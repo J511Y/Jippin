@@ -5,7 +5,8 @@
 # 핵심 흐름:
 #   1. build         — apps/api 빌드 산출물 점검 (uv sync + import smoke).
 #   2. release-migrate — `alembic upgrade head` 를 운영 Neon (`NEON_PROD_DATABASE_URL`,
-#                       non-pooler) 에 적용. 실패하면 deploy 잡으로 진행하지 않는다.
+#                       non-pooler) 에 적용. 시크릿이 아직 없으면 bootstrap 단계로 간주해
+#                       warning + no-op 처리한다.
 #   3. deploy        — 실제 배포 단계. 현재는 스켈레톤(TODO: Vercel/Fly/etc.).
 #                       release-migrate 실패 시 needs 조건으로 자동 차단.
 #
@@ -135,9 +136,7 @@ jobs:
             echo "::notice::apps/api/alembic.ini 미존재 — Alembic 스캐폴드(CMP-537) 머지 전이므로 release-migrate 는 no-op."
           fi
           if [[ "${has_alembic}" == "true" && "${has_secret}" != "true" ]]; then
-            # 시크릿 미설정인데 alembic 은 있다 = 운영 발급 누락. 사고로 간주, 잡 실패.
-            echo "::error::NEON_PROD_DATABASE_URL 시크릿이 설정되지 않았다. Settings → Environments → production 에서 발급할 것."
-            exit 1
+            echo "::warning::NEON_PROD_DATABASE_URL 시크릿이 설정되지 않았다. bootstrap 단계로 간주해 release-migrate 를 no-op 처리한다. 실제 배포 전 Settings → Environments → production 에서 발급할 것."
           fi
 
       - name: Setup Python ${{ env.PYTHON_VERSION }}

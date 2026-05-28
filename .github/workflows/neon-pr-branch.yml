@@ -3,7 +3,7 @@
 # 목표:
 #   - PR 마다 격리된 Neon 브랜치를 만들어, 마이그레이션/스키마 변경이 운영 데이터에
 #     영향을 주지 않은 채로 검증되게 한다.
-#   - PR open 시 ephemeral 브랜치를 만들고 connection string 을 PR 코멘트로 게시.
+#   - PR open 시 ephemeral 브랜치를 만들고 branch id 만 PR 코멘트로 게시.
 #   - PR close/merge 시 ephemeral 브랜치를 삭제.
 #
 # 시크릿 (Settings → Secrets → Actions):
@@ -14,8 +14,8 @@
 #   - fork PR (pull_request 이벤트는 fork 의 경우 secrets 접근 불가) 에서는 본 워크플로우가
 #     동작하지 않는다. 운영 시크릿을 fork 에 노출하지 않기 위한 GitHub 의 기본 동작이며,
 #     본 워크플로우는 그것을 그대로 둔다. fork 기여자는 schema 변경 검증을 수동으로 요청.
-#   - 코멘트에 노출되는 connection string 은 운영이 아닌 ephemeral 브랜치용. PR close 시
-#     자동 삭제되므로 장기 노출 위험은 낮다. 그래도 PR 본문/스크린샷에 재게시하지 말 것.
+#   - connection string 은 ephemeral 이더라도 credential 이므로 PR 코멘트/본문/로그에
+#     게시하지 않는다. 필요한 사람은 Neon 콘솔에서 해당 branch id 로 직접 조회한다.
 #
 # 비범위:
 #   - 매 push 마다 신규 브랜치 — 본 워크플로우는 PR 단위 1개 브랜치만 유지.
@@ -65,12 +65,10 @@ jobs:
           branch_name: pr-${{ github.event.pull_request.number }}
           api_key: ${{ secrets.NEON_API_KEY }}
 
-      - name: Comment connection string on PR
+      - name: Comment branch id on PR
         if: steps.guard.outputs.skip == 'false'
         uses: actions/github-script@v7
         env:
-          DB_URL: ${{ steps.create_branch.outputs.db_url }}
-          DB_URL_POOLED: ${{ steps.create_branch.outputs.db_url_pooled }}
           BRANCH_ID: ${{ steps.create_branch.outputs.branch_id }}
         with:
           script: |
@@ -78,10 +76,8 @@ jobs:
               '🌱 **Neon ephemeral branch created for this PR.**',
               '',
               `- branch id: \`${process.env.BRANCH_ID}\``,
-              `- non-pooler (Alembic / migrations 용): \`${process.env.DB_URL}\``,
-              `- pooler (앱 런타임 용): \`${process.env.DB_URL_POOLED}\``,
               '',
-              '본 connection string 은 PR close 시 자동 삭제된다. PR 본문이나 외부 채널에 재게시하지 말 것.',
+              'Connection string 은 credential 이므로 PR 코멘트에 게시하지 않는다. 필요한 리뷰어는 Neon 콘솔에서 branch id 로 직접 조회할 것.',
             ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
