@@ -1,0 +1,19 @@
+# Python runtime / uv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Lint / type caches
+.ruff_cache/
+.mypy_cache/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
