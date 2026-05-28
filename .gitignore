@@ -1,0 +1,190 @@
+# 집핀(Jippin) — .gitignore
+# 기준: AGENTS.md §4.4 / ADR-0001 §9 / CEO 브리프 §2 D5
+# 절대 커밋 금지: 시크릿, 빌드 산출물, 캐시, AI 모델 가중치
+
+# -----------------------------------------------------------------------------
+# 환경 변수 / 시크릿 (AGENTS.md §4.4)
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.crt
+*.pfx
+secrets/
+.secrets/
+
+# -----------------------------------------------------------------------------
+# Python (apps/api, tooling/)
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+develop-eggs/
+.installed.cfg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# 가상환경 / uv
+.venv/
+venv/
+env/
+ENV/
+.python-version.local
+uv.lock.local
+
+# 테스트 / 커버리지 / 타입 캐시
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+
+# -----------------------------------------------------------------------------
+# Node / Next.js (apps/web, packages/*)
+# -----------------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+.pnp.*
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# Next.js
+.next/
+out/
+.vercel/
+next-env.d.ts
+
+# Build / cache
+dist/
+build/
+.turbo/
+.cache/
+.parcel-cache/
+.swc/
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# ESLint / TS
+.eslintcache
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs/
+
+# -----------------------------------------------------------------------------
+# AI 모델 가중치 / 데이터셋 (단일 인스턴스 정책 — 가중치 커밋 금지)
+# ADR-0001 §7 T6: Mask2Former / SAM2 / VLM
+# -----------------------------------------------------------------------------
+models/
+models/weights/
+weights/
+checkpoints/
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.onnx
+*.gguf
+*.ggml
+*.ckpt
+*.h5
+*.pb
+*.tflite
+*.mlmodel
+
+# HuggingFace / torch 캐시
+.cache/huggingface/
+.cache/torch/
+
+# 데이터셋 / 학습 산출물
+datasets/
+data/raw/
+data/processed/
+runs/
+wandb/
+mlruns/
+
+# -----------------------------------------------------------------------------
+# packages/contracts — 코드 생성 산출물 (ADR-0001 §9.2)
+# schemas/*.json 만 정본. ts/, python/zippin_contracts/ 는 생성물.
+# 단, 빈 디렉터리 유지를 위해 .gitkeep 만 허용한다.
+# -----------------------------------------------------------------------------
+packages/contracts/ts/*
+!packages/contracts/ts/.gitkeep
+packages/contracts/python/zippin_contracts/*
+!packages/contracts/python/zippin_contracts/.gitkeep
+!packages/contracts/python/zippin_contracts/__init__.py
+
+# -----------------------------------------------------------------------------
+# IDE / 에디터
+# -----------------------------------------------------------------------------
+.idea/
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# JetBrains
+*.iml
+.idea_modules/
+
+# -----------------------------------------------------------------------------
+# Docker / 운영 산출물 (로컬에서만 사용)
+# -----------------------------------------------------------------------------
+*.local.yml
+*.local.yaml
+docker-compose.override.yml
+.docker/
+postgres-data/
+redis-data/
+
+# -----------------------------------------------------------------------------
+# 임시 파일 / 백업
+# -----------------------------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+*.orig
+.tmp/
+tmp/
+
+# -----------------------------------------------------------------------------
+# Paperclip 에이전트 런타임 산출물 — 절대 커밋 금지
+# 이슈 본문 덤프는 평문 자격증명을 포함할 수 있다 (R1).
+# 본 항목은 CMP-533 (Security Engineer) 에서 추가.
+# -----------------------------------------------------------------------------
+/CMP-*.json
+/cmp*.json
+/children.json
+/.paperclip/
+/.paperclip-*
