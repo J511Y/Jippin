@@ -1,6 +1,6 @@
 # `apps/api` — Jippin FastAPI Backend (CMP-528)
 
-FastAPI 0.115 / Python 3.12 / `uv` 패키지 매니저.
+FastAPI 0.115 / Python 3.13 / `uv` 패키지 매니저.
 Neon Postgres(psycopg3 async) 연결, structlog JSON 로깅, `request_id` 컨텍스트, AGENTS.md §4.5 에러 봉투, `/healthz` 를 제공한다.
 
 본 이슈(CMP-528) 범위는 **API 골격 + `/healthz` + 표준 에러/로깅**까지다. 도메인 라우터(AUTH/INPUT/AI/RULE/REPORT 등)는 후속 이슈에서 채운다.
@@ -9,7 +9,7 @@ Neon Postgres(psycopg3 async) 연결, structlog JSON 로깅, `request_id` 컨텍
 
 ## 1. 사전 요구
 
-- Python 3.12 (`.python-version=3.12`)
+- Python 3.13 (`.python-version=3.13`)
 - [uv](https://docs.astral.sh/uv/) 0.5+
 - (옵션) Docker — `docker compose up api` 실행 시
 - Neon Postgres 계정 또는 `TEST_MODE=true` (DB 없이 부팅)
@@ -56,7 +56,7 @@ curl http://localhost:8000/healthz
 ```
 apps/api/
 ├── pyproject.toml
-├── .python-version           # 3.12
+├── .python-version           # 3.13
 ├── Dockerfile                # multi-stage (uv builder → non-root runtime)
 ├── alembic.ini               # Alembic 설정 (CMP-537)
 ├── .env.example
