@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📚 기여 가이드 (gitmoji · GitHub Flow · PR 체크리스트)
+    url: https://github.com/J511Y/Jippin/blob/main/docs/CONTRIBUTING.md
+    about: 브랜치·커밋·PR 정책을 먼저 확인.
+  - name: 🏛️ ADR-0001 — 스택 봉인
+    url: https://github.com/J511Y/Jippin/blob/main/docs/adr/0001-stack-reevaluation.md
+    about: Next.js 16.2 / FastAPI 0.115 / Python 3.13 / pnpm 9 / uv 0.5 봉인.
+  - name: 📋 CEO 프로젝트 브리프
+    url: https://github.com/J511Y/Jippin/blob/main/docs/brief/CEO_PROJECT_BRIEF.md
+    about: 요구사항 합의 기준선.
