@@ -141,6 +141,45 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 5. **시크릿 헌팅** — PR/커밋 단계에서 `npg_`, `sk-`, `AKIA` 등 시크릿 패턴이 들어가지 않도록 검사. 발견 시 즉시 회전 요청.
 6. **모순 보고** — 명세 4종 간 모순을 발견하면 `docs/명세서-모순.md`(없으면 생성)에 기록하고 후속 이슈로 분리.
 
+### 5.7 한글(UTF-8) 인코딩 — 이슈/코멘트/문서 작성 시 절대 위반 금지
+
+> **배경.** Windows(PowerShell/cmd.exe) 호스트에서 `curl -d '{"title":"한글"}' ...` 형태로 Paperclip API 를 인라인 호출하면, 활성 코드페이지(CP949)와 curl 의 UTF-8 가정이 충돌해 본문이 `?` 로 깨진 채 서버에 저장된다. **이 손상은 비가역적**(원문 복원 불가)이며, 보드와 위임받은 에이전트 모두 작업 컨텍스트를 잃는다. 2026-05-28 CMP-524 사고(자식 이슈 7개 제목·본문 전손) 재발 방지.
+
+**모든 에이전트는 Paperclip API(POST/PATCH `/api/...`)로 한글 콘텐츠를 보낼 때 다음 절차를 따른다.**
+
+1. **JSON 페이로드를 파일로 먼저 작성** — Claude Code `Write`/`Edit` 툴은 기본 UTF-8 (BOM 없음). PowerShell `Out-File`/`Set-Content` 사용 시 반드시 `-Encoding utf8NoBOM`.
+2. **`curl` 은 `--data-binary @<파일>` + 명시적 charset 헤더** 로 전송한다.
+3. **인라인 `-d '...'` 또는 here-string 으로 한글을 박지 않는다.** PowerShell here-doc 도 환경에 따라 변환된다 — 금지.
+
+표준 호출 패턴 (Git Bash / MSYS):
+
+```bash
+# 1) JSON 본문을 UTF-8 파일로 저장 (Claude Code Write 툴 권장)
+#    또는 Git Bash 한정: cat > .tmp/payload.json <<'EOF' ... EOF
+#    PowerShell here-string 금지.
+
+# 2) PATCH/POST 호출 — --data-binary @ 와 charset 헤더 반드시 포함
+curl -s -X PATCH \
+  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+  -H "Content-Type: application/json; charset=utf-8" \
+  --data-binary @.tmp/payload.json \
+  "$PAPERCLIP_API_URL/api/issues/<ID>" \
+  -o .tmp/resp.json
+
+# 3) 응답을 node 로 검증 — PowerShell Get-Content 는 인코딩 자동변환 위험
+node -e "const d=JSON.parse(require('fs').readFileSync('.tmp/resp.json','utf8')); console.log(d.title)"
+```
+
+자기 점검 체크 (이슈 생성/수정 직후 즉시):
+
+- [ ] 같은 ID 를 `GET /api/issues/<ID>` 로 재조회해 `title`/`description` 에 `?` 가 아닌 정상 한글이 들어있는지 확인.
+- [ ] 깨진 흔적이 보이면 즉시 PATCH 로 복구 + 사고 코멘트.
+- [ ] 자식 이슈를 7개 이상 일괄 생성할 때는 첫 1개 직후 위 검증을 통과해야 다음 6개를 만든다.
+
+위반 시: 위임 사슬의 모든 자식 이슈가 영문/`?` 만 보여 보드와 위임받은 에이전트가 작업 식별 불가. **인수 거부 사유**다.
+
+> 사람 작업자 주의: 시스템 PowerShell 콘솔 폰트가 `Lucida Console` 인 경우 정상 출력된 한글도 콘솔에서는 `?` 로 보일 수 있다. **보드(웹 UI) 또는 `GET /api/issues/<ID>` 응답을 진실의 원천으로 삼는다.**
+
 ---
 
 ## 6. 표준 명령 (CTO 확정 후 갱신)
