@@ -1,0 +1,103 @@
+name: 🐛 버그 리포트
+description: 동작이 명세·기대와 다른 경우.
+title: "[Bug] <한 줄 요약>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        본 템플릿은 사람 개발자와 Paperclip 에이전트 모두를 위한 것이다.
+        가능한 한 **재현 조건**과 **명세 근거**를 함께 적어줘.
+
+  - type: input
+    id: cmp_id
+    attributes:
+      label: 관련 Paperclip 이슈 (선택)
+      description: 이미 등록된 상위 이슈가 있으면 `CMP-###`.
+      placeholder: "CMP-###"
+
+  - type: dropdown
+    id: module
+    attributes:
+      label: 영향 모듈
+      description: SDD §3·§4의 8개 모듈 + 가로 책임 중 하나.
+      multiple: true
+      options:
+        - AUTH
+        - INPUT
+        - MASK
+        - AI
+        - OVERLAY
+        - CHAT
+        - FLOW_GUARD
+        - RULE
+        - REPORT
+        - CONTRACTS
+        - INFRA
+        - DEVOPS
+        - SECURITY
+        - QA
+        - META
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 무엇이 잘못되었는가
+      description: 한 단락 요약.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 재현 절차
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 동작 (명세 근거)
+      description: 어떤 명세서/ADR/AGENTS.md 절을 위반했는가.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 동작
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: 환경
+      description: OS / Node / Python / 브라우저 / 커밋 SHA
+      placeholder: |
+        - OS: Windows 11 / macOS 14 / Ubuntu 22.04
+        - Node: 22.x (`.nvmrc`)
+        - Python: 3.13.x (`.python-version`)
+        - Commit SHA: `git rev-parse HEAD`
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 로그 / 스크린샷
+      description: 시크릿(npg_, sk-, AKIA, xoxb- 등)이 포함된 로그는 마스킹.
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 확인
+      options:
+        - label: 본 이슈 본문에 시크릿(API 키·DB 비밀번호·도면 원본 등)을 포함하지 않았다.
+          required: true
+        - label: 동일·유사 이슈가 이미 열려있지 않은지 검색했다.
+          required: true

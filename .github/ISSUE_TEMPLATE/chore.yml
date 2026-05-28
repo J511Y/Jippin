@@ -1,0 +1,89 @@
+name: 🔧 잡일 (chore)
+description: 빌드·설정·도구·CI·의존성·문서 정리 등 코드 동작 변화 없는 작업.
+title: "[Chore] <한 줄 요약>"
+labels: ["chore", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        본 템플릿은 사람 개발자와 Paperclip 에이전트 모두를 위한 것이다.
+        **사용자 기능 변경이나 동작 변화가 없는 작업** 만 본 템플릿을 쓴다. (있으면 Feature/Bug)
+
+  - type: input
+    id: cmp_parent
+    attributes:
+      label: 부모 Paperclip 이슈 (선택)
+      placeholder: "CMP-###"
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 잡일 종류
+      options:
+        - 의존성 업데이트
+        - 빌드 / CI 워크플로
+        - 도구 / 스크립트
+        - 설정 / 메타 파일
+        - 문서 / ADR
+        - 리팩터 (동작 동일)
+        - 기타
+    validations:
+      required: true
+
+  - type: dropdown
+    id: module
+    attributes:
+      label: 영향 모듈
+      multiple: true
+      options:
+        - AUTH
+        - INPUT
+        - MASK
+        - AI
+        - OVERLAY
+        - CHAT
+        - FLOW_GUARD
+        - RULE
+        - REPORT
+        - CONTRACTS
+        - INFRA
+        - DEVOPS
+        - SECURITY
+        - QA
+        - META
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 무엇을 해야 하는가
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: 왜 (근거)
+      description: ADR · 명세 · CEO 브리프 · AGENTS.md 어디서 유래했는지.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 완료 조건
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 확인
+      options:
+        - label: 본 작업은 사용자 기능 변경 / 동작 변화가 없다.
+          required: true
+        - label: 의존성 업데이트인 경우 ADR-0001 §9 의 봉인 버전을 위반하지 않는다.
