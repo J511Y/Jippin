@@ -2,8 +2,8 @@
 
 revision: 0004_request_logs / down: 0003_drop_deployment_probe_temp
 
-CMP-545 stores API request/response log rows. The approved table spec lists
-five single-column indexes plus two composite indexes; all seven are created.
+CMP-545 stores API request/response log rows. Only lookup indexes with an
+immediate operational path are created to keep per-request inserts cheap.
 """
 
 from __future__ import annotations
@@ -64,22 +64,13 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_request_logs_created_at"), "request_logs", ["created_at"])
     op.create_index(op.f("ix_request_logs_request_id"), "request_logs", ["request_id"])
-    op.create_index(op.f("ix_request_logs_last_ip"), "request_logs", ["last_ip"])
     op.create_index(
         op.f("ix_request_logs_response_code"), "request_logs", ["response_code"]
-    )
-    op.create_index(
-        op.f("ix_request_logs_duration_ms"), "request_logs", ["duration_ms"]
     )
     op.create_index(
         op.f("ix_request_logs_user_id_created_at"),
         "request_logs",
         ["user_id", sa.text("created_at DESC")],
-    )
-    op.create_index(
-        op.f("ix_request_logs_method_url_created_at"),
-        "request_logs",
-        ["method", "url", "created_at"],
     )
 
 

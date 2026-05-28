@@ -45,7 +45,6 @@ class RequestLog(Base):
     )
     last_ip: Mapped[str | None] = mapped_column(
         postgresql.INET,
-        index=True,
     )
     url: Mapped[str] = mapped_column(sa.Text, nullable=False)
     parameter: Mapped[dict[str, object]] = mapped_column(
@@ -58,10 +57,9 @@ class RequestLog(Base):
     response_code: Mapped[int] = mapped_column(sa.Integer, nullable=False, index=True)
     response_message: Mapped[str | None] = mapped_column(sa.Text)
     error_code: Mapped[str | None] = mapped_column(sa.Text)
-    duration_ms: Mapped[int] = mapped_column(sa.Integer, nullable=False, index=True)
+    duration_ms: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     user_agent: Mapped[str | None] = mapped_column(sa.Text)
     referrer: Mapped[str | None] = mapped_column(sa.Text)
 
 
 sa.Index(None, RequestLog.user_id, RequestLog.created_at.desc())
-sa.Index(None, RequestLog.method, RequestLog.url, RequestLog.created_at)

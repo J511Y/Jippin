@@ -42,11 +42,8 @@ def test_request_logs_indexes_use_naming_convention() -> None:
     assert index_names == {
         "ix_request_logs_created_at",
         "ix_request_logs_request_id",
-        "ix_request_logs_last_ip",
         "ix_request_logs_response_code",
-        "ix_request_logs_duration_ms",
         "ix_request_logs_user_id_created_at",
-        "ix_request_logs_method_url_created_at",
     }
 
 

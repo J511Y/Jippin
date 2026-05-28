@@ -71,6 +71,9 @@ def test_request_log_redacts_body_and_query_without_consuming_body(monkeypatch):
     assert response.json()["received"]["password"] == "plain-text"
     assert len(records) == 1
     record = records[0]
+    assert record["url"] == "/_echo"
+    assert "query-token" not in record["url"]
+    assert "safe=value" not in record["url"]
     assert record["parameter"]["token"] == "[REDACTED]"
     assert record["parameter"]["safe"] == "value"
     assert record["body"]["email"] == "user@example.com"

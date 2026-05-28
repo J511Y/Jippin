@@ -133,7 +133,7 @@ def build_request_log_record(
         ),
         "ip_addrs": ip_addrs,
         "last_ip": ip_addrs[-1] if ip_addrs else None,
-        "url": str(request.url),
+        "url": request.url.path,
         "parameter": query_params_to_dict(request.query_params),
         "method": request.method,
         "body": decode_body_bytes(
