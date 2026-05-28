@@ -1,0 +1,105 @@
+# 집핀(Jippin) gitleaks 설정 — CMP-533 (Security Engineer)
+#
+# 본 파일은 `.github/workflows/secret-scan.yml` 가
+# `GITLEAKS_CONFIG=.gitleaks.toml` 으로 참조한다.
+#
+# 정본 패턴은 `tools/secret-scan/patterns.yml` 에 있다 (Python 스캐너).
+# 본 파일은 gitleaks 가 동일 패턴을 매칭하도록 미러링한다.
+# 양쪽이 어긋나지 않도록 패턴 변경 시 **두 파일 모두** 갱신할 것.
+#
+# gitleaks 문서: https://github.com/gitleaks/gitleaks#configuration
+
+title = "Jippin secret-scan config (mirrors tools/secret-scan/patterns.yml)"
+
+# 기본 룰셋(default rules)을 그대로 사용하되 아래 커스텀 룰을 ADD.
+# `useDefault = true` 는 gitleaks v8 의 표준 동작.
+
+[extend]
+useDefault = true
+
+# -----------------------------------------------------------------------------
+# 커스텀 룰
+# -----------------------------------------------------------------------------
+
+[[rules]]
+id = "neon-postgres-password"
+description = "Neon Serverless Postgres password (npg_*) — includes placeholder forms like npg_FAKE_*"
+regex = '''npg_[A-Za-z0-9_]{8,}'''
+keywords = ["npg_"]
+tags = ["secret", "postgres", "neon", "critical"]
+
+[[rules]]
+id = "openai-api-key-prefix"
+description = "OpenAI API key (sk-, sk-proj-, sk-svcacct-, sk-admin-)"
+regex = '''sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}'''
+keywords = ["sk-"]
+tags = ["secret", "openai", "critical"]
+
+[[rules]]
+id = "aws-access-key-id"
+description = "AWS Access Key ID family"
+regex = '''(?:A[SK]IA|AIDA|AGPA|AROA|AIPA|ANPA|ANVA|ASCA)[A-Z0-9]{16}'''
+keywords = ["AKIA", "ASIA", "AIDA", "AGPA", "AROA", "AIPA", "ANPA", "ANVA", "ASCA"]
+tags = ["secret", "aws", "critical"]
+
+[[rules]]
+id = "slack-token-family"
+description = "Slack tokens (xoxb-/xoxp-/xoxa-/xoxr-/xoxs-)"
+regex = '''xox[baprs]-[A-Za-z0-9-]{10,}'''
+keywords = ["xoxb-", "xoxp-", "xoxa-", "xoxr-", "xoxs-"]
+tags = ["secret", "slack", "high"]
+
+[[rules]]
+id = "github-pat"
+description = "GitHub Personal Access Token (ghp_)"
+regex = '''ghp_[A-Za-z0-9]{36,}'''
+keywords = ["ghp_"]
+tags = ["secret", "github", "critical"]
+
+[[rules]]
+id = "github-oauth"
+description = "GitHub OAuth Token (gho_)"
+regex = '''gho_[A-Za-z0-9]{36,}'''
+keywords = ["gho_"]
+tags = ["secret", "github", "high"]
+
+[[rules]]
+id = "github-app-tokens"
+description = "GitHub App / Refresh / Server / User tokens (ghs_/ghr_/ghu_)"
+regex = '''gh[sur]_[A-Za-z0-9]{36,}'''
+keywords = ["ghs_", "ghr_", "ghu_"]
+tags = ["secret", "github", "high"]
+
+[[rules]]
+id = "db-url-inline-password"
+description = "DB URL with inline password (postgres://, mysql://, mongodb://, redis://)"
+regex = '''\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqp|amqps)://[^\s:/@]+:(?!(?:\*+|x+|password|REDACTED|<[^>]+>|\$\{[^}]+\}))[^\s/@]+@[^\s/]+'''
+keywords = ["postgres://", "postgresql://", "mysql://", "mongodb://", "mariadb://", "redis://", "rediss://", "amqp://"]
+tags = ["secret", "database", "critical"]
+
+# -----------------------------------------------------------------------------
+# Allowlist — patterns.yml 의 allowlist 와 동일 의도
+# -----------------------------------------------------------------------------
+
+[allowlist]
+description = "정당한 등장 위치 (문서 · 패턴 정의 · 테스트 fixture)"
+paths = [
+  '''tools/secret-scan/patterns\.yml''',
+  '''tools/secret-scan/scan\.py''',
+  '''tools/secret-scan/README\.md''',
+  '''tools/secret-scan/tests/.*''',
+  '''docs/runbooks/neon-credential-rotation\.md''',
+  '''docs/runbooks/security-policy\.md''',
+  '''docs/brief/CEO_PROJECT_BRIEF\.md''',
+  '''\.gitleaks\.toml''',
+  '''\.env\.example''',
+  '''infra/compose/\.env\.example''',
+]
+
+# 가짜/예시 토큰 (런북·문서 안의 placeholder)
+regexes = [
+  '''npg_(FAKE|REDACTED|EXAMPLE|XXXX|SAMPLE)[A-Za-z0-9_]*''',
+  '''sk-(?:proj-|svcacct-)?(FAKE|REDACTED|EXAMPLE|placeholder)[A-Za-z0-9_-]*''',
+  '''AKIA(FAKE|REDACTED|EXAMPLE|XXXX)[A-Z0-9]{0,16}''',
+  '''ghp_(FAKE|REDACTED|EXAMPLE|XXXX)[A-Za-z0-9]{0,40}''',
+]
