@@ -116,7 +116,9 @@ def build_request_log_record(
     duration_ms: int,
 ) -> RequestLogRecord:
     headers = request.headers
-    ip_addrs = extract_ip_addrs(headers, request.client.host if request.client else None)
+    ip_addrs = extract_ip_addrs(
+        headers, request.client.host if request.client else None
+    )
     response_message, error_code = parse_response_envelope(response_body)
     user_id = extract_user_id(request)
     request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())

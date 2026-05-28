@@ -65,7 +65,9 @@ def redact_headers(headers: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def truncate_bytes(data: bytes, max_bytes: int = MAX_LOG_BODY_BYTES) -> tuple[bytes, bool]:
+def truncate_bytes(
+    data: bytes, max_bytes: int = MAX_LOG_BODY_BYTES
+) -> tuple[bytes, bool]:
     if len(data) <= max_bytes:
         return data, False
     return data[:max_bytes], True

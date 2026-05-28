@@ -169,9 +169,7 @@ def test_request_log_redacts_expanded_sensitive_keys_in_params_and_body(monkeypa
         "refresh_token",
     )
     query = {key: f"query-secret-{index}" for index, key in enumerate(sensitive_keys)}
-    body = {
-        key: f"body-secret-{index}" for index, key in enumerate(sensitive_keys)
-    } | {
+    body = {key: f"body-secret-{index}" for index, key in enumerate(sensitive_keys)} | {
         "nested": {"client_secret": "nested-secret"},
         "items": [{"id_token": "list-secret"}],
     }
@@ -305,7 +303,9 @@ def test_request_log_truncates_large_body(monkeypatch):
 
 def test_request_log_helper_classifies_devices():
     assert classify_device("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X)") == "tablet"
-    assert classify_device("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Mobile") == "mobile"
+    assert (
+        classify_device("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Mobile") == "mobile"
+    )
     assert classify_device("Mozilla/5.0 (X11; Linux x86_64)") == "pc"
     assert classify_device(None) == "other"
 
