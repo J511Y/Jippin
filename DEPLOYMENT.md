@@ -30,6 +30,7 @@ Repository variable:
 Repository 또는 Environment secret:
 
 - `NEON_API_KEY`: PR preview branch 생성/삭제용 Neon API key.
+- `NEON_DEV_PARENT_BRANCH`: `dev` 대상 PR preview 의 parent branch. Neon branch id 사용을 권장한다.
 - `NEON_DEV_DATABASE_URL`: `dev` merge 후 development Neon branch 에 적용할 non-pooler URL.
 - `NEON_PROD_DATABASE_URL`: `main` merge 후 production Neon branch 에 적용할 non-pooler URL.
 - `NEON_TEST_DATABASE_URL`: 선택. CI drift guard 용 테스트 DB URL.
@@ -46,7 +47,7 @@ PR open/reopen/synchronize 시 workflow 는 다음 이름의 Neon branch 를 만
 preview/pr-<PR번호>-<head branch>
 ```
 
-PR base 가 `dev` 면 Neon `development` branch 를 parent 로 사용하고, PR base 가 `main` 이면 Neon `production` branch 를 parent 로 사용한다. 생성된 preview branch 는 14일 만료 시간을 가진다.
+PR base 가 `dev` 면 `NEON_DEV_PARENT_BRANCH` 를 parent 로 사용하고, PR base 가 `main` 이면 Neon `production` branch 를 parent 로 사용한다. 생성된 preview branch 는 14일 만료 시간을 가진다.
 
 connection string 은 credential 이므로 로그나 PR 코멘트에 출력하지 않는다. PR 코멘트에는 branch 이름, parent, migration 실행 여부만 남긴다.
 
