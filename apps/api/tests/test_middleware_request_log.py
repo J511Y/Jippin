@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 
 from fastapi import Request
@@ -13,6 +14,11 @@ from src.middleware.request_log import (
     classify_device,
     extract_ip_addrs,
 )
+from src.middleware.request_log_redaction import REDACTED_VALUE
+
+
+def _serialized(value):
+    return json.dumps(value, default=str, sort_keys=True)
 
 
 def test_request_log_captures_request_id_and_duration(monkeypatch):
@@ -79,6 +85,166 @@ def test_request_log_redacts_body_and_query_without_consuming_body(monkeypatch):
     assert record["body"]["email"] == "user@example.com"
     assert record["body"]["password"] == "[REDACTED]"
     assert record["body"]["nested"]["access_token"] == "[REDACTED]"
+
+
+def test_request_log_text_body_never_persists_raw_secret_bytes(monkeypatch):
+    records = []
+    monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
+
+    app = create_app()
+
+    @app.post("/_text")
+    async def _text(request: Request):
+        return {"bytes": len(await request.body())}
+
+    payload = (
+        b"Authorization: Bearer SECRET\n"
+        b"password=hunter2\n"
+        b"token=abc123\n"
+        b"client_secret=cs_123"
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/_text",
+            content=payload,
+            headers={"content-type": "text/plain"},
+        )
+
+    assert response.status_code == 200
+    body = records[0]["body"]
+    assert body == {"_content_type": "text/plain", "_bytes": len(payload)}
+    serialized = _serialized(body)
+    for leaked in ("Authorization", "SECRET", "hunter2", "abc123", "cs_123"):
+        assert leaked not in serialized
+
+
+def test_request_log_malformed_json_body_stores_metadata_only(monkeypatch):
+    records = []
+    monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
+
+    app = create_app()
+
+    @app.post("/_malformed")
+    async def _malformed(request: Request):
+        return {"bytes": len(await request.body())}
+
+    payload = b'{"password":"hunter2","token":"abc123"'
+    with TestClient(app) as client:
+        response = client.post(
+            "/_malformed",
+            content=payload,
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 200
+    body = records[0]["body"]
+    assert body == {
+        "_unparsable": True,
+        "_content_type": "application/json",
+        "_bytes": len(payload),
+    }
+    serialized = _serialized(body)
+    for leaked in ("password", "hunter2", "token", "abc123"):
+        assert leaked not in serialized
+
+
+def test_request_log_redacts_expanded_sensitive_keys_in_params_and_body(monkeypatch):
+    records = []
+    monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
+
+    app = create_app()
+
+    @app.post("/_sensitive")
+    async def _sensitive(request: Request):
+        return {"received": await request.json()}
+
+    sensitive_keys = (
+        "api_key",
+        "apikey",
+        "x_api_key",
+        "x-api-key",
+        "apiKey",
+        "client_secret",
+        "id_token",
+        "refresh_token",
+    )
+    query = {key: f"query-secret-{index}" for index, key in enumerate(sensitive_keys)}
+    body = {
+        key: f"body-secret-{index}" for index, key in enumerate(sensitive_keys)
+    } | {
+        "nested": {"client_secret": "nested-secret"},
+        "items": [{"id_token": "list-secret"}],
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/_sensitive", params=query, json=body)
+
+    assert response.status_code == 200
+    record = records[0]
+    for key in sensitive_keys:
+        assert record["parameter"][key] == REDACTED_VALUE
+        assert record["body"][key] == REDACTED_VALUE
+    assert record["body"]["nested"]["client_secret"] == REDACTED_VALUE
+    assert record["body"]["items"][0]["id_token"] == REDACTED_VALUE
+
+    serialized = _serialized(record["parameter"]) + _serialized(record["body"])
+    for leaked in (
+        "query-secret",
+        "body-secret",
+        "nested-secret",
+        "list-secret",
+    ):
+        assert leaked not in serialized
+
+
+def test_request_log_does_not_persist_sensitive_header_names_or_values(monkeypatch):
+    records = []
+    monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get(
+            "/healthz",
+            headers={
+                "Authorization": "Bearer HEADERSECRET",
+                "Cookie": "session=COOKIESECRET",
+                "Set-Cookie": "server=SETCOOKIESECRET",
+                "X-Api-Key": "APIKEYSECRET",
+            },
+        )
+
+    assert response.status_code == 200
+    serialized = _serialized(records[0]).lower()
+    for leaked in (
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "headersecret",
+        "cookiesecret",
+        "setcookiesecret",
+        "apikeysecret",
+    ):
+        assert leaked not in serialized
+
+
+def test_request_log_sanitizes_referrer_query_and_fragment(monkeypatch):
+    records = []
+    monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get(
+            "/healthz",
+            headers={
+                "Referer": "https://example.com/callback?token=ABC&state=xyz#frag"
+            },
+        )
+
+    assert response.status_code == 200
+    assert records[0]["referrer"] == "https://example.com/callback"
+    assert "ABC" not in records[0]["referrer"]
+    assert "token=" not in records[0]["referrer"]
 
 
 def test_request_log_parses_error_envelope(monkeypatch):

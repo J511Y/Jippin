@@ -84,9 +84,16 @@ def decode_body_bytes(
         try:
             decoded: Any = json.loads(truncated.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            decoded = {"_raw": truncated.decode("utf-8", errors="replace")}
+            decoded = {
+                "_unparsable": True,
+                "_content_type": "application/json",
+                "_bytes": len(data),
+            }
     elif normalized_content_type.startswith("text/"):
-        decoded = {"_raw": truncated.decode("utf-8", errors="replace")}
+        decoded = {
+            "_content_type": normalized_content_type,
+            "_bytes": len(data),
+        }
     else:
         decoded = {
             "_content_type": normalized_content_type or "application/octet-stream",

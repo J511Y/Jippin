@@ -6,6 +6,7 @@ import time
 import uuid
 from collections.abc import Iterable, Mapping
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import sqlalchemy as sa
 from starlette.datastructures import Headers, QueryParams
@@ -145,7 +146,7 @@ def build_request_log_record(
         "error_code": error_code,
         "duration_ms": duration_ms,
         "user_agent": headers.get("user-agent"),
-        "referrer": headers.get("referer") or headers.get("referrer"),
+        "referrer": sanitize_referrer(first_header(headers, "referer", "referrer")),
     }
 
 
@@ -177,6 +178,16 @@ def first_header(headers: Headers, *names: str) -> str | None:
         if value:
             return value
     return None
+
+
+def sanitize_referrer(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return None
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
 def classify_device(user_agent: str | None) -> str:
