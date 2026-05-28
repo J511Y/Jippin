@@ -32,4 +32,6 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-__all__ = ["Base", "NAMING_CONVENTION"]
+from .request_log import RequestLog  # noqa: E402
+
+__all__ = ["Base", "NAMING_CONVENTION", "RequestLog"]
