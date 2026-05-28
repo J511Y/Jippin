@@ -1,0 +1,400 @@
+집핀 (Zippin)
+소프트웨어 설계문서
+Software Design Document (SDD) v1.9
+비내력벽 철거 사전검토 AI 서비스
+
+--- TABLE ---
+문서 버전 | v1.9
+작성일 | 2026-05-27
+기준 문서 | 소프트웨어 설계문서 v1.8
+관련 문서 | 기능명세서 v1.0, 기술명세서 v1.6
+--- /TABLE ---
+
+목차
+1. 문서 개요
+1.1 목적과 범위
+본 소프트웨어 설계문서(SDD)는 집핀 서비스를 어떤 논리 모듈로 분해하며, 각 모듈이 어떤 책임을 지고, 모듈끼리 어떤 인터페이스로 결합하는지를 정의한다. 본 문서는 “무엇을 만들 것인가(What)”가 아니라 “어떻게 분해할 것인가(How to decompose)”에 답한다.
+핵심 원칙 — 모듈 분해는 코드가 물리적으로 어디서 실행되는가(프론트엔드/백엔드)가 아니라, 어떤 책임을 지는가(논리 도메인)를 기준으로 한다. 프론트엔드·백엔드 구분은 논리 모듈을 배포 단위에 매핑하는 §2.4와 각 모듈의 ‘배포 매핑’ 필드에서만 다룬다.
+범위 외 항목 — 본 문서는 다음을 다루지 않는다. 해당 항목은 부록 A의 정본 분담표를 참조한다.
+기술 스택 선정 근거, 라이브러리 버전 (→ 기술명세서)
+API 엔드포인트 상세 명세, 요청·응답 페이로드 (→ 기술명세서)
+물리 DB 스키마(컬럼 타입·제약·인덱스) (→ 기술명세서)
+기능별 수용 기준, 사용자 플로우 (→ 기능명세서)
+코드 레벨 구현물 — TypeScript 인터페이스, 컴포넌트 Props 시그니처, Zustand 스토어, Python 클래스, 디렉토리 트리 (→ 각 리포지토리 README·소스 코드)
+배포 산출물, 운영 정책 수치(로그 보존, Rate Limit, 캐싱 TTL) (→ 기술명세서·운영 가이드)
+1.2 관련 문서와 정본 영역
+
+--- TABLE ---
+문서 | 정본 영역
+요구사항 명세서 v0.2 | 기능 요구사항 ID 체계, 우선순위, 수용 기준
+기능명세서 v1.0 | 사용자 플로우, 도메인별 기능 명세(AUTH/INPUT/MASK/AI/OVERLAY/CHAT/RULE/REPORT)
+기술명세서 v1.6 | 기술 스택, API 명세, 물리 DB 스키마, 보안 수치, 외부 연동, 환경 변수, 배포 산출물
+소프트웨어 설계문서 v1.9 (본 문서) | 논리 모듈 분해와 책임, 모듈 간 인터페이스, 인터페이스 카탈로그, 핵심 시퀀스, 데이터 모델 ERD
+--- /TABLE ---
+
+1.3 용어 정의
+
+--- TABLE ---
+용어 | 정의
+논리 모듈 | 책임 경계를 기준으로 분해한 설계 단위. 물리 배포 위치와 독립적이다.
+배포 단위 | 논리 모듈이 실제로 실행되는 물리 구성요소(Next.js 앱, FastAPI 앱, DB 등).
+비내력벽 | 구조적 하중을 지지하지 않는 벽체. 철거 가능 여부 사전 검토 대상.
+Mask2Former | 도면 이미지 픽셀 단위 세그멘테이션 + 벽 유형 분류 AI 모델.
+VLM | Vision-Language Model. 이미지 기반 자연어 추론 모델(초기 GPT-5.4-mini).
+공통 판단 스키마 | AI 분석 모듈이 Rule Engine 모듈에 결과를 전달하는 표준 JSON 컨트랙트. §5.2 참조.
+A2UI | AI-to-User Interface. 텍스트와 구조화된 선택지 카드가 혼합된 채팅형 인터페이스.
+Rule Engine | 국토부 규정을 Python rule-engine 라이브러리로 구현한 법적 판단 모듈.
+제공/요구 인터페이스 | Provided: 다른 모듈이 이 모듈을 호출하는 계약. Required: 이 모듈이 다른 모듈·외부 시스템에 의존하는 계약.
+--- /TABLE ---
+
+2. 시스템 아키텍처
+2.1 아키텍처 원칙
+책임 기준 모듈 분해 — 모듈은 물리 배포 위치가 아니라 도메인 책임을 기준으로 분해한다. 하나의 논리 모듈은 여러 배포 단위에 걸칠 수 있다.
+단방향 계층 의존 — Presentation, Application, Data 3개 논리 계층 간 의존은 단방향이며 역방향 호출을 허용하지 않는다.
+AI 처리는 동기 — 사용자 체감 응답시간(< 30s) 목표 하에 비동기 큐 없이 워커 멀티프로세싱으로 처리한다.
+AI 모델 추상화 — 프로바이더 교체(OpenAI ↔ 자체 호스팅)가 자유롭도록 LangChain 추상 인터페이스로 격리한다.
+법적 판단 분리 — RULE 모듈을 AI 파이프라인 바깥에 두고, AI 출력은 ‘공통 판단 스키마’ 컨트랙트로만 RULE 모듈에 진입한다.
+2.2 3-Layer 논리 구조
+집핀은 Presentation · Application · Data 3개 논리 계층으로 구성된다. ‘계층’은 배포 단위가 아니라 책임의 추상화 수준을 가리킨다. 각 계층은 아래 계층에만 의존한다.
+
+--- TABLE ---
+논리 계층 | 주요 책임 | 대표 배포 단위
+Presentation | 사용자 인터랙션, A2UI 렌더링, 도면 오버레이 표시, OAuth 콜백 수신 | Next.js (App Router) + Nginx
+Application | 요청 라우팅, 모듈 오케스트레이션, AI 파이프라인, 법규 판단, 외부 API 어댑팅 | FastAPI (Gunicorn/Uvicorn)
+Data | 사용자·세션·도면·리포트 영속화, 캐시, 객체 저장 | PostgreSQL + Redis + S3
+--- /TABLE ---
+
+[그림 1] 시스템 아키텍처 — 3-Layer 논리 구조
+2.3 네트워크 토폴로지
+Nginx가 모든 인바운드 트래픽을 종단하며 경로 기반 리버스 프록시로 분배한다.
+/api/*  →  FastAPI   (Application 계층)
+/*      →  Next.js   (Presentation 계층)
+동일 EC2 인스턴스 내 컨테이너 네트워크 격리. PostgreSQL은 별도 EC2-DB로 분리한다. 인프라 구체 사양은 기술명세서 §7.2가 정본이다.
+2.4 논리 모듈 ↔ 배포 단위 매핑
+§3·§4가 정의하는 8개 논리 모듈은 아래와 같이 물리 배포 단위에 매핑된다. 하나의 논리 모듈이 Presentation·Application·Data에 걸쳐 분산될 수 있다 — 이는 모듈의 책임이 깨진 것이 아니라, 동일 책임이 사용자 인터랙션 측과 서버 처리 측에 나뉘어 구현되었음을 뜻한다.
+
+--- TABLE ---
+논리 모듈 | Presentation (Next.js) | Application (FastAPI) | Data
+AUTH | NextAuth OAuth 콜백, 토큰 인터셉터 | auth 라우터, auth 미들웨어 | users, JWT 블랙리스트(Redis)
+INPUT | 주소 입력 화면, 업로드 존 | floorplans 라우터, address_service | 평면도 DB, S3
+MASK | — | 마스킹 전처리 서비스 | S3
+AI | CHAT, OVERLAY | analyzeFloorplan | 공통 판단 스키마 초안 / 도면 객체·벽체 분석 결과
+OVERLAY | CHAT/session | captureWallSelection | selected_walls[] (스키마 병합 입력)
+CHAT | ChatInterface, 메시지·카드 UI | chat·sessions 라우터, 흐름 오케스트레이션 | sessions, chat_messages
+RULE | REPORT, CHAT | evaluate | RuleEvalResult
+REPORT | CHAT | generateReport / submitLead / shareReport | ReportRef, LeadRef
+--- /TABLE ---
+
+주의 — 본 표는 모듈을 배포에 ‘투영’한 결과일 뿐이다. 설계의 1차 단위는 어디까지나 논리 모듈이며, 프론트엔드·백엔드라는 용어는 본 문서에서 이 표와 모듈별 ‘배포 매핑’ 필드 외에는 사용하지 않는다.
+3. 모듈 분해 (Module Decomposition)
+3.1 모듈 분해 개요와 구조도
+집핀은 기능명세서 §2가 정의한 8개 도메인을 그대로 논리 모듈 경계로 채택한다. 각 모듈은 단일 책임을 가지며, 사용자 플로우 9단계는 이 모듈들이 정해진 순서로 협력한 결과다.
+구조도 (Structure Chart) — CHAT 모듈이 사용자 응답과 세션 스키마 초안을 구성하고, 전체 절차 감시 에이전트(FLOW_GUARD)가 전체 절차의 충분성 판단과 보완 루프 제어를 독립 책임으로 수행한다. 본 도면의 화살표는 API 호출 계약이 아니라 대표 산출물 흐름과 오케스트레이션 방향을 요약한다. 실제 제공/소비 인터페이스 계약은 §5.1 및 그림 3을 정본으로 한다.
+도면 처리 본류는 INPUT → MASK → AI → OVERLAY 순으로 흐른다. 이후 OVERLAY의 벽체 선택값과 CHAT의 부족 판단값 수집 결과가 CHAT/session 계층에서 CommonJudgmentSchemaDraft로 병합되고, FLOW_GUARD가 충분성·충돌·고위험 여부를 평가한다. FLOW_GUARD가 PROCEED_RULE을 반환한 경우에만 RULE이 완성된 단일 스키마를 평가하고, REPORT는 RuleEvalResult를 바탕으로 리포트와 예상 견적을 산출한다.
+[그림 3] 모듈 연계도 — 책임 배치와 대표 산출물 흐름(직접 API 계약도 아님)
+3.2 모듈 분해 근거 (Design Rationale)
+
+--- TABLE ---
+분해 결정 | 근거
+분해 축으로 8개 도메인을 채택 | 기능명세서가 이미 AUTH/INPUT/MASK/AI/OVERLAY/CHAT/RULE/REPORT 도메인으로 요구사항을 구획했다. 동일 경계를 설계에서도 유지하면 요구사항→설계 추적성이 1:1로 확보된다.
+MASK를 AI에서 분리 | 수치 마스킹은 ‘도면 자산 유출 방지’라는 독립 책임이며 AI 분석 정확도와 무관하다. 분리하면 마스킹 정책을 AI 모델 교체와 독립적으로 진화시킬 수 있다.
+RULE을 AI에서 분리 | 법적 판단은 결정성·감사 가능성이 필요하다. AI 출력, 오버레이 선택값, 대화형 보완값은 CHAT/session 계층에서 공통 판단 스키마로 병합되고, RULE은 완성된 스키마만 입력으로 수신한다. 따라서 AI 모델·오버레이 UI·대화 UX 변경이 법규 판단 로직에 직접 파급되지 않는다.
+OVERLAY를 CHAT에서 분리 | 도면 위 좌표 기반 인터랙션은 채팅 메시지 인터랙션과 입력 양식·상태 모델이 다르다. 분리하면 캔버스 렌더링 기술 선택이 채팅 모듈에 영향을 주지 않는다.
+CHAT을 오케스트레이터로 지정 | 사용자 플로우 9단계가 모두 채팅 세션 안에서 진행된다. 흐름 제어 책임을 CHAT에 집중시켜 다른 모듈은 순수 도메인 처리에만 집중하게 한다.
+--- /TABLE ---
+
+3.3 모듈 의존성 그래프
+아래 표는 각 모듈이 ‘요구 인터페이스’로 의존하는 모듈·외부 시스템을 정리한 것이다. 순환 의존은 존재하지 않는다.
+
+--- TABLE ---
+모듈 | 의존 모듈 | 의존 외부 시스템
+AUTH | — | OAuth 프로바이더(카카오·구글·네이버)
+INPUT | — | 도로명주소 API, 평면도 DB, S3, OCR
+MASK | INPUT | OCR/수치 검출 엔진, S3
+AI | MASK | Mask2Former, VLM 프로바이더(LangChain)
+OVERLAY | AI | —
+CHAT | INPUT, AI, OVERLAY, RULE, REPORT | —
+RULE | — (완성된 CommonJudgmentSchema만 수신) | 규칙 카탈로그(코드), 법령 룰 데이터
+REPORT | RULE | Node.js DOCX subprocess, S3, 이메일/SMS
+--- /TABLE ---
+
+4. 모듈별 상세 설계
+8개 논리 모듈을 동일한 7개 필드 템플릿으로 기술한다. 본 장은 모듈의 책임과 인터페이스 계약까지만 다루며, 클래스명·함수 시그니처·디렉토리 구조 등 코드 레벨 표현은 각 모듈의 ‘코드 정본’이 담당한다.
+제공/요구 인터페이스의 오퍼레이션은 ‘오퍼레이션명(입력) → 출력 — 의미’ 형식의 계약 수준으로만 기술한다.
+4.1 AUTH — 인증·계정 모듈
+
+--- TABLE ---
+책임 (Responsibility) | 소셜 OAuth 기반 사용자 식별과 JWT 세션 수명주기(발급·갱신·무효화)를 단독으로 책임진다.
+제공 인터페이스 (Provided) | authenticateOAuth(provider, authCode) → {accessToken, refreshToken, userContext} — OAuth 콜백 코드를 검증하여 사용자를 식별·자동가입하고 토큰을 발급한다. / refreshSession(refreshToken) → {accessToken} — 만료된 Access Token을 사용자 인지 없이 재발급한다. / resolveCurrentUser(accessToken) → UserContext — 모든 보호 라우터에 사용자 컨텍스트를 주입한다(인가 의존성). / revokeSession(accessToken) → void — 로그아웃·관리자 강제 만료 시 토큰을 무효화한다.
+요구 인터페이스 (Required) | 외부 OAuth 프로바이더 — Authorize / Token 교환 / UserInfo 조회. / users 엔티티 영속화(Data 계층 upsert). / JWT 블랙리스트 저장소(Redis).
+데이터 계약 (Data Contract) | UserContext { user_id, email, role(user|admin) }. 비밀번호는 보관하지 않는다.
+오류·예외 | OAUTH_FAILED — 외부 인증 실패. / TOKEN_INVALID / TOKEN_EXPIRED — Access Token 검증 실패. / REFRESH_EXPIRED — Refresh Token 만료. 재로그인 유도.
+배포 매핑 (논리 계층) | Presentation(OAuth 콜백·토큰 인터셉터) + Application(인증 미들웨어·auth 라우터) + Data(users·블랙리스트).
+코드 정본 (Source of Truth) | 기능명세서 §2.1(AUTH-001~002). 토큰 유효기간 등 수치는 기술명세서 §5.1. 코드: frontend lib/auth.ts, backend middleware/auth.py·routers/auth.py.
+--- /TABLE ---
+
+4.2 INPUT — 입력·도면조회 모듈
+
+--- TABLE ---
+책임 (Responsibility) | 공동주택 식별정보 수집·정규화, 내부 도면 DB 후보 조회, 사용자 직접 업로드 도면의 수신·검증·전처리(자동 보정·텍스트 OCR)를 책임진다.
+제공 인터페이스 (Provided) | normalizeAddress(rawInput) → BuildingIdentity — 주소·동·호·층을 정규화한다. / lookupFloorplanCandidates(BuildingIdentity) → FloorplanCandidate[] — 내부 평면도 DB(약 3만 건)에서 후보를 신뢰도와 함께 반환한다. / ingestUploadedFloorplan(file) → FloorplanRef — 형식·용량·악성코드 검증, 자동 보정, 텍스트 OCR을 거쳐 분석 가능한 도면 참조를 생성한다.
+요구 인터페이스 (Required) | 도로명주소 API — 주소 검색·자동완성·정규화. / 내부 평면도 DB — 세대별 평면도 후보. / S3 — 업로드 원본·보정본 저장. / OCR 엔진 — 도면 내 호수·평형·실명 텍스트 추출.
+데이터 계약 (Data Contract) | BuildingIdentity { address, apt_name, dong, ho, floor, pyeong? }. FloorplanRef { floorplan_id, image_url, ocr_labels[] }.
+오류·예외 | REQUIRED_FIELD_MISSING — 필수 입력 누락. / NO_CANDIDATE — DB 후보 없음(직접 업로드 분기). / UNSUPPORTED_FILE / FILE_TOO_LARGE / MALWARE_DETECTED — 업로드 검증 실패.
+배포 매핑 (논리 계층) | Presentation(주소 입력 화면·업로드 존) + Application(address_service·floorplans 라우터) + Data(평면도 DB·S3).
+코드 정본 (Source of Truth) | 기능명세서 §2.2(INPUT-001~005). 코드: backend services/address_service·routers/floorplans.
+--- /TABLE ---
+
+4.3 MASK — 수치 마스킹 모듈
+
+--- TABLE ---
+책임 (Responsibility) | 업로드 도면의 치수·면적·좌표 수치 영역을 검출·가림 처리하여 도면 자산 유출을 방지하고, 마스킹본을 AI 분석 입력으로 제공한다.
+제공 인터페이스 (Provided) | maskNumericRegions(FloorplanRef) → MaskedFloorplanRef — 치수·면적·배율 수치를 단색 마스크로 가린 도면을 생성한다.
+요구 인터페이스 (Required) | 수치 검출 엔진(OCR 기반). / S3 — 마스킹본 저장.
+데이터 계약 (Data Contract) | MaskedFloorplanRef { masked_image_url, masked_regions[] }. 판단 기준은 수치가 아닌 공간 인접 관계·벽체 유형이므로 마스킹은 분석 정확도에 영향을 주지 않는다.
+오류·예외 | MASKING_TIMEOUT / MASKING_FAILED — 실패 시 원본 도면으로 폴백하고 사유를 로깅한다.
+배포 매핑 (논리 계층) | Application 전용. Presentation 구성요소 없음.
+코드 정본 (Source of Truth) | 기능명세서 §2.3(MASK-001). 코드: backend 마스킹 전처리 서비스.
+--- /TABLE ---
+
+4.4 AI — 도면 분석 모듈
+
+--- TABLE ---
+책임 (Responsibility) | 마스킹된 도면을 입력으로 ① 세그멘테이션 → ② VLM 문맥 해석 → ③ 공통 판단 스키마 정규화의 3단계 오케스트레이션을 책임진다.
+제공 인터페이스 (Provided) | analyzeFloorplan(MaskedFloorplanRef, sessionContext) → CommonJudgmentSchema — 도면을 분석하여 공간·벽체 객체와 룰 엔진 입력 변수를 담은 공통 판단 스키마를 생성한다.
+요구 인터페이스 (Required) | MASK 모듈 출력(MaskedFloorplanRef). / Mask2Former 모델 — 공간 세그멘테이션·벽체 유형 분류. / VLM 프로바이더 — LangChain 추상화로 격리(초기 GPT-5.4-mini).
+데이터 계약 (Data Contract) | 출력 컨트랙트: 공통 판단 스키마(§5.2). 내부 3단계 책임 분리: / ① 세그멘테이션 — 도면 → SegmentationResult (모델 버전 교체 가능). / ② 문맥 해석 — SegmentationResult+이미지 → VLM 보완 결과 (프로바이더 교체 가능). / ③ 스키마 정규화 — ①·② 결과 → 공통 판단 스키마 (스키마 semver 진화 가능).
+오류·예외 | SEGMENTATION_FAILED / VLM_TIMEOUT — 단계별 실패를 도메인 예외로 변환. / ANALYSIS_LOW_CONFIDENCE — 신뢰도 0.6 미만 시 재업로드 권장. / SCHEMA_CONFLICT — 모델 간 결과 불일치 해결 불가.
+배포 매핑 (논리 계층) | Application 전용. Mask2Former는 워커 부팅 시 1회 로드 후 메모리 상주(워커별 싱글톤).
+코드 정본 (Source of Truth) | 기능명세서 §2.4(AI-001~003). 코드: backend services/ai_pipeline(mask2former·vlm_chain·schema_builder).
+--- /TABLE ---
+
+4.5 OVERLAY — 오버레이 상호작용 모듈
+
+--- TABLE ---
+책임 (Responsibility) | AI 분석 결과를 도면 위 인터랙티브 오버레이로 렌더링하고, 사용자의 비내력벽 후보 선택·간소 보정 입력을 수집한다.
+제공 인터페이스 (Provided) | renderOverlay(imageUrl, segmentationResult) → 인터랙티브 도면 뷰 — 객체 유형별 색상 마스크·레이블·범례를 표시한다. / captureWallSelection() → selected_walls(region_id[]) — 사용자가 클릭으로 선택한 철거 희망 벽체 목록을 반환한다.
+요구 인터페이스 (Required) | AI 모듈 출력 — 공통 판단 스키마의 segmentation_result 및 overlay_data. 세션 상태 저장소 — 선택 결과를 CHAT/session에 보관하고 RULE 직접 호출 없이 스키마 병합 대상으로 전달한다.
+데이터 계약 (Data Contract) | WallRegion { region_id, label, polygon, adjacent_rooms }. 출력은 selected_walls: region_id[] 이며 CHAT/session 계층을 통해 공통 판단 스키마의 selected_walls 필드에 반영된다. OVERLAY는 RULE을 직접 호출하지 않는다.
+오류·예외 | OVERLAY_RENDER_FAILED — 캔버스 렌더 실패. 원본 이미지로 폴백.
+배포 매핑 (논리 계층) | Presentation 전용. 캔버스 렌더링 기술(Fabric.js/Konva.js/SVG)은 코드 정본에서 결정.
+코드 정본 (Source of Truth) | 기능명세서 §2.5(OVERLAY-001~002). 코드: frontend CanvasOverlay·WallSelector.
+--- /TABLE ---
+
+4.6 CHAT — 대화·A2UI 모듈
+
+--- TABLE ---
+책임 (Responsibility) | A2UI 채팅 세션의 수명주기를 관리하고, 텍스트·선택지 카드가 혼합된 인터페이스를 제공하며, 법령 판단에 부족한 판단값을 생활 언어 Q&A로 수집한다. 사용자 플로우 9단계의 흐름 오케스트레이션을 담당한다.
+제공 인터페이스 (Provided) | createSession(BuildingIdentity) → session_id — 주소 입력 완료 시 채팅 세션을 생성한다. / sendUserMessage(session_id, payload) → A2UIMessage — 사용자 발화·선택을 받아 다음 단계 메시지를 반환한다. / collectMissingValues(judgmentGaps) → judgment_values — 부족 판단값을 생활 언어 질문·선택지 카드로 변환·수집한다.
+요구 인터페이스 (Required) | INPUT·AI·OVERLAY·RULE·REPORT 모듈 — 흐름 단계별 호출. / sessions·chat_messages 엔티티 영속화.
+데이터 계약 (Data Contract) | A2UIMessage { type(text|choice|image|overlay|report), payload }. 첨부·선택지는 JSONB로 비정형 보존.
+오류·예외 | SESSION_EXPIRED — 마지막 활동 24시간 경과. / 판단 보류 — INSUFFICIENT_DATA / CONFLICTING_DATA / LOW_CONFIDENCE / RULE_EXCEPTION. 사유 안내 + 상담 CTA 노출.
+배포 매핑 (논리 계층) | Presentation(ChatInterface·메시지·카드 UI) + Application(chat·sessions 라우터·흐름 오케스트레이션) + Data(sessions·chat_messages).
+코드 정본 (Source of Truth) | 기능명세서 §2.6(CHAT-001~004). 코드: frontend ChatInterface, backend routers/chat·routers/sessions.
+--- /TABLE ---
+
+4.7 전체 절차 감시 에이전트 (FLOW_GUARD)
+
+--- TABLE ---
+책임 (Responsibility) | CommonJudgmentSchemaDraft, 대화 이력, 누락 필드, 오버레이 선택값, AI 분석 신뢰도, 충돌 플래그를 입력받아 사전검토 리포트 생성과 법령 평가를 진행하기에 충분한지 단독으로 판단한다. CHAT의 사용자 대화 책임과 충분성 판단·루프 제어 책임을 분리한다.
+제공 인터페이스 (Provided) | 충분성 평가(evaluateCompleteness): 공통 판단 스키마 초안(CommonJudgmentSchemaDraft), 대화 이력(chat_history), 누락 판단값(missing_values), AI 분석 요약(analysis_summary), 선택된 벽체(selected_walls)를 입력받아 충분성 판단 결정(CompletionDecision)을 반환한다. 충분성·충돌·고위험 여부를 평가해 다음 행동을 결정한다.
+요구 인터페이스 (Required) | CHAT/session — 스키마 초안·대화 이력·누락 필드 제공. AI 모듈 — 분석 신뢰도·충돌 플래그. OVERLAY — 사용자 선택값. RULE — 평가 진입 신호 수신.
+데이터 계약 (Data Contract) | 충분성 판단 결정(CompletionDecision) { decision, reason, missing_fields[], next_actions[] }. decision 값은 4가지: 추가 질의 요청(ASK_MORE) — 대화 에이전트가 추가 질문을 생성, 도면 재확인 요청(REQUEST_OVERLAY_REVIEW) — 오버레이 보정 입력으로 복귀, 룰 평가 진행(PROCEED_RULE) — 완성된 공통 판단 스키마를 RULE에 전달, 보류·상담 전환(HOLD_OR_HANDOFF) — 판단 보류 안내 또는 상담 채널 전환. 결정은 보수적으로 산출되며 동일 입력에 대해 안정적인 결정이 나오도록 한다.
+오류·예외 | 결정 모호(DECISION_AMBIGUOUS) — 충분성과 충돌이 동시에 발생하면 보류·상담 전환(HOLD_OR_HANDOFF)으로 보수적 분기. 에이전트 타임아웃(AGENT_TIMEOUT) — 외부 에이전트 호출 실패 시 보류 처리. 보완 루프 과다(LOOP_OVERFLOW) — 동일 보완 질의가 임계 횟수 반복되면 상담 전환을 유도.
+배포 매핑 (논리 계층) | Application 전용. 별도 LLM·검증 에이전트 프로세스로 분리하거나 동일 실행 환경 내 논리 모듈로 구성 가능. CHAT과 분리된 책임 경계는 유지한다.
+코드 정본 (Source of Truth) | 기능명세서 §2.7 [FLOW_GUARD] 전체 절차 감시 에이전트(FLOW_GUARD-001~003). 코드: backend services/flow_guard·agents/flow_guard.
+--- /TABLE ---
+
+4.8 RULE — 법규 룰엔진 모듈
+
+--- TABLE ---
+책임 (Responsibility) | 공통 판단 스키마를 입력으로 국토부 고시 규칙을 평가하여 철거 가능 여부·필요 방화시설·행위허가 필요 여부 판정을 산출한다. AI 파이프라인 바깥에 위치한다.
+제공 인터페이스 (Provided) | evaluate(CommonJudgmentSchema) → RuleEvalResult — 규칙을 평가하고 최종 판정을 집계한다.
+요구 인터페이스 (Required) | 공통 판단 스키마 — CHAT/session 계층이 AI 분석 결과, OVERLAY 선택값, CHAT 보완 질문값을 병합해 완성한 단일 입력 컨트랙트. 규칙 카탈로그 — 비내력벽 확인·내력벽 금지·건물 노후도·발코니 접합 등(코드 정본).
+데이터 계약 (Data Contract) | RuleEvalResult { verdict(ALLOW|WARN|DENY|HOLD), required_facilities[], permit_required, legal_basis[], ruleset_version }. 내부 책임 분리: 규칙 정의 / 개별 규칙 평가 / 판정 집계(DENY > WARN > ALLOW) / 사용자 메시지 빌드. RULE은 AI·OVERLAY·CHAT의 내부 인터페이스에 의존하지 않고 CommonJudgmentSchema 필드만 참조한다.
+오류·예외 | RULE_EXCEPTION — 법령 예외 케이스로 자동 판단 불가. / INSUFFICIENT_DATA — rule_input_ready=false. 추가 정보 수집 필요.
+배포 매핑 (논리 계층) | Application 전용. 동일 입력에 대한 결정성 100%(NFR-QUAL-002).
+코드 정본 (Source of Truth) | 기능명세서 §2.7(RULE-001~003). 코드: backend services/rule_engine·services/rules.
+--- /TABLE ---
+
+4.9 REPORT — 리포트·리드 모듈
+
+--- TABLE ---
+책임 (Responsibility) | 룰 판정 결과를 사전검토 리포트(화면·DOCX)로 생성하고, 상담·행위허가 의뢰 리드를 수집하여 영업 채널로 연결한다.
+제공 인터페이스 (Provided) | generateReport(RuleEvalResult, sessionContext) → ReportRef — 판정 결과를 사용자 친화 리포트와 DOCX 산출물로 생성한다. / submitLead(reportId, contactInfo, ctaType) → LeadRef — 상담·의뢰 리드를 수집하고 관리자에게 알린다. / shareReport(reportId) → shareUrl — 리포트 공유 토큰·URL을 발급한다.
+요구 인터페이스 (Required) | RULE 모듈 출력(RuleEvalResult). / Node.js DOCX 생성 subprocess. / S3 — 리포트 산출물 저장. 이메일/SMS — 관리자 리드 알림.
+데이터 계약 (Data Contract) | ReportRef { report_id, verdict, share_token, docx_url }. LeadRef { lead_id, cta_type(상담|행위허가의뢰|재검토|공유) }. 모든 리포트 화면에 AI 한계 법적 고지 문구 필수(NFR-LEGAL-001).
+오류·예외 | REPORT_GENERATION_FAILED — DOCX 산출 실패. / LEAD_NOTIFY_FAILED — 관리자 알림 실패(리드 자체는 보존).
+배포 매핑 (논리 계층) | Presentation(ReportViewer·CTA) + Application(reports 라우터·report_generator) + Data(reports·leads·S3).
+코드 정본 (Source of Truth) | 기능명세서 §2.8(REPORT-001~002). 코드: backend routers/reports·services/report_generator.
+--- /TABLE ---
+
+견적 산출 세부 산출부 (REPORT.estimate)
+
+--- TABLE ---
+책임 (Responsibility) | 법규 룰 엔진(RULE) 판정과 정책 단가표를 입력받아 사전검토 단계의 예상 견적 범위(EstimateResult)를 산출한다. 법령 판단은 RULE이, 견적 계산은 견적 산출 세부 산출부(REPORT.estimate)가 담당하여 책임을 분리한다.
+제공 인터페이스 (Provided) | 견적 산출(computeEstimate): 룰 평가 결과(RuleEvalResult), 산정 기준(measurement_basis), 정책 단가표 참조(pricing_policy_ref)를 입력받아 예상 견적 결과(EstimateResult)를 반환한다. 항목별 예상 금액 범위와 산정 전제·정책 버전·변동 사유를 함께 산출한다.
+요구 인터페이스 (Required) | RULE 모듈 출력(RuleEvalResult, 필요 방화시설, 행위허가 필요 여부, 법령 근거). 정책 단가표(pricing_policy_ref) — 운영 정책에 따라 변경 가능.
+데이터 계약 (Data Contract) | 예상 견적 결과(EstimateResult) { permit_agency_fee_estimate(행위허가 대행 비용), fire_panel_estimate(방화판 설치 비용), fire_glass_estimate(방화유리 설치 비용), total_range(합산 범위), assumptions(산정 전제), policy_version(정책 버전), variance_notes(변동 사유), consultation_required(상담 권장 여부) }. 단가 정책 예시(v1): 행위허가 대행 33만원 / 방화판 설치 가로 길이 × 2만원/m / 방화유리 설치 유리 자재비 + 시공비 5만원. 특허 출원 설명에서는 특정 단가를 고정하지 않고 정책에 따라 변경 가능한 산정식·단가표로 표현하며, 모든 단가는 운영 정책에 따라 변경 가능하다.
+오류·예외 | 정책 단가표 누락(PRICING_POLICY_MISSING) — 단가표 미연결 시 견적 항목을 생략하고 상담을 권고. 견적 범위 초과(ESTIMATE_OUT_OF_RANGE) — 산정 결과가 정책 허용 범위를 초과하면 보수적 범위로 클립하고 사유를 기록.
+배포 매핑 (논리 계층) | Application 전용. REPORT 모듈 하위 산출부로 결합되며 별도 배포 단위로 분리되지 않는다.
+코드 정본 (Source of Truth) | 기능명세서 §2.9(REPORT-003). 코드: backend services/report_generator/estimate.
+--- /TABLE ---
+
+5. 인터페이스 설계 (Interface Design)
+5.1 모듈 간 인터페이스 일람 (Interface Catalog)
+§4가 정의한 제공 인터페이스를 계약 관계 기준으로 한곳에 모은 카탈로그다. 화살표의 방향은 데이터가 화면에 흘러가는 방향이 아니라 ‘제공 모듈’이 ‘소비 모듈’에게 노출하는 인터페이스 방향이다.
+
+--- TABLE ---
+제공 모듈 | 소비 모듈 | 인터페이스 | 경계 데이터
+AUTH | CHAT, (전 모듈) | resolveCurrentUser | UserContext
+INPUT | CHAT | lookupFloorplanCandidates / ingestUploadedFloorplan | FloorplanRef
+MASK | AI | maskNumericRegions | MaskedFloorplanRef
+AI | CHAT, OVERLAY | analyzeFloorplan | 공통 판단 스키마 초안 / 도면 객체·벽체 분석 결과
+OVERLAY | CHAT/session | captureWallSelection | selected_walls[] (스키마 병합 입력)
+CHAT | RULE | provideCompletedJudgmentSchema / evaluate 호출 | 완성된 CommonJudgmentSchema
+RULE | REPORT, CHAT | evaluate | RuleEvalResult
+REPORT | CHAT | generateReport / submitLead / shareReport | ReportRef, LeadRef
+--- /TABLE ---
+
+핵심 관찰 — RULE 모듈의 입력은 전체 절차 감시 에이전트(FLOW_GUARD)가 진행 가능하다고 판단한 완성 CommonJudgmentSchema다. AI 분석 결과, OVERLAY의 selected_walls, CHAT의 judgment_values는 CHAT/session에서 초안으로 병합되고, FLOW_GUARD가 충분성 판단과 보완 루프 제어를 담당한다. 이 단일 입력 컨트랙트 덕분에 RULE은 AI·오버레이·대화 UX·견적 산출의 내부 구현과 분리된다.
+[그림 3] 모듈간 인터페이스도 — 제공 모듈에서 소비 모듈로 노출되는 계약 관계
+FLOW_GUARD·견적 산출 연계 인터페이스
+아래 흐름은 5.1 카탈로그를 보완하는 절차 감시·견적 산출 경로의 명시적 계약이다.
+
+--- TABLE ---
+ID | 송신 → 수신 | 페이로드 | 의미
+I-FLOW-01 | CHAT/session → FLOW_GUARD | CommonJudgmentSchemaDraft, chat_history, missing_values, analysis_summary, selected_walls | 충분성 판단 입력 전달
+I-FLOW-02 | FLOW_GUARD → CHAT / OVERLAY / RULE | 충분성 판단 결정(CompletionDecision) { decision, reason, missing_fields[], next_actions[] } | 추가 질의 요청(ASK_MORE) / 도면 재확인 요청(REQUEST_OVERLAY_REVIEW) / 룰 평가 진행(PROCEED_RULE) / 보류·상담 전환(HOLD_OR_HANDOFF) 분기
+I-REPORT-EST-01 | RULE → REPORT.estimate | RuleEvalResult, required_facilities, permit_required, legal_basis, measurement_basis, pricing_policy_ref | 견적 산출 입력 → EstimateResult로 REPORT 본문 병합
+--- /TABLE ---
+
+5.2 핵심 컨트랙트 — 공통 판단 스키마
+공통 판단 스키마는 상류 분석·사용자 보완 계층과 RULE 모듈 사이의 판정 입력 컨트랙트다. AI 분석 결과, OVERLAY 선택값, CHAT 보완 질문값이 CHAT/session에서 CommonJudgmentSchemaDraft로 병합되고, 전체 절차 감시 에이전트(FLOW_GUARD)가 충분성·충돌·고위험 여부를 평가한 뒤 룰 평가 진행(PROCEED_RULE) 상태의 완성 스키마만 RULE로 전달한다.
+
+--- TABLE ---
+필드 | 타입 | 역할
+session_id | uuid | 세션 추적
+analyzed_at | ISO-8601 | AI 분석 시점
+schema_version | string | 스키마 버전(semver, 예: “1.0.0”)
+building_info | object | 주소·건물 유형·추정 준공년도 등 RULE이 사용하는 메타데이터
+space_objects[] | array | 공간 객체. id, label, type, mask_coords, confidence, source_engine
+wall_objects[] | array | 벽체 객체. id, wall_type(non_load_bearing|load_bearing), confidence, coords
+vlm_supplement | object | VLM 재분류 결과·주석
+selected_walls[] | array<region_id> | OVERLAY가 수집한 사용자 선택 철거 대상 벽체 ID
+target_space | region_id | 사용자가 지정한 변경 희망 공간 ID
+judgment_values | object | CHAT이 수집한 RULE 입력 변수(층수, 스프링클러, 대피공간, 계단실 수, 창호 형태 등)
+rule_input_ready | boolean | RULE 진입 가능 여부. false면 CHAT이 추가 정보를 수집한다.
+--- /TABLE ---
+
+5.3 외부 시스템 인터페이스
+모듈이 외부 시스템과 맺는 인터페이스를 정리한다. API 엔드포인트·인증 키 등 상세 명세는 기술명세서 §6이 정본이다.
+
+--- TABLE ---
+외부 시스템 | 소비 모듈 | 인터페이스 역할
+OAuth 프로바이더 (카카오·구글·네이버) | AUTH | Authorize 리다이렉트, Access Token 교환, 사용자 정보 조회
+도로명주소 API | INPUT | 주소 검색·자동완성·정규화
+내부 평면도 DB | INPUT | 공동주택 식별키 기반 평면도 후보 조회(약 3만 건)
+세움터 API | INPUT | 공동주택 식별키로 기확장 신고 정보 조회. 장애 시 graceful degradation(판단 보류)
+OpenAI API (VLM) | AI | 도면 문맥 해석. LangChain 추상화로 프로바이더 교체 가능
+Amazon S3 | INPUT·MASK·REPORT | 도면 원본·마스킹본·리포트 산출물 객체 저장, Pre-Signed URL 발급
+이메일/SMS (SES·SOLAPI 등) | REPORT | 상담·행위허가 의뢰 리드 발생 시 관리자 알림
+--- /TABLE ---
+
+6. 데이터 모델 설계
+물리 스키마(컬럼 타입·제약·인덱스)는 기술명세서 §4가 정본이다. 본 장은 엔티티 경계와 책임만 정의한다.
+6.1 엔티티 책임 요약
+
+--- TABLE ---
+엔티티 | 책임 | 주요 관계
+users | OAuth 기반 사용자 식별. 비밀번호 미보관. | 1:N sessions
+sessions | 사전검토 1건의 수명주기 단위. 채팅·도면·리포트의 부모. | N:1 users / 1:N floorplans·chat_messages / 1:1 reports / 1:N leads
+floorplans | 도면 원본·전처리본 메타데이터, 세그멘테이션 결과·선택 벽체 보관. | N:1 sessions
+chat_messages | 세션 내 A2UI 대화 이력. 첨부·선택지는 JSONB 비정형 보존. | N:1 sessions
+reports | RULE 판정 결과와 DOCX 산출물 메타데이터. 공유 토큰 발급 단위. | 1:1 sessions, N:1 floorplans
+leads | 리포트로부터 파생되는 상담·의뢰 리드. 영업 전환 진입점. | N:1 sessions
+--- /TABLE ---
+
+6.2 ERD 개요
+다음은 핵심 엔티티들의 관계도이며 핵심 관계이외의 세부 필드들은 개발 단계에서 추가 및 수정이 일어날 수 있다.
+[그림 4] ERD — 핵심 데이터간의 연결관계 개요
+6.3 절차 감시 및 견적 산출 데이터
+전체 절차 감시 에이전트(FLOW_GUARD)의 판단 이력과 견적 산출 세부 산출부(REPORT.estimate)의 견적 산출 결과를 영속화·전달하기 위한 데이터 구조다. 물리 스키마는 기술명세서 §4가 정본이며, 본 절은 엔티티 경계와 주요 필드만 정의한다.
+
+--- TABLE ---
+엔티티 / 구조 | 책임 | 주요 필드
+flow_guard_decisions | 절차 감시 에이전트의 판단 이력 영속화. 보완 루프 추적과 감사 근거 제공. | schema_snapshot, missing_fields, conflict_flags, confidence_summary, decision, next_action
+estimate_items | 리포트 단위 견적 항목 영속화. 산정 정책 버전·전제 함께 보관. | report_id, estimate_type, basis_value, unit_policy_ref, amount_range, assumptions, variance_notes
+예상 견적 결과 (EstimateResult, 출력 컨트랙트) | REPORT 본문에 병합되는 견적 산출 결과 컨트랙트. 운영 정책에 따라 변경 가능한 산정식·단가표로 표현. | permit_agency_fee_estimate, fire_panel_estimate, fire_glass_estimate, total_range, assumptions, policy_version, variance_notes, consultation_required
+--- /TABLE ---
+
+특허 출원 설명에서는 특정 단가를 고정하지 않고 운영 정책에 따라 변경 가능한 산정식 또는 단가표로 표현한다.
+현행 운영 정책(v1) 예시 — 행위허가 대행 비용 33만원, 방화판 설치 비용 가로 길이 × 2만원/m, 방화유리 설치 비용 유리 자재비 + 시공비 5만원. 모든 단가는 정책 단가표(pricing_policy_ref) 갱신에 따라 변경 가능하며, 예상 견적 결과(EstimateResult)의 policy_version 필드로 산정 시점의 정책 버전을 함께 기록한다.
+7. 핵심 시퀀스 설계
+주요 흐름을 §3·§4가 정의한 논리 모듈 간 호출 순서로 기술한다. 행위자(Actor)는 물리 ‘프론트엔드/백엔드’가 아니라 논리 모듈명으로 표기하여 §3·§4와 어휘를 일치시킨다. 사용자 플로우 9단계 자체는 기능명세서 §1.3이 정본이다.
+7.1 소셜 로그인 및 JWT 발급 흐름
+
+--- TABLE ---
+# | 모듈/행위자 | 동작
+1 | User → AUTH | /login 진입, 소셜 프로바이더 선택
+2 | AUTH → OAuth 프로바이더 | Authorize URL로 리다이렉트
+3 | OAuth 프로바이더 → AUTH | Authorization Code 콜백
+4 | AUTH → OAuth 프로바이더 | Access Token 교환, 사용자 정보 조회
+5 | AUTH → Data(users) | users upsert
+6 | AUTH → User | JWT Access Token + Refresh Token 반환
+--- /TABLE ---
+
+토큰 유효기간 등 수치는 기술명세서 §5.1을 정본으로 한다.
+[그림 5] 시퀀스 — 소셜 로그인·JWT 발급 흐름
+7.2 도면 업로드 및 AI 분석 흐름
+동기 처리. 목표 p95 응답시간은 30초이며 수치 자체는 기술명세서 §7.1을 정본으로 한다.
+
+--- TABLE ---
+# | 모듈/행위자 | 동작
+1 | CHAT → INPUT | 도면 이미지 업로드 전달(ingestUploadedFloorplan)
+2 | INPUT → S3 | 원본 저장, Pre-Signed URL 발급
+3 | INPUT → MASK | maskNumericRegions — 수치 마스킹 전처리
+4 | MASK → AI | MaskedFloorplanRef 전달, analyzeFloorplan 호출
+5 | AI 내부 | 세그멘테이션 → VLM 해석 → 스키마 정규화 순차 실행
+6 | AI → Data | 공통 판단 스키마 영속화
+7 | AI → OVERLAY | 공통 판단 스키마 반환 — 도면 오버레이 렌더링
+--- /TABLE ---
+
+[그림 6] 시퀀스 — 도면 업로드·AI 분석 흐름
+7.3 채팅 기반 정보 수집 및 판정 흐름
+9단계 사용자 플로우를 모듈 간 호출 관점으로 요약한다. 전체 단계 정의는 기능명세서 §1.3 참조.
+
+--- TABLE ---
+국면 | 주체 모듈 | 주된 모듈 간 호출
+주소 입력 | CHAT ↔ INPUT | normalizeAddress → lookupFloorplanCandidates
+도면 분석 | CHAT → MASK → AI | §7.2 흐름
+벽 선택 | OVERLAY | captureWallSelection → selected_walls를 CHAT/session에 반영
+정보 수집 | CHAT | collectMissingValues → judgment_values 완성 및 스키마 병합
+법규 판단 | CHAT → RULE | evaluate(완성된 공통 판단 스키마) → RuleEvalResult
+결과 표시 | CHAT → REPORT | generateReport → ReportViewer 렌더링 + CTA
+--- /TABLE ---
+
+8. 횡단 관심사 (Cross-Cutting Concerns) 설계
+본 장은 ‘어디서 어떻게 처리하는가’의 설계 의도만 다룬다. 수치(토큰 유효기간·로그 보존·Rate Limit·TTL)는 기술명세서·운영 정책이 정본이다.
+8.1 인증·인가 설계
+인증 책임 위치 — AUTH 모듈의 인증 미들웨어에서 JWT를 검증한다. 다른 모듈의 라우터는 인가 의존성 주입으로 사용자 컨텍스트만 받는다.
+권한 모델 — RBAC 2단계(user / admin). /admin/* 라우터는 별도 관리자 게이팅을 적용한다.
+세션 격리 — 모든 자원 접근 라우터에서 session.user_id == current_user.id 사전 검증을 일관 적용한다.
+토큰 갱신 — Presentation의 HTTP 인터셉터가 401 응답을 감지하여 refreshSession 후 원본 요청을 자동 재시도한다.
+토큰 무효화 — Redis JWT 블랙리스트로 로그아웃·강제 만료를 처리한다.
+토큰 유효기간·서명 알고리즘 등 구체 수치는 기술명세서 §5.1 참조(부록 A에 정합성 이슈 기재).
+8.2 에러 처리 전략
+에러 도메인 분류 — 클라이언트 오류(4xx), 외부 시스템 오류(502/504), AI 신뢰도 부족(422), 내부 오류(500) 4개 그룹으로 분리한다.
+처리 위치 — 비즈니스 예외는 모듈 내부에서 도메인 예외(ZippinException 계열)로 raise하고, 공통 예외 핸들러가 표준 응답 포맷으로 변환한다.
+AI 분석 실패 — AI 모듈의 각 단계는 timeout·예외를 도메인 예외로 변환한다. 신뢰도 0.6 미만 시 ANALYSIS_LOW_CONFIDENCE로 재업로드를 권장한다.
+응답 포맷 — error.{code, message, request_id, timestamp}를 표준으로 한다. detail은 개발 환경에서만 노출한다.
+8.3 로깅 전략
+구조화 로깅 — structlog로 JSON 로깅. request_id를 컨텍스트에 주입하여 모듈·외부 호출 전반에 전파한다.
+로깅 지점 — 로깅 미들웨어에서 요청·응답 1줄, 모듈 내부에서 외부 호출·도메인 이벤트, 예외 핸들러에서 에러+스택트레이스.
+PII 마스킹 — 채팅 메시지·주소·연락처는 로그 전 마스킹 단계를 거친다.
+외부 송신 — ERROR 레벨은 Sentry, 운영 메트릭은 CloudWatch로 송출한다.
+8.4 캐싱 전략
+계층 위치 — 모든 캐시는 Redis 단일 인스턴스에 집중하되 키 네임스페이스(token:bl, addr:, seumteo:)로 도메인을 분리한다.
+캐시 위치 — 외부 API 응답(주소·세움터)은 INPUT 모듈에서 데코레이터로 감싼다. 비즈니스 로직은 캐시 존재를 가정하지 않는다.
+AI 모델 상주 — Mask2Former는 워커 부팅 시 1회 로드 후 메모리 상주한다(워커별 싱글톤).
+정적 에셋 — Nginx + CDN. 애플리케이션 코드의 관심사가 아니다.
