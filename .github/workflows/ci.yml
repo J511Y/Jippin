@@ -1,0 +1,215 @@
+# 집핀(Jippin) CI 스켈레톤 — CMP-531 / D5
+#
+# 책임:
+#   1. PR 마다 apps/web (Next.js 16.2 / pnpm 9) typecheck + lint
+#   2. PR 마다 apps/api (FastAPI 0.115 / Python 3.13 / uv) ruff check
+#   3. PR 의 모든 커밋이 gitmoji 정규식(AGENTS.md §4.1) 통과
+#
+# 의도적으로 빠진 것 (CMP-531 범위 외):
+#   - 실제 테스트 실행 (PyTest / Playwright)         → 별도 자식 이슈
+#   - 빌드 산출물 업로드 / 배포                       → D6 이후
+#   - 시크릿 스캔                                    → secret-scan.yml 로 분리
+#
+# ADR-0001 §9 봉인: Node 22 / Python 3.13 / pnpm 9 / uv 0.5+
+name: ci
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+# 동일 PR 의 직전 실행은 취소(빠른 피드백).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.13"
+  PNPM_VERSION: "9.12.0"
+  UV_VERSION: "0.5.11"
+
+jobs:
+  # -------------------------------------------------------------------
+  # 1) gitmoji 커밋 메시지 검증
+  # -------------------------------------------------------------------
+  gitmoji-validate:
+    name: gitmoji commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for range check)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Validate commit messages
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+            echo "Validating commits in ${BASE}..${HEAD}"
+            python tooling/validate_commit_msg.py --range "${BASE}..${HEAD}"
+          else
+            # push to main / workflow_dispatch — 최근 1건만 검증
+            HEAD="${{ github.sha }}"
+            echo "Validating HEAD commit ${HEAD}"
+            git log -1 --format=%s "${HEAD}" | python tooling/validate_commit_msg.py --stdin
+          fi
+
+  # -------------------------------------------------------------------
+  # 2) apps/web — Next.js 16.2 / pnpm 9 (typecheck + lint)
+  # -------------------------------------------------------------------
+  web:
+    name: web (typecheck + lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect apps/web
+        id: detect
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [[ -f apps/web/package.json ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/web/package.json 없음 — 본 job 은 no-op."
+          fi
+
+      - name: Setup pnpm
+        if: steps.detect.outputs.exists == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: pnpm install (frozen if lock present)
+        if: steps.detect.outputs.exists == 'true'
+        shell: bash
+        run: |
+          if [[ -f pnpm-lock.yaml ]]; then
+            pnpm install --frozen-lockfile
+          else
+            echo "::warning::pnpm-lock.yaml 미존재. 초기 부트스트랩 단계로 간주하고 lock 없이 설치한다."
+            pnpm install --no-frozen-lockfile
+          fi
+
+      - name: Typecheck (tsc --noEmit)
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm run typecheck
+
+      - name: Lint (next lint / eslint)
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm run lint
+
+  # -------------------------------------------------------------------
+  # 3) apps/api — FastAPI 0.115 / Python 3.13 / uv (ruff)
+  # -------------------------------------------------------------------
+  api:
+    name: api (ruff check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect apps/api
+        id: detect
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [[ -f apps/api/pyproject.toml ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/api/pyproject.toml 없음 — 본 job 은 no-op."
+          fi
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv ${{ env.UV_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            apps/api/uv.lock
+            apps/api/pyproject.toml
+
+      - name: uv sync
+        if: steps.detect.outputs.exists == 'true'
+        shell: bash
+        run: |
+          if [[ -f uv.lock ]]; then
+            uv sync --frozen
+          else
+            echo "::warning::apps/api/uv.lock 미존재. 초기 부트스트랩 단계로 간주."
+            uv sync
+          fi
+
+      - name: Ruff check
+        if: steps.detect.outputs.exists == 'true'
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        if: steps.detect.outputs.exists == 'true'
+        run: uv run ruff format --check .
+
+  # -------------------------------------------------------------------
+  # 4) 메타 게이트 — 위 모든 job 통과 시에만 성공.
+  # 브랜치 보호 규칙은 본 job 한 개만 required 로 설정하면 충분.
+  # -------------------------------------------------------------------
+  ci-status:
+    name: ci-status
+    runs-on: ubuntu-latest
+    needs:
+      - gitmoji-validate
+      - web
+      - api
+    if: always()
+    steps:
+      - name: Aggregate
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail=0
+          for r in "${{ needs.gitmoji-validate.result }}" "${{ needs.web.result }}" "${{ needs.api.result }}"; do
+            if [[ "$r" != "success" && "$r" != "skipped" ]]; then
+              echo "::error::sub-job failed/cancelled: $r"
+              fail=1
+            fi
+          done
+          exit "$fail"
