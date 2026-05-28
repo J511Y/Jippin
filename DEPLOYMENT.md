@@ -7,7 +7,7 @@
 | Git branch | GitHub Environment | APP_ENV | Neon branch | 용도 |
 |---|---|---|---|---|
 | feature / issue branch | 없음 | `test` | `preview/pr-<PR>-<branch>` | PR 단위 기능/스키마 검증 |
-| `dev` | `development` | `development` | `dev` | 개발 통합 환경 |
+| `dev` | `development` | `development` | `development` | 개발 통합 환경 |
 | `main` | `production` | `production` | `production` | 운영 환경 |
 
 기본 흐름:
@@ -46,7 +46,7 @@ PR open/reopen/synchronize 시 workflow 는 다음 이름의 Neon branch 를 만
 preview/pr-<PR번호>-<head branch>
 ```
 
-PR base 가 `dev` 면 Neon `dev` branch 를 parent 로 사용하고, PR base 가 `main` 이면 Neon `production` branch 를 parent 로 사용한다. 생성된 preview branch 는 14일 만료 시간을 가진다.
+PR base 가 `dev` 면 Neon `development` branch 를 parent 로 사용하고, PR base 가 `main` 이면 Neon `production` branch 를 parent 로 사용한다. 생성된 preview branch 는 14일 만료 시간을 가진다.
 
 connection string 은 credential 이므로 로그나 PR 코멘트에 출력하지 않는다. PR 코멘트에는 branch 이름, parent, migration 실행 여부만 남긴다.
 
