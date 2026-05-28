@@ -41,6 +41,14 @@ jippin/
 ```
 
 > 본 이슈(CMP-523) 종료 시점에는 위 트리의 골격만 존재한다. 모듈별 실제 코드는 후속 이슈에서 채워진다.
+>
+> **봉인 ADR**: 본 트리·패키지 매니저·런타임은 [`docs/adr/0001-stack-reevaluation.md`](docs/adr/0001-stack-reevaluation.md) 가 봉인한다. 변경은 새 ADR을 발행해 supersede 해야 한다. 핵심 결정:
+> - `apps/web` = **Next.js 16.2 LTS** · React 19 · Node 22 LTS · **pnpm 9.x**
+> - `apps/api` = **FastAPI 0.115** · Python 3.12 · **uv 0.5+**
+> - DB = **Neon Postgres** (외부, 로컬 DB 컨테이너 없음). 캐시 = **Redis 7.4-alpine** 컨테이너.
+> - 객체 스토리지 = **Cloudflare R2** (S3 호환, zero-egress).
+> - LLM 오케스트레이션 = **LangChain v0.3+**. VLM 기본 = OpenAI `gpt-4.1-mini` / 정밀 = `gpt-4o`.
+> - 클라우드 MVP = **AWS Lightsail Seoul (`ap-northeast-2`)** — ADR-0002 Accepted 후 확정.
 
 ---
 
@@ -143,19 +151,25 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 
 ---
 
-## 6. 표준 명령 (CTO 확정 후 갱신)
+## 6. 표준 명령 (CTO ADR-0001 봉인 후 정본)
 
-CTO ADR 확정 전 가설값. 실제 명령은 각 앱 README에 정본을 둔다.
+각 앱의 정본 명령은 해당 앱 README에 두되, 모노레포 루트에서 자주 쓰는 명령은 다음과 같다.
 
 ```bash
-# 전체 부팅
-docker compose up --build
+# 전체 부팅 (web + api + redis. DB는 Neon 원격)
+docker compose -f infra/compose/docker-compose.yml up --build
 
-# DB 헬스체크
+# 백엔드 단독 (uv)
+cd apps/api && uv sync && uv run uvicorn src.main:app --reload --port 8000
+
+# 프론트엔드 단독 (pnpm)
+cd apps/web && pnpm install && pnpm dev
+
+# 헬스체크 (Neon SELECT 1 결과 포함)
 curl http://localhost:8000/healthz
 
-# 마이그레이션 (api 앱 컨테이너 내부)
-docker compose exec api alembic upgrade head      # 또는 prisma migrate deploy
+# 마이그레이션 (api 컨테이너 내부 / Alembic)
+docker compose exec api alembic upgrade head
 
 # 정본 docx/xlsx 텍스트 캐시 재생성
 python tooling/extract_specs.py
