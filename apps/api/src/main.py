@@ -11,6 +11,7 @@ from .config import get_settings
 from .db import dispose_engines
 from .errors import register_exception_handlers
 from .logging import RequestIDMiddleware, configure_logging, get_logger
+from .middleware.request_log import RequestLogMiddleware
 from .routers.healthz import router as healthz_router
 
 
@@ -47,6 +48,9 @@ def create_app() -> FastAPI:
         expose_headers=[settings.request_id_header],
     )
     app.add_middleware(RequestIDMiddleware)
+    # Last added wraps first: request logging sees the final response while
+    # reading request.state.request_id after RequestIDMiddleware runs.
+    app.add_middleware(RequestLogMiddleware)
 
     register_exception_handlers(app)
     app.include_router(healthz_router)
