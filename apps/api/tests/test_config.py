@@ -12,9 +12,7 @@ from pydantic import ValidationError
 from src.config import ALLOWED_APP_ENVS, Settings
 
 
-@pytest.mark.parametrize(
-    "value", ["development", "test", "staging", "production"]
-)
+@pytest.mark.parametrize("value", ["development", "test", "staging", "production"])
 def test_allowed_app_envs_boot(value: str) -> None:
     settings = Settings(app_env=value)
     assert settings.app_env == value
