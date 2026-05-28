@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jippin.local/contracts/common-judgment-schema.schema.json",
+  "title": "CommonJudgmentSchema",
+  "description": "공통 판단 스키마 — AI 분석·OVERLAY 선택·CHAT 보완값이 CHAT/session 에서 병합되어 FLOW_GUARD 평가를 거쳐 RULE 의 단일 입력 컨트랙트가 된다. SDD §5.2 정본.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id",
+    "analyzed_at",
+    "schema_version",
+    "building_info",
+    "space_objects",
+    "wall_objects",
+    "selected_walls",
+    "judgment_values",
+    "rule_input_ready"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "세션 추적 식별자."
+    },
+    "analyzed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "AI 분석 시점 (ISO-8601)."
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "const": "1.0.0",
+      "description": "스키마 버전 (semver). 본 ADR-0001 / CMP-527 시점 고정값."
+    },
+    "building_info": {
+      "$ref": "#/$defs/BuildingInfo"
+    },
+    "space_objects": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/SpaceObject" },
+      "description": "공간 객체 목록."
+    },
+    "wall_objects": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/WallObject" },
+      "description": "벽체 객체 목록."
+    },
+    "vlm_supplement": {
+      "$ref": "#/$defs/VlmSupplement",
+      "description": "VLM 재분류·주석 결과. 분석이 보류된 경우 null 또는 부재."
+    },
+    "selected_walls": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "OVERLAY 가 수집한 사용자 선택 철거 대상 벽체 region_id 목록."
+    },
+    "target_space": {
+      "type": ["string", "null"],
+      "description": "사용자가 지정한 변경 희망 공간 region_id. 미지정 시 null."
+    },
+    "judgment_values": {
+      "$ref": "#/$defs/JudgmentValues"
+    },
+    "rule_input_ready": {
+      "type": "boolean",
+      "description": "RULE 진입 가능 여부. false면 CHAT/FLOW_GUARD 가 추가 정보를 수집한다."
+    }
+  },
+  "$defs": {
+    "BuildingInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address_normalized", "building_type"],
+      "properties": {
+        "address_normalized": {
+          "type": "string",
+          "minLength": 1,
+          "description": "도로명주소 API 가 정규화한 주소 문자열."
+        },
+        "dong": {
+          "type": ["string", "null"],
+          "description": "동 식별자."
+        },
+        "ho": {
+          "type": ["string", "null"],
+          "description": "호 식별자."
+        },
+        "floor": {
+          "type": ["integer", "null"],
+          "description": "층수. 룰 평가의 1차 입력."
+        },
+        "total_floors": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "건물 전체 층수."
+        },
+        "building_type": {
+          "type": "string",
+          "enum": ["APARTMENT", "OFFICETEL", "ROW_HOUSE", "MULTI_FAMILY", "ETC"],
+          "description": "건물 유형."
+        },
+        "approx_built_year": {
+          "type": ["integer", "null"],
+          "minimum": 1900,
+          "maximum": 2100,
+          "description": "추정 준공년도."
+        }
+      }
+    },
+    "MaskCoord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      },
+      "description": "도면 좌표계 위 한 점 (px or normalized)."
+    },
+    "SpaceObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "type", "mask_coords", "confidence", "source_engine"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": {
+          "type": "string",
+          "description": "사람이 읽는 라벨 (예: '거실', '주방', '대피공간')."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "LIVING_ROOM",
+            "KITCHEN",
+            "BEDROOM",
+            "BATHROOM",
+            "BALCONY",
+            "EVACUATION_SPACE",
+            "STAIRWELL",
+            "CORRIDOR",
+            "ETC"
+          ],
+          "description": "정규화된 공간 타입."
+        },
+        "mask_coords": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/MaskCoord" },
+          "minItems": 3,
+          "description": "공간 폴리곤 좌표."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "세그멘테이션 신뢰도."
+        },
+        "source_engine": {
+          "type": "string",
+          "enum": ["MASK2FORMER", "SAM2", "VLM", "HITL"],
+          "description": "이 객체를 생성한 엔진."
+        }
+      }
+    },
+    "WallObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "wall_type", "confidence", "coords", "source_engine"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "wall_type": {
+          "type": "string",
+          "enum": ["NON_LOAD_BEARING", "LOAD_BEARING", "UNKNOWN"],
+          "description": "벽체 종류. UNKNOWN 은 보완 루프 트리거."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "coords": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/MaskCoord" },
+          "minItems": 2,
+          "description": "벽체 선분/폴리라인 좌표."
+        },
+        "source_engine": {
+          "type": "string",
+          "enum": ["MASK2FORMER", "SAM2", "VLM", "HITL"]
+        }
+      }
+    },
+    "VlmSupplement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["OPENAI", "ANTHROPIC", "GOOGLE", "OTHER"],
+          "description": "VLM 프로바이더 (ADR-0001 §7 의 VLMClient 인터페이스 호환)."
+        },
+        "model": {
+          "type": "string",
+          "description": "예: 'gpt-5.4-mini', 'gpt-5.5'."
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "VLM 자유 텍스트 주석."
+        },
+        "reclassifications": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["object_id", "new_label", "reason"],
+            "properties": {
+              "object_id": { "type": "string", "minLength": 1 },
+              "new_label": { "type": "string", "minLength": 1 },
+              "reason": { "type": "string" }
+            }
+          },
+          "description": "Mask2Former 라벨을 VLM 이 교정한 결과."
+        }
+      }
+    },
+    "JudgmentValues": {
+      "type": "object",
+      "description": "CHAT 이 사용자로부터 수집한 RULE 입력 변수 모음. SDD §5.2.",
+      "additionalProperties": false,
+      "properties": {
+        "floor_count": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "건물 층수."
+        },
+        "has_sprinkler": {
+          "type": ["boolean", "null"],
+          "description": "스프링클러 설치 여부."
+        },
+        "has_evacuation_space": {
+          "type": ["boolean", "null"],
+          "description": "대피공간 존재 여부."
+        },
+        "stairwell_count": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "계단실 수."
+        },
+        "window_form": {
+          "type": ["string", "null"],
+          "enum": ["FIXED", "OPENABLE", "FOLDING", "SLIDING", "OTHER", null],
+          "description": "창호 형태."
+        },
+        "balcony_attached": {
+          "type": ["boolean", "null"],
+          "description": "발코니 접합 여부."
+        },
+        "permit_history_known": {
+          "type": ["boolean", "null"],
+          "description": "기존 행위허가 이력 존재 여부."
+        }
+      }
+    }
+  }
+}

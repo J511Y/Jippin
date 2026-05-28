@@ -1,0 +1,86 @@
+# 집핀(Jippin) PR 제목 검증 — CMP-531 / D5
+#
+# 책임:
+#   PR 제목이 다음 두 조건을 모두 만족하는지 검증한다.
+#     1. 본문 어딘가에 `CMP-<숫자>` 이슈 식별자 포함 (AGENTS.md §4.3 / docs/CONTRIBUTING.md §3)
+#     2. 첫 글자가 gitmoji prefix 정규식과 호환 — 즉 PR 을 squash 머지했을 때
+#        그대로 commit subject 가 되어 `gitmoji-validate` 를 통과할 수 있는 형식
+#        (^(✨|🐛|📝|♻️|✅|🔧|🚀|🔒|🚧) (feat|fix|docs|refactor|test|chore|perf|security|wip)\(([a-z0-9][a-z0-9-]*)\): .+)
+#
+# 실패 예:
+#   "kakao callback"                              → 이모지/prefix/scope 없음
+#   "✨ feat(auth): 카카오 콜백"                   → CMP-### 누락
+#   "feat(auth): kakao callback (CMP-528)"        → 이모지 누락
+#
+# 통과 예:
+#   "✨ feat(auth): 카카오 콜백 (CMP-528)"
+#   "🔧 chore(cmp-531): CI 스켈레톤 추가 (Refs: CMP-531)"
+#
+# 본 job 은 push/머지 후가 아니라 PR 이벤트에만 동작한다 (제목 검증의 본질).
+name: pr-title-lint
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-title-lint-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-pr-title:
+    name: PR title (gitmoji + CMP-###)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          title="${PR_TITLE}"
+          echo "PR title: ${title}"
+
+          fail=0
+
+          # 1) CMP-### 식별자 포함 (대소문자 무시).
+          if ! [[ "${title}" =~ [Cc][Mm][Pp]-[0-9]+ ]]; then
+            echo "::error::PR 제목에 'CMP-<숫자>' 이슈 식별자가 없습니다 (AGENTS.md §4.3)."
+            echo "::error::예) '✨ feat(auth): 카카오 콜백 (CMP-528)'"
+            fail=1
+          fi
+
+          # 2) gitmoji + prefix(scope): 본문 — Python 으로 정규식 검증 (bash 의 [[=~]] 는 유니코드 클래스 제한).
+          python3 - "${title}" <<'PY' || fail=1
+          import re
+          import sys
+
+          title = sys.argv[1]
+          pattern = re.compile(
+              r"^(✨|🐛|📝|♻️|✅|🔧|🚀|🔒|🚧) "
+              r"(feat|fix|docs|refactor|test|chore|perf|security|wip)"
+              r"\(([a-z0-9][a-z0-9-]*)\): .+"
+          )
+          if not pattern.match(title):
+              print("::error::PR 제목이 gitmoji 정규식과 일치하지 않습니다 (docs/CONTRIBUTING.md §2.1).", file=sys.stderr)
+              print("::error::허용 이모지: ✨ 🐛 📝 ♻️ ✅ 🔧 🚀 🔒 🚧", file=sys.stderr)
+              print("::error::허용 prefix: feat fix docs refactor test chore perf security wip", file=sys.stderr)
+              print("::error::예) '🔧 chore(cmp-531): CI 스켈레톤 추가 (Refs: CMP-531)'", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+          if [[ "${fail}" -ne 0 ]]; then
+            exit 1
+          fi
+          echo "OK — PR 제목이 gitmoji + CMP-### 정책을 통과합니다."

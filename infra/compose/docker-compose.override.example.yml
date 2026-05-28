@@ -1,0 +1,52 @@
+# =============================================================================
+# Jippin — 개발자 hot-reload 오버레이 (CMP-530 산출물 #2)
+# -----------------------------------------------------------------------------
+# 이 파일은 *.example.yml 로 트래킹된다. docker compose 가 cwd 의
+# docker-compose.override.yml 을 자동으로 머지하기 때문에, 본 파일을 그대로
+# 추적할 경우 prod 부팅 시에도 호스트 소스가 봉인된 이미지를 덮어쓰는 사고가
+# 발생할 수 있다 (ADR-0001 §9 봉인 위반). 따라서 활성화는 명시적 1회 cp 로만.
+#
+# 활성화:
+#   cp infra/compose/docker-compose.override.example.yml \
+#      infra/compose/docker-compose.override.yml
+#   make up   # 또는 docker compose -f docker-compose.yml -f docker-compose.override.yml up
+#
+# 비활성화:
+#   rm infra/compose/docker-compose.override.yml
+#
+# 효과:
+#   - apps/web 소스가 컨테이너 /app 으로 마운트되어 next dev 가 변경을 감지.
+#   - apps/api/src 소스가 컨테이너 /app/src 로 마운트되어 uvicorn --reload 가
+#     감지 (WATCHFILES_FORCE_POLLING=1 로 Windows/WSL bind mount 대응).
+# =============================================================================
+
+services:
+  web:
+    # dev 에서는 봉인된 standalone 이미지 대신 소스 마운트 + next dev 를 사용한다.
+    command: ["pnpm", "exec", "next", "dev", "-p", "3000", "-H", "0.0.0.0"]
+    environment:
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+      CHOKIDAR_USEPOLLING: "1"
+    volumes:
+      - ../../apps/web:/app
+      # 컨테이너 안의 빌드 산출물/모듈은 호스트로 덮어쓰지 않는다.
+      - /app/node_modules
+      - /app/.next
+    # dev 모드에서는 자체 헬스체크를 비활성화해 watcher 콜드스타트와의 경합을 피한다.
+    healthcheck:
+      disable: true
+
+  api:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # Linux bind mount 의 inotify 한계 회피 (Windows/WSL/Docker Desktop).
+      WATCHFILES_FORCE_POLLING: "1"
+    volumes:
+      - ../../apps/api/src:/app/src
+      # 가상환경/캐시는 호스트로 빠지지 않도록 익명 볼륨으로 가린다.
+      - /app/.venv
+      - /app/__pycache__
+    healthcheck:
+      disable: true

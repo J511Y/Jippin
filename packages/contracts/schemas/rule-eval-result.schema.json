@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jippin.local/contracts/rule-eval-result.schema.json",
+  "title": "RuleEvalResult",
+  "description": "RULE 모듈의 평가 결과. CommonJudgmentSchema 를 입력으로 산출되며, REPORT 와 REPORT.estimate 의 입력이다. SDD §4.8·§5.1 (I-REPORT-EST-01) 정본.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verdict",
+    "required_facilities",
+    "permit_required",
+    "legal_basis",
+    "ruleset_version",
+    "evaluated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "const": "1.0.0",
+      "description": "스키마 버전 (semver). 본 ADR-0001 / CMP-527 시점 고정값."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["ALLOW", "WARN", "DENY", "HOLD"],
+      "description": "최종 판정. 집계 우선순위 DENY > WARN > ALLOW > HOLD 는 RULE 모듈 내부에서 강제 (SDD §4.8 데이터 계약)."
+    },
+    "required_facilities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/RequiredFacility" },
+      "description": "필요 방화시설 목록. REPORT.estimate 의 산정 입력."
+    },
+    "permit_required": {
+      "type": "boolean",
+      "description": "행위허가 필요 여부."
+    },
+    "legal_basis": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/LegalBasis" },
+      "minItems": 0,
+      "description": "법령 근거 목록. 모든 화면에 노출되어야 한다 (FR-REPORT-009)."
+    },
+    "ruleset_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "룰셋 카탈로그 버전 (예: '2026-05-01'). 결정성 100%(NFR-QUAL-002) 의 추적 키."
+    },
+    "evaluated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RULE 평가 시점 (ISO-8601)."
+    },
+    "user_message": {
+      "type": ["string", "null"],
+      "description": "사용자에게 표시할 한 줄 요약. RULE 의 메시지 빌더 결과."
+    }
+  },
+  "$defs": {
+    "RequiredFacility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "label"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "FIRE_PANEL",
+            "FIRE_GLASS",
+            "EVACUATION_SPACE",
+            "SPRINKLER",
+            "AUTOMATIC_DOOR_CLOSER"
+          ],
+          "description": "방화시설/안전시설 코드."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "사용자 노출 라벨."
+        },
+        "measurement_basis": {
+          "type": ["string", "null"],
+          "description": "산정 기준 (예: '대피공간 인접 벽 가로 길이')."
+        }
+      }
+    },
+    "LegalBasis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statute", "article", "summary"],
+      "properties": {
+        "statute": {
+          "type": "string",
+          "minLength": 1,
+          "description": "법령명 (예: '건축법 시행령')."
+        },
+        "article": {
+          "type": "string",
+          "minLength": 1,
+          "description": "조·항·호 (예: '제46조 제5항')."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "한 줄 요약."
+        },
+        "url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "description": "원문 링크 (있는 경우)."
+        }
+      }
+    }
+  }
+}

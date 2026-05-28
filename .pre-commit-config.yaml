@@ -1,0 +1,85 @@
+# 집핀(Jippin) — pre-commit 훅 정본
+# 정본 정의: CMP-533 (Security Engineer)
+#
+# 설치:
+#   pip install pre-commit       # 또는 brew install pre-commit
+#   pre-commit install           # .git/hooks/pre-commit 에 진입점 설치
+#
+# CI 와의 관계:
+#   - 본 훅은 `tools/secret-scan/scan.py --staged` 로 로컬에서 빠르게 fail-fast
+#   - CI(`.github/workflows/secret-scan.yml`) 는 동일 스크립트를 PR 전체에 적용
+#     + gitleaks 가 별도로 한 번 더 스캔 → 다층 방어
+#
+# 우회 (개발자에게 알리는 정책):
+#   - `git commit --no-verify` 는 **PR 머지 전 코드 리뷰에서 거부 사유**.
+#   - allowlist 가 필요한 경우 `tools/secret-scan/patterns.yml` 의 `allowlist:`
+#     섹션에 사유를 적고 커밋 (Security Engineer 리뷰 필수).
+
+default_install_hook_types: [pre-commit]
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # ---------------------------------------------------------------------------
+  # 1) 집핀 자체 시크릿 스캐너 — patterns.yml 기반 정규식 매칭 (정본)
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: jippin-secret-scan
+        name: 집핀 시크릿 스캐너 (npg_/sk-/AKIA/xoxb-/ghp_/postgresql:// 등)
+        entry: python tools/secret-scan/scan.py --staged
+        language: python
+        additional_dependencies:
+          - pyyaml>=6.0
+        # 모든 변경 파일에 대해 한 번만 호출 (스크립트가 자체적으로 staged 를 가져옴)
+        pass_filenames: false
+        always_run: true
+        verbose: true
+
+      - id: jippin-secret-scan-selftest
+        name: 집핀 시크릿 스캐너 자체 점검
+        # patterns.yml 또는 scan.py 가 변경될 때만 실행 — 신규 패턴이
+        # 실제로 자기 자신을 잡는지 확인.
+        entry: python tools/secret-scan/scan.py --selftest
+        language: python
+        additional_dependencies:
+          - pyyaml>=6.0
+        files: ^tools/secret-scan/(patterns\.yml|scan\.py)$
+        pass_filenames: false
+
+  # ---------------------------------------------------------------------------
+  # 2) gitleaks — 보조 (false-positive 더 많지만 커버리지 넓음)
+  # 로컬 설치 비용을 고려해 본 훅은 manual-stage 로 제공.
+  # `pre-commit run --hook-stage manual gitleaks` 또는 CI 에서만 실행.
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        name: gitleaks (manual / CI 보조)
+        stages: [manual]
+
+  # ---------------------------------------------------------------------------
+  # 3) 기본 위생 — 끝줄 공백 / 큰 파일 / private key 파일 등
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-private-key
+        name: detect private key (.pem / .key)
+      - id: check-added-large-files
+        name: large file guard (>5MB)
+        args: ["--maxkb=5120"]
+      - id: end-of-file-fixer
+        # 정본 명세서(docx/xlsx) 와 모델 가중치는 건드리지 않는다.
+        exclude: |
+          (?x)^(
+            docs/명세서/.*|
+            .*\.(png|jpg|jpeg|gif|pdf|zip|tar|gz|7z|rar|docx|xlsx|pptx|safetensors|pt|pth|bin|onnx|gguf|ckpt)$
+          )$
+      - id: trailing-whitespace
+        exclude: |
+          (?x)^(
+            docs/명세서/.*|
+            .*\.md$
+          )$
