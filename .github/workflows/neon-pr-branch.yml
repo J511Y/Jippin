@@ -4,7 +4,8 @@
 #
 # 동작:
 #   - PR opened/reopened/synchronize: `preview/pr-<PR번호>-<head branch>` 브랜치 생성/갱신.
-#   - PR base 가 dev 이면 Neon development 에서, main 이면 Neon production 에서 preview 를 딴다.
+#   - PR base 가 dev 이면 NEON_DEV_PARENT_BRANCH(권장: branch id) 에서,
+#     main 이면 Neon production 에서 preview 를 딴다.
 #   - preview branch 에 `alembic upgrade head` 를 적용해 PR 단위 스키마를 검증한다.
 #   - PR closed: 같은 이름의 preview branch 삭제.
 #   - branch 는 14일 만료(expires_at)를 가진다.
@@ -52,12 +53,14 @@ jobs:
 
       - name: Select Neon parent branch
         id: parent
+        env:
+          NEON_DEV_PARENT_BRANCH: ${{ vars.NEON_DEV_PARENT_BRANCH }}
         shell: bash
         run: |
           set -euo pipefail
           case "${{ github.event.pull_request.base.ref }}" in
             dev)
-              echo "parent_branch=development" >> "$GITHUB_OUTPUT"
+              echo "parent_branch=${NEON_DEV_PARENT_BRANCH:-development}" >> "$GITHUB_OUTPUT"
               ;;
             main)
               echo "parent_branch=production" >> "$GITHUB_OUTPUT"
