@@ -159,7 +159,67 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 5. **시크릿 헌팅** — PR/커밋 단계에서 `npg_`, `sk-`, `AKIA` 등 시크릿 패턴이 들어가지 않도록 검사. 발견 시 즉시 회전 요청.
 6. **모순 보고** — 명세 4종 간 모순을 발견하면 `docs/명세서-모순.md`(없으면 생성)에 기록하고 후속 이슈로 분리.
 
-### 5.7 한글(UTF-8) 인코딩 — 이슈/코멘트/문서 작성 시 절대 위반 금지
+### 5.7 병렬 에이전트 격리 — git worktree 필수
+
+> **배경.** Paperclip 멀티에이전트가 같은 루트 체크아웃에서 브랜치를 바꿔가며 작업하면, 서로의 변경·브랜치·PR 상태가 섞여 CMP-523 처럼 미머지 브랜치와 중복 PR 이 대량으로 생긴다. 2026-05-28 CMP-523 병렬 브랜치/PR 정리 사고 재발 방지.
+
+**Paperclip 에이전트는 코드·문서 변경을 루트 체크아웃(`C:\Users\jhyou\2026\jippin`)에서 직접 수행하지 않는다.** 루트 체크아웃은 조정·조회·PR 정리용으로만 사용하고, 실제 변경은 이슈별 독립 worktree 에서만 진행한다.
+
+원칙:
+
+- **1 Paperclip 이슈 = 1 브랜치 = 1 worktree.** 자식 이슈는 자식 브랜치와 자식 worktree 를 새로 만든다.
+- 서로 다른 에이전트가 같은 worktree 를 공유하지 않는다.
+- worktree 위치는 기본적으로 `C:\Users\jhyou\2026\jippin-worktrees\<CMP-ID>-<slug>` 를 사용한다.
+- 이미 브랜치가 있으면 새로 만들지 말고 `git worktree add <path> <branch>` 로 해당 브랜치를 붙인다.
+- 이미 worktree 경로가 있으면 `git -C <path> status --short --branch` 로 같은 이슈의 깨끗한 작업공간인지 확인한 뒤 재사용한다.
+- 루트 체크아웃의 변경을 치우기 위해 stash/reset/checkout 을 하지 않는다. 충돌이 있으면 새 worktree 를 만들거나 해당 worktree 에서만 해결한다.
+
+표준 시작 절차 (PowerShell):
+
+```powershell
+$issue = "CMP-523"
+$branch = "chore/cmp-523-bootstrap"
+$worktree = "C:\Users\jhyou\2026\jippin-worktrees\$issue-bootstrap"
+
+New-Item -ItemType Directory -Force -Path C:\Users\jhyou\2026\jippin-worktrees | Out-Null
+git -C C:\Users\jhyou\2026\jippin fetch origin
+git -C C:\Users\jhyou\2026\jippin worktree add -b $branch $worktree origin/main
+Set-Location $worktree
+git status --short --branch
+```
+
+이미 원격 브랜치가 있을 때:
+
+```powershell
+$branch = "chore/cmp-523-bootstrap"
+$worktree = "C:\Users\jhyou\2026\jippin-worktrees\CMP-523-bootstrap"
+
+New-Item -ItemType Directory -Force -Path C:\Users\jhyou\2026\jippin-worktrees | Out-Null
+git -C C:\Users\jhyou\2026\jippin fetch origin
+git -C C:\Users\jhyou\2026\jippin worktree add -b $branch $worktree origin/$branch
+Set-Location $worktree
+```
+
+이미 로컬 브랜치가 있을 때는 `-b` 없이 붙인다: `git -C C:\Users\jhyou\2026\jippin worktree add <path> <branch>`.
+
+push/PR 전 자기 점검:
+
+- [ ] `git status --short --branch` 가 의도한 이슈 브랜치를 가리킨다.
+- [ ] 현재 경로가 `jippin-worktrees\<CMP-ID>-...` 이며 루트 체크아웃이 아니다.
+- [ ] `git worktree list` 에서 같은 이슈를 여러 에이전트가 공유하지 않는다.
+- [ ] PR 본문에 Paperclip 이슈 ID 와 영향 모듈을 적었다.
+
+PR 머지 또는 폐기 후 정리:
+
+```powershell
+git -C C:\Users\jhyou\2026\jippin worktree remove C:\Users\jhyou\2026\jippin-worktrees\CMP-523-bootstrap
+git -C C:\Users\jhyou\2026\jippin branch -d chore/cmp-523-bootstrap
+git -C C:\Users\jhyou\2026\jippin push origin --delete chore/cmp-523-bootstrap
+```
+
+단, worktree 가 dirty 이면 삭제하지 말고 변경 소유자와 상태를 확인한다.
+
+### 5.8 한글(UTF-8) 인코딩 — 이슈/코멘트/문서 작성 시 절대 위반 금지
 
 > **배경.** Windows(PowerShell/cmd.exe) 호스트에서 `curl -d '{"title":"한글"}' ...` 형태로 Paperclip API 를 인라인 호출하면, 활성 코드페이지(CP949)와 curl 의 UTF-8 가정이 충돌해 본문이 `?` 로 깨진 채 서버에 저장된다. **이 손상은 비가역적**(원문 복원 불가)이며, 보드와 위임받은 에이전트 모두 작업 컨텍스트를 잃는다. 2026-05-28 CMP-524 사고(자식 이슈 7개 제목·본문 전손) 재발 방지.
 
@@ -198,7 +258,7 @@ node -e "const d=JSON.parse(require('fs').readFileSync('.tmp/resp.json','utf8'))
 
 > 사람 작업자 주의: 시스템 PowerShell 콘솔 폰트가 `Lucida Console` 인 경우 정상 출력된 한글도 콘솔에서는 `?` 로 보일 수 있다. **보드(웹 UI) 또는 `GET /api/issues/<ID>` 응답을 진실의 원천으로 삼는다.**
 
-### 5.8 CI 마이그레이션 워크플로우 — Alembic drift 가드 / 운영 적용 / PR ephemeral (CMP-539)
+### 5.9 CI 마이그레이션 워크플로우 — Alembic drift 가드 / 운영 적용 / PR ephemeral (CMP-539)
 
 `.github/workflows/` 의 세 잡이 Alembic 마이그레이션 라이프사이클을 책임진다. 어떤 잡이 무엇을 보장하는지 한 단락으로 요약한다.
 

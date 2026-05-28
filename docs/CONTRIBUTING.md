@@ -4,6 +4,7 @@
 
 근거:
 - `AGENTS.md` §4.1 (gitmoji prefix), §4.2 (GitHub Flow), §4.3 (PR 체크리스트), §4.4 (시크릿)
+- `AGENTS.md` §5.7 (Paperclip 병렬 에이전트 git worktree 격리)
 - `docs/brief/CEO_PROJECT_BRIEF.md` §5 (정책)
 - `docs/adr/0001-stack-reevaluation.md` §9.1 (패키지 매니저 봉인)
 - CMP-531 (`.gitignore`, `.env.example`, CI 스켈레톤, 본 문서)
@@ -16,6 +17,7 @@
 
 - `main` 은 **보호 브랜치**. 직접 푸시 금지. 머지는 PR 경유.
 - 새 작업은 **feature 브랜치** 에서 진행한다.
+- Paperclip 병렬 에이전트와 여러 사람이 동시에 작업할 때는 **브랜치별 git worktree** 에서만 변경한다.
 - 머지 방식: **Squash and merge** 단일 옵션. (gitmoji prefix 가 머지 커밋 메시지에 남는다)
 
 ### 1.1 브랜치 이름 규칙
@@ -45,12 +47,49 @@
 
 ### 1.2 작업 흐름
 
-1. `git switch main && git pull --ff-only`
-2. `git switch -c <type>/<scope>-<short>` (위 규칙)
-3. 작업 → 작은 단위로 자주 커밋 (`gitmoji` prefix 준수, §2)
-4. `git push -u origin <branch>` → GitHub 에서 PR 생성
-5. 리뷰 통과 + CI 그린 → **Squash and merge**
-6. 머지 후 브랜치 삭제 (`git push origin --delete <branch>`)
+1. 루트 체크아웃에서 최신 main 을 확인한다: `git fetch origin`
+2. 이슈별 worktree 를 만든다: `git worktree add -b <type>/<scope>-<short> C:\Users\jhyou\2026\jippin-worktrees\<CMP-ID>-<slug> origin/main`
+3. worktree 로 이동한다: `cd C:\Users\jhyou\2026\jippin-worktrees\<CMP-ID>-<slug>`
+4. 작업 → 작은 단위로 자주 커밋 (`gitmoji` prefix 준수, §2)
+5. `git push -u origin <branch>` → GitHub 에서 PR 생성
+6. 리뷰 통과 + CI 그린 → **Squash and merge**
+7. 머지 후 worktree 와 브랜치 삭제 (`git worktree remove <path>`, `git push origin --delete <branch>`)
+
+### 1.3 병렬 작업 격리 — git worktree 필수
+
+Paperclip 에이전트는 루트 체크아웃(`C:\Users\jhyou\2026\jippin`)에서 직접 브랜치를 바꿔가며 작업하지 않는다. 루트 체크아웃은 coordination/read-only 용도로 두고, 실제 변경·커밋·푸시는 이슈별 worktree 에서 수행한다.
+
+표준 PowerShell 절차:
+
+```powershell
+$issue = "CMP-531"
+$branch = "chore/cmp-531-github-flow"
+$worktree = "C:\Users\jhyou\2026\jippin-worktrees\$issue-github-flow"
+
+New-Item -ItemType Directory -Force -Path C:\Users\jhyou\2026\jippin-worktrees | Out-Null
+git fetch origin
+git worktree add -b $branch $worktree origin/main
+Set-Location $worktree
+git status --short --branch
+```
+
+기존 브랜치가 원격에만 있으면 원격 브랜치에서 로컬 브랜치를 만들어 worktree 에 붙인다.
+
+```powershell
+New-Item -ItemType Directory -Force -Path C:\Users\jhyou\2026\jippin-worktrees | Out-Null
+git fetch origin
+git worktree add -b chore/cmp-531-github-flow C:\Users\jhyou\2026\jippin-worktrees\CMP-531-github-flow origin/chore/cmp-531-github-flow
+```
+
+기존 브랜치가 로컬에 있으면 `-b` 를 쓰지 않는다: `git worktree add <path> <branch>`.
+
+필수 규칙:
+
+- **1 Paperclip 이슈 = 1 브랜치 = 1 worktree.**
+- 서로 다른 에이전트가 같은 worktree 를 공유하지 않는다.
+- 자식 이슈는 별도 브랜치와 별도 worktree 로 처리한다.
+- push/PR 전 `git status --short --branch` 와 `git worktree list` 로 현재 브랜치·경로를 확인한다.
+- dirty worktree 는 삭제하지 않는다. 먼저 변경 소유자와 상태를 확인한다.
 
 ---
 
@@ -161,7 +200,7 @@ ADR-0001 §9.1 봉인. **다른 매니저 사용 금지**.
 
 ## 6. 신규 기여자 — 첫 PR 5분 가이드
 
-```bash
+```powershell
 # 1) 의존성 (각 앱)
 cd apps/web && pnpm install && cd -
 cd apps/api && uv sync && cd -
@@ -179,8 +218,14 @@ git config commit.template .gitmessage
 cp .env.example .env
 #   → 실제 값을 채운다. .env 는 절대 커밋되지 않는다.
 
-# 4) 새 브랜치
-git switch -c feat/<scope>-<short>
+# 4) 새 브랜치 + 독립 worktree
+$issue = "CMP-000"
+$branch = "feat/<scope>-<short>"
+$worktree = "C:\Users\jhyou\2026\jippin-worktrees\$issue-<short>"
+New-Item -ItemType Directory -Force -Path C:\Users\jhyou\2026\jippin-worktrees | Out-Null
+git fetch origin
+git worktree add -b $branch $worktree origin/main
+cd $worktree
 
 # 5) 커밋 (gitmoji prefix 필수)
 git add <files>
@@ -195,6 +240,6 @@ gh pr create --fill
 
 ## 7. 본 문서의 변경 절차
 
-- 본 문서의 §1·§2 (gitmoji prefix·브랜치 규칙)는 AGENTS.md §4 와 **반드시 일치** 한다. 변경은 AGENTS.md 와 동기 PR 로 진행.
+- 본 문서의 §1·§2 (gitmoji prefix·브랜치/worktree 규칙)는 AGENTS.md §4·§5.7 과 **반드시 일치** 한다. 변경은 AGENTS.md 와 동기 PR 로 진행.
 - 그 외 절차는 DevOps Lead 가 PR 로 갱신한다.
 - 갱신 시 본 PR 도 본 문서의 §2.1 정규식을 통과해야 한다. (자기-적용)
