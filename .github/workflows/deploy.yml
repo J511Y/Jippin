@@ -1,0 +1,185 @@
+# 집핀(Jippin) 배포 파이프라인 — CMP-539
+#
+# 트리거: push to main (PR squash-merge 후)
+#
+# 핵심 흐름:
+#   1. build         — apps/api 빌드 산출물 점검 (uv sync + import smoke).
+#   2. release-migrate — `alembic upgrade head` 를 운영 Neon (`NEON_PROD_DATABASE_URL`,
+#                       non-pooler) 에 적용. 시크릿이 아직 없으면 bootstrap 단계로 간주해
+#                       warning + no-op 처리한다.
+#   3. deploy        — 실제 배포 단계. 현재는 스켈레톤(TODO: Vercel/Fly/etc.).
+#                       release-migrate 실패 시 needs 조건으로 자동 차단.
+#
+# 시크릿 (Settings → Secrets → Actions):
+#   - NEON_PROD_DATABASE_URL : 운영 Neon 브랜치 connection string. **non-pooler** 필수.
+#                              Alembic 은 트랜잭션 DDL + advisory lock 을 쓰므로
+#                              transaction-pooled (PgBouncer) 연결을 쓰면 깨진다.
+#
+# 실패 알림:
+#   - release-migrate 가 실패하면 워크플로우 자체가 빨갛게 떨어진다. GitHub 의
+#     이메일/모바일 알림이 1차. 후속으로 Slack/PagerDuty webhook 을 잡으로 추가하려면
+#     CMP-533 (Security) / 후속 운영 이슈에서 잡을 새로 만든다.
+#
+# 비범위 (의도적으로 안 한 것):
+#   - 실제 배포 대상 (Vercel/Fly/Cloud Run 등) — 운영 환경 확정 후 별도 이슈.
+#   - 롤백 자동화 — Alembic downgrade 는 위험하므로 사람 결정으로 둔다.
+#   - 다단계 환경 (staging → prod) — CMP-538 의 APP_ENV ↔ Neon 매핑 정리 후 추가.
+name: deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+# 같은 main 푸시가 연속 들어오면 직전 실행은 취소 — 단, 이미 release-migrate 단계에
+# 진입한 경우엔 절대 취소하지 않는다 (마이그레이션 도중 중단은 운영에 위험).
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  UV_VERSION: "0.5.11"
+
+jobs:
+  # -------------------------------------------------------------------
+  # 1) Build / smoke — 운영 마이그레이션 전에 코드가 import 가능한지만 확인.
+  # 실제 빌드 산출물(컨테이너 이미지 등)은 후속 이슈에서 추가.
+  # -------------------------------------------------------------------
+  build:
+    name: build (api smoke)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect apps/api
+        id: detect
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [[ -f apps/api/pyproject.toml ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/api/pyproject.toml 없음 — build 잡은 no-op."
+          fi
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv ${{ env.UV_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            apps/api/uv.lock
+            apps/api/pyproject.toml
+
+      - name: uv sync
+        if: steps.detect.outputs.exists == 'true'
+        shell: bash
+        run: |
+          if [[ -f uv.lock ]]; then
+            uv sync --frozen
+          else
+            uv sync
+          fi
+
+  # -------------------------------------------------------------------
+  # 2) Release — Alembic 마이그레이션을 운영 Neon 에 적용.
+  # 이 잡이 실패하면 deploy 로 진행하지 않는다. (needs.release-migrate)
+  # -------------------------------------------------------------------
+  release-migrate:
+    name: release (alembic upgrade head)
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    # 운영 시크릿 보호: GitHub Environments 의 `production` 환경에 secret 을 두고
+    # required reviewers / wait timer 같은 보호 규칙을 환경 차원에서 건다.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect alembic + secret
+        id: detect
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          NEON_PROD_DATABASE_URL: ${{ secrets.NEON_PROD_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          has_alembic="false"
+          has_secret="false"
+          if [[ -f apps/api/alembic.ini ]]; then
+            has_alembic="true"
+          fi
+          if [[ -n "${NEON_PROD_DATABASE_URL:-}" ]]; then
+            has_secret="true"
+          fi
+          echo "has_alembic=${has_alembic}" >> "$GITHUB_OUTPUT"
+          echo "has_secret=${has_secret}"   >> "$GITHUB_OUTPUT"
+          if [[ "${has_alembic}" != "true" ]]; then
+            echo "::notice::apps/api/alembic.ini 미존재 — Alembic 스캐폴드(CMP-537) 머지 전이므로 release-migrate 는 no-op."
+          fi
+          if [[ "${has_alembic}" == "true" && "${has_secret}" != "true" ]]; then
+            echo "::warning::NEON_PROD_DATABASE_URL 시크릿이 설정되지 않았다. bootstrap 단계로 간주해 release-migrate 를 no-op 처리한다. 실제 배포 전 Settings → Environments → production 에서 발급할 것."
+          fi
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv ${{ env.UV_VERSION }}
+        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true'
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            apps/api/uv.lock
+            apps/api/pyproject.toml
+
+      - name: uv sync
+        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true'
+        shell: bash
+        run: |
+          if [[ -f uv.lock ]]; then
+            uv sync --frozen
+          else
+            uv sync
+          fi
+
+      - name: alembic upgrade head (production)
+        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.NEON_PROD_DATABASE_URL }}
+          APP_ENV: production
+        run: uv run alembic upgrade head
+
+  # -------------------------------------------------------------------
+  # 3) Deploy — 실제 배포. release-migrate 가 통과한 뒤에만 실행.
+  # 현재는 스켈레톤. 운영 배포 대상이 정해지면 (예: Vercel + Fly.io) 본 잡을 채운다.
+  # -------------------------------------------------------------------
+  deploy:
+    name: deploy (stub)
+    needs: release-migrate
+    runs-on: ubuntu-latest
+    steps:
+      - name: TODO — wire real deploy target
+        run: 'echo "TODO: deploy step — release-migrate 통과 후에만 도달. 배포 대상(Vercel/Fly/Cloud Run 등) 확정 후 본 step 을 채운다."'
