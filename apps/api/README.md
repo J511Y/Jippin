@@ -58,6 +58,7 @@ apps/api/
 ├── pyproject.toml
 ├── .python-version           # 3.12
 ├── Dockerfile                # multi-stage (uv builder → non-root runtime)
+├── alembic.ini               # Alembic 설정 (CMP-537)
 ├── .env.example
 ├── src/
 │   ├── main.py               # create_app() + lifespan + CORS + GZip + middleware
@@ -65,11 +66,44 @@ apps/api/
 │   ├── db.py                 # SQLAlchemy async (psycopg3) — pool / non-pool engine
 │   ├── logging.py            # structlog JSON + RequestIDMiddleware
 │   ├── errors.py             # ZippinException + AGENTS.md §4.5 핸들러
+│   ├── models/__init__.py    # Base = DeclarativeBase + naming convention (CMP-537)
 │   └── routers/
 │       └── healthz.py        # GET /healthz
+├── migrations/               # Alembic 스크립트 (CMP-537)
+│   ├── env.py                # sync psycopg3, Settings.database_url 만 사용
+│   ├── script.py.mako
+│   └── versions/             # 리비전 파일 (YYYYMMDD_HHMM_rev_slug.py)
 └── tests/
     └── test_healthz.py       # /healthz + 에러 봉투 단위 테스트
 ```
+
+---
+
+## 4.1 Alembic 마이그레이션 (CMP-537)
+
+DB 스키마 변경은 **autogenerate → 사람 리뷰 → upgrade** 3-step 으로 진행한다. 컨테이너 ENTRYPOINT 에 묶지 않고 `infra/compose/docker-compose.yml` 의 `migrate` 사이드카로 분리해 돌린다 (multi-replica 경합/롤백 회피).
+
+```bash
+# 1) 모델 변경 후 리비전 자동 생성
+make migration name=add_users
+#   → apps/api/migrations/versions/<UTC ts>_<rev>_add_users.py 생성
+#   → ruff format 이 post-write hook 으로 즉시 적용된다.
+
+# 2) 생성된 파일을 PR 에 첨부하기 전 반드시 **사람 리뷰**:
+#    - autogenerate 가 놓친 인덱스/제약/타입 차이 보강
+#    - downgrade 함수에 실제 역연산을 적는다 (prod 에선 실행 안 해도, 개발/리뷰 용)
+#    - 데이터 마이그레이션이 필요한 경우 별도 리비전으로 분리
+
+# 3) Neon 에 적용
+make migrate                            # 로컬: uv 가상환경에서 직접
+docker compose -f infra/compose/docker-compose.yml up migrate   # 컨테이너 사이드카
+```
+
+봉인:
+
+- **`DATABASE_URL` (non-pooler) 만 사용한다.** `DATABASE_POOL_URL` (pgbouncer) 은 DDL/prepared-statement 호환성 문제로 alembic 경로에서 금지.
+- **`alembic downgrade` 는 prod 에서 금지.** roll-forward only — 잘못된 리비전은 보상 리비전으로 되돌린다.
+- 리비전 파일명은 `YYYYMMDD_HHMM_<rev>_<slug>.py` 로 고정 (`alembic.ini` `file_template`).
 
 ---
 

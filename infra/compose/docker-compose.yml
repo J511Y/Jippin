@@ -49,6 +49,26 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
+  # migrate — Alembic 사이드카 (CMP-537 / parent: CMP-536).
+  # api 가 기동되기 전 한 번 실행되고 service_completed_successfully 로 종료된다.
+  # ENTRYPOINT 와 분리해 multi-replica 경합/롤백 어려움을 피한다 (CTO ADR).
+  # ---------------------------------------------------------------------------
+  migrate:
+    image: jippin-api:local
+    build:
+      context: ../../apps/api
+      dockerfile: Dockerfile
+    container_name: jippin-migrate
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      # Alembic 은 non-pooler URL 에서만 동작한다 (DDL/Prepared-statement 호환성).
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set (Neon non-pooler)}"
+      PYTHONUNBUFFERED: "1"
+    restart: "no"
+    networks:
+      - jippin
+
+  # ---------------------------------------------------------------------------
   # api — FastAPI 백엔드. Neon (non-pooler + pooler) 직결.
   # 컨테이너 내부에서 /healthz 가 SELECT 1 으로 Neon 응답을 확인하는 것을 가정.
   # ---------------------------------------------------------------------------
@@ -74,6 +94,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - jippin
     healthcheck:
