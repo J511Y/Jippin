@@ -118,7 +118,17 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 
 - 실제 값은 `.env` 로컬 또는 운영 시크릿 매니저. 커밋 금지.
 - `.env.example` 만 커밋. 변수명·예시값 형식·설명 포함.
-- Neon DB URL은 두 가지를 모두 관리한다: `DATABASE_URL`(non-pooler, 마이그레이션), `DATABASE_POOL_URL`(pooler, 일반 쿼리).
+- Neon DB URL은 두 가지를 모두 관리한다: `DATABASE_URL`(non-pooler, 마이그레이션), `DATABASE_POOL_URL`(pooler, 일반 쿼리). `sslmode=require` 는 모든 URL 에 필수.
+- **APP_ENV ↔ Neon 브랜치 매핑은 봉인** (CMP-538). 코드 분기 금지 — 매핑은 환경별 `.env` 의 URL 값으로만 한다 (12-factor). `apps/api/src/config.py::ALLOWED_APP_ENVS` 가 그 외 값을 부팅 단계에서 차단한다. 변경하려면 ADR 을 새로 발행한다.
+
+  | APP_ENV       | Neon 브랜치             | 수명           | 비고                              |
+  |---------------|-------------------------|----------------|-----------------------------------|
+  | `development` | `dev`                   | 장기, 공유     | 로컬 개발자 공용                  |
+  | `test`        | `dev` 또는 PR ephemeral | 단기           | CI / 단위 테스트                  |
+  | `staging`     | `staging`               | 장기           | QA / 사전검증                     |
+  | `production`  | `main`                  | 장기           | 운영 (Neon project default branch)|
+
+  운영 절차: [`docs/runbooks/neon-branches.md`](docs/runbooks/neon-branches.md). 회전 절차: [`docs/runbooks/neon-credential-rotation.md`](docs/runbooks/neon-credential-rotation.md).
 
 ### 4.5 에러·응답 표준
 
