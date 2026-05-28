@@ -105,6 +105,9 @@ logs/
 # AI model weights / datasets
 # -----------------------------------------------------------------------------
 models/
+# Carve-out: SQLAlchemy ORM package (CMP-537). Source code, not weights.
+!apps/api/src/models/
+!apps/api/src/models/**
 models/weights/
 weights/
 checkpoints/

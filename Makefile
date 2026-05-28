@@ -32,7 +32,7 @@ endif
 DC := docker compose --env-file $(ENV_FILE) $(COMPOSE_FILES)
 DC_PROD := docker compose --env-file $(ENV_FILE) -f $(BASE_FILE)
 
-.PHONY: help up up-detach up-prod up-edge down down-clean logs ps restart exec config doctor
+.PHONY: help up up-detach up-prod up-edge down down-clean logs ps restart exec config doctor migrate migration
 
 help:
 	@echo "Jippin compose 단축 명령 (CMP-530):"
@@ -48,6 +48,10 @@ help:
 	@echo "  make exec SVC=api CMD=\"alembic upgrade head\""
 	@echo "  make config        — compose 파싱 검증"
 	@echo "  make doctor        — 사전 점검"
+	@echo ""
+	@echo "Alembic (CMP-537):"
+	@echo "  make migrate                    — alembic upgrade head"
+	@echo "  make migration name=add_users   — alembic revision --autogenerate"
 
 up:
 	$(DC) up --build
@@ -91,3 +95,14 @@ doctor:
 	@grep -qE '^DATABASE_URL=postgres' $(ENV_FILE) || { echo "✗ DATABASE_URL 미설정" >&2; exit 1; }
 	@grep -qE '^DATABASE_POOL_URL=postgres' $(ENV_FILE) || { echo "✗ DATABASE_POOL_URL 미설정" >&2; exit 1; }
 	@echo "✓ docker / compose / Neon URL 점검 통과"
+
+# -----------------------------------------------------------------------------
+# Alembic — CMP-537. uv 가상환경에서 직접 실행 (컨테이너 빌드 없이 빠른 피드백).
+# DDL 호환성 문제로 alembic 은 non-pooler DATABASE_URL 에서만 동작한다.
+# -----------------------------------------------------------------------------
+migrate:
+	cd apps/api && uv run alembic upgrade head
+
+migration:
+	@if [ -z "$(name)" ]; then echo "name=<short_slug> 가 필요합니다 (예: make migration name=add_users)" >&2; exit 2; fi
+	cd apps/api && uv run alembic revision --autogenerate -m "$(name)"

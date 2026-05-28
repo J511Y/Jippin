@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # ---------- Stage 1: builder (uv → resolve & install deps) ----------
-FROM python:3.12-slim AS builder
+FROM python:3.13-slim AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -25,9 +25,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     fi
 
 COPY src ./src
+# Alembic 스캐폴드 (CMP-537). migrate 사이드카가 같은 이미지를 공유한다.
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
 
 # ---------- Stage 2: runtime (non-root, gunicorn + uvicorn worker) ----------
-FROM python:3.12-slim AS runtime
+FROM python:3.13-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -42,6 +45,8 @@ WORKDIR /app
 
 COPY --from=builder --chown=app:app /opt/venv /opt/venv
 COPY --from=builder --chown=app:app /build/src ./src
+COPY --from=builder --chown=app:app /build/alembic.ini ./alembic.ini
+COPY --from=builder --chown=app:app /build/migrations ./migrations
 
 USER app
 EXPOSE 8000
