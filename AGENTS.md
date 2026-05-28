@@ -188,6 +188,22 @@ node -e "const d=JSON.parse(require('fs').readFileSync('.tmp/resp.json','utf8'))
 
 > 사람 작업자 주의: 시스템 PowerShell 콘솔 폰트가 `Lucida Console` 인 경우 정상 출력된 한글도 콘솔에서는 `?` 로 보일 수 있다. **보드(웹 UI) 또는 `GET /api/issues/<ID>` 응답을 진실의 원천으로 삼는다.**
 
+### 5.8 CI 마이그레이션 워크플로우 — Alembic drift 가드 / 운영 적용 / PR ephemeral (CMP-539)
+
+`.github/workflows/` 의 세 잡이 Alembic 마이그레이션 라이프사이클을 책임진다. 어떤 잡이 무엇을 보장하는지 한 단락으로 요약한다.
+
+- **`ci.yml` → `migrate-check`** (PR / push, apps/api 변경시) — 테스트용 Neon 브랜치(`secrets.NEON_TEST_DATABASE_URL`, non-pooler) 에 `alembic upgrade head` 를 돌린 뒤 `alembic check` 로 모델↔리비전 drift 가 있으면 빨갛게 실패한다. 엔티티 모델만 바꾸고 마이그레이션 파일을 안 만든 PR 이 이 단계에서 차단된다. `ci-status` 메타 게이트의 needs 에 포함되므로 브랜치 보호의 required check 1개로 자동 보장.
+- **`deploy.yml` → `release-migrate`** (push to main) — `production` GitHub Environment 에서 `alembic upgrade head` 를 운영 Neon (`secrets.NEON_PROD_DATABASE_URL`, non-pooler) 에 적용한다. 본 잡이 실패하면 `deploy` 잡으로 진행하지 않으므로 마이그레이션 실패가 배포로 새지 않는다. `cancel-in-progress: false` 로 마이그레이션 도중 중단을 막는다.
+- **`neon-pr-branch.yml`** (PR open/close) — PR 단위로 Neon ephemeral 브랜치를 만들고 connection string 을 PR 코멘트로 게시한 뒤, PR close/merge 시 자동 삭제한다. fork PR 은 `secrets` 미접근으로 자동 skip — 운영 시크릿이 fork 에 노출되지 않게 의도된 동작.
+
+운영 시크릿 (Settings → Secrets and variables → Actions / Environments):
+
+- `NEON_TEST_DATABASE_URL` — CI drift 가드용 테스트 브랜치. non-pooler.
+- `NEON_PROD_DATABASE_URL` — 운영 적용용. `production` Environment 에 두고 required reviewers 보호 권장.
+- `NEON_API_KEY`, `NEON_PROJECT_ID` — ephemeral 브랜치 생성/삭제용.
+
+> 시크릿 이름만 본 문서에 정한다. 실제 값 발급은 사람이 Neon 콘솔에서 수행하고 `npg_` prefix 가 코드/이슈/PR 본문에 새는지 §5.7 시크릿 헌팅 단계로 점검한다.
+
 ---
 
 ## 6. 표준 명령 (CTO ADR-0001 봉인 후 정본)
