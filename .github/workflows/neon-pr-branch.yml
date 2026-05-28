@@ -4,6 +4,8 @@
 #
 # 동작:
 #   - PR opened/reopened/synchronize: `preview/pr-<PR번호>-<head branch>` 브랜치 생성/갱신.
+#   - PR base 가 dev 이면 Neon dev 에서, main 이면 Neon production 에서 preview 를 딴다.
+#   - preview branch 에 `alembic upgrade head` 를 적용해 PR 단위 스키마를 검증한다.
 #   - PR closed: 같은 이름의 preview branch 삭제.
 #   - branch 는 14일 만료(expires_at)를 가진다.
 #
@@ -12,7 +14,7 @@
 #   - Repository secret:   `NEON_API_KEY`
 #
 # 보안:
-#   - Neon action 은 db_url/db_url_with_pooler output 을 제공하지만, connection string 은
+#   - Neon action 은 db_url/db_url_pooled output 을 제공하지만, connection string 은
 #     credential 이므로 로그/PR 코멘트에 출력하지 않는다.
 #   - fork PR 은 secrets 접근이 불가능하므로 자동 skip 한다.
 name: neon-pr-branch
@@ -32,16 +34,39 @@ permissions:
   contents: read
   pull-requests: write
 
+env:
+  PYTHON_VERSION: "3.13"
+  UV_VERSION: "0.5.11"
+
 jobs:
   setup:
     name: setup
     runs-on: ubuntu-latest
     outputs:
       branch: ${{ steps.branch_name.outputs.current_branch }}
+      parent_branch: ${{ steps.parent.outputs.parent_branch }}
     steps:
       - name: Get branch name
         id: branch_name
         uses: tj-actions/branch-names@v8
+
+      - name: Select Neon parent branch
+        id: parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ github.event.pull_request.base.ref }}" in
+            dev)
+              echo "parent_branch=dev" >> "$GITHUB_OUTPUT"
+              ;;
+            main)
+              echo "parent_branch=production" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "parent_branch=production" >> "$GITHUB_OUTPUT"
+              echo "::notice::Unsupported PR base '${{ github.event.pull_request.base.ref }}'; using Neon production as preview parent."
+              ;;
+          esac
 
   create_neon_branch:
     name: create neon branch
@@ -83,8 +108,59 @@ jobs:
         with:
           project_id: ${{ vars.NEON_PROJECT_ID }}
           branch_name: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}
+          parent_branch: ${{ needs.setup.outputs.parent_branch }}
           api_key: ${{ secrets.NEON_API_KEY }}
           expires_at: ${{ env.EXPIRES_AT }}
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.skip == 'false'
+
+      - name: Detect Alembic
+        if: steps.guard.outputs.skip == 'false'
+        id: detect
+        shell: bash
+        run: |
+          if [[ -f apps/api/alembic.ini ]]; then
+            echo "has_alembic=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_alembic=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/api/alembic.ini 없음 - preview migration 검증을 건너뛴다."
+          fi
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv ${{ env.UV_VERSION }}
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            apps/api/uv.lock
+            apps/api/pyproject.toml
+
+      - name: uv sync
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        shell: bash
+        working-directory: apps/api
+        run: |
+          if [[ -f uv.lock ]]; then
+            uv sync --frozen
+          else
+            uv sync
+          fi
+
+      - name: alembic upgrade head (preview)
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        working-directory: apps/api
+        env:
+          APP_ENV: test
+          DATABASE_URL: ${{ steps.create_neon_branch.outputs.db_url }}
+        run: uv run alembic upgrade head
 
       - name: Comment preview branch on PR
         if: steps.guard.outputs.skip == 'false' && github.event.action != 'synchronize'
@@ -98,6 +174,8 @@ jobs:
               '🌱 **Neon preview branch is ready for this PR.**',
               '',
               `- branch: \`${process.env.PREVIEW_BRANCH}\``,
+              `- parent: \`${{ needs.setup.outputs.parent_branch }}\``,
+              '- migration: `alembic upgrade head`',
             ];
             if (process.env.BRANCH_ID) {
               lines.push(`- branch id: \`${process.env.BRANCH_ID}\``);

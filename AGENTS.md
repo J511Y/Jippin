@@ -126,7 +126,7 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
   | `development` | `dev`                   | 장기, 공유     | 로컬 개발자 공용                  |
   | `test`        | `dev` 또는 PR ephemeral | 단기           | CI / 단위 테스트                  |
   | `staging`     | `staging`               | 장기           | QA / 사전검증                     |
-  | `production`  | `main`                  | 장기           | 운영 (Neon project default branch)|
+  | `production`  | `production`            | 장기           | 운영 (Neon project default branch)|
 
   운영 절차: [`docs/runbooks/neon-branches.md`](docs/runbooks/neon-branches.md). 회전 절차: [`docs/runbooks/neon-credential-rotation.md`](docs/runbooks/neon-credential-rotation.md).
 
@@ -263,13 +263,14 @@ node -e "const d=JSON.parse(require('fs').readFileSync('.tmp/resp.json','utf8'))
 `.github/workflows/` 의 세 잡이 Alembic 마이그레이션 라이프사이클을 책임진다. 어떤 잡이 무엇을 보장하는지 한 단락으로 요약한다.
 
 - **`ci.yml` → `migrate-check`** (PR / push, apps/api 변경시) — 테스트용 Neon 브랜치(`secrets.NEON_TEST_DATABASE_URL`, non-pooler) 에 `alembic upgrade head` 를 돌린 뒤 `alembic check` 로 모델↔리비전 drift 가 있으면 빨갛게 실패한다. 엔티티 모델만 바꾸고 마이그레이션 파일을 안 만든 PR 이 이 단계에서 차단된다. `ci-status` 메타 게이트의 needs 에 포함되므로 브랜치 보호의 required check 1개로 자동 보장.
-- **`deploy.yml` → `release-migrate`** (push to main) — `production` GitHub Environment 에서 `alembic upgrade head` 를 운영 Neon (`secrets.NEON_PROD_DATABASE_URL`, non-pooler) 에 적용한다. bootstrap 단계에서 시크릿이 아직 없으면 warning + no-op 으로 통과하지만, 실제 배포 전에는 production environment secret 을 발급해야 한다. `cancel-in-progress: false` 로 마이그레이션 도중 중단을 막는다.
-- **`neon-pr-branch.yml`** (PR open/reopen/synchronize/close) — Neon GitHub integration 권장 흐름에 맞춰 `preview/pr-<PR번호>-<head branch>` preview 브랜치를 만들고 branch id 만 PR 코멘트로 게시한 뒤, PR close/merge 시 자동 삭제한다. connection string 은 credential 이므로 PR 코멘트에 게시하지 않는다. fork PR 은 `secrets` 미접근으로 자동 skip — 운영 시크릿이 fork 에 노출되지 않게 의도된 동작.
+- **`deploy.yml` → `release-migrate`** (push to `dev` / `main`) — `dev` push 는 `development` GitHub Environment 에서 `secrets.NEON_DEV_DATABASE_URL` 로 `APP_ENV=development` 마이그레이션을 적용하고, `main` push 는 `production` GitHub Environment 에서 `secrets.NEON_PROD_DATABASE_URL` 로 `APP_ENV=production` 마이그레이션을 적용한다. bootstrap 단계에서 시크릿이 아직 없으면 warning + no-op 으로 통과하지만, 실제 배포 전에는 각 environment secret 을 발급해야 한다. `cancel-in-progress: false` 로 마이그레이션 도중 중단을 막는다.
+- **`neon-pr-branch.yml`** (PR open/reopen/synchronize/close) — Neon GitHub integration 권장 흐름에 맞춰 `preview/pr-<PR번호>-<head branch>` preview 브랜치를 만들고, PR base 가 `dev` 면 Neon `dev` 에서, `main` 이면 Neon `production` 에서 preview 를 딴다. 생성 직후 preview connection 에 `alembic upgrade head` 를 적용해 PR 단위 스키마를 검증한다. branch id 만 PR 코멘트로 게시하고, connection string 은 credential 이므로 PR 코멘트에 게시하지 않는다. PR close/merge 시 preview branch 는 자동 삭제된다. fork PR 은 `secrets` 미접근으로 자동 skip — 운영 시크릿이 fork 에 노출되지 않게 의도된 동작.
 
 운영 시크릿 (Settings → Secrets and variables → Actions / Environments):
 
 - `NEON_TEST_DATABASE_URL` — CI drift 가드용 테스트 브랜치. non-pooler.
-- `NEON_PROD_DATABASE_URL` — 운영 적용용. `production` Environment 에 두고 required reviewers 보호 권장.
+- `NEON_DEV_DATABASE_URL` — `dev` 브랜치 merge 후 development 적용용. `development` Environment 에 둔다. non-pooler.
+- `NEON_PROD_DATABASE_URL` — `main` 브랜치 merge 후 production 적용용. `production` Environment 에 두고 required reviewers 보호 권장. non-pooler.
 - `NEON_API_KEY` — preview 브랜치 생성/삭제용 Neon API token. GitHub Actions secret.
 - `NEON_PROJECT_ID` — preview 브랜치 대상 Neon project id. GitHub Actions repository variable.
 
