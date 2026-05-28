@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+# 집핀(Jippin) commit-msg 훅 — gitmoji prefix 강제.
+# AGENTS.md §4.1 / docs/CONTRIBUTING.md §2.1.
+#
+# 활성화:
+#   git config core.hooksPath .githooks
+#
+# CI(.github/workflows/ci.yml gitmoji-validate job) 와 동일 규칙.
+
+set -e
+
+# Python 3 가 PATH 에 있어야 한다 (.python-version = 3.13).
+if command -v python3 >/dev/null 2>&1; then
+  PY=python3
+elif command -v python >/dev/null 2>&1; then
+  PY=python
+elif command -v py >/dev/null 2>&1; then
+  PY=py
+else
+  echo "[commit-msg] python 미설치 — gitmoji 검증을 건너뛴다. (CI 에서는 강제됨)" >&2
+  exit 0
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+"$PY" "$REPO_ROOT/tooling/validate_commit_msg.py" "$1"

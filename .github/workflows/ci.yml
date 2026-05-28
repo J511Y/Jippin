@@ -1,0 +1,391 @@
+# 집핀(Jippin) CI 스켈레톤 — CMP-531 / D5
+#
+# 책임 (이슈 §3 산출물의 8개 잡 중 secret-scan 제외 7개):
+#   1. `gitmoji-validate`  — PR 의 모든 커밋이 gitmoji 정규식(AGENTS.md §4.1) 통과
+#   2. `web`               — apps/web (Next.js 16.2 / pnpm 9) typecheck + lint
+#   3. `api`               — apps/api (FastAPI 0.115 / Python 3.13 / uv) ruff check + format check
+#   4. `typecheck-api`     — apps/api mypy 스켈레톤 (의존성 추가 시 자동 활성화)
+#   5. `test-web`          — apps/web pnpm test 스켈레톤 (script 추가 시 자동 활성화)
+#   6. `test-api`          — apps/api uv run pytest 스켈레톤 (의존성 추가 시 자동 활성화)
+#   7. `ci-status`         — 메타 게이트. 브랜치 보호의 required check 는 본 잡 1개로 충분.
+#
+# 의도적으로 빠진 것 (CMP-531 범위 외):
+#   - 실제 테스트 본체 (PyTest / Playwright) — `test-web` / `test-api` 잡은 스켈레톤만
+#     (이슈 §3 "실제 액션은 스켈레톤" + AGENTS.md §4.4 도구 부재 시 후속 이슈로 분리)
+#   - mypy 본체 — `typecheck-api` 잡은 스켈레톤만 (apps/api 가 mypy 의존 추가 시 활성화)
+#   - 빌드 산출물 업로드 / 배포                       → D6 이후
+#   - 시크릿 스캔                                    → CMP-533 (Security) 의 secret-scan.yml 정본
+#
+# ADR-0001 §9 봉인: Node 22 / Python 3.13 / pnpm 9 / uv 0.5+
+name: ci
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+# 동일 PR 의 직전 실행은 취소(빠른 피드백).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.13"
+  PNPM_VERSION: "9.12.0"
+  UV_VERSION: "0.5.11"
+
+jobs:
+  # -------------------------------------------------------------------
+  # 1) gitmoji 커밋 메시지 검증
+  # -------------------------------------------------------------------
+  gitmoji-validate:
+    name: gitmoji commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for range check)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Validate commit messages
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+            echo "Validating commits in ${BASE}..${HEAD}"
+            python tooling/validate_commit_msg.py --range "${BASE}..${HEAD}"
+          else
+            # push to main / workflow_dispatch — 최근 1건만 검증
+            HEAD="${{ github.sha }}"
+            echo "Validating HEAD commit ${HEAD}"
+            git log -1 --format=%s "${HEAD}" | python tooling/validate_commit_msg.py --stdin
+          fi
+
+  # -------------------------------------------------------------------
+  # 2) apps/web — Next.js 16.2 / pnpm 9 (typecheck + lint)
+  # -------------------------------------------------------------------
+  web:
+    name: web (typecheck + lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect apps/web
+        id: detect
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [[ -f apps/web/package.json ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/web/package.json 없음 — 본 job 은 no-op."
+          fi
+
+      - name: Setup pnpm
+        if: steps.detect.outputs.exists == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: pnpm install (frozen if lock present)
+        if: steps.detect.outputs.exists == 'true'
+        shell: bash
+        run: |
+          if [[ -f pnpm-lock.yaml ]]; then
+            pnpm install --frozen-lockfile
+          else
+            echo "::warning::pnpm-lock.yaml 미존재. 초기 부트스트랩 단계로 간주하고 lock 없이 설치한다."
+            pnpm install --no-frozen-lockfile
+          fi
+
+      - name: Typecheck (tsc --noEmit)
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm run typecheck
+
+      - name: Lint (next lint / eslint)
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm run lint
+
+  # -------------------------------------------------------------------
+  # 3) apps/api — FastAPI 0.115 / Python 3.13 / uv (ruff)
+  # -------------------------------------------------------------------
+  api:
+    name: api (ruff check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect apps/api
+        id: detect
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [[ -f apps/api/pyproject.toml ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/api/pyproject.toml 없음 — 본 job 은 no-op."
+          fi
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv ${{ env.UV_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            apps/api/uv.lock
+            apps/api/pyproject.toml
+
+      - name: uv sync
+        if: steps.detect.outputs.exists == 'true'
+        shell: bash
+        run: |
+          if [[ -f uv.lock ]]; then
+            uv sync --frozen
+          else
+            echo "::warning::apps/api/uv.lock 미존재. 초기 부트스트랩 단계로 간주."
+            uv sync
+          fi
+
+      - name: Ruff check
+        if: steps.detect.outputs.exists == 'true'
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        if: steps.detect.outputs.exists == 'true'
+        run: uv run ruff format --check .
+
+  # -------------------------------------------------------------------
+  # 4) apps/api — typecheck (mypy) 스켈레톤.
+  # 이슈 §3 산출물의 `typecheck-api` 잡. mypy 가 apps/api/pyproject.toml 의 dev 의존성에
+  # 추가되면 `uv run mypy .` 단계를 활성화한다. 그 전까지는 잡 구조만 유지.
+  # -------------------------------------------------------------------
+  typecheck-api:
+    name: api (mypy — stub)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect mypy in pyproject
+        id: detect
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [[ -f apps/api/pyproject.toml ]] && grep -q '^mypy' apps/api/pyproject.toml 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/api/pyproject.toml 에 mypy 미설정 — 본 job 은 stub (TODO: hook real linter)."
+          fi
+
+      - name: TODO — uv run mypy .
+        if: steps.detect.outputs.exists == 'false'
+        run: 'echo "TODO: hook real linter (mypy)"'
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv ${{ env.UV_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: uv sync
+        if: steps.detect.outputs.exists == 'true'
+        run: uv sync
+
+      - name: mypy
+        if: steps.detect.outputs.exists == 'true'
+        run: uv run mypy .
+
+  # -------------------------------------------------------------------
+  # 5) apps/web — test 스켈레톤.
+  # 이슈 §3 산출물의 `test-web` 잡. apps/web/package.json 에 `test` 스크립트가
+  # 추가되면 실제 실행되고, 그 전까지는 stub.
+  # -------------------------------------------------------------------
+  test-web:
+    name: web (test — stub)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect web test script
+        id: detect
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [[ -f apps/web/package.json ]] && grep -q '"test"' apps/web/package.json 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/web/package.json 에 test 스크립트 미정의 — 본 job 은 stub (TODO: hook real test runner)."
+          fi
+
+      - name: TODO — pnpm -C apps/web test
+        if: steps.detect.outputs.exists == 'false'
+        run: 'echo "TODO: hook real test runner (vitest/jest/playwright)"'
+
+      - name: Setup pnpm
+        if: steps.detect.outputs.exists == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: pnpm install
+        if: steps.detect.outputs.exists == 'true'
+        shell: bash
+        run: |
+          if [[ -f pnpm-lock.yaml ]]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
+
+      - name: pnpm test
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm test
+
+  # -------------------------------------------------------------------
+  # 6) apps/api — test 스켈레톤.
+  # 이슈 §3 산출물의 `test-api` 잡. apps/api/pyproject.toml 의 dev 의존성에 pytest 가
+  # 추가되면 실제 실행되고, 그 전까지는 stub.
+  # -------------------------------------------------------------------
+  test-api:
+    name: api (test — stub)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect pytest in pyproject
+        id: detect
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [[ -f apps/api/pyproject.toml ]] && grep -q '^pytest' apps/api/pyproject.toml 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/api/pyproject.toml 에 pytest 미설정 — 본 job 은 stub (TODO: hook real test runner)."
+          fi
+
+      - name: TODO — uv run pytest
+        if: steps.detect.outputs.exists == 'false'
+        run: 'echo "TODO: hook real test runner (pytest)"'
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv ${{ env.UV_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: uv sync
+        if: steps.detect.outputs.exists == 'true'
+        run: uv sync
+
+      - name: pytest
+        if: steps.detect.outputs.exists == 'true'
+        run: uv run pytest
+
+  # -------------------------------------------------------------------
+  # 7) 메타 게이트 — 위 모든 job 통과 시에만 성공.
+  # 브랜치 보호 규칙은 본 job 한 개만 required 로 설정하면 충분.
+  # -------------------------------------------------------------------
+  ci-status:
+    name: ci-status
+    runs-on: ubuntu-latest
+    needs:
+      - gitmoji-validate
+      - web
+      - api
+      - typecheck-api
+      - test-web
+      - test-api
+    if: always()
+    steps:
+      - name: Aggregate
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail=0
+          for r in \
+            "${{ needs.gitmoji-validate.result }}" \
+            "${{ needs.web.result }}" \
+            "${{ needs.api.result }}" \
+            "${{ needs.typecheck-api.result }}" \
+            "${{ needs.test-web.result }}" \
+            "${{ needs.test-api.result }}"; do
+            if [[ "$r" != "success" && "$r" != "skipped" ]]; then
+              echo "::error::sub-job failed/cancelled: $r"
+              fail=1
+            fi
+          done
+          exit "$fail"

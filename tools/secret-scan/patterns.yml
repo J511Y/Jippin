@@ -1,0 +1,153 @@
+# 집핀 시크릿 스캔 패턴 정본
+#
+# 사용처:
+# - `tools/secret-scan/scan.py` (pre-commit + CI 진입점)
+# - `.gitleaks.toml` (gitleaks 보조 스캐너) — 패턴 변경 시 두 파일 모두 갱신.
+#
+# 규약:
+# - `id`: kebab-case, 충돌 금지. 에러 메시지에 그대로 표시된다.
+# - `regex`: Python `re` 모듈 호환. `(?P<secret>...)` 캡처는 선택.
+# - `severity`: `critical` | `high` | `medium`. 모두 fail.
+# - `description`: 한 줄. 사용자에게 어떤 키인지·왜 위험한지 한 번에 인지시킨다.
+# - `remediation`: actionable 조치 문구. 에러 출력 첫 줄에 노출된다.
+#
+# 새 패턴 추가 절차:
+# 1) 본 파일에 항목 추가
+# 2) `.gitleaks.toml` 의 동일 룰 미러링
+# 3) `python tools/secret-scan/scan.py --selftest` 통과 확인
+# 4) `docs/runbooks/security-policy.md` 의 시크릿 카탈로그 갱신
+#
+# 본 파일은 보안 가드의 정본이다. 변경은 Security Engineer 리뷰 필수.
+
+version: 1
+
+patterns:
+  - id: neon-password
+    description: Neon Serverless Postgres 비밀번호 (`npg_*`)
+    # 실제 Neon 비밀번호는 alnum 만 12-16자이지만 placeholder 형태(`npg_FAKE_PASSWORD_xxxxx`)도 잡기
+    # 위해 underscore 까지 허용. 접두사 `npg_` 의 특이성이 false-positive 를 막아준다.
+    regex: 'npg_[A-Za-z0-9_]{8,}'
+    severity: critical
+    remediation: |
+      Neon Console 에서 즉시 비밀번호 회전 (`docs/runbooks/neon-credential-rotation.md`).
+      커밋 전 단계라면 `.env` 또는 시크릿 매니저로 옮기고 코드에서 환경변수 참조로 교체.
+
+  - id: openai-api-key
+    description: OpenAI API 키 (`sk-...`, `sk-proj-...`, `sk-svcacct-...`)
+    regex: 'sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}'
+    severity: critical
+    remediation: |
+      platform.openai.com/api-keys 에서 해당 키 revoke. `OPENAI_API_KEY` 환경변수만 사용.
+
+  - id: aws-access-key-id
+    description: AWS Access Key ID (`AKIA*` long-term · `ASIA*` STS · `AIDA*` IAM)
+    regex: '(?:A[SK]IA|AIDA|AGPA|AROA|AIPA|ANPA|ANVA|ASCA)[A-Z0-9]{16}'
+    severity: critical
+    remediation: |
+      IAM 콘솔에서 즉시 키 비활성화 + 회전. CloudTrail 로 키 사용 흔적 추적.
+
+  - id: aws-secret-access-key
+    description: AWS Secret Access Key (`aws_secret_access_key=...` 컨텍스트 + 40자)
+    regex: '(?i)aws[_-]?(?:secret|sk)[_-]?(?:access)?[_-]?key["''`\s:=]+[A-Za-z0-9/+=]{40}'
+    severity: critical
+    remediation: |
+      IAM 콘솔에서 키 페어 무효화. CloudTrail 에서 키 사용 흔적 조사.
+
+  - id: slack-bot-token
+    description: Slack Bot/User/App Token (`xoxb-`, `xoxp-`, `xoxa-`, `xoxr-`, `xoxs-`)
+    regex: 'xox[baprs]-[A-Za-z0-9-]{10,}'
+    severity: high
+    remediation: |
+      Slack 앱 관리 페이지에서 토큰 revoke + 재발급. 봇이 채널에 메시지를 남겼는지 점검.
+
+  - id: github-personal-token
+    description: GitHub Personal Access Token (`ghp_`)
+    regex: 'ghp_[A-Za-z0-9]{36,}'
+    severity: critical
+    remediation: |
+      github.com/settings/tokens 에서 즉시 revoke. Security log 에서 의심 활동 확인.
+
+  - id: github-oauth-token
+    description: GitHub OAuth Token (`gho_`)
+    regex: 'gho_[A-Za-z0-9]{36,}'
+    severity: high
+    remediation: |
+      OAuth 앱 소유자에게 회전 요청. 사용자 권한 부여 내역 점검.
+
+  - id: github-app-token
+    description: GitHub App / Refresh / Server / User-to-server Token (`ghs_`, `ghu_`, `ghr_`)
+    regex: 'gh[sur]_[A-Za-z0-9]{36,}'
+    severity: high
+    remediation: |
+      GitHub App 설정에서 비밀 회전. 만료 정책 확인.
+
+  - id: db-url-with-inline-password
+    description: 인라인 비밀번호가 박힌 DB URL (`postgresql://user:pw@...`, `mysql://...`)
+    regex: '\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqp|amqps)://[^\s:/@]+:(?!(?:\*+|x+|password|REDACTED|\<[^>]+\>|\$\{[^}]+\}))[^\s/@]+@[^\s/]+'
+    severity: critical
+    remediation: |
+      URL 에서 비밀번호 제거 → 환경변수(`DATABASE_URL`, `DATABASE_POOL_URL`) 로 분리.
+      이미 노출되었다면 즉시 회전 (`docs/runbooks/neon-credential-rotation.md`).
+
+  - id: google-api-key
+    description: Google API Key (`AIza...`)
+    regex: 'AIza[0-9A-Za-z_-]{35}'
+    severity: high
+    remediation: |
+      console.cloud.google.com 에서 키 삭제 + 재발급. Application Restriction 강제.
+
+  - id: stripe-secret-key
+    description: Stripe Secret Key (`sk_live_*`, `sk_test_*`, `rk_live_*`)
+    regex: '(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}'
+    severity: critical
+    remediation: |
+      dashboard.stripe.com/apikeys 에서 키 roll. 결제 activity audit log 확인.
+
+  - id: private-key-block
+    description: PEM 형식 개인키 블록 (`-----BEGIN ... PRIVATE KEY-----`)
+    regex: '-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----'
+    severity: critical
+    remediation: |
+      해당 키 즉시 폐기 후 재발급. 키가 보호하던 모든 리소스(SSH 서버, GPG 서명 등) 재인증.
+
+# allowlist
+#
+# 정당한 사유로 패턴이 등장해야 하는 위치를 명시한다.
+# - `path`: glob (fnmatch). 디렉터리 단위 차단보다 파일 단위가 안전.
+# - `pattern_id`: 적용 패턴. 생략 시 모든 패턴에 적용 (가급적 지정 권장).
+# - `regex`: 매칭된 값 자체에 추가 정규식. 가짜/예제 토큰만 허용하고 싶을 때 사용.
+# - `reason`: 필수. 리뷰 흔적.
+allowlist:
+  - path: 'tools/secret-scan/patterns.yml'
+    reason: '패턴 정의 자체에 시그니처가 포함됨'
+
+  - path: 'tools/secret-scan/scan.py'
+    reason: '스캐너의 SELFTEST_POSITIVES 상수에 양성 fixture 가 포함됨'
+
+  - path: 'tools/secret-scan/tests/**'
+    reason: '스캐너 단위 테스트의 양성 fixture'
+
+  - path: 'tools/secret-scan/README.md'
+    reason: '사용 예시 docstring 안에 패턴 형태가 포함됨'
+
+  - path: '.gitleaks.toml'
+    reason: 'gitleaks 보조 스캐너 설정 — patterns.yml 미러'
+
+  - path: 'docs/runbooks/neon-credential-rotation.md'
+    pattern_id: neon-password
+    regex: 'npg_(FAKE|REDACTED|EXAMPLE|XXXX|SAMPLE)[A-Za-z0-9_]*'
+    reason: '회전 런북의 가짜 샘플 (FAKE/REDACTED/EXAMPLE 접두만 허용)'
+
+  - path: 'docs/runbooks/security-policy.md'
+    reason: '보안 정책 문서가 패턴 카탈로그를 인용'
+
+  - path: 'docs/brief/CEO_PROJECT_BRIEF.md'
+    pattern_id: db-url-with-inline-password
+    regex: ':\\*+@'
+    reason: 'CEO 브리프의 DB URL 예시는 password 자리에 `****` 마스킹만 포함'
+
+  - path: '.env.example'
+    reason: '예시 변수 파일 — 실제 값은 들어가지 않는다'
+
+  - path: 'infra/compose/.env.example'
+    reason: 'docker-compose 환경 변수 예시 파일 (실제 값 없음)'

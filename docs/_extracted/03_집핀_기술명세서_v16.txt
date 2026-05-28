@@ -1,0 +1,475 @@
+집핀 (Zippin)
+기술명세서 (Technical Specification)
+공동주택 비내력벽 철거 사전검토 AI 서비스
+
+--- TABLE ---
+문서명 | 집핀 기술명세서
+버전 | v1.6
+작성일 | 2026-05-26
+상태 | 배포본
+연계 문서 | 기능명세서 v1.0 / 소프트웨어 설계문서 v1.9
+--- /TABLE ---
+
+1. 목적 및 범위
+1.1 문서 목적
+본 문서는 집핀(Zippin) 서비스의 기술 구현 기준을 정의한다. 기술 스택, 시스템 아키텍처, API, 데이터 모델, 보안, 외부 연동, 성능·배포 구성을 명확히 기술하여 개발팀이 일관된 기준으로 구현하고 검증할 수 있도록 한다.
+기능 요구사항의 정의는 「집핀 기능명세서 v1.0」을 따르며, 본 문서는 해당 기능을 실현하기 위한 기술적 구현 방법을 다룬다.
+1.2 적용 범위
+포함: 집핀 서비스의 프론트엔드·백엔드·AI 파이프라인·데이터베이스·인프라·배포에 대한 기술 명세 전 영역을 포함한다.
+제외: 사업 모델 및 전략, UI 비주얼 디자인, 법령 룰셋의 구체적 판단 로직(별도 룰셋 문서에서 관리), 운영 조직 체계는 본 문서의 범위에서 제외한다.
+1.3 대상 독자
+백엔드·프론트엔드 개발자, AI 엔지니어, DevOps·인프라 담당자, QA 엔지니어, 그리고 아키텍처를 검토하는 기술 리드를 주 독자로 한다.
+1.4 연계 문서
+
+--- TABLE ---
+문서명 | 버전 | 본 문서와의 관계
+집핀 기능명세서 | v1.0 | 본 문서가 구현 대상으로 삼는 상위 기능 요구사항 정의
+집핀 소프트웨어 설계문서 | v1.9 | 모듈·클래스 수준의 상세 설계 (본 문서의 하위)
+요구사항 명세서 | v0.2 | 기능·기술 명세의 최상위 요구사항 출처
+--- /TABLE ---
+
+2. 기술 스택 전체 목록
+2.1 Frontend
+
+--- TABLE ---
+항목 | 기술/버전
+Framework | Next.js 14+ (App Router, TypeScript)
+UI 라이브러리 | React 18+
+스타일링 | Tailwind CSS + shadcn/ui 또는 Radix UI
+상태 관리 | React Context + Zustand (채팅 세션 상태)
+API 클라이언트 | TanStack Query (React Query) + Axios
+도면 오버레이 | Canvas 라이브러리 - Fabric.js / Konva.js / SVG (테스트 후 결정)
+인증 | NextAuth.js (OAuth 2.0 / OpenID Connect)
+빌드 도구 | Turbopack (Next.js 내장)
+배포 | Docker 컨테이너 + Nginx 리버스 프록시
+--- /TABLE ---
+
+2.2 Backend
+
+--- TABLE ---
+항목 | 기술/버전
+Framework | Python 3.11+ / FastAPI (비동기 지원, OpenAPI 자동 생성)
+아키텍처 | 모놀리식 (단일 FastAPI 애플리케이션). AI 처리는 동기 방식
+ASGI 서버 | Uvicorn + Gunicorn (멀티 워커)
+ORM | SQLAlchemy 2.0 (비동기) + Alembic (마이그레이션)
+인증 미들웨어 | python-jose (JWT 검증) + httpx (OAuth 콜백)
+파일 처리 | python-multipart + Pillow (이미지 보정)
+OCR | EasyOCR 또는 Tesseract (수치 마스킹용)
+룰 엔진 | rule-engine (Python 라이브러리)
+LLM 오케스트레이션 | LangChain Python + OpenAI SDK (GPT-5.4-mini)
+AI/CV | PyTorch + Mask2Former (HuggingFace Transformers)
+HTTP 클라이언트 | httpx (비동기)
+검증 | Pydantic v2
+로깅 | structlog + Python logging
+--- /TABLE ---
+
+2.3 데이터베이스 및 스토리지
+
+--- TABLE ---
+항목 | 기술/버전
+RDB | PostgreSQL 15+ (사용자 정보, 세션, 판단 스키마, 로그, 리포트)
+Object Storage | AWS S3 (도면 원본, 마스킹본, AI 분석 결과 이미지)
+캐시 | Redis 7+ (세션 캐싱, 도면 후보 캐싱)
+DB 연결 풀 | asyncpg (비동기 PostgreSQL 드라이버)
+S3 클라이언트 | boto3 / aioboto3
+--- /TABLE ---
+
+2.4 인프라 및 배포
+
+--- TABLE ---
+항목 | 기술/버전
+클라우드 | AWS (추후 확정). 초기: 복수 EC2 인스턴스
+컨테이너화 | Docker + Docker Compose
+서버 구성 | 앱 서버(EC2) + DB 서버(EC2, PostgreSQL) 분리. Redis 동일 EC2 또는 별도
+리버스 프록시 | Nginx (SSL 종단, 정적 파일 서빙, 로드밸런싱)
+SSL | Let's Encrypt (Certbot 자동 갱신)
+CI/CD | GitHub Actions (빌드 → 테스트 → Docker 이미지 빌드 → EC2 배포)
+모니터링 | AWS CloudWatch + 선택적 Sentry (에러 트래킹)
+--- /TABLE ---
+
+3. 시스템 아키텍처
+3.1 전체 구성도 (텍스트 표현)
+집핀 시스템은 다음 3개 레이어로 구성된다.
+
+--- TABLE ---
+레이어 | 구성 요소
+클라이언트 | Next.js Web App → Nginx → FastAPI 백엔드 (단일 모노리딕 서비스)
+백엔드 서비스 | FastAPI (Router 단위 모듈화): Auth / User / Session / FloorPlan / AI / RuleEngine / Report / Admin
+데이터 레이어 | PostgreSQL (메타·판단·로그) + AWS S3 (도면 파일) + Redis (캐시·세션)
+--- /TABLE ---
+
+[그림 1] 시스템 구성도 — Docker Compose 기반 배포 구성
+3.2 요청 처리 흐름
+사용자 요청의 일반적인 처리 흐름은 다음과 같다:
+
+--- TABLE ---
+# | 단계 | 담당 컴포넌트
+1 | 사용자 브라우저 → HTTPS 요청 | Next.js Client
+2 | Nginx에서 SSL 종단, /api/* → FastAPI 프록시 | Nginx
+3 | JWT 검증 미들웨어 통과 | FastAPI Auth Middleware
+4 | 비즈니스 로직 처리 (도면 조회 / AI 분석 / 룰 엔진) | FastAPI Router → Service
+5 | PostgreSQL 조회/저장, S3 업로드/다운로드, Redis 캐싱 | 데이터 레이어
+6 | JSON 응답 반환 → Next.js → 사용자 화면 렌더링 | FastAPI → Next.js
+--- /TABLE ---
+
+3.3 AI 파이프라인 처리 흐름
+도면 분석 요청 시 백엔드 내부의 AI 파이프라인이 순차적으로 실행된다 (동기 처리).
+
+--- TABLE ---
+# | 단계 | 처리 모듈
+1 | 도면 이미지 수신 → S3 업로드 | FileService
+2 | 이미지 보정 (기울기·명도·노이즈) | ImagePreprocessor
+3 | OCR 텍스트 추출 → 수치 마스킹 처리 | OCRService → MaskingService
+4 | Mask2Former 추론 (세그멘테이션 + 벽체 분류) | Mask2FormerInference
+5 | VLM(OpenAI Vision) 도면 문맥 해석 | VLMService (LangChain)
+6 | 두 모델 결과 정합성 검증 → 공통 판단 스키마 정규화 | SchemaValidator
+7 | 법령 룰 엔진 적용 | RuleEngineService
+8 | 결과 리포트 생성 → DB/S3 저장 | ReportService
+--- /TABLE ---
+
+4. API 명세
+기본 URL: /api/v1. 모든 요청에 Authorization: Bearer {access_token} 헤더 필요 (공개 엔드포인트 제외).
+4.1 인증 API
+
+--- TABLE ---
+Method | Endpoint | 설명 | 비고
+GET | /auth/{provider} | OAuth 시작 | provider: kakao|google|naver. OAuth 인증 URL로 리다이렉트
+GET | /auth/callback/{provider} | OAuth 콜백 | Authorization Code 수신 → JWT 발급 → 클라이언트 리다이렉트
+POST | /auth/refresh | 토큰 갱신 | Body: {refresh_token}. 응답: {access_token, expires_in}
+POST | /auth/logout | 로그아웃 | 서버 측 Refresh Token 무효화
+--- /TABLE ---
+
+4.2 주소 및 도면 조회 API
+
+--- TABLE ---
+Method | Endpoint | 설명 | 비고
+GET | /address/search?q={query} | 주소 검색 | 외부 주소 API 프록시. 응답: [{address, lat, lng, ...}]
+GET | /floorplans?apt={name}&dong={d}&size={s} | 평면도 후보 조회 | 내부 DB 검색. 응답: [{id, thumbnail_url, meta, confidence}]
+POST | /floorplans/upload | 도면 업로드 | multipart/form-data. 응답: {file_id, preview_url, s3_key}
+--- /TABLE ---
+
+4.3 분석 세션 API
+
+--- TABLE ---
+Method | Endpoint | 설명 | 비고
+POST | /sessions | 세션 생성 | Body: {address_info}. 응답: {session_id, created_at}
+GET | /sessions/{id} | 세션 조회 | 현재 세션 상태 + 판단 스키마 반환
+GET | /sessions | 세션 목록 | 사용자의 과거 세션 목록 (마이페이지)
+DELETE | /sessions/{id} | 세션 삭제 | 사용자 세션 삭제
+--- /TABLE ---
+
+4.4 AI 분석 API
+
+--- TABLE ---
+Method | Endpoint | 설명 | 비고
+POST | /sessions/{id}/analyze | 도면 분석 실행 | Body: {floorplan_id|file_id}. 동기 처리. 응답: {schema, overlay_data, masked_url}
+POST | /sessions/{id}/overlay/confirm | 오버레이 확인 | Body: {target_wall_id, corrections:[]}. 사용자 선택 결과 저장
+--- /TABLE ---
+
+4.5 채팅(LLM 에이전트) API
+
+--- TABLE ---
+Method | Endpoint | 설명 | 비고
+POST | /sessions/{id}/chat | 메시지 전송 | Body: {message}. 응답: {reply, ui_components:[], updated_schema}
+GET | /sessions/{id}/chat/history | 대화 이력 | 세션 내 전체 대화 이력 반환
+--- /TABLE ---
+
+4.6 [FLOW_GUARD] 전체 절차 감시 API
+POST /api/sessions/{session_id}/flow-guard/evaluate: CHAT/session의 CommonJudgmentSchemaDraft, 누락 필드, 대화 이력, AI 분석 결과, 오버레이 선택값을 입력받아 CompletionDecision을 반환한다.
+FLOW_GUARD 모듈의 CompletionDecision enum은 ASK_MORE, REQUEST_OVERLAY_REVIEW, PROCEED_RULE, HOLD_OR_HANDOFF를 기본값으로 한다. 구현은 별도 LLM 에이전트, 룰 기반 검증기, 또는 동일 실행 환경 내 논리 모듈 중 하나로 대체 가능하도록 인터페이스를 고정한다.
+4.7 룰 엔진 및 리포트 API
+
+--- TABLE ---
+Method | Endpoint | 설명 | 비고
+POST | /sessions/{id}/evaluate | 룰 엔진 실행 | 공통 판단 스키마 기반 법령 판단. 응답: {result, facilities, permit_type, references}
+GET | /sessions/{id}/report | 리포트 조회 | 사전검토 리포트 JSON. 공유 링크용 공개 엔드포인트 별도 제공
+POST | /sessions/{id}/lead | 리드 제출 | Body: {type: consultation|permit, contact_info}. 관리자 알림 트리거
+--- /TABLE ---
+
+REPORT.estimate: RuleEvalResult, 필요 방화시설, 행위허가 필요 여부, 치수 또는 산정 기준, 정책 단가표를 조합해 EstimateResult를 생성한다. RULE은 법령 평가만 수행하고 견적 계산은 REPORT 하위 산출부가 담당한다.
+4.8 관리자 API (Admin)
+기본 URL: /admin/v1. Admin 역할 JWT 필요.
+
+--- TABLE ---
+Method | Endpoint | 설명 | 비고
+GET | /admin/sessions | 세션 목록 | 필터: 기간/결과유형/사용자ID
+GET | /admin/leads | 리드 목록 | 필터: 상태(신규/처리중/완료)/담당자
+PATCH | /admin/leads/{id} | 리드 상태 변경 | Body: {status, assignee}
+GET | /admin/ruleset/version | 룰셋 버전 | 현재 적용 버전 + 변경 이력
+GET | /admin/training-data | 학습 데이터 | 라벨링 상태별 도면 목록
+--- /TABLE ---
+
+5. 데이터 모델
+5.1 엔터티 관계도 (ER)
+데이터 모델은 6개 핵심 엔터티로 구성되며, 사전검토 세션(sessions)을 중심으로 사용자·평면도·리포트·대화 이력·리드가 연결된다. 엔터티 간 관계를 텍스트로 표현하면 다음과 같다.
++-------------+
+user_id |    users    | assignee_id
++----------+-------------+-----------+
+|                                    |
+v                                    v
++-----------+   floorplan_id   +-------------+
+| sessions  |<-----------------|  floorplans |
++-----+-----+                  +-------------+
+| session_id
++------> reports         (1 : 1)
++------> chat_messages   (1 : N)
++------> leads           (1 : N)
+주요 관계와 외래 키, 카디널리티는 다음과 같다.
+
+--- TABLE ---
+관계 | 외래 키 | 카디널리티 | 설명
+users ~ sessions | sessions.user_id | 1 : N | 한 사용자가 여러 사전검토 세션을 보유
+floorplans ~ sessions | sessions.floorplan_id | 1 : N | 한 평면도가 여러 세션에서 선택될 수 있음
+sessions ~ reports | reports.session_id | 1 : 1 | 한 세션당 사전검토 리포트 1건 (UNIQUE 제약)
+sessions ~ chat_messages | chat_messages.session_id | 1 : N | 세션별 대화 이력 다수 보유
+sessions ~ leads | leads.session_id | 1 : N | 한 세션에서 상담·행위허가 리드 발생
+users ~ leads | leads.assignee_id | 1 : N | 관리자(담당자)가 여러 리드를 담당
+--- /TABLE ---
+
+[그림 2] ERD — PostgreSQL 데이터 모델, 관계 우선
+5.2 PostgreSQL 테이블 정의
+users
+
+--- TABLE ---
+컬럼 | 타입 | 제약 | 설명
+id | UUID | PK | 사용자 고유 ID
+oauth_provider | VARCHAR(20) | NOT NULL | kakao | google | naver
+oauth_sub | VARCHAR(256) | NOT NULL | OAuth Subject (프로바이더별 사용자 ID)
+email | VARCHAR(256) | UNIQUE | 이메일 (nullable)
+name | VARCHAR(128) |  | 표시 이름
+role | VARCHAR(20) | DEFAULT user | user | admin
+created_at | TIMESTAMPTZ | NOT NULL | 계정 생성일
+last_login_at | TIMESTAMPTZ |  | 마지막 로그인
+--- /TABLE ---
+
+sessions (사전검토 세션)
+
+--- TABLE ---
+컬럼 | 타입 | 제약 | 설명
+id | UUID | PK | 세션 고유 ID
+user_id | UUID | FK→users | 소유 사용자
+address_info | JSONB | NOT NULL | 주소·아파트명·동·호수·층수·평형
+floorplan_id | UUID | FK→floorplans | 선택된 평면도 참조
+judgment_schema | JSONB |  | 공통 판단 스키마 (버전 포함)
+status | VARCHAR(30) | NOT NULL | in_progress | completed | pending | expired
+created_at | TIMESTAMPTZ | NOT NULL | 세션 생성일
+last_activity_at | TIMESTAMPTZ |  | 마지막 활동. 24시간 후 만료
+--- /TABLE ---
+
+floorplans (평면도 DB)
+
+--- TABLE ---
+컬럼 | 타입 | 제약 | 설명
+id | UUID | PK | 평면도 ID
+apt_name | VARCHAR(256) | INDEX | 아파트명
+dong | VARCHAR(50) |  | 동
+size_type | VARCHAR(50) |  | 평형 타입 (예: 84A)
+s3_key | VARCHAR(512) | NOT NULL | S3 원본 이미지 경로
+thumbnail_s3_key | VARCHAR(512) |  | S3 썸네일 경로
+source | VARCHAR(50) |  | internal | user_upload
+confidence | FLOAT |  | 후보 신뢰도 0.0~1.0
+created_at | TIMESTAMPTZ | NOT NULL | 등록일
+--- /TABLE ---
+
+reports (사전검토 리포트)
+
+--- TABLE ---
+컬럼 | 타입 | 제약 | 설명
+id | UUID | PK | 리포트 ID
+session_id | UUID | FK→sessions | 소속 세션
+result | VARCHAR(20) | NOT NULL | possible | impossible | pending
+permit_type | VARCHAR(20) |  | permit | notification | none
+required_facilities | JSONB |  | [{name, position, quantity, legal_ref}]
+legal_references | JSONB |  | [{article, summary, url}]
+pending_reason | JSONB |  | 보류 사유 코드 + 설명
+ruleset_version | VARCHAR(20) | NOT NULL | 적용된 룰셋 버전
+admin_override | BOOLEAN | DEFAULT false | 관리자 판정 수정 여부
+share_token | VARCHAR(64) | UNIQUE | 링크 공유용 토큰
+created_at | TIMESTAMPTZ | NOT NULL | 리포트 생성일
+--- /TABLE ---
+
+chat_messages (대화 이력)
+
+--- TABLE ---
+컬럼 | 타입 | 제약 | 설명
+id | UUID | PK | 메시지 ID
+session_id | UUID | FK→sessions | 소속 세션
+role | VARCHAR(10) | NOT NULL | user | assistant | system
+content | TEXT | NOT NULL | 텍스트 내용 (개인정보 마스킹 적용)
+ui_components | JSONB |  | 선택지 버튼, 이미지 카드 등 UI 컴포넌트 정의
+judgment_snapshot | JSONB |  | 해당 시점 판단 스키마 스냅샷
+created_at | TIMESTAMPTZ | NOT NULL | 메시지 생성 시각
+--- /TABLE ---
+
+leads (상담 리드)
+
+--- TABLE ---
+컬럼 | 타입 | 제약 | 설명
+id | UUID | PK | 리드 ID
+session_id | UUID | FK→sessions | 연결 세션
+type | VARCHAR(20) | NOT NULL | consultation | permit
+contact_info | JSONB | ENCRYPTED | {name, phone, email} - 암호화 저장
+status | VARCHAR(20) | DEFAULT new | new | in_progress | done
+assignee_id | UUID | FK→users | 담당 관리자
+created_at | TIMESTAMPTZ | NOT NULL | 리드 생성일
+--- /TABLE ---
+
+flow_guard_decisions
+session_id, schema_snapshot, missing_fields, conflict_flags, confidence_summary, decision, next_action, evaluated_by, created_at을 저장한다. decision은 ASK_MORE, REQUEST_OVERLAY_REVIEW, PROCEED_RULE, HOLD_OR_HANDOFF 중 하나다.
+estimate_items
+report_id, estimate_type, basis_value, unit_policy_ref, amount_min, amount_max, assumptions, variance_notes를 저장한다. 방화판·방화유리·행위허가 대행 등 항목별 예상 견적과 산정 전제를 분리해 보존한다.
+5.3 인덱스 설계
+조회 성능과 데이터 무결성을 위해 테이블별 인덱스를 다음과 같이 정의한다. 기본 키(PK)는 B-tree 인덱스로 자동 생성되며, 아래 표는 추가 인덱스와 제약(UNIQUE) 인덱스를 명시한다.
+
+--- TABLE ---
+테이블 | 인덱스명 | 대상 컬럼 | 유형 | 목적
+users | uq_users_email | email | UNIQUE | 이메일 중복 방지
+users | uq_users_oauth | oauth_provider, oauth_sub | UNIQUE | OAuth 로그인 시 사용자 식별
+sessions | idx_sessions_user | user_id, created_at DESC | 복합 | 사용자별 세션 목록 최신순 조회
+sessions | idx_sessions_floorplan | floorplan_id | B-tree | 평면도 조인 및 참조 무결성
+sessions | idx_sessions_status | status | B-tree | 진행 상태별 필터링
+sessions | idx_sessions_activity | last_activity_at | B-tree | 24시간 미활동 세션 만료 배치
+floorplans | idx_floorplans_lookup | apt_name, dong, size_type | 복합 | 주소 기반 평면도 후보 조회
+floorplans | idx_floorplans_source | source | B-tree | 내부 DB / 사용자 업로드 구분 조회
+reports | uq_reports_session | session_id | UNIQUE | 세션당 리포트 1건 보장 (1:1)
+reports | uq_reports_share_token | share_token | UNIQUE | 링크 공유 토큰 조회
+reports | idx_reports_result | result, created_at DESC | 복합 | 판정 결과별 통계 및 조회
+chat_messages | idx_chat_session | session_id, created_at | 복합 | 세션 대화 이력 시간순 조회
+leads | idx_leads_session | session_id | B-tree | 세션-리드 조인
+leads | idx_leads_board | status, created_at DESC | 복합 | 관리자 리드 보드 상태별 정렬
+leads | idx_leads_assignee | assignee_id | B-tree | 담당 관리자별 리드 조회
+--- /TABLE ---
+
+6. 보안 명세
+6.1 인증·인가
+
+--- TABLE ---
+항목 | 명세
+JWT 서명 알고리즘 | HS256 (초기) → RS256 (키 로테이션 지원 시 전환 검토)
+Access Token 유효기간 | 1시간
+Refresh Token 유효기간 | 30일. DB에 저장하여 무효화 가능
+RBAC | role: user / admin. 관리자 엔드포인트(/admin/*) admin 역할만 접근
+2FA (Admin) | 관리자 계정 TOTP 기반 2단계 인증 (Google Authenticator 등)
+--- /TABLE ---
+
+6.2 데이터 보안
+
+--- TABLE ---
+항목 | 명세
+전송 암호화 | TLS 1.2+ (Nginx에서 SSL 종단)
+저장 암호화 | AES-256. S3 서버 사이드 암호화(SSE-S3). 민감 컬럼(contact_info) 애플리케이션 레벨 암호화
+개인정보 마스킹 | 대화 로그의 주소·연락처 마스킹 처리. 로그 조회 시 마스킹본 노출
+파일 업로드 보안 | 허용 형식(JPG/PNG/PDF) 검증. 파일 크기 20MB 제한. 악성코드 스캔 (ClamAV 또는 AWS Macie)
+--- /TABLE ---
+
+6.3 감사 및 모니터링
+
+--- TABLE ---
+항목 | 명세
+감사 로그 | 룰셋 변경, 권한 변경 등 모든 관리자 행위 로그. 보존 기간 1년 이상
+요청 로그 | API 요청별 request_id, user_id, endpoint, status_code, duration 기록
+에러 모니터링 | Sentry 연동 (에러 트래킹 + 알림)
+인프라 모니터링 | AWS CloudWatch (CPU, Memory, Disk, Network 메트릭)
+--- /TABLE ---
+
+7. 외부 연동 기술 명세
+7.1 소셜 OAuth
+
+--- TABLE ---
+프로바이더 | 연동 방식 | 수집 항목
+카카오 | 카카오 로그인 API v2 (Authorization Code Flow) | kakao_account.email, profile.nickname, profile.profile_image_url
+구글 | Google Identity Services (OpenID Connect) | email, name, picture
+네이버 | 네이버 로그인 API (Authorization Code Flow) | email, name, profile_image
+--- /TABLE ---
+
+7.2 주소 검색 API
+카카오 주소 검색 API 또는 네이버 주소 검색 API 사용 (비용 검토 후 결정)
+엔드포인트: /address/search → 외부 API 프록시 (직접 노출 방지)
+Rate Limiting: 사용자당 분당 60회
+7.3 OpenAI API (VLM)
+
+--- TABLE ---
+항목 | 명세
+모델 | gpt-5.4-mini (초기). LangChain ChatOpenAI 클래스로 추상화
+입력 | 이미지(base64) + 텍스트 프롬프트. 최대 토큰: 4096
+타임아웃 | 30초. 초과 시 VLM 결과 없이 Mask2Former 단독 결과로 진행
+비용 관리 | 세션당 VLM 호출 횟수 제한 (최대 5회). 토큰 사용량 로깅
+키 관리 | AWS Secrets Manager에서 런타임 로드. 코드베이스에 하드코딩 금지
+--- /TABLE ---
+
+7.4 세움터 API
+공동주택 식별키로 건축물 대장·신고 정보 조회 (행위허가 이력 확인용)
+API 장애 시 해당 판단값을 "미확인"으로 처리하고 graceful degradation
+응답 캐시: Redis에 단지별 결과 1시간 캐싱
+7.5 이메일·SMS 알림
+
+--- TABLE ---
+채널 | 명세
+이메일 | AWS SES 또는 SendGrid. 리드 생성 시 관리자에게 즉시 발송
+SMS | SOLAPI 또는 NHN Cloud. 관리자 SMS 알림 (선택적)
+템플릿 | 리드 유형별(상담/행위허가 의뢰) 이메일 템플릿 관리
+--- /TABLE ---
+
+8. 성능 목표 및 배포 구성
+8.1 성능 목표
+
+--- TABLE ---
+항목 | 목표값
+AI 분석 응답시간 | 평균 5초, 95th percentile 8초 이내 (도면 1건 기준)
+LLM 1차 응답 | 사용자 메시지 전송 후 3초 이내
+LLM 최종 응답 | 10초 이내
+일반 API 응답 | 200ms 이내 (DB 조회 포함)
+동시 사용자 | 초기: 30세션 안정 동작 / 확장 시: 200세션
+가용성 | 월간 99.0% 이상
+--- /TABLE ---
+
+8.2 배포 구성
+초기 Docker Compose 기반 복수 EC2 배포. DB 서버는 독립 인스턴스로 분리하여 확장성과 보안을 확보한다.
+
+--- TABLE ---
+구성 요소 | 상세
+앱 서버 (EC2) | Next.js + FastAPI + Nginx 컨테이너. Gunicorn 4워커 기준
+DB 서버 (EC2) | PostgreSQL 전용 인스턴스. RDS 마이그레이션 고려
+Redis | 앱 서버 동일 EC2 또는 별도 인스턴스 (ElastiCache 고려)
+Nginx | SSL 종단 + 리버스 프록시 + 정적 파일 서빙 + Gzip
+SSL | Let's Encrypt Certbot 자동 갱신
+S3 | 도면 원본/마스킹본/분석 결과. 버킷 정책으로 접근 제어
+CI/CD | GitHub Actions: main 브랜치 push → 테스트 → Docker 빌드 → EC2 무중단 배포
+배포 전략 | Blue-Green 또는 Rolling Update (Docker Compose scale)
+--- /TABLE ---
+
+8.3 docker-compose.yml 서비스 구성
+services:
+nginx:        # 리버스 프록시 + SSL + 정적 파일
+nextjs:       # Next.js 앱 서버 (Node.js)
+fastapi:      # FastAPI 백엔드 (Gunicorn + Uvicorn workers)
+redis:        # 캐시 및 세션
+# DB 서버 (별도 EC2)
+postgres:     # PostgreSQL 15+
+9. 환경 변수 명세
+모든 환경 변수는 AWS Secrets Manager 또는 .env 파일로 관리한다. 코드베이스에 하드코딩 금지.
+
+--- TABLE ---
+변수명 | 예시값 | 설명
+DATABASE_URL | postgresql+asyncpg://... | PostgreSQL 연결 문자열
+REDIS_URL | redis://redis:6379/0 | Redis 연결 URL
+JWT_SECRET_KEY | (random 256-bit) | JWT 서명 키
+JWT_ALGORITHM | HS256 | JWT 알고리즘
+KAKAO_CLIENT_ID | (카카오 REST API 키) | 카카오 OAuth 앱 키
+GOOGLE_CLIENT_ID | (구글 클라이언트 ID) | 구글 OAuth 클라이언트 ID
+NAVER_CLIENT_ID | (네이버 클라이언트 ID) | 네이버 OAuth 클라이언트 ID
+OPENAI_API_KEY | sk-... | OpenAI VLM API 키
+AWS_ACCESS_KEY_ID | AKIA... | AWS 자격 증명
+AWS_SECRET_ACCESS_KEY | (secret) | AWS 시크릿 키
+S3_BUCKET_NAME | zippin-floorplans | 도면 저장 S3 버킷명
+KAKAO_ADDRESS_API_KEY | (REST API 키) | 주소 검색 API 키
+SMTP_HOST / SES_REGION | email-smtp.ap-northeast-2... | 이메일 발송 설정
+SENTRY_DSN | https://...@sentry.io/... | Sentry 에러 트래킹 DSN
+NEXT_PUBLIC_API_URL | https://api.zippin.kr | 프론트엔드에서 API 기본 URL
+--- /TABLE ---
+
+10. 종속항 6·7 반영 기술 보강
+10.1 CompletionDecision 구조
+CompletionDecision은 전체 절차 감시 에이전트가 생성하는 제어 결과다. 필드는 decision, reasons, missing_fields, requested_overlay_targets, risk_flags, next_prompt_seed, rule_input_ready를 포함한다.
+10.2 EstimateResult 구조
+EstimateResult는 permit_agency_fee_estimate, fire_panel_estimate, fire_glass_estimate, total_range, assumptions, policy_version, variance_notes, consultation_required를 포함한다. 초기 운영 단가는 정책값으로 관리하며 특허 청구 범위나 본문에서 특정 금액으로 한정하지 않는다.

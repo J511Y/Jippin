@@ -1,0 +1,198 @@
+# Jippin - monorepo .gitignore
+# Source: AGENTS.md section 4.4 / ADR-0001 section 9 / CEO brief D5 / CMP-533.
+
+# -----------------------------------------------------------------------------
+# Environment variables / secrets
+# -----------------------------------------------------------------------------
+.env
+.env.*
+infra/compose/.env
+!.env.example
+!.env.*.example
+!**/.env.example
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+*.jks
+*.keystore
+secrets/
+.secrets/
+
+# -----------------------------------------------------------------------------
+# Python (apps/api, tooling/)
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+develop-eggs/
+.installed.cfg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtualenv / uv
+.venv/
+venv/
+env/
+ENV/
+.python-version.local
+uv.lock.local
+
+# Test / coverage / type caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+coverage.xml
+*.cover
+.hypothesis/
+
+# -----------------------------------------------------------------------------
+# Node / Next.js (apps/web, packages/*)
+# -----------------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+.pnp.*
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# Next.js
+.next/
+out/
+.vercel/
+next-env.d.ts
+
+# Build / cache
+dist/
+build/
+.turbo/
+.cache/
+.parcel-cache/
+.swc/
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# ESLint / TypeScript
+.eslintcache
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs/
+
+# -----------------------------------------------------------------------------
+# AI model weights / datasets
+# -----------------------------------------------------------------------------
+models/
+models/weights/
+weights/
+checkpoints/
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.onnx
+*.gguf
+*.ggml
+*.ckpt
+*.h5
+*.pb
+*.tflite
+*.mlmodel
+
+# Hugging Face / torch caches
+.cache/huggingface/
+.cache/torch/
+
+# Datasets / training outputs
+datasets/
+data/raw/
+data/processed/
+runs/
+wandb/
+mlruns/
+
+# -----------------------------------------------------------------------------
+# packages/contracts generated outputs
+# -----------------------------------------------------------------------------
+packages/contracts/ts/*
+!packages/contracts/ts/.gitkeep
+packages/contracts/python/zippin_contracts/*
+!packages/contracts/python/zippin_contracts/.gitkeep
+!packages/contracts/python/zippin_contracts/__init__.py
+
+# -----------------------------------------------------------------------------
+# IDE / editor / OS
+# -----------------------------------------------------------------------------
+.idea/
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+*.iml
+.idea_modules/
+
+# -----------------------------------------------------------------------------
+# Docker / local operations
+# -----------------------------------------------------------------------------
+*.local.yml
+*.local.yaml
+docker-compose.override.yml
+infra/compose/docker-compose.override.yml
+.docker/
+postgres-data/
+redis-data/
+
+# -----------------------------------------------------------------------------
+# Terraform (CMP-532 follow-up)
+# -----------------------------------------------------------------------------
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+
+# -----------------------------------------------------------------------------
+# Temporary files / backups
+# -----------------------------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+*.orig
+.tmp/
+/.tmp/
+tmp/
+
+# -----------------------------------------------------------------------------
+# Paperclip agent runtime outputs
+# -----------------------------------------------------------------------------
+/CMP-*.json
+/cmp*.json
+/children.json
+/.paperclip/
+/.paperclip-*

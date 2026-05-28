@@ -1,0 +1,37 @@
+{
+  "name": "@jippin/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Jippin 공통 컨트랙트 — JSON Schema (정본) + 생성된 TypeScript/Python 바인딩. SDD §5.1·§5.2 / ADR-0001 §9.2 봉인.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "./ts/index.ts",
+  "types": "./ts/index.ts",
+  "exports": {
+    ".": "./ts/index.ts",
+    "./schemas/*.json": "./schemas/*.json"
+  },
+  "files": [
+    "schemas",
+    "ts",
+    "README.md"
+  ],
+  "scripts": {
+    "generate": "pnpm run generate:ts && pnpm run generate:py",
+    "generate:ts": "tsx scripts/generate.ts",
+    "generate:py": "uv run --python 3.13 --no-project --with datamodel-code-generator==0.28.5 --with \"pydantic>=2.9,<3\" python scripts/generate.py",
+    "check": "git diff --exit-code -- ts python"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "^15.0.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
