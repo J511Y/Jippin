@@ -25,9 +25,11 @@ class ZippinException(Exception):
         *,
         code: str | None = None,
         http_status: int | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
+        self.details = details
         if code is not None:
             self.code = code
         if http_status is not None:
@@ -56,10 +58,10 @@ async def _zippin_handler(request: Request, exc: ZippinException) -> JSONRespons
         message=exc.message,
         status=exc.http_status,
     )
-    return JSONResponse(
-        status_code=exc.http_status,
-        content=_envelope(exc.code, exc.message, _rid(request)),
-    )
+    body = _envelope(exc.code, exc.message, _rid(request))
+    if exc.details:
+        body["detail"] = exc.details
+    return JSONResponse(status_code=exc.http_status, content=body)
 
 
 async def _http_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
