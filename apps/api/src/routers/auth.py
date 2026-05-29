@@ -421,9 +421,7 @@ def _set_session_cookie(
     settings: Settings,
 ) -> None:
     pending_anonymous_user_id = (
-        state_payload.anonymous_user_id
-        if not login_result.signup_completed
-        else None
+        state_payload.anonymous_user_id if not login_result.signup_completed else None
     )
     set_session_cookie(
         response,

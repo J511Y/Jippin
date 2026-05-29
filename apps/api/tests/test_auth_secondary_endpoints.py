@@ -61,7 +61,9 @@ def auth_env(monkeypatch):
     get_settings.cache_clear()
 
 
-def _session_cookie(user_id: uuid.UUID, *, pending_anon: uuid.UUID | None = None) -> str:
+def _session_cookie(
+    user_id: uuid.UUID, *, pending_anon: uuid.UUID | None = None
+) -> str:
     return create_session_token(
         user_id,
         get_settings(),
@@ -153,7 +155,9 @@ def test_logout_expires_session_cookie(monkeypatch, auth_env):
 def test_sso_link_start_requires_login(auth_env):
     app = create_app()
     with TestClient(app) as client:
-        response = client.post("/auth/sso-accounts/google/link", params={"mode": "json"})
+        response = client.post(
+            "/auth/sso-accounts/google/link", params={"mode": "json"}
+        )
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "AUTH_UNAUTHENTICATED"
@@ -179,7 +183,10 @@ def test_sso_link_start_stores_linking_user_id(monkeypatch, auth_env):
     authorization_url = response.json()["authorization_url"]
     parsed = urlparse(authorization_url)
     query = parse_qs(parsed.query)
-    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == google.AUTHORIZATION_ENDPOINT
+    assert (
+        f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        == google.AUTHORIZATION_ENDPOINT
+    )
     assert query["state"] == [store.put_calls[0][0]]
     assert store.put_calls[0][1].linking_user_id == user_id
     assert store.put_calls[0][1].anonymous_user_id is None
@@ -247,7 +254,9 @@ def test_link_callback_returns_409_for_other_user_link(monkeypatch, auth_env):
         created_at=datetime.now(UTC),
         linking_user_id=uuid.uuid4(),
     )
-    monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: _FakeStateStore(payload))
+    monkeypatch.setattr(
+        auth_router, "get_oauth_state_store", lambda: _FakeStateStore(payload)
+    )
     provider_module = auth_router.PROVIDER_MODULES[OAuthProvider.GOOGLE]
 
     async def fake_exchange_code(code, *, http_client, settings):
@@ -419,7 +428,9 @@ class _FakeConnection:
 
 
 @pytest.mark.asyncio
-async def test_accept_required_terms_upserts_rows_and_claims_anonymous(monkeypatch, auth_env):
+async def test_accept_required_terms_upserts_rows_and_claims_anonymous(
+    monkeypatch, auth_env
+):
     user_id = uuid.uuid4()
     anonymous_user_id = uuid.uuid4()
     conn = _FakeConnection(user_id, anonymous_user_id)

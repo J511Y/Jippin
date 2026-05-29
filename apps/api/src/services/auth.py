@@ -230,12 +230,16 @@ async def get_current_user_context(user_id: uuid.UUID) -> CurrentUserContext:
             )
 
         providers = (
-            await conn.execute(
-                sa.select(ExternalSsoAccount.provider)
-                .where(ExternalSsoAccount.user_id == user_id)
-                .order_by(ExternalSsoAccount.provider)
+            (
+                await conn.execute(
+                    sa.select(ExternalSsoAccount.provider)
+                    .where(ExternalSsoAccount.user_id == user_id)
+                    .order_by(ExternalSsoAccount.provider)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         missing_terms = await _missing_required_terms(conn, user_id, settings)
 
     return CurrentUserContext(

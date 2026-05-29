@@ -82,7 +82,9 @@ def read_session_claims(
     pending_anonymous_user_id = None
     if payload.get("pending_anonymous_user_id"):
         try:
-            pending_anonymous_user_id = uuid.UUID(str(payload["pending_anonymous_user_id"]))
+            pending_anonymous_user_id = uuid.UUID(
+                str(payload["pending_anonymous_user_id"])
+            )
         except (TypeError, ValueError) as exc:
             raise _unauthenticated() from exc
     return SessionClaims(

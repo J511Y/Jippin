@@ -64,9 +64,7 @@ class OAuthStatePayload:
             nonce=value["nonce"],
             created_at=created_at,
             linking_user_id=(
-                UUID(value["linking_user_id"])
-                if value.get("linking_user_id")
-                else None
+                UUID(value["linking_user_id"]) if value.get("linking_user_id") else None
             ),
         )
 
