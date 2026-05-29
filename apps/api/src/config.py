@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Sealed APP_ENV ↔ Neon branch mapping (CMP-538 / AGENTS.md §4.4).
@@ -18,6 +19,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
     app_env: str = Field(default="development")
@@ -31,6 +33,51 @@ class Settings(BaseSettings):
 
     test_mode: bool = Field(default=False)
     anon_session_ttl_days: int = Field(default=30)
+    redis_url: str = Field(default="redis://redis:6379/0")
+
+    oauth_state_redis_url: str | None = Field(default=None)
+    auth_oauth_state_ttl_seconds: int = Field(
+        default=600,
+        validation_alias=AliasChoices(
+            "AUTH_OAUTH_STATE_TTL_SECONDS",
+            "OAUTH_STATE_TTL_SECONDS",
+        ),
+    )
+    kakao_rest_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("KAKAO_REST_API_KEY", "OAUTH_KAKAO_CLIENT_ID"),
+    )
+    kakao_client_secret: str | None = Field(default=None)
+    kakao_redirect_uri: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("KAKAO_REDIRECT_URI", "OAUTH_KAKAO_REDIRECT_URI"),
+    )
+    google_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GOOGLE_OAUTH_CLIENT_ID", "OAUTH_GOOGLE_CLIENT_ID"
+        ),
+    )
+    google_oauth_client_secret: str | None = Field(default=None)
+    google_oauth_redirect_uri: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GOOGLE_OAUTH_REDIRECT_URI", "OAUTH_GOOGLE_REDIRECT_URI"
+        ),
+    )
+    naver_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NAVER_OAUTH_CLIENT_ID", "OAUTH_NAVER_CLIENT_ID"),
+    )
+    naver_oauth_client_secret: str | None = Field(default=None)
+    naver_oauth_redirect_uri: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "NAVER_OAUTH_REDIRECT_URI", "OAUTH_NAVER_REDIRECT_URI"
+        ),
+    )
+    frontend_auth_success_url: str = Field(default="http://localhost:3000/auth/success")
+    frontend_auth_failure_url: str = Field(default="http://localhost:3000/auth/failure")
 
     cors_allow_origins: list[str] = Field(default_factory=lambda: ["*"])
 
@@ -49,6 +96,21 @@ class Settings(BaseSettings):
                 "See AGENTS.md §4.4 and docs/runbooks/neon-branches.md."
             )
         return normalized
+
+    @field_validator("auth_oauth_state_ttl_seconds")
+    @classmethod
+    def _validate_oauth_state_ttl(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("AUTH_OAUTH_STATE_TTL_SECONDS must be positive.")
+        return v
+
+    @field_validator("frontend_auth_success_url", "frontend_auth_failure_url")
+    @classmethod
+    def _validate_frontend_auth_url(cls, v: str) -> str:
+        parsed = urlparse(v)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Frontend auth URLs must be absolute http(s) URLs.")
+        return v
 
 
 @lru_cache
