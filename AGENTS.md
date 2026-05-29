@@ -174,10 +174,10 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 
 **모델 가드 (요약 — 정본은 ADR-0003).**
 
-- `anonymous_users(id uuid pk, created_at, last_seen_at, converted_user_id uuid null fk → users.id, converted_at null, ip_hash, ua_hash)`.
-- `users(id uuid pk, email citext, display_name, created_at, last_login_at, status)` — **password 컬럼 영구 금지**.
-- `external_sso_accounts(user_id fk, provider external_sso_provider, provider_subject text, provider_email, linked_at, pk (provider, provider_subject))` — provider 는 ENUM.
-- `terms_consents(id, user_id fk, term_id, version, source text, agreed_at)` — `source ∈ {'internal_signup', 'kakao_sync', ...}`.
+- `users(id uuid pk, email text null, display_name, status, created_at, last_login_at)` — **password 컬럼 영구 금지**. citext 의존 회피, 대소문자 무시 매칭은 `LOWER(email)` functional index 로.
+- `anonymous_users(id uuid pk, created_at, last_seen_at, ip_hash, ua_hash, converted_user_id uuid null fk → users.id, converted_at null)` — users 를 먼저 만든 뒤 본 테이블 생성.
+- `external_sso_accounts(user_id fk, provider external_sso_provider, provider_subject text, provider_email text, linked_at, pk (provider, provider_subject), unique (user_id, provider))` — provider 는 ENUM, 한 user 가 같은 provider 를 두 번 연결 불가.
+- `terms_consents(id, user_id fk not null, term_id, version, source text, agreed_at)` — `source ∈ {'internal_signup', 'kakao_sync', ...}`. user row 생성·연결과 같은 트랜잭션에서 insert.
 
 **환경변수 이름 (정본은 `apps/api/.env.example`).**
 
