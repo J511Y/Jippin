@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
+from .auth.state_store import close_oauth_state_store
 from .config import get_settings
 from .db import dispose_engines
 from .errors import register_exception_handlers
@@ -25,6 +26,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await close_oauth_state_store()
         await dispose_engines()
         log.info("api_stop")
 

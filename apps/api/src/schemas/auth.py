@@ -15,3 +15,7 @@ class AnonymousUserCreateRequest(BaseModel):
 class AnonymousUserCreateResponse(BaseModel):
     anonymous_user_id: uuid.UUID
     reused: bool
+
+
+class OAuthStartResponse(BaseModel):
+    authorization_url: str
