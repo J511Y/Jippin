@@ -35,11 +35,15 @@ class OAuthStatePayload:
     return_url: str | None
     nonce: str
     created_at: datetime
+    linking_user_id: UUID | None = None
 
     def to_json_dict(self) -> dict[str, Any]:
         value = asdict(self)
         value["anonymous_user_id"] = (
             str(self.anonymous_user_id) if self.anonymous_user_id is not None else None
+        )
+        value["linking_user_id"] = (
+            str(self.linking_user_id) if self.linking_user_id is not None else None
         )
         value["created_at"] = self.created_at.isoformat()
         return value
@@ -59,6 +63,9 @@ class OAuthStatePayload:
             return_url=value.get("return_url"),
             nonce=value["nonce"],
             created_at=created_at,
+            linking_user_id=(
+                UUID(value["linking_user_id"]) if value.get("linking_user_id") else None
+            ),
         )
 
 
