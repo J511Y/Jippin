@@ -74,9 +74,14 @@ CREATE TABLE anonymous_users (
 );
 
 -- 3) 사용자 — password 컬럼 금지.
+--
+--  email 은 NULL 허용. Kakao / Naver / Google 모두 provider 이메일 제공이
+--  사용자 동의·약관·계정 상태에 따라 누락될 수 있으므로 NOT NULL 강제는 부적합.
+--  CMP-557 본문의 `email TEXT NULL` 정책과 정합. 표시 가능 이메일은
+--  external_sso_accounts.provider_email 에 provider 별로 별도 보관한다.
 CREATE TABLE users (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email           CITEXT NOT NULL,
+  email           CITEXT NULL,
   display_name    TEXT,
   status          TEXT NOT NULL DEFAULT 'active', -- active | suspended | deleted
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -85,15 +90,20 @@ CREATE TABLE users (
 );
 
 -- 4) 외부 SSO 계정 — (provider, provider_subject) 가 자연 PK.
+--
+--   - PRIMARY KEY (provider, provider_subject) : provider 측 subject 중복 차단.
+--   - UNIQUE (user_id, provider) : 한 user 는 같은 provider 를 두 번 연결할 수
+--     없다 (Kakao 1회, Google 1회, Naver 1회 max). 다른 provider 추가 연결은
+--     허용되며 사용자 명시 “계정 통합” 흐름을 거쳐야 한다 (§2.3).
 CREATE TABLE external_sso_accounts (
   user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   provider         external_sso_provider NOT NULL,
   provider_subject TEXT NOT NULL,
   provider_email   CITEXT,
   linked_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (provider, provider_subject)
+  PRIMARY KEY (provider, provider_subject),
+  UNIQUE (user_id, provider)
 );
--- 같은 user_id 가 여러 provider 를 가질 수 있으나, 사용자 명시 통합 흐름이 있어야 함.
 
 -- 5) 약관 동의 — source 분리 저장.
 CREATE TABLE terms_consents (
@@ -121,14 +131,25 @@ CREATE TABLE terms_consents (
   │  3) GET /auth/callback/{provider}?code=...&state=... ◀─
   │     서버: Redis 에서 state 검증, code 교환
   │  4) provider=kakao :
-  │       - Kakao Sync 약관 동의 결과를 받아 terms_consents(source='kakao_sync') 기록
+  │       - Kakao Sync 약관 동의 결과를 받아 단일 트랜잭션에서
+  │         users upsert + external_sso_accounts upsert
+  │         + terms_consents(source='kakao_sync') insert
+  │         + anonymous_users claim 갱신.
   │       - 내부 약관 화면은 생략 (Kakao 가 표시 책임).
   │     provider in (google, naver) :
-  │       - 내부 약관 동의 화면으로 리다이렉트 (가입 완료 전까지 user row 미생성).
-  │       - 사용자가 동의하면 terms_consents(source='internal_signup') 기록.
-  │  5) users / external_sso_accounts upsert.
-  │     anonymous_users 의 converted_user_id, converted_at 갱신 (claim).
-  │  6) JWT 발급 → 클라이언트 리다이렉트 (FRONTEND_AUTH_SUCCESS_URL).
+  │       - 내부 약관 동의 화면으로 리다이렉트 — 이 시점에는 users row 미생성.
+  │       - provider userinfo(subject, email 등) + anon_id + state 키를
+  │         **pending_signup** 으로 Redis 에 짧은 TTL(≤10분)로 보관해 약관
+  │         화면 왕복 중 컨텍스트가 유지되도록 한다.
+  │       - 사용자가 약관에 동의하면, **단일 트랜잭션에서**
+  │         users upsert + external_sso_accounts upsert
+  │         + terms_consents(source='internal_signup') insert
+  │         + anonymous_users.converted_user_id / converted_at 갱신 을 수행한다.
+  │         (terms_consents.user_id NOT NULL 이므로 user row 생성·연결과 약관
+  │         insert 가 같은 트랜잭션이어야 한다. 부분 커밋 금지.)
+  │       - 사용자가 약관을 거부하면 pending_signup 폐기, users 미생성,
+  │         익명 세션 유지. TERMS_DECLINED 응답.
+  │  5) JWT 발급 → 클라이언트 리다이렉트 (FRONTEND_AUTH_SUCCESS_URL).
 ```
 
 실패·예외 코드 (SDD §AUTH 와 정합):
@@ -203,7 +224,8 @@ CREATE TABLE terms_consents (
 | `external_sso_provider` (PG ENUM) | `google | naver | kakao` | 신규 provider 추가 = 새 ADR + 마이그레이션 |
 | `users.password*` | 컬럼 없음 | 모델 메타데이터 테스트 가드 |
 | `anonymous_users` localStorage 키 | `jippin_anonymous_user_id` | 서버 발급 UUID v4 |
-| OAuth state store | Redis 컨테이너 (ADR-0001 §5) | TTL ≤10분 |
+| 익명 세션 전달 헤더 | `x-jippin-anon-id` | 정본 변수 = `apps/api/.env.example::ANON_SESSION_HEADER`. 다른 문서·코드는 모두 이 정본을 인용 |
+| OAuth state store | Redis 컨테이너 (ADR-0001 §5) | TTL ≤10분, key prefix 분리 (`oauth_state:*`, `pending_signup:*`) |
 | 자동 병합 | 금지 | 사용자 명시 통합 흐름만 허용 |
 | Kakao 내부 약관 화면 | 생략 | source 분리 저장으로 감사 |
 | Google/Naver 내부 약관 화면 | 필수 | `terms_consents.source='internal_signup'` |
