@@ -236,4 +236,4 @@ colors: {
 2. `apps/web/tailwind.config.ts` 와 `apps/web/app/layout.tsx` 등 코드 토큰을 동기화한다.
 3. WCAG 검증을 자동화 도구(axe, Lighthouse) 로 재실행하고 그 결과를 PR 본문에 캡처한다.
 4. 의미가 바뀌는 변경(역할 변경·신규 토큰·폐기) 은 `docs/design/decisions/` (신설 가능) 또는 ADR 로 결정 기록을 남긴다.
-5. 커밋: gitmoji `📝 docs(brand|design):` 또는 `🎨 style(web):`. PR 본문에 영향 범위(`BRAND` / `DESIGN` / `DOCS` / `WEB`) 와 `CMP-###` 표기.
+5. 커밋: gitmoji `📝 docs(brand|design):` 를 기본으로 한다. 코드 토큰만 동기화하는 경우에도 현행 허용 prefix 안에서 `📝 docs(brand):` 또는 `🔧 chore(web):` 를 사용한다. PR 본문에 영향 범위(`BRAND` / `DESIGN` / `DOCS` / `WEB`) 와 `CMP-###` 표기.
