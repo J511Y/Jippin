@@ -20,9 +20,15 @@ external_sso_provider_enum = postgresql.ENUM(
 
 
 class User(TimestampMixin, Base):
-    """OAuth-only user account. Password columns are intentionally forbidden."""
+    """OAuth-only user account; role authorization is separate from lifecycle status."""
 
     __tablename__ = "users"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('active', 'suspended', 'deleted')",
+            name="users_status_allowed",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         postgresql.UUID(as_uuid=True),
@@ -37,13 +43,18 @@ class User(TimestampMixin, Base):
         nullable=False,
         server_default=sa.text("'user'"),
     )
+    status: Mapped[str] = mapped_column(
+        sa.Text,
+        nullable=False,
+        server_default=sa.text("'active'"),
+    )
     last_login_at: Mapped[datetime | None] = mapped_column(
         postgresql.TIMESTAMP(timezone=True)
     )
 
 
 class AnonymousUser(TimestampMixin, Base):
-    """Anonymous pre-review actor that can later be converted to a User."""
+    """Anonymous pre-review actor. Only HMAC IP/UA hashes are stored."""
 
     __tablename__ = "anonymous_users"
 
@@ -56,6 +67,8 @@ class AnonymousUser(TimestampMixin, Base):
         postgresql.UUID(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="SET NULL"),
     )
+    ip_hash: Mapped[bytes | None] = mapped_column(postgresql.BYTEA)
+    ua_hash: Mapped[bytes | None] = mapped_column(postgresql.BYTEA)
     last_seen_at: Mapped[datetime] = mapped_column(
         postgresql.TIMESTAMP(timezone=True),
         nullable=False,
@@ -87,7 +100,7 @@ class ExternalSsoAccount(TimestampMixin, Base):
     )
     provider: Mapped[str] = mapped_column(external_sso_provider_enum, nullable=False)
     provider_subject: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    email: Mapped[str | None] = mapped_column(sa.Text)
+    provider_email: Mapped[str | None] = mapped_column(sa.Text)
     display_name: Mapped[str | None] = mapped_column(sa.Text)
     profile_image_url: Mapped[str | None] = mapped_column(sa.Text)
     raw_profile: Mapped[dict[str, object]] = mapped_column(
@@ -122,14 +135,14 @@ class Term(TimestampMixin, Base):
     )
 
 
-class UserTermConsent(TimestampMixin, Base):
+class TermsConsent(TimestampMixin, Base):
     """Audit row for a user's consent to a specific term version."""
 
-    __tablename__ = "user_term_consents"
+    __tablename__ = "terms_consents"
     __table_args__ = (
         sa.CheckConstraint(
             "source IN ('kakao_sync', 'internal_signup')",
-            name="user_term_consents_source_allowed",
+            name="terms_consents_source_allowed",
         ),
         sa.UniqueConstraint("user_id", "term_id"),
     )

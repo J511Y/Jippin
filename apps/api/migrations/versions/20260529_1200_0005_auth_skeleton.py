@@ -42,6 +42,12 @@ def upgrade() -> None:
         sa.Column("display_name", sa.Text(), nullable=True),
         sa.Column("profile_image_url", sa.Text(), nullable=True),
         sa.Column(
+            "status",
+            sa.Text(),
+            server_default=sa.text("'active'"),
+            nullable=False,
+        ),
+        sa.Column(
             "role",
             sa.Text(),
             server_default=sa.text("'user'"),
@@ -60,6 +66,10 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
+        sa.CheckConstraint(
+            "status IN ('active', 'suspended', 'deleted')",
+            name=op.f("ck_users_users_status_allowed"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_users")),
     )
 
@@ -74,7 +84,7 @@ def upgrade() -> None:
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("provider", provider_enum, nullable=False),
         sa.Column("provider_subject", sa.Text(), nullable=False),
-        sa.Column("email", sa.Text(), nullable=True),
+        sa.Column("provider_email", sa.Text(), nullable=True),
         sa.Column("display_name", sa.Text(), nullable=True),
         sa.Column("profile_image_url", sa.Text(), nullable=True),
         sa.Column(
@@ -123,6 +133,8 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("converted_user_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("ip_hash", postgresql.BYTEA(), nullable=True),
+        sa.Column("ua_hash", postgresql.BYTEA(), nullable=True),
         sa.Column(
             "last_seen_at",
             postgresql.TIMESTAMP(timezone=True),
@@ -193,7 +205,7 @@ def upgrade() -> None:
     )
 
     op.create_table(
-        "user_term_consents",
+        "terms_consents",
         sa.Column("id", sa.BigInteger(), nullable=False),
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("term_id", sa.BigInteger(), nullable=False),
@@ -224,30 +236,30 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "source IN ('kakao_sync', 'internal_signup')",
-            name=op.f("ck_user_term_consents_user_term_consents_source_allowed"),
+            name=op.f("ck_terms_consents_terms_consents_source_allowed"),
         ),
         sa.ForeignKeyConstraint(
             ["term_id"],
             ["terms.id"],
-            name=op.f("fk_user_term_consents_term_id_terms"),
+            name=op.f("fk_terms_consents_term_id_terms"),
         ),
         sa.ForeignKeyConstraint(
             ["user_id"],
             ["users.id"],
-            name=op.f("fk_user_term_consents_user_id_users"),
+            name=op.f("fk_terms_consents_user_id_users"),
             ondelete="CASCADE",
         ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_user_term_consents")),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_terms_consents")),
         sa.UniqueConstraint(
             "user_id",
             "term_id",
-            name=op.f("uq_user_term_consents_user_id_term_id"),
+            name=op.f("uq_terms_consents_user_id_term_id"),
         ),
     )
 
 
 def downgrade() -> None:
-    op.drop_table("user_term_consents")
+    op.drop_table("terms_consents")
     op.drop_table("terms")
     op.drop_index(
         op.f("ix_anonymous_users_last_seen_at"),

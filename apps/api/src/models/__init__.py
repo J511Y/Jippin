@@ -28,8 +28,8 @@ from .auth import (  # noqa: E402
     AnonymousUser,
     ExternalSsoAccount,
     Term,
+    TermsConsent,
     User,
-    UserTermConsent,
     external_sso_provider_enum,
 )
 
@@ -46,9 +46,9 @@ __all__ = [
     "NAMING_CONVENTION",
     "RequestLog",
     "Term",
+    "TermsConsent",
     "TimestampMixin",
     "User",
-    "UserTermConsent",
     "external_sso_provider_enum",
     "utc_now",
 ]
