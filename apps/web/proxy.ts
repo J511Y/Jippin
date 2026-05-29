@@ -1,7 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 /**
- * 보호 경로 미인증 가드 (CMP-529, CMP-557, CMP-564).
+ * 보호 경로 미인증 가드 (CMP-529, CMP-557, CMP-564, CMP-571).
+ *
+ * CMP-571: Next.js 16 의 `middleware` 파일 컨벤션이 deprecated 되어 본 파일은
+ * `proxy.ts` 로 이동되고 export 함수명도 `proxy` 로 변경되었다. matcher 와
+ * 가드 로직 자체는 유지된다.
  *
  * CMP-557 정책 (`/CMP/issues/CMP-557` plan 문서 §2):
  *   - 비회원 사전검토 진입 경로(`/app/pre-review/...`)는 로그인 없이 접근 가능해야 한다.
@@ -48,7 +52,7 @@ function isProtected(pathname: string): boolean {
   return PROTECTED_APP_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
   if (!isProtected(pathname)) {
