@@ -128,7 +128,7 @@ class UserTermConsent(TimestampMixin, Base):
     __tablename__ = "user_term_consents"
     __table_args__ = (
         sa.CheckConstraint(
-            "source IN ('kakao_sync', 'internal_terms_page')",
+            "source IN ('kakao_sync', 'internal_signup')",
             name="user_term_consents_source_allowed",
         ),
         sa.UniqueConstraint("user_id", "term_id"),

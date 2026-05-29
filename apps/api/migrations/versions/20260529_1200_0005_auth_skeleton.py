@@ -223,7 +223,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "source IN ('kakao_sync', 'internal_terms_page')",
+            "source IN ('kakao_sync', 'internal_signup')",
             name=op.f("ck_user_term_consents_user_term_consents_source_allowed"),
         ),
         sa.ForeignKeyConstraint(

@@ -99,7 +99,7 @@ def test_user_term_consent_constraints_are_sealed() -> None:
     }
 
     assert ("user_id", "term_id") in unique_constraints
-    assert "source IN ('kakao_sync', 'internal_terms_page')" in check_constraints
+    assert "source IN ('kakao_sync', 'internal_signup')" in check_constraints
     assert next(iter(table.c.user_id.foreign_keys)).target_fullname == "users.id"
     assert next(iter(table.c.user_id.foreign_keys)).ondelete == "CASCADE"
     assert next(iter(table.c.term_id.foreign_keys)).target_fullname == "terms.id"
