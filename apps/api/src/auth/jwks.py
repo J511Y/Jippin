@@ -28,4 +28,3 @@ def clear_google_jwks_cache() -> None:
     global _GOOGLE_JWKS, _GOOGLE_JWKS_EXPIRES_AT
     _GOOGLE_JWKS = None
     _GOOGLE_JWKS_EXPIRES_AT = None
-

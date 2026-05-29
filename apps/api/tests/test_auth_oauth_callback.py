@@ -102,9 +102,7 @@ def test_oauth_callback_consumes_state_sets_cookie_and_redirects(
         return OAuthLoginResult(
             user_id=uuid.uuid4(),
             signup_completed=signup_completed,
-            claimed_anonymous_user_id=(
-                anonymous_user_id if signup_completed else None
-            ),
+            claimed_anonymous_user_id=(anonymous_user_id if signup_completed else None),
         )
 
     monkeypatch.setattr(provider_module, "exchange_code", fake_exchange_code)

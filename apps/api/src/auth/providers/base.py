@@ -26,4 +26,3 @@ class ProviderProfile:
     display_name: str | None = None
     profile_image_url: str | None = None
     agreed_terms_tags: tuple[str, ...] = ()
-
