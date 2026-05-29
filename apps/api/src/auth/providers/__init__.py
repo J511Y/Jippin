@@ -4,6 +4,7 @@ from enum import StrEnum
 from types import ModuleType
 
 from . import google, kakao, naver
+from .base import OAuthProviderError, OAuthTokens, ProviderProfile
 
 
 class OAuthProvider(StrEnum):
@@ -19,4 +20,13 @@ PROVIDER_MODULES: dict[OAuthProvider, ModuleType] = {
 }
 
 
-__all__ = ["OAuthProvider", "PROVIDER_MODULES", "google", "kakao", "naver"]
+__all__ = [
+    "OAuthProvider",
+    "OAuthProviderError",
+    "OAuthTokens",
+    "ProviderProfile",
+    "PROVIDER_MODULES",
+    "google",
+    "kakao",
+    "naver",
+]

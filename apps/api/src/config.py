@@ -78,6 +78,17 @@ class Settings(BaseSettings):
     )
     frontend_auth_success_url: str = Field(default="http://localhost:3000/auth/success")
     frontend_auth_failure_url: str = Field(default="http://localhost:3000/auth/failure")
+    frontend_auth_terms_url: str = Field(default="http://localhost:3000/auth/terms")
+
+    auth_jwt_secret: str | None = Field(default=None)
+    auth_jwt_alg: str = Field(default="HS256")
+    auth_session_ttl_days: int = Field(default=14)
+    auth_cookie_name: str = Field(default="jippin_session")
+    auth_cookie_domain: str | None = Field(default=None)
+    auth_cookie_secure: bool | None = Field(default=None)
+    kakao_sync_required_term_tags: list[str] = Field(
+        default_factory=lambda: ["service_terms", "privacy_policy"]
+    )
 
     cors_allow_origins: list[str] = Field(default_factory=lambda: ["*"])
 
@@ -104,12 +115,37 @@ class Settings(BaseSettings):
             raise ValueError("AUTH_OAUTH_STATE_TTL_SECONDS must be positive.")
         return v
 
-    @field_validator("frontend_auth_success_url", "frontend_auth_failure_url")
+    @field_validator(
+        "frontend_auth_success_url",
+        "frontend_auth_failure_url",
+        "frontend_auth_terms_url",
+    )
     @classmethod
     def _validate_frontend_auth_url(cls, v: str) -> str:
         parsed = urlparse(v)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("Frontend auth URLs must be absolute http(s) URLs.")
+        return v
+
+    @field_validator("auth_session_ttl_days")
+    @classmethod
+    def _validate_auth_session_ttl_days(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("AUTH_SESSION_TTL_DAYS must be positive.")
+        return v
+
+    @field_validator("auth_cookie_domain", "auth_cookie_secure", mode="before")
+    @classmethod
+    def _empty_cookie_settings_are_none(cls, v: object) -> object:
+        if v == "":
+            return None
+        return v
+
+    @field_validator("kakao_sync_required_term_tags", mode="before")
+    @classmethod
+    def _parse_kakao_sync_required_term_tags(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
         return v
 
 
