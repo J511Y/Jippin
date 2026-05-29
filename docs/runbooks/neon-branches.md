@@ -1,9 +1,9 @@
 # Runbook — Neon Postgres 브랜치 운영 (APP_ENV ↔ branch 매핑)
 
 - 정본 책임자: **Infrastructure Lead** · **Database Engineer** 리뷰
-- 관련: CMP-536 (Neon 마이그레이션 세팅), CMP-538 (본 문서), AGENTS.md §4.4
+- 관련: CMP-536 (Neon 마이그레이션 세팅), CMP-538 (본 문서), CMP-543 (개발환경 구축), CMP-544 (`local` 브랜치 신설), AGENTS.md §4.4
 - 인접 런북: [`neon-credential-rotation.md`](neon-credential-rotation.md) (비밀번호 회전)
-- 목표 소요(신규 작업자 자기 dev 브랜치 생성): **30분 이내**
+- 목표 소요(신규 작업자 자기 `local` fork 생성): **30분 이내**
 
 ---
 
@@ -11,10 +11,12 @@
 
 | APP_ENV       | Neon 브랜치               | 수명           | 비고                                  |
 |---------------|---------------------------|----------------|---------------------------------------|
-| `development` | `dev`                     | 장기, 공유     | 로컬 개발자 공용                      |
+| `development` | `dev` [^cmp544]           | 장기, 공유     | 로컬 개발자 공용                      |
 | `test`        | `dev` 또는 PR ephemeral   | 단기           | CI / 단위 테스트 (ephemeral은 CMP-536 자식 C) |
 | `staging`     | `staging`                 | 장기           | QA / 사전검증                         |
 | `production`  | `main`                    | 장기           | 운영 (Neon project default branch)    |
+
+[^cmp544]: CMP-544 — `APP_ENV=development` 의 표준 Neon 브랜치는 **`local` (로컬 워크스테이션)** 또는 **`dev` (CI / `development` GitHub Environment 배포)** 이다. 둘 다 `APP_ENV=development` 로 부팅하며 enum 은 확장하지 않는다 (CMP-538 봉인 유지). 어느 브랜치를 보느냐는 `apps/api/.env` 의 `DATABASE_URL` / `DATABASE_POOL_URL` host 한 줄로만 결정한다 (12-factor). **표 자체는 봉인이며 본 각주만 추가된다.**
 
 **코드 분기는 만들지 않는다** — 매핑은 환경별 `.env` 의 `DATABASE_URL` / `DATABASE_POOL_URL` 값으로만 한다 (12-factor).
 
@@ -26,19 +28,25 @@
 
 ```
 neon project (jippin)
-└── main           ← APP_ENV=production
-    ├── staging    ← APP_ENV=staging        (parent: main)
-    └── dev        ← APP_ENV=development    (parent: main 또는 staging)
-        ├── pr-1234   (CMP-536 자식 C, ephemeral, parent: dev)
-        ├── pr-1235   (ephemeral)
-        └── dev-<handle>  (작업자별 dev fork, parent: dev)
+└── main                 ← APP_ENV=production
+    ├── staging          ← APP_ENV=staging        (parent: main)
+    └── dev              ← APP_ENV=development    (parent: main 또는 staging)
+        │                  · CI 워크플로 / `development` GitHub Environment 배포 전용
+        │                  · pr-N ephemeral 의 parent (CMP-536 자식 C)
+        ├── pr-1234         (CMP-536 자식 C, ephemeral, parent: dev)
+        ├── pr-1235         (ephemeral)
+        └── local         ← APP_ENV=development    (parent: dev, CMP-544)
+            │                · 로컬 워크스테이션 표준 브랜치 (공용 시드, 공용 schema)
+            │                · scale-to-zero ON, suspend 5분, history retention 최소
+            └── local-<handle>  (선택: 작업자별 격리 fork, parent: local)
 ```
 
 운영 원칙:
 
-- 브랜치 parent 는 항상 더 신뢰도 높은 브랜치를 가리킨다 (production → staging → dev).
+- 브랜치 parent 는 항상 더 신뢰도 높은 브랜치를 가리킨다 (production → staging → dev → local).
 - `dev` 의 스키마는 `staging` 의 스키마와 동일하거나 **앞서 있을 수 있다** (마이그레이션이 먼저 dev 에서 검증).
 - `staging` 의 스키마는 `main` 의 스키마와 동일하거나 앞서 있을 수 있다.
+- `local` 은 `dev` 에서 분기된 로컬 전용 브랜치다. 여기서 수행한 마이그레이션 실험은 PR/CI 를 통해 `dev` 로 승격되며, 자동 역전파는 없다.
 - 거꾸로 흐르는 데이터 복제는 본 런북 범위가 아니다 (`reset_from_parent` 별도 운용).
 
 ---
@@ -69,43 +77,63 @@ neon project (jippin)
 2. 이름: `dev`, parent: `main` (또는 `staging` — CTO 결정에 따른다), **include data**: Yes.
 3. compute size: 가장 작은 옵션. autoscale: scale-to-zero ON, suspend after 5분.
 4. **Connection details** 의 두 URL 을 1Password `집핀 / Neon dev / neondb_owner` 에 저장.
+5. **TTL 끔.** `dev` 는 장기 공유 브랜치이므로 expiration 없이 운영한다. Neon 콘솔 `Branches > dev > Edit > Expiration` 에서 `Never` 로 설정. (TTL 이 설정된 브랜치는 자식 브랜치를 만들 수 없으며, CMP-544 의 `local` 자식 생성을 차단한다.)
 
-### 2.4 자기 dev fork (작업자별, 신규 작업자 onboarding 30분 안에)
+### 2.4 자기 `local` fork (로컬 워크스테이션, 신규 작업자 onboarding 30분 안에)
 
-본 절차가 **신규 작업자가 스스로 따라할 수 있는 셀프 가이드** 이며, 본 런북의 자기 점검 기준이다.
+본 절차가 **신규 작업자가 스스로 따라할 수 있는 셀프 가이드** 이며, 본 런북의 자기 점검 기준이다. 본 절차는 CMP-544 에서 `dev-<handle>` → `local` 기반으로 재작성됐다.
+
+선행 조건:
+
+- 프로젝트에 공용 `local` 브랜치가 이미 존재한다 (CMP-544 가 1회 생성). 없다면 §2.4.0 의 1회 셋업을 먼저 수행한다.
+
+#### 2.4.0 공용 `local` 브랜치 (1회만, CMP-544 인도물)
 
 1. **Branches** → `Create branch`.
-2. 이름: `dev-<handle>` (예: `dev-jhyou`). parent: `dev`. **include data**: Yes.
+2. 이름: `local`. parent: `dev`. **include data**: Yes.
+3. compute size: 가장 작은 옵션. autoscale: scale-to-zero ON, suspend after 5분.
+4. **History retention**: 최소 (콘솔 슬라이더 최좌측).
+5. **TTL/Expiration**: `Never` (장기 공유 브랜치).
+6. **Connection details** 의 두 URL 을 1Password `집핀 / Neon local / neondb_owner` 에 저장.
+
+MCP 로도 생성 가능하다: `mcp__Neon__create_branch(projectId="<...>", branchName="local", parentId="<dev branch id>")`. MCP 는 compute / TTL / history retention 옵션을 노출하지 않으므로 생성 직후 Neon 콘솔에서 위 세 값을 직접 확인·수정한다.
+
+#### 2.4.1 자기 local fork (작업자별)
+
+1. **Branches** → `Create branch`.
+2. 이름: `local-<handle>` (예: `local-jhyou`). parent: `local`. **include data**: Yes.
 3. 작은 compute, scale-to-zero, suspend 5분.
 4. **Connection details** 패널의 두 URL 을 로컬 `apps/api/.env` 에 붙여넣는다. (절대 커밋 금지)
-5. `cd apps/api && uv run uvicorn src.main:app --reload` 로 부팅.
+5. `cd apps/api && uv run uvicorn src.main:app --reload` 로 부팅 (`APP_ENV=development` 그대로).
 6. `curl http://localhost:8000/healthz` 가 200 + `db.ok=true` 인지 확인.
-7. (선택) 자기 dev fork 가 더는 필요 없으면 §3 정리.
+7. (선택) 자기 fork 가 더는 필요 없으면 §3 정리.
+
+> 격리가 필요 없는 작업자는 공용 `local` 브랜치 URL 을 그대로 `.env` 에 사용해도 된다. 스키마가 충돌할 위험이 있을 때만 `local-<handle>` 로 분리한다.
 
 ### 2.5 신규 작업자 자기 점검 체크리스트 (30분 내 완료해야 본 런북 통과)
 
 - [ ] 0 분 — 콘솔 로그인 + 프로젝트 진입.
-- [ ] 5 분 — §2.4 절차로 `dev-<handle>` 브랜치 생성 완료.
+- [ ] 5 분 — §2.4.1 절차로 `local-<handle>` (또는 공용 `local`) URL 확보 완료.
 - [ ] 10분 — 두 URL 을 `apps/api/.env` 에 채움. `sslmode=require` 포함 확인.
 - [ ] 15분 — `APP_ENV=development` 로 부팅. `/healthz` 200.
 - [ ] 20분 — psql 또는 `uv run python -c "..."` 로 `SELECT 1` 직접 실행 성공.
 - [ ] 25분 — `git status` 가 깨끗하다 (실수로 `.env` 가 스테이지되지 않았다).
-- [ ] 30분 — `infra/compose/.env.example` 에 자기 비밀번호 흔적이 없다 (`grep npg_` 결과 0).
+- [ ] 30분 — `infra/compose/.env.example` / `apps/api/.env.example` 에 자기 비밀번호 흔적이 없다 (`grep npg_` 결과 0).
 
 30분을 초과하면 본 런북이 미흡하다는 신호다. 인프라 Lead 에게 피드백 코멘트로 보고할 것.
 
 ---
 
-## 3. 브랜치 정리 (자기 dev fork 폐기)
+## 3. 브랜치 정리 (자기 `local` fork 폐기)
 
 작업자 이탈, 머신 교체, 또는 더 이상 fork 가 필요 없을 때:
 
-1. Neon 콘솔 **Branches** → `dev-<handle>` → 우측 `⋯` → `Delete branch`.
-2. 1Password `집핀 / Neon dev-<handle>` 항목을 `archived` 로 이동.
+1. Neon 콘솔 **Branches** → `local-<handle>` → 우측 `⋯` → `Delete branch`.
+2. 1Password `집핀 / Neon local-<handle>` 항목을 `archived` 로 이동.
 3. 로컬 `.env` 의 두 URL 을 비우거나 새 fork 의 URL 로 교체.
 4. 본인이 만든 ephemeral PR 브랜치(있으면)도 같이 삭제.
 
-> **공유 브랜치는 절대 임의 삭제 금지.** `dev` / `staging` / `main` 삭제는 CEO + DBA 합의가 필요하다.
+> **공유 브랜치는 절대 임의 삭제 금지.** `local` / `dev` / `staging` / `main` 삭제는 CEO + DBA 합의가 필요하다.
 
 ---
 
@@ -117,7 +145,7 @@ neon project (jippin)
 postgresql+psycopg://<USER>:<PASSWORD>@<HOST>/<DB>?sslmode=require
 ```
 
-`<HOST>` 의 prefix 가 브랜치 라벨을 결정한다 (Neon 콘솔이 자동 부여 — 예: `ep-dev-…`, `ep-staging-…`, `ep-main-…`).
+`<HOST>` 의 prefix 가 브랜치 라벨을 결정한다 (Neon 콘솔이 자동 부여 — 예: `ep-local-…`, `ep-dev-…`, `ep-staging-…`, `ep-main-…`).
 
 | 키                  | 호스트 패턴            | 용도                                |
 |---------------------|------------------------|-------------------------------------|
@@ -138,8 +166,9 @@ APP_ENV 별 자리표시자 예시는 [`apps/api/.env.example`](../../apps/api/.
 |-------------|----------------|--------------------------|-----------------------------------|
 | production  | 90일           | **즉시** + audit         | 다운타임 공지 5분 권장            |
 | staging     | 180일          | 즉시 (production보다 후) | QA 알림 후 진행                   |
-| dev (공유)  | 365일          | 즉시                     | 영향 적음, 그러나 절대 평문 commit 금지 |
-| dev-<handle>| 작업자 책임    | 즉시 + Neon 콘솔 삭제 후 재생성 | 자기 fork 는 자기가 관리          |
+| dev (공유)  | 365일          | 즉시                     | CI / development env 배포 의존; 절대 평문 commit 금지 |
+| local (공유) | 365일         | 즉시                     | 로컬 워크스테이션 공용; 절대 평문 commit 금지 |
+| local-<handle>| 작업자 책임  | 즉시 + Neon 콘솔 삭제 후 재생성 | 자기 fork 는 자기가 관리          |
 
 compromise 의심 = 다음 중 하나라도 해당:
 

@@ -14,22 +14,25 @@
 
 from __future__ import annotations
 
-from sqlalchemy import MetaData
-from sqlalchemy.orm import DeclarativeBase
+from .base import (
+    NAMING_CONVENTION,
+    AuditMixin,
+    Base,
+    CreatedAtMixin,
+    CreatedByMixin,
+    TimestampMixin,
+    utc_now,
+)
 
-NAMING_CONVENTION: dict[str, str] = {
-    "ix": "ix_%(table_name)s_%(column_0_N_name)s",
-    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
-    "ck": "ck_%(table_name)s_%(constraint_name)s",
-    "fk": "fk_%(table_name)s_%(column_0_N_name)s_%(referred_table_name)s",
-    "pk": "pk_%(table_name)s",
-}
+from .request_log import RequestLog  # noqa: E402
 
-
-class Base(DeclarativeBase):
-    """모든 ORM 모델의 베이스. naming convention 이 적용된 MetaData 를 사용한다."""
-
-    metadata = MetaData(naming_convention=NAMING_CONVENTION)
-
-
-__all__ = ["Base", "NAMING_CONVENTION"]
+__all__ = [
+    "AuditMixin",
+    "Base",
+    "CreatedAtMixin",
+    "CreatedByMixin",
+    "NAMING_CONVENTION",
+    "RequestLog",
+    "TimestampMixin",
+    "utc_now",
+]
