@@ -1,0 +1,57 @@
+# 집핀(Jippin) main 승격 PR 출발 브랜치 검증.
+#
+# 운영 흐름:
+#   feature/fix/* -> dev -> main
+#
+# main 대상 PR 은 dev 브랜치에서만 올린다. 일반 기능 브랜치가 main 으로
+# 직접 PR 을 올리면 본 체크가 실패하고, main branch protection 이 차단한다.
+name: main-promotion-guard
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-promotion-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-source:
+    name: main promotion source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require dev -> main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base="${{ github.event.pull_request.base.ref }}"
+          head="${{ github.event.pull_request.head.ref }}"
+          head_repo="${{ github.event.pull_request.head.repo.full_name }}"
+          repo="${{ github.repository }}"
+
+          echo "base=${base}"
+          echo "head=${head}"
+          echo "head_repo=${head_repo}"
+
+          if [[ "${base}" != "main" ]]; then
+            echo "::error::This guard only supports PRs targeting main."
+            exit 1
+          fi
+
+          if [[ "${head_repo}" != "${repo}" || "${head}" != "dev" ]]; then
+            echo "::error::main PR 은 같은 저장소의 dev 브랜치에서만 올릴 수 있습니다."
+            echo "::error::현재 head=${head_repo}:${head}"
+            exit 1
+          fi
+
+          echo "OK - dev -> main 승격 PR 입니다."
