@@ -1,0 +1,145 @@
+# 집핀(Jippin) Supabase CLI 설정 — CMP-574 스캐폴드
+#
+# 본 파일은 Supabase GitHub integration 과 `supabase` CLI 가 모노레포 루트에서
+# 동작하도록 하는 **최소 스캐폴드**다. 실제 운영 값은 사용자가 콘솔에서 발급한 뒤
+# 본 파일과 GitHub Secrets/Variables 를 통해 주입한다.
+#
+# 정본 절차: docs/runbooks/supabase-branching.md (CMP-574 인도물)
+# 정책 정본: docs/adr/0004-supabase-transition.md (CMP-573 인도물 — Pending)
+#
+# 봉인 가드 (CMP-574 §0):
+#   1. `project_id` 는 placeholder 만 사용한다. 실제 project ref 는 CMP-574 PR 머지 후
+#      사용자가 별도 PR / 콘솔 작업으로 채운다.
+#   2. 본 파일에는 절대 `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_PASSWORD`,
+#      `*_CLIENT_SECRET` 평문을 쓰지 않는다. 모든 비밀은 `env(VAR_NAME)` 으로만 참조한다.
+#   3. `[auth]`, `[storage]`, `[edge_runtime]` 등의 활성화 토글은 본 PR 시점에서는
+#      모두 보수적인 값으로 둔다. 실제 활성화는 후속 트랙 (CMP-576 Auth, CMP-575 DB,
+#      차후 Storage ADR) 이 개별 PR 로 켠다.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# project_id — Supabase project ref (placeholder)
+# ─────────────────────────────────────────────────────────────────────────────
+# 사용자 작업: `supabase projects list` 의 `Reference ID` 값으로 교체한다.
+# 예: "abcdefghijklmnopqrst" (20자 lowercase)
+# **본 PR 머지 시점에는 placeholder 그대로 둔다.**
+project_id = "jippin-placeholder"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [api] — PostgREST 자동 생성 REST API
+# ─────────────────────────────────────────────────────────────────────────────
+# 집핀은 FastAPI(apps/api) 가 1차 API 게이트웨이이며, PostgREST 는 보조 (관리·디버그)
+# 용도로만 노출한다. 외부 노출 여부는 후속 ADR 에서 결정.
+[api]
+enabled = true
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [db] — Postgres
+# ─────────────────────────────────────────────────────────────────────────────
+# CMP-573 ADR 봉인 후: Supabase 는 Postgres 17 (2026-05 기준 기본) 을 사용한다.
+# 로컬 dev 포트: 콘솔 default (54322) 유지.
+[db]
+major_version = 17
+port = 54322
+shadow_port = 54320
+
+# 마이그레이션 정본 위치 — CMP-575 가 Alembic → SQL 변환 결과를 여기에 쌓는다.
+# 본 PR 시점에는 `supabase/migrations/` 디렉터리만 비워두고 `.gitkeep` 으로 보존.
+[db.migrations]
+schema_paths = ["./supabase/schemas/*.sql"]
+
+[db.pooler]
+enabled = false
+port = 54329
+pool_mode = "transaction"
+default_pool_size = 20
+max_client_conn = 100
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [studio] — Supabase Studio (local)
+# ─────────────────────────────────────────────────────────────────────────────
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [inbucket] — 로컬 메일 캡처 (Auth confirmation 메일 등 테스트용)
+# ─────────────────────────────────────────────────────────────────────────────
+[inbucket]
+enabled = true
+port = 54324
+smtp_port = 54325
+pop3_port = 54326
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [storage] — Supabase Storage
+# ─────────────────────────────────────────────────────────────────────────────
+# CMP-573 ADR 봉인: R2 는 당장 유지. Supabase Storage 전환은 별도 ADR.
+# 본 PR 시점에는 enabled=false 로 비활성화하여 사용자가 의도치 않게 켜지 않도록 한다.
+[storage]
+enabled = false
+file_size_limit = "50MiB"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [auth] — Supabase Auth (CMP-576 트랙이 활성화)
+# ─────────────────────────────────────────────────────────────────────────────
+# 본 PR 시점에는 enabled=true (콘솔 default) 로 두되, 모든 provider 는 disabled.
+# 실제 provider 활성화·anonymous 활성화는 CMP-576 Auth 트랙이 별도 PR 로 켠다.
+[auth]
+enabled = true
+# 사용자 작업: 운영 도메인 확정 후 `site_url` 과 `additional_redirect_urls` 를 갱신.
+site_url = "http://127.0.0.1:3000"
+additional_redirect_urls = ["http://127.0.0.1:3000"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+enable_signup = true
+# CMP-576 가 실제 PoC 후 true 로 전환. 본 PR 시점은 보수적 false.
+enable_anonymous_sign_ins = false
+enable_manual_linking = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+
+[auth.sms]
+enable_signup = false
+enable_confirmations = false
+
+# Built-in OAuth providers — CMP-576 트랙이 실제 client_id/secret 발급 후 활성화.
+# 본 PR 시점에는 모두 disabled. 변수명만 정의해두어 사용자 콘솔 작업 시 헷갈리지 않게 한다.
+[auth.external.google]
+enabled = false
+client_id = "env(SUPABASE_AUTH_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_GOOGLE_SECRET)"
+redirect_uri = ""
+skip_nonce_check = false
+
+[auth.external.kakao]
+enabled = false
+client_id = "env(SUPABASE_AUTH_KAKAO_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_KAKAO_SECRET)"
+redirect_uri = ""
+
+# Naver — built-in provider 가 아니다. Custom OAuth/OIDC 로 PoC 후 활성화 (CMP-576).
+# 본 파일에는 정의하지 않는다 (CLI 가 unknown provider 로 거부할 수 있음).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [realtime] — 실시간 채널
+# ─────────────────────────────────────────────────────────────────────────────
+# 집핀 MVP 는 채팅/스트림에 SSE/WebSocket 자체 구현 예정. Realtime 활성화는 후속 ADR.
+[realtime]
+enabled = false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [edge_runtime] — Edge Functions (Deno)
+# ─────────────────────────────────────────────────────────────────────────────
+# 집핀은 FastAPI(apps/api) 가 백엔드 정본. Edge Functions 도입은 후속 ADR.
+[edge_runtime]
+enabled = false
+policy = "oneshot"
+inspector_port = 8083
