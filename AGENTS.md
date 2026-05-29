@@ -12,9 +12,10 @@
 2. **`docs/brief/CEO_PROJECT_BRIEF.md`** — 범위·인도물·금지사항
 3. **`docs/명세서/` 4종 정본** — 요구사항(v0.2) / 기능명세(v1.0) / 기술명세(v1.6) / SDD(v1.9)
 4. **`docs/_extracted/`** — 위 정본에서 추출한 텍스트 캐시 (Word/Excel 미설치 환경용)
-5. 해당 모듈의 `README.md` 와 코드 정본
+5. **디자인·문구·리포트 관련 이슈는 [`docs/design/DESIGN.md`](docs/design/DESIGN.md) 진입점 + 하위 정본** ([`BRAND.md`](docs/design/BRAND.md) · [`COLOR_SYSTEM.md`](docs/design/COLOR_SYSTEM.md) · [`TYPOGRAPHY.md`](docs/design/TYPOGRAPHY.md)) — UI·컬러·폰트·문체·결과 화면·다운로드 산출물 작업 전 반드시 통독.
+6. 해당 모듈의 `README.md` 와 코드 정본
 
-기능명세서·SDD·기술명세서 간 모순이 있으면 **(이슈 본문) > (CEO 브리프) > (SDD) > (기술명세서) > (기능명세서) > (요구사항)** 순으로 정본을 따르되, 모순 자체를 PR 또는 후속 이슈로 보고한다.
+기능명세서·SDD·기술명세서 간 모순이 있으면 **(이슈 본문) > (CEO 브리프) > (SDD) > (기술명세서) > (기능명세서) > (요구사항)** 순으로 정본을 따르되, 모순 자체를 PR 또는 후속 이슈로 보고한다. 디자인·문구·시각 관련 모순은 **(이슈 본문) > (CEO 브리프) > (`docs/design/DESIGN.md`) > (`BRAND.md`) > (`COLOR_SYSTEM.md` / `TYPOGRAPHY.md`) > 코드의 임시 토큰** 순으로 정본을 따른다.
 
 ---
 
@@ -152,6 +153,8 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 
 > 본 서비스는 AI 기반 사전 검토 시스템입니다. 최종 행위허가 여부는 관할 행정기관 판단에 따라 달라질 수 있습니다.
 
+이 문구의 시각·문체 규칙은 [`docs/design/BRAND.md §6`](docs/design/BRAND.md) 과 [`docs/design/COLOR_SYSTEM.md §5`](docs/design/COLOR_SYSTEM.md) 가 정본이다. 디자인 단독으로 문구를 줄이거나 다듬지 않는다. 문구 자체 변경이 필요하면 CEO·Security Lead 가 함께 검토하는 별도 이슈를 연다.
+
 ### 4.7 사용자 식별 정책 — 비회원 사전검토 + 전환 시점 OAuth 간편가입
 
 > **봉인.** 본 절은 CEO 정책 (CMP-557) 결정. 정본은 `docs/adr/0003-anon-user-and-sso.md`. 기존 명세 4종 (요구·기능·기술·SDD) 중 “소셜 OAuth 로그인 필수 / 비회원 사전검토 불가” 가정은 본 절로 **supersede** 된다. 모순 추적: `docs/명세서-모순.md`.
@@ -188,6 +191,15 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - `AUTH_JWT_SECRET`, `AUTH_JWT_ALG`, `AUTH_JWT_ACCESS_TTL_SECONDS`, `AUTH_JWT_REFRESH_TTL_SECONDS`
 - `ANON_SESSION_HEADER` _(기본 `x-jippin-anon-id`)_, `ANON_SESSION_TTL_DAYS`
 - `FRONTEND_AUTH_SUCCESS_URL`, `FRONTEND_AUTH_FAILURE_URL` — API 가 콜백 처리 후 302 하므로 **`apps/api/.env.example`** 가 정본. `apps/web/.env.example` 의 동명 변수는 SPA 표시용 보조 표기.
+
+### 4.8 디자인 SSOT — 임의 변경 금지
+
+집핀 브랜드의 시각·문구·결과 화면·다운로드 산출물 디자인은 [`docs/design/DESIGN.md`](docs/design/DESIGN.md) 진입점과 그 하위 정본(`BRAND.md` / `COLOR_SYSTEM.md` / `TYPOGRAPHY.md`) 이 단일 정본(SSOT) 이다.
+
+- **브랜드 색·상태 색·법적 고지 문구·폰트·문체** 를 코드에서 임의로 바꾸지 않는다. 임시 토큰(`#1f6feb` 등) 이 보이면 SSOT 토큰(`brand.primary` 등) 으로 교체하는 PR 을 별도로 낸다.
+- 색·폰트의 **의미가 바뀌는 변경**(역할 변경, 새 토큰 도입, 톤 재정의) 은 SSOT 문서를 먼저 갱신하고 PR 본문에 영향 범위(`BRAND` / `DESIGN` / `DOCS` / 필요 시 `WEB`) 를 명시한다. 필요 시 ADR 또는 `docs/design/decisions/` 결정 기록을 함께 남긴다.
+- 리포트·다운로드·공유링크 OG 의 시각/문구 변경은 `§4.6` 법적 고지 누락 금지와 교차 검증한다 (`COLOR_SYSTEM.md §5`, `TYPOGRAPHY.md §4.5` 참조).
+- 디자인 SSOT 의 §1 브랜드 약속·금지 톤·법적 고지는 **CEO 봉인 영역**이며, 변경하려면 새 CEO 브리프 리비전이 필요하다.
 
 ---
 

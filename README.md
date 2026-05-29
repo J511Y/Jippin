@@ -15,6 +15,11 @@
 - 정본 텍스트 캐시(Office 미설치 환경용): [`docs/_extracted/`](docs/_extracted/)
 - 본 이슈 범위·인도물·금지사항: [`docs/brief/CEO_PROJECT_BRIEF.md`](docs/brief/CEO_PROJECT_BRIEF.md)
 - 에이전트 · 사람 공통 작업 가이드: [`AGENTS.md`](AGENTS.md)
+- 디자인·브랜드 정본 (UI/문구/리포트 작업 전 통독): [`docs/design/DESIGN.md`](docs/design/DESIGN.md) — 진입점. 하위 정본 [`BRAND.md`](docs/design/BRAND.md) · [`COLOR_SYSTEM.md`](docs/design/COLOR_SYSTEM.md) · [`TYPOGRAPHY.md`](docs/design/TYPOGRAPHY.md).
+
+### 1.1 브랜드 방향 요약
+
+집핀의 시각 정체성은 **Urban Teal (`#147A73`) 을 기본**으로, **Blueprint Navy (`#153B5C`) 를 리포트·도면 분석·관리자 전문 영역의 보조 축**으로 사용한다. 가능/불가/보류 상태색은 브랜드 컬러와 분리된 별도 기능 토큰(`status.*`) 으로 운용한다. 자세한 토큰·접근성 기준·문체 규칙은 디자인 SSOT 4종 참조.
 
 ---
 
@@ -102,6 +107,16 @@ curl http://localhost:8000/healthz       # api
 - **PR 본문**: 관련 Paperclip 이슈 식별자(`CMP-###`)와 영향 모듈 명시. 체크리스트는 [`AGENTS.md §4.3`](AGENTS.md).
 - **에러·응답 포맷**: `{ "error": { "code", "message", "request_id", "timestamp" } }` 통일 (자세한 정의는 [`AGENTS.md §4.5`](AGENTS.md)).
 - **법적 고지**: 모든 결과 화면·다운로드 산출물에 위 ⚠️ 문구 필수 — 누락 시 머지 거부.
+- **디자인 SSOT 우선**: UI/문구/리포트 작업 전에 [`docs/design/DESIGN.md`](docs/design/DESIGN.md) 통독. 브랜드 색·상태 색·법적 고지 문구·폰트·문체를 코드에서 임의 변경 금지 (자세한 정책은 [`AGENTS.md §4.7`](AGENTS.md)).
+
+### 5.1 UI 작업 전 사전 체크 (로컬 개발자)
+
+`apps/web` 에서 UI 변경을 시작하기 전에 다음 디자인 정본을 확인한다.
+
+- [ ] [`docs/design/DESIGN.md`](docs/design/DESIGN.md) — 디자인 원칙·인덱스
+- [ ] [`docs/design/BRAND.md`](docs/design/BRAND.md) — 톤앤매너 / 금지 톤
+- [ ] [`docs/design/COLOR_SYSTEM.md`](docs/design/COLOR_SYSTEM.md) — 토큰 표 / WCAG 기준
+- [ ] [`docs/design/TYPOGRAPHY.md`](docs/design/TYPOGRAPHY.md) — 폰트 스택 / 문체 좋은 예/나쁜 예
 
 ---
 
@@ -112,7 +127,11 @@ curl http://localhost:8000/healthz       # api
 | [`docs/명세서/`](docs/명세서/) | 요구·기능·기술·SDD (외부 합의) | PM/이해관계자 |
 | [`docs/_extracted/`](docs/_extracted/) | 위 정본의 텍스트 캐시 | `tooling/extract_specs.py` 산출물 |
 | [`docs/brief/CEO_PROJECT_BRIEF.md`](docs/brief/CEO_PROJECT_BRIEF.md) | 본 이슈 범위·인도물·종결 조건 | CEO |
-| [`AGENTS.md`](AGENTS.md) | 에이전트·사람 공통 작업 가이드 | CEO(§1·§3·§4 봉인), CTO·라인 리드(§2·§5·§6) |
+| [`AGENTS.md`](AGENTS.md) | 에이전트·사람 공통 작업 가이드 | CEO(§1·§3·§4 봉인), CTO·라인 리드(§2·§5·§6·§7) |
+| [`docs/design/DESIGN.md`](docs/design/DESIGN.md) | 디자인 원칙·SSOT 진입점 | Frontend Lead |
+| [`docs/design/BRAND.md`](docs/design/BRAND.md) | 브랜드 약속·톤앤매너·금지 톤 | Frontend Lead + CEO 봉인(§1·§5·§6) |
+| [`docs/design/COLOR_SYSTEM.md`](docs/design/COLOR_SYSTEM.md) | 컬러 토큰·상태색·법적/오류 색·WCAG 기준 | Frontend Lead |
+| [`docs/design/TYPOGRAPHY.md`](docs/design/TYPOGRAPHY.md) | 폰트 스택·타입스케일·문체 가이드 | Frontend Lead |
 | `docs/adr/` (예정) | 기술 채택 결정 기록 | CTO·라인 리드 |
 | 각 모듈 `README.md` (예정) | 모듈별 로컬 개발·테스트 명령 정본 | 해당 모듈 라인 리드 |
 
