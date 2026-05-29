@@ -2,41 +2,39 @@
 
 import { useState } from 'react';
 
-const ANON_USER_ID_KEY = 'jippin_anonymous_user_id';
-const ANON_USER_ID_HEADER = 'x-jippin-anon-id';
+import { apiBaseUrl } from '@/lib/api-base-url';
+import { getOrCreateAnonymousUserId } from '@/lib/anonymous-user';
+
+/**
+ * 간편가입 OAuth 시작 버튼 (CMP-557, CMP-564).
+ *
+ * - 자체 가입/아이디 찾기/비밀번호 찾기 UI 는 정책상 존재하지 않는다.
+ * - 흐름: 버튼 클릭 → `GET /auth/{provider}/start?return_url=<absolute>&anonymous_user_id=<id>` 로
+ *   브라우저를 이동시킨다. 백엔드는 302 로 provider authorization URL 까지 곧장 보낸다.
+ * - return_url 은 `/login?next=...` 로 들어온 경로를 절대 URL 로 변환해 그대로 전달한다.
+ */
 
 const PROVIDERS = [
-  { id: 'kakao', label: '카카오로 로그인' },
-  { id: 'google', label: 'Google 로 로그인' },
-  { id: 'naver', label: '네이버로 로그인' }
+  { id: 'kakao', label: '카카오로 시작하기' },
+  { id: 'naver', label: '네이버로 시작하기' },
+  { id: 'google', label: 'Google 로 시작하기' }
 ] as const;
 
 type ProviderId = (typeof PROVIDERS)[number]['id'];
 
-type OAuthStartResponse = {
-  authorize_url?: string;
+type LoginButtonsProps = {
+  nextPath: string | null;
 };
 
-function getOrCreateAnonymousUserId(): string {
-  const stored = window.localStorage.getItem(ANON_USER_ID_KEY);
-  if (stored) {
-    return stored;
+function resolveReturnUrl(nextPath: string | null): string {
+  const origin = window.location.origin;
+  if (!nextPath || !nextPath.startsWith('/')) {
+    return `${origin}/`;
   }
-
-  if (!window.crypto?.randomUUID) {
-    throw new Error('이 브라우저에서는 익명 세션을 만들 수 없습니다.');
-  }
-
-  const generated = window.crypto.randomUUID();
-  window.localStorage.setItem(ANON_USER_ID_KEY, generated);
-  return generated;
+  return `${origin}${nextPath}`;
 }
 
-type LoginButtonsProps = {
-  apiBase: string;
-};
-
-export function LoginButtons({ apiBase }: LoginButtonsProps) {
+export function LoginButtons({ nextPath }: LoginButtonsProps) {
   const [pendingProvider, setPendingProvider] = useState<ProviderId | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -45,26 +43,16 @@ export function LoginButtons({ apiBase }: LoginButtonsProps) {
     setErrorMessage(null);
 
     try {
-      const anonymousUserId = getOrCreateAnonymousUserId();
-      const response = await fetch(`${apiBase}/auth/${provider}/start`, {
-        method: 'POST',
-        headers: {
-          [ANON_USER_ID_HEADER]: anonymousUserId
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('로그인 시작 요청에 실패했습니다.');
-      }
-
-      const data = (await response.json()) as OAuthStartResponse;
-      if (!data.authorize_url) {
-        throw new Error('로그인 이동 주소를 받지 못했습니다.');
-      }
-
-      window.location.assign(data.authorize_url);
+      const anonymousUserId = await getOrCreateAnonymousUserId();
+      const returnUrl = resolveReturnUrl(nextPath);
+      const url = new URL(`${apiBaseUrl()}/auth/${provider}/start`);
+      url.searchParams.set('return_url', returnUrl);
+      url.searchParams.set('anonymous_user_id', anonymousUserId);
+      window.location.assign(url.toString());
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '로그인을 시작하지 못했습니다.');
+      setErrorMessage(
+        error instanceof Error ? error.message : '로그인을 시작하지 못했습니다.'
+      );
       setPendingProvider(null);
     }
   }

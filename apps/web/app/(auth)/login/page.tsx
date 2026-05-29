@@ -3,28 +3,40 @@ import Link from 'next/link';
 import { LoginButtons } from './login-buttons';
 
 /**
- * 소셜 OAuth 진입 스텁 (CMP-529).
+ * 간편가입 로그인 페이지 (CMP-557, CMP-564).
  *
- * - 실제 OAuth 콜백 처리, PKCE 흐름, JWT 발급은 백엔드(`apps/api`)의 AUTH 모듈이 담당.
- * - 본 페이지는 클라이언트에서 백엔드의 `/auth/{provider}/start` 로 POST 하는 트리거만 노출.
- * - 콜백 처리는 후속 [Frontend] 자식 이슈에서 추가 (`apps/web/app/(auth)/callback/route.ts`).
+ * - 정책: 자체 가입 / 아이디 찾기 / 비밀번호 찾기 UI 는 제공하지 않는다.
+ *   소셜 OAuth provider 3종(Kakao / Naver / Google) 만 노출한다.
+ * - `/login?next=/app/foo` 형태로 들어오면 `next` 경로를 OAuth start 의 `return_url` 로 전달한다.
  */
 
 export const metadata = {
   title: '로그인'
 };
 
-export default function LoginPage() {
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
+type LoginPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+function pickNext(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+  return value ?? null;
+}
+
+export default async function LoginPage({ searchParams }: LoginPageProps) {
+  const resolved = (await searchParams) ?? {};
+  const nextPath = pickNext(resolved.next);
   return (
     <section className="mx-auto flex max-w-md flex-col gap-6 px-6 py-20">
       <header className="space-y-2">
-        <h1 className="text-2xl font-semibold">집핀 로그인</h1>
+        <h1 className="text-2xl font-semibold">집핀 간편가입</h1>
         <p className="text-sm text-slate-600">
-          소셜 OAuth 로 로그인하면 백엔드가 자체 JWT 를 발급합니다.
+          소셜 계정으로 1초 만에 시작하세요. 별도의 아이디 / 비밀번호는 없습니다.
         </p>
       </header>
-      <LoginButtons apiBase={apiBase} />
+      <LoginButtons nextPath={nextPath} />
       <p className="text-xs text-slate-500">
         <Link href="/" className="underline underline-offset-2">
           홈으로
