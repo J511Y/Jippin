@@ -46,16 +46,17 @@ apps/web/
 └── package.json
 ```
 
-## 인증 전략 (CMP-529 선택)
+## 인증 전략 (CMP-577 — Supabase Auth 전환 중)
 
-본 골격은 자체 발급 JWT + HttpOnly 리프레시 쿠키 경로를 채택합니다.
+본 골격은 CMP-529 시점에 자체 발급 JWT + HttpOnly 리프레시 쿠키 경로로 시작되었으나, CMP-577 부터 **Supabase Auth 를 세션 1차 소스로 채택**합니다. 현재 트리는 자체 JWT 코드(`lib/auth-token.ts`, `lib/api-client.ts` 의 401 refresh 큐, `lib/anonymous-user.ts`, `proxy.ts` 의 `jippin_session` 가드)를 그대로 두고 있으며, Supabase 콘솔 세팅 + adapter 도입 PR 에서 한 번에 교체됩니다.
 
-- 액세스 토큰은 `lib/auth-token.ts` 메모리 저장소에 보관되며 `apiClient` 가 자동 주입합니다.
-- 리프레시는 HttpOnly Secure 쿠키로 백엔드에서 발급되어, `/auth/refresh` 호출 시 자동 전달됩니다.
-- 401 응답 시 단일 refresh 큐로 직렬화하여 동시 갱신 폭주를 방지합니다.
+- 설계 정본: [`docs/runbooks/supabase-web-auth.md`](../../docs/runbooks/supabase-web-auth.md) (CMP-577).
+- 클라이언트: `@supabase/supabase-js` + `@supabase/ssr` 도입 (Next.js 16 App Router · Edge proxy / Route Handler / Server Component cookie 통합).
+- 비회원 흐름: `supabase.auth.signInAnonymously()` 로 익명 세션 발급. `localStorage.jippin_anonymous_user_id` 와 `POST /auth/anonymous-users` 는 폐기.
+- 전환 시점: 익명 user 는 `supabase.auth.linkIdentity({ provider })`, 신규 로그인은 `supabase.auth.signInWithOAuth({ provider })`. provider 화이트리스트는 `google | kakao | naver` (ADR-0003 봉인).
+- FastAPI 호출: `Authorization: Bearer <session.access_token>` 헤더 주입. 자체 refresh 인터셉터 폐기 (SDK 자동 갱신 신뢰).
 
-NextAuth v5 도입 여부는 후속 [Frontend] 이슈에서 재검토합니다
-(교체 시 `lib/auth-token.ts` / `lib/api-client.ts` 만 갈아끼울 수 있도록 책임을 격리해 두었습니다).
+env 추가 변수는 `apps/web/.env.example` 의 `NEXT_PUBLIC_SUPABASE_*` 두 라인을 참조하십시오. 실제 값은 `.env.local` 또는 운영 시크릿 매니저에만 보관합니다.
 
 ## A2UI
 
