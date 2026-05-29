@@ -119,7 +119,7 @@ class TermsConsent(TimestampMixin, Base):
             "source IN ('kakao_sync', 'internal_signup')",
             name="terms_consents_source_allowed",
         ),
-        sa.UniqueConstraint("user_id", "term_id", "version", "source"),
+        sa.UniqueConstraint("user_id", "term_id", "version"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
