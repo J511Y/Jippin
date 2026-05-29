@@ -12,6 +12,7 @@ from .db import dispose_engines
 from .errors import register_exception_handlers
 from .logging import RequestIDMiddleware, configure_logging, get_logger
 from .middleware.request_log import RequestLogMiddleware
+from .routers.auth import router as auth_router
 from .routers.healthz import router as healthz_router
 
 
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestLogMiddleware)
 
     register_exception_handlers(app)
+    app.include_router(auth_router)
     app.include_router(healthz_router)
 
     return app

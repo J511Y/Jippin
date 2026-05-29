@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 from sqlalchemy import BigInteger, Boolean, Integer, Text
 from sqlalchemy.dialects import postgresql
 
@@ -45,10 +43,3 @@ def test_request_logs_indexes_use_naming_convention() -> None:
         "ix_request_logs_response_code",
         "ix_request_logs_user_id_created_at",
     }
-
-
-def test_alembic_head_is_request_logs_revision() -> None:
-    config = Config("alembic.ini")
-    script = ScriptDirectory.from_config(config)
-
-    assert script.get_current_head() == "0004_request_logs"

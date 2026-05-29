@@ -27,6 +27,7 @@ on:
       - reopened
       - synchronize
     branches:
+      - dev
       - main
 
 permissions:
