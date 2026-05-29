@@ -34,13 +34,13 @@ const config: Config = {
           linkHover: '#0F5F59'
         },
         status: {
-          success: '#1F8A4C',
+          success: '#1B7F46',
           successFg: '#FFFFFF',
           successSurface: '#E8F5EE',
           danger: '#C0392B',
           dangerFg: '#FFFFFF',
           dangerSurface: '#FBEAE8',
-          warning: '#B8740C',
+          warning: '#995D00',
           warningFg: '#FFFFFF',
           warningSurface: '#FFF3E0',
           info: '#1F6F8B',

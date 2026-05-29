@@ -66,13 +66,13 @@
 
 | 토큰 | HEX | 역할 | 사용처 |
 |---|---|---|---|
-| `status.success` | `#1F8A4C` | 가능 / 충족 | "가능" 판정 칩·리포트 라벨 |
+| `status.success` | `#1B7F46` | 가능 / 충족 | "가능" 판정 칩·리포트 라벨 |
 | `status.successFg` | `#FFFFFF` | 위 색 위 텍스트 | 라벨 텍스트 |
 | `status.successSurface` | `#E8F5EE` | 가능 카드/배너 배경 | 결과 카드 배경 |
 | `status.danger` | `#C0392B` | 불가 / 제한 | "불가" 판정 칩·차단 메시지 |
 | `status.dangerFg` | `#FFFFFF` | 위 색 위 텍스트 | 라벨 텍스트 |
 | `status.dangerSurface` | `#FBEAE8` | 불가 카드/배너 배경 | 결과 카드 배경 |
-| `status.warning` | `#B8740C` | 보류 / 추가 확인 | "보류" 판정 칩·확인 요청 |
+| `status.warning` | `#995D00` | 보류 / 추가 확인 | "보류" 판정 칩·확인 요청 |
 | `status.warningFg` | `#FFFFFF` | 위 색 위 텍스트 | 라벨 텍스트 |
 | `status.warningSurface` | `#FFF3E0` | 보류 카드/배너 배경 | 결과 카드 배경 |
 | `status.info` | `#1F6F8B` | 중립 정보 안내 | 안내 배너·툴팁·도움 |
@@ -125,9 +125,9 @@
 | `brand.copy #48606A` on `brand.surface #F7FBFA` | ~6.5:1 | 부가 텍스트 |
 | `content.onPrimary #FFFFFF` on `brand.primary #147A73` | ~4.6:1 | 1차 버튼 |
 | `content.onProfessional #FFFFFF` on `brand.professional #153B5C` | ~10:1 | 리포트 헤더 |
-| `status.successFg #FFFFFF` on `status.success #1F8A4C` | ~4.5:1 | 가능 칩 |
+| `status.successFg #FFFFFF` on `status.success #1B7F46` | ~5.0:1 | 가능 칩 |
 | `status.dangerFg #FFFFFF` on `status.danger #C0392B` | ~5.5:1 | 불가 칩 |
-| `status.warningFg #FFFFFF` on `status.warning #B8740C` | ~4.7:1 | 보류 칩 |
+| `status.warningFg #FFFFFF` on `status.warning #995D00` | ~5.3:1 | 보류 칩 |
 
 > 추정 대비는 권장 조합의 대략값이다. 실제 구현 시 reliable한 자동화 도구(예: axe, Pa11y, Lighthouse) 로 재측정한다. 4.5:1 에 매우 근접한 조합(`brand.primary` 위 흰 글자 등)은 굵기·크기를 함께 조정해 안전 마진을 확보한다.
 
@@ -178,13 +178,13 @@ colors: {
     linkHover: '#0F5F59'
   },
   status: {
-    success: '#1F8A4C',
+    success: '#1B7F46',
     successFg: '#FFFFFF',
     successSurface: '#E8F5EE',
     danger: '#C0392B',
     dangerFg: '#FFFFFF',
     dangerSurface: '#FBEAE8',
-    warning: '#B8740C',
+    warning: '#995D00',
     warningFg: '#FFFFFF',
     warningSurface: '#FFF3E0',
     info: '#1F6F8B',
