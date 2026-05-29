@@ -23,16 +23,30 @@ from .base import (
     TimestampMixin,
     utc_now,
 )
+from .auth import (  # noqa: E402
+    EXTERNAL_SSO_PROVIDER_VALUES,
+    AnonymousUser,
+    ExternalSsoAccount,
+    TermsConsent,
+    User,
+    external_sso_provider_enum,
+)
 
 from .request_log import RequestLog  # noqa: E402
 
 __all__ = [
+    "AnonymousUser",
     "AuditMixin",
     "Base",
     "CreatedAtMixin",
     "CreatedByMixin",
+    "EXTERNAL_SSO_PROVIDER_VALUES",
+    "ExternalSsoAccount",
     "NAMING_CONVENTION",
     "RequestLog",
+    "TermsConsent",
     "TimestampMixin",
+    "User",
+    "external_sso_provider_enum",
     "utc_now",
 ]
