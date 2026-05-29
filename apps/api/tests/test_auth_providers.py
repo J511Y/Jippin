@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from src.auth.providers import google, kakao, naver
+from src.auth.providers.base import OAuthProviderError
 from src.config import get_settings
 
 
@@ -109,10 +110,15 @@ async def test_google_adapter_exchanges_code_verifies_id_token_and_parses_userin
     monkeypatch,
     provider_env,
 ):
-    async def fake_verify_id_token(id_token, *, http_client, audience):
+    async def fake_verify_id_token(id_token, *, http_client, audience, expected_nonce):
         assert id_token == "google-id-token"
         assert audience == "google-client"
-        return {"sub": "google-subject", "email": "id-token@example.com"}
+        assert expected_nonce == "nonce-value"
+        return {
+            "sub": "google-subject",
+            "email": "id-token@example.com",
+            "nonce": "nonce-value",
+        }
 
     def handler(request: httpx.Request) -> httpx.Response:
         if str(request.url) == google.TOKEN_ENDPOINT:
@@ -143,9 +149,42 @@ async def test_google_adapter_exchanges_code_verifies_id_token_and_parses_userin
             "oauth-code", http_client=client, settings=get_settings()
         )
         profile = await google.fetch_userinfo(
-            tokens, http_client=client, settings=get_settings()
+            tokens,
+            http_client=client,
+            settings=get_settings(),
+            expected_nonce="nonce-value",
         )
 
     assert tokens.access_token == "google-access"
     assert profile.provider_subject == "google-subject"
     assert profile.email == "google@example.com"
+
+
+@pytest.mark.asyncio
+async def test_google_id_token_rejects_nonce_mismatch(monkeypatch, provider_env):
+    async def fake_get_google_jwks(http_client):
+        del http_client
+        return {"keys": []}
+
+    def fake_decode(id_token, key, *, algorithms, audience):
+        assert id_token == "google-id-token"
+        assert key == {"keys": []}
+        assert algorithms == ["RS256"]
+        assert audience == "google-client"
+        return {
+            "iss": "https://accounts.google.com",
+            "sub": "google-subject",
+            "nonce": "different-nonce",
+        }
+
+    monkeypatch.setattr(google, "get_google_jwks", fake_get_google_jwks)
+    monkeypatch.setattr(google.jwt, "decode", fake_decode)
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(OAuthProviderError, match="nonce"):
+            await google.verify_id_token(
+                "google-id-token",
+                http_client=client,
+                audience="google-client",
+                expected_nonce="expected-nonce",
+            )

@@ -229,11 +229,19 @@ async def oauth_callback(
         )
         if id_token and not tokens.id_token:
             tokens = replace(tokens, id_token=id_token)
-        profile = await provider_module.fetch_userinfo(
-            tokens,
-            http_client=http_client,
-            settings=settings,
-        )
+        if provider == OAuthProvider.GOOGLE:
+            profile = await provider_module.fetch_userinfo(
+                tokens,
+                http_client=http_client,
+                settings=settings,
+                expected_nonce=state_payload.nonce,
+            )
+        else:
+            profile = await provider_module.fetch_userinfo(
+                tokens,
+                http_client=http_client,
+                settings=settings,
+            )
 
     login_result = await complete_oauth_login(
         provider=provider,

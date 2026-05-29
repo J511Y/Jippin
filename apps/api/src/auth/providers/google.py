@@ -79,11 +79,13 @@ async def fetch_userinfo(
     *,
     http_client: httpx.AsyncClient,
     settings: Settings,
+    expected_nonce: str | None = None,
 ) -> ProviderProfile:
     id_claims = await verify_id_token(
         tokens.id_token,
         http_client=http_client,
         audience=settings.google_oauth_client_id,
+        expected_nonce=expected_nonce,
     )
     response = await http_client.get(
         USERINFO_ENDPOINT,
@@ -107,6 +109,7 @@ async def verify_id_token(
     *,
     http_client: httpx.AsyncClient,
     audience: str | None,
+    expected_nonce: str | None = None,
 ) -> dict[str, object]:
     if not id_token:
         raise OAuthProviderError("Google token response did not include id_token.")
@@ -125,4 +128,6 @@ async def verify_id_token(
         raise OAuthProviderError("Google ID token issuer is invalid.")
     if not claims.get("sub"):
         raise OAuthProviderError("Google ID token subject is missing.")
+    if expected_nonce is not None and claims.get("nonce") != expected_nonce:
+        raise OAuthProviderError("Google ID token nonce is invalid.")
     return claims

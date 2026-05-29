@@ -160,7 +160,6 @@ async def complete_oauth_login(
                         TermsConsent.user_id,
                         TermsConsent.term_id,
                         TermsConsent.version,
-                        TermsConsent.source,
                     ]
                 )
             )

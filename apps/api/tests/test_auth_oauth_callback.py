@@ -86,8 +86,12 @@ def test_oauth_callback_consumes_state_sets_cookie_and_redirects(
         assert code == "oauth-code"
         return OAuthTokens(access_token="provider-access-token")
 
-    async def fake_fetch_userinfo(tokens, *, http_client, settings):
+    async def fake_fetch_userinfo(tokens, *, http_client, settings, **kwargs):
         assert tokens.access_token == "provider-access-token"
+        if provider == "google":
+            assert kwargs == {"expected_nonce": payload.nonce}
+        else:
+            assert kwargs == {}
         return ProviderProfile(
             provider_subject=f"{provider}-subject",
             email=f"{provider}@example.com",
@@ -239,6 +243,10 @@ async def test_complete_oauth_login_creates_new_sso_records_terms_and_claims_ano
     assert "INSERT INTO users" in combined_sql
     assert "INSERT INTO external_sso_accounts" in combined_sql
     assert "INSERT INTO terms_consents" in combined_sql
+    assert "ON CONFLICT (user_id, term_id, version) DO NOTHING" in combined_sql
+    assert "ON CONFLICT (user_id, term_id, version, source) DO NOTHING" not in (
+        combined_sql
+    )
     assert "UPDATE anonymous_users" in combined_sql
     assert "WHERE users.email" not in combined_sql
 
