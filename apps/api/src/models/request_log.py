@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.models import Base
+from src.models.base import Base, CreatedAtMixin
 
 
-class RequestLog(Base):
+class RequestLog(CreatedAtMixin, Base):
     """Raw API request/response log row for later middleware ingestion."""
 
     __tablename__ = "request_logs"
@@ -19,12 +18,6 @@ class RequestLog(Base):
         sa.BigInteger,
         primary_key=True,
         autoincrement=True,
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        postgresql.TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=sa.func.now(),
-        index=True,
     )
     request_id: Mapped[uuid.UUID] = mapped_column(
         postgresql.UUID(as_uuid=True),
@@ -62,4 +55,5 @@ class RequestLog(Base):
     referrer: Mapped[str | None] = mapped_column(sa.Text)
 
 
+sa.Index(None, RequestLog.created_at)
 sa.Index(None, RequestLog.user_id, RequestLog.created_at.desc())
