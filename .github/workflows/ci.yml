@@ -326,7 +326,7 @@ jobs:
         shell: bash
         working-directory: ${{ github.workspace }}
         run: |
-          if [[ -f apps/api/pyproject.toml ]] && grep -q '^pytest' apps/api/pyproject.toml 2>/dev/null; then
+          if [[ -f apps/api/pyproject.toml ]] && grep -Eq "(^|[[:space:]\"'])pytest([<>=~!,[:space:]\"']|$)" apps/api/pyproject.toml 2>/dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"

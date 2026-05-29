@@ -2,9 +2,11 @@
 #
 # 운영 흐름:
 #   feature/fix/* -> dev -> main
+#   hotfix/fix/security/* -> main (CTO/DevOps 승인 예외)
 #
-# main 대상 PR 은 dev 브랜치에서만 올린다. 일반 기능 브랜치가 main 으로
-# 직접 PR 을 올리면 본 체크가 실패하고, main branch protection 이 차단한다.
+# main 대상 PR 은 기본적으로 dev 브랜치에서만 올린다. 긴급 핫픽스는 같은 저장소의
+# hotfix/*, fix/*, security/* 브랜치만 허용한다. 일반 기능 브랜치가 main 으로 직접
+# PR 을 올리면 본 체크가 실패하고, main branch protection 이 차단한다.
 name: main-promotion-guard
 
 on:
@@ -48,10 +50,22 @@ jobs:
             exit 1
           fi
 
-          if [[ "${head_repo}" != "${repo}" || "${head}" != "dev" ]]; then
-            echo "::error::main PR 은 같은 저장소의 dev 브랜치에서만 올릴 수 있습니다."
+          if [[ "${head_repo}" != "${repo}" ]]; then
+            echo "::error::main PR 은 같은 저장소의 dev 또는 승인된 hotfix/fix/security 브랜치에서만 올릴 수 있습니다."
             echo "::error::현재 head=${head_repo}:${head}"
             exit 1
           fi
 
-          echo "OK - dev -> main 승격 PR 입니다."
+          if [[ "${head}" == "dev" ]]; then
+            echo "OK - dev -> main 승격 PR 입니다."
+            exit 0
+          fi
+
+          if [[ "${head}" =~ ^(hotfix|fix|security)/ ]]; then
+            echo "OK - 승인 예외 대상 hotfix/fix/security -> main PR 입니다."
+            exit 0
+          fi
+
+          echo "::error::main PR 은 dev 또는 hotfix/fix/security/* 브랜치에서만 올릴 수 있습니다."
+          echo "::error::현재 head=${head_repo}:${head}"
+          exit 1

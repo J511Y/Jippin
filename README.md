@@ -102,7 +102,7 @@ curl http://localhost:8000/healthz       # api
 
 전체 규칙은 [`AGENTS.md`](AGENTS.md) 가 정본이며, 본 README 는 한 줄 요약만 둔다.
 
-- **브랜치 전략**: GitHub Flow. `main` 보호, 직접 푸시 금지, `<type>/<scope>-<short>` 명으로 feature 브랜치 → PR → squash merge.
+- **브랜치 전략**: `main ← dev ← feature/*`. `main`/`dev` 직접 푸시 금지, 일반 작업 PR base 는 `dev`, `main` PR 은 `dev` 승격 또는 CTO/DevOps 승인 핫픽스만 허용.
 - **커밋 메시지**: gitmoji (`✨ feat:`, `🐛 fix:`, `📝 docs:`, `♻️ refactor:`, `✅ test:`, `🔧 chore:`, `🚀 perf:`, `🔒 security:`).
 - **PR 본문**: 관련 Paperclip 이슈 식별자(`CMP-###`)와 영향 모듈 명시. 체크리스트는 [`AGENTS.md §4.3`](AGENTS.md).
 - **에러·응답 포맷**: `{ "error": { "code", "message", "request_id", "timestamp" } }` 통일 (자세한 정의는 [`AGENTS.md §4.5`](AGENTS.md)).

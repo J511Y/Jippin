@@ -190,7 +190,7 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - `OAUTH_STATE_REDIS_URL`, `OAUTH_STATE_TTL_SECONDS`
 - `AUTH_JWT_SECRET`, `AUTH_JWT_ALG`, `AUTH_JWT_ACCESS_TTL_SECONDS`, `AUTH_JWT_REFRESH_TTL_SECONDS`
 - `ANON_SESSION_HEADER` _(기본 `x-jippin-anon-id`)_, `ANON_SESSION_TTL_DAYS`
-- `FRONTEND_AUTH_SUCCESS_URL`, `FRONTEND_AUTH_FAILURE_URL` — API 가 콜백 처리 후 302 하므로 **`apps/api/.env.example`** 가 정본. `apps/web/.env.example` 의 동명 변수는 SPA 표시용 보조 표기.
+- `FRONTEND_AUTH_SUCCESS_URL`, `FRONTEND_AUTH_FAILURE_URL` — API 가 콜백 처리 후 302 하므로 **`apps/api/.env.example`** 가 정본. `apps/web/.env.example` 의 `NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL`, `NEXT_PUBLIC_FRONTEND_AUTH_FAILURE_URL` 은 SPA 표시용 보조 표기.
 
 ### 4.8 디자인 SSOT — 임의 변경 금지
 
