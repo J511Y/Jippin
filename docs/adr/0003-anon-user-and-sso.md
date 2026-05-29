@@ -166,7 +166,7 @@ CREATE TABLE terms_consents (
   │     실패 시 FRONTEND_AUTH_FAILURE_URL 로 302 (사유는 query string).
 ```
 
-> **API 가 redirect 의 owner.** 콜백은 API 가 처리하고 JWT 발급 후 프론트로 redirect 하므로, `FRONTEND_AUTH_SUCCESS_URL` / `FRONTEND_AUTH_FAILURE_URL` 정본은 **`apps/api/.env.example`** 에 둔다. `apps/web/.env.example` 의 동명 변수는 SPA 측 라우팅 표시용 보조 표기이며 값이 두 곳에서 어긋나면 API 측이 정본이다.
+> **API 가 redirect 의 owner.** 콜백은 API 가 처리하고 JWT 발급 후 프론트로 redirect 하므로, `FRONTEND_AUTH_SUCCESS_URL` / `FRONTEND_AUTH_FAILURE_URL` 정본은 **`apps/api/.env.example`** 에 둔다. `apps/web/.env.example` 의 `NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL` / `NEXT_PUBLIC_FRONTEND_AUTH_FAILURE_URL` 은 SPA 측 라우팅 표시용 보조 표기이며 값이 두 곳에서 어긋나면 API 측이 정본이다.
 
 실패·예외 코드 (SDD §AUTH 와 정합):
 
