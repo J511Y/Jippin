@@ -101,6 +101,11 @@ class ExternalSsoAccount(TimestampMixin, Base):
     provider: Mapped[str] = mapped_column(external_sso_provider_enum, nullable=False)
     provider_subject: Mapped[str] = mapped_column(sa.Text, nullable=False)
     provider_email: Mapped[str | None] = mapped_column(sa.Text)
+    linked_at: Mapped[datetime] = mapped_column(
+        postgresql.TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=sa.func.now(),
+    )
     display_name: Mapped[str | None] = mapped_column(sa.Text)
     profile_image_url: Mapped[str | None] = mapped_column(sa.Text)
     raw_profile: Mapped[dict[str, object]] = mapped_column(
@@ -110,33 +115,8 @@ class ExternalSsoAccount(TimestampMixin, Base):
     )
 
 
-class Term(TimestampMixin, Base):
-    """Versioned legal term shown during signup or captured from Kakao Sync."""
-
-    __tablename__ = "terms"
-
-    id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True)
-    code: Mapped[str] = mapped_column(sa.Text, nullable=False, unique=True)
-    version: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    title: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    body_url: Mapped[str | None] = mapped_column(sa.Text)
-    is_required: Mapped[bool] = mapped_column(
-        sa.Boolean,
-        nullable=False,
-        server_default=sa.text("true"),
-    )
-    effective_at: Mapped[datetime] = mapped_column(
-        postgresql.TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=sa.func.now(),
-    )
-    retired_at: Mapped[datetime | None] = mapped_column(
-        postgresql.TIMESTAMP(timezone=True)
-    )
-
-
 class TermsConsent(TimestampMixin, Base):
-    """Audit row for a user's consent to a specific term version."""
+    """Canonical consent row plus TimestampMixin audit columns outside ADR-0003."""
 
     __tablename__ = "terms_consents"
     __table_args__ = (
@@ -144,30 +124,26 @@ class TermsConsent(TimestampMixin, Base):
             "source IN ('kakao_sync', 'internal_signup')",
             name="terms_consents_source_allowed",
         ),
-        sa.UniqueConstraint("user_id", "term_id"),
+        sa.UniqueConstraint("user_id", "term_id", "version"),
     )
 
-    id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("gen_random_uuid()"),
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         postgresql.UUID(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    term_id: Mapped[int] = mapped_column(
-        sa.BigInteger,
-        sa.ForeignKey("terms.id"),
-        nullable=False,
-    )
+    term_id: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    version: Mapped[str] = mapped_column(sa.Text, nullable=False)
     source: Mapped[str] = mapped_column(sa.Text, nullable=False)
     agreed_at: Mapped[datetime] = mapped_column(
         postgresql.TIMESTAMP(timezone=True),
         nullable=False,
         server_default=sa.func.now(),
-    )
-    raw: Mapped[dict[str, object]] = mapped_column(
-        postgresql.JSONB,
-        nullable=False,
-        server_default=sa.text("'{}'::jsonb"),
     )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Text, UniqueConstraint
 from sqlalchemy.dialects import postgresql
 
 from src.models import (
@@ -8,7 +8,6 @@ from src.models import (
     AnonymousUser,
     Base,
     ExternalSsoAccount,
-    Term,
     TermsConsent,
     User,
 )
@@ -17,7 +16,6 @@ AUTH_TABLES = (
     AnonymousUser.__table__,
     User.__table__,
     ExternalSsoAccount.__table__,
-    Term.__table__,
     TermsConsent.__table__,
 )
 
@@ -27,9 +25,10 @@ def test_auth_tables_are_registered() -> None:
         "anonymous_users",
         "users",
         "external_sso_accounts",
-        "terms",
         "terms_consents",
     }.issubset(Base.metadata.tables)
+    removed_catalog_table = "".join(("term", "s"))
+    assert removed_catalog_table not in Base.metadata.tables
 
 
 def test_user_model_never_contains_password_columns() -> None:
@@ -97,21 +96,12 @@ def test_external_sso_account_constraints_and_enum_are_sealed() -> None:
     assert "email" not in table.c
     assert isinstance(table.c.provider_email.type, Text)
     assert table.c.provider_email.nullable is True
+    assert isinstance(table.c.linked_at.type, postgresql.TIMESTAMP)
+    assert table.c.linked_at.type.timezone is True
+    assert table.c.linked_at.nullable is False
+    assert table.c.linked_at.server_default is not None
     assert table.c.user_id.foreign_keys
     assert next(iter(table.c.user_id.foreign_keys)).ondelete == "CASCADE"
-
-
-def test_terms_table_shape() -> None:
-    table = Term.__table__
-
-    assert isinstance(table.c.id.type, BigInteger)
-    assert isinstance(table.c.code.type, Text)
-    assert table.c.code.unique is True
-    assert isinstance(table.c.is_required.type, Boolean)
-    assert table.c.is_required.nullable is False
-    assert table.c.is_required.server_default is not None
-    assert isinstance(table.c.effective_at.type, postgresql.TIMESTAMP)
-    assert table.c.effective_at.type.timezone is True
 
 
 def test_terms_consent_constraints_are_sealed() -> None:
@@ -127,9 +117,19 @@ def test_terms_consent_constraints_are_sealed() -> None:
         if isinstance(constraint, CheckConstraint)
     }
 
-    assert unique_constraints["uq_terms_consents_user_id_term_id"] == (
+    assert isinstance(table.c.id.type, postgresql.UUID)
+    assert table.c.id.primary_key is True
+    assert table.c.id.server_default is not None
+    assert isinstance(table.c.term_id.type, Text)
+    assert table.c.term_id.nullable is False
+    assert not table.c.term_id.foreign_keys
+    assert isinstance(table.c.version.type, Text)
+    assert table.c.version.nullable is False
+    assert "raw" not in table.c
+    assert unique_constraints["uq_terms_consents_user_id_term_id_version"] == (
         "user_id",
         "term_id",
+        "version",
     )
     assert (
         check_constraints["ck_terms_consents_terms_consents_source_allowed"]
@@ -137,7 +137,6 @@ def test_terms_consent_constraints_are_sealed() -> None:
     )
     assert next(iter(table.c.user_id.foreign_keys)).target_fullname == "users.id"
     assert next(iter(table.c.user_id.foreign_keys)).ondelete == "CASCADE"
-    assert next(iter(table.c.term_id.foreign_keys)).target_fullname == "terms.id"
 
 
 def test_auth_tables_use_timestamp_mixin() -> None:
