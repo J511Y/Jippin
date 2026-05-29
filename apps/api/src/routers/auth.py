@@ -15,9 +15,7 @@ async def create_anonymous_user(
     payload: AnonymousUserCreateRequest,
     request: Request,
 ) -> AnonymousUserCreateResponse:
-    result = await create_or_reuse_anonymous_user(
-        payload.existing_anonymous_user_id
-    )
+    result = await create_or_reuse_anonymous_user(payload.existing_anonymous_user_id)
     logger.info(
         "anonymous_user_resolved",
         anonymous_user_id=str(result.anonymous_user_id),
