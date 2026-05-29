@@ -98,12 +98,16 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 
 예: `✨ feat(auth): kakao oauth callback`
 
-### 4.2 브랜치 전략 — GitHub Flow
+### 4.2 브랜치 전략 — `main ← dev ← feature/*`
 
-- `main` 보호. 직접 푸시 금지.
-- 브랜치 명: `<type>/<scope>-<short>` (예: `feat/auth-kakao-callback`, `chore/cmp-523-bootstrap`).
-- PR 본문에는 관련 Paperclip 이슈 식별자(`CMP-###`)와 영향 모듈 표기.
-- 머지 방식: Squash and merge (gitmoji prefix 유지).
+- `main` 보호. **직접 푸시 금지.** 운영 트래픽이 가리키는 단일 정본.
+- `dev` 보호. `dev` 가 통합 브랜치(integration branch)이며 모든 작업 브랜치의 기본 PR base 다.
+- 작업 브랜치는 `dev` 에서 분기한다. 명명: `<type>/<scope>-<short>` (예: `feat/auth-kakao-callback`, `docs/cmp-557a-auth-policy`, `fix/auth-jwt-leak`, `refactor/api-audit-mixin`).
+- 흐름: `main` ← (release PR) ← `dev` ← (작업 PR) ← `feature/* | fix/* | docs/* | refactor/* | chore/* | perf/* | test/* | security/*`.
+- **PR base 기본값 = `dev`.** `main` 으로의 PR 은 운영 release 컷 또는 핫픽스에 한정하며 CTO/DevOps 승인 필요.
+- PR 본문에는 관련 Paperclip 이슈 식별자(`CMP-###`)와 영향 모듈을 표기한다.
+- 머지 방식: **Squash and merge** (gitmoji prefix 유지).
+- `dev` → `main` 승급 자동화는 `.github/workflows/` 의 release 워크플로우(CMP-539 가드 적용)에 따른다.
 
 ### 4.3 PR 체크리스트
 
@@ -147,6 +151,43 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 모든 리포트 화면·다운로드 산출물(웹/PDF/DOCX/공유링크 OG)은 다음 문구를 포함한다.
 
 > 본 서비스는 AI 기반 사전 검토 시스템입니다. 최종 행위허가 여부는 관할 행정기관 판단에 따라 달라질 수 있습니다.
+
+### 4.7 사용자 식별 정책 — 비회원 사전검토 + 전환 시점 OAuth 간편가입
+
+> **봉인.** 본 절은 CEO 정책 (CMP-557) 결정. 정본은 `docs/adr/0003-anon-user-and-sso.md`. 기존 명세 4종 (요구·기능·기술·SDD) 중 “소셜 OAuth 로그인 필수 / 비회원 사전검토 불가” 가정은 본 절로 **supersede** 된다. 모순 추적: `docs/명세서-모순.md`.
+
+**원칙.**
+
+1. **비회원 사전검토 허용.** 도면 업로드·마스킹·1차 AI 판단·리포트 미리보기까지는 익명 세션으로 진행 가능하다. 로그인 게이트로 사전검토 흐름을 끊지 않는다.
+2. **전환 시점 OAuth 간편가입 의무.** 다음 전환 지점에서만 OAuth 로그인을 강제한다.
+   - (a) **상담 전환** — 사업자 연결·견적·연락 요청 시점.
+   - (b) **리드 생성** — 사업자 측 리드 풀에 사용자 식별이 필요한 시점.
+   - (c) **리포트 저장 / 공유** — 익명 세션 만료 이후에도 리포트 다시 보기·공유 링크 발급이 필요한 시점.
+3. **자체 비밀번호 가입 금지.** `users` 또는 어떤 인증 테이블에도 password / hash / salt 컬럼을 두지 않는다. 모델 메타데이터 단위 테스트(`tests/auth/test_no_password_columns.py` 권고)로 가드한다.
+4. **OAuth provider 는 `google` · `naver` · `kakao` 3종 고정.** Postgres ENUM `external_sso_provider` 로 봉인. 신규 provider 추가 시 ADR + 마이그레이션 필요.
+5. **Kakao Sync 약관 분리 저장.** Kakao 는 Kakao Sync 약관 동의 source 를 우리 내부 약관 동의와 분리하여 저장한다 (별도 `terms_consents` row + `source='kakao_sync'`). Kakao 가 자체 약관 화면을 이미 제공하므로 우리 내부 약관 화면을 중복 노출하지 않는다.
+6. **Google / Naver 는 내부 약관 동의 화면을 거친다.** OAuth 콜백 → 내부 약관 동의 화면 → 가입 완료 → 채팅/상담 진입 순. 약관 미동의 시 가입 미완료, 익명 세션 유지.
+7. **비회원 식별자.** 서버에서 발급한 UUID v4 를 `anonymous_users.id` 로 저장하고, 브라우저는 `localStorage.jippin_anonymous_user_id` 키로 보관한다. 쿠키 사용 시 약관·동의 비용이 발생하므로 localStorage 우선.
+8. **가입 성공 시 claim.** OAuth 가입 완료 시 `anonymous_users.converted_user_id` 와 `anonymous_users.converted_at` 으로 익명 세션을 사용자에게 귀속(claim)시킨다. 익명 세션의 도면·리포트·판단 결과는 새 user_id 로 이관된다.
+9. **동일 이메일 + 다른 provider 자동 병합 금지.** 같은 이메일이 카카오·구글·네이버에서 각각 가입되면 별개 user 로 둔다. 사용자가 명시적으로 “계정 통합” 흐름을 요청하기 전까지 자동 병합·linking 금지. 자동 병합은 계정 탈취 벡터.
+10. **OAuth state store.** Authorization Code Flow 의 `state` / `nonce` / `code_verifier` 는 **Redis** 에 짧은 TTL(≤10분)로 저장한다. 메모리 단일 인스턴스 가정과 정합.
+
+**모델 가드 (요약 — 정본은 ADR-0003).**
+
+- `anonymous_users(id uuid pk, created_at, last_seen_at, converted_user_id uuid null fk → users.id, converted_at null, ip_hash, ua_hash)`.
+- `users(id uuid pk, email citext, display_name, created_at, last_login_at, status)` — **password 컬럼 영구 금지**.
+- `external_sso_accounts(user_id fk, provider external_sso_provider, provider_subject text, provider_email, linked_at, pk (provider, provider_subject))` — provider 는 ENUM.
+- `terms_consents(id, user_id fk, term_id, version, source text, agreed_at)` — `source ∈ {'internal_signup', 'kakao_sync', ...}`.
+
+**환경변수 이름 (정본은 `apps/api/.env.example`).**
+
+- `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REDIRECT_URI`
+- `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`
+- `NAVER_OAUTH_CLIENT_ID`, `NAVER_OAUTH_CLIENT_SECRET`, `NAVER_OAUTH_REDIRECT_URI`
+- `OAUTH_STATE_REDIS_URL`, `OAUTH_STATE_TTL_SECONDS`
+- `AUTH_JWT_SECRET`, `AUTH_JWT_ALG`, `AUTH_JWT_ACCESS_TTL_SECONDS`, `AUTH_JWT_REFRESH_TTL_SECONDS`
+- `ANON_SESSION_COOKIE_NAME` _(필요 시)_, `ANON_SESSION_TTL_DAYS`
+- 프론트엔드: `FRONTEND_AUTH_SUCCESS_URL`, `FRONTEND_AUTH_FAILURE_URL`
 
 ---
 
