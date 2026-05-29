@@ -108,11 +108,6 @@ class ExternalSsoAccount(TimestampMixin, Base):
     )
     display_name: Mapped[str | None] = mapped_column(sa.Text)
     profile_image_url: Mapped[str | None] = mapped_column(sa.Text)
-    raw_profile: Mapped[dict[str, object]] = mapped_column(
-        postgresql.JSONB,
-        nullable=False,
-        server_default=sa.text("'{}'::jsonb"),
-    )
 
 
 class TermsConsent(TimestampMixin, Base):
@@ -124,7 +119,7 @@ class TermsConsent(TimestampMixin, Base):
             "source IN ('kakao_sync', 'internal_signup')",
             name="terms_consents_source_allowed",
         ),
-        sa.UniqueConstraint("user_id", "term_id", "version"),
+        sa.UniqueConstraint("user_id", "term_id", "version", "source"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

@@ -94,12 +94,6 @@ def upgrade() -> None:
         sa.Column("display_name", sa.Text(), nullable=True),
         sa.Column("profile_image_url", sa.Text(), nullable=True),
         sa.Column(
-            "raw_profile",
-            postgresql.JSONB(astext_type=sa.Text()),
-            server_default=sa.text("'{}'::jsonb"),
-            nullable=False,
-        ),
-        sa.Column(
             "created_at",
             postgresql.TIMESTAMP(timezone=True),
             server_default=sa.text("now()"),
@@ -219,7 +213,8 @@ def upgrade() -> None:
             "user_id",
             "term_id",
             "version",
-            name=op.f("uq_terms_consents_user_id_term_id_version"),
+            "source",
+            name=op.f("uq_terms_consents_user_id_term_id_version_source"),
         ),
     )
 
