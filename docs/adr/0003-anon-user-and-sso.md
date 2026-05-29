@@ -112,7 +112,8 @@ CREATE TABLE terms_consents (
   term_id     TEXT NOT NULL,     -- e.g. tos_v1, privacy_v2, marketing_optin
   version     TEXT NOT NULL,
   source      TEXT NOT NULL,     -- 'internal_signup' | 'kakao_sync'
-  agreed_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  agreed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, term_id, version, source)
 );
 ```
 

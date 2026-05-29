@@ -96,6 +96,7 @@ def test_external_sso_account_constraints_and_enum_are_sealed() -> None:
     assert "email" not in table.c
     assert isinstance(table.c.provider_email.type, Text)
     assert table.c.provider_email.nullable is True
+    assert "raw_profile" not in table.c
     assert isinstance(table.c.linked_at.type, postgresql.TIMESTAMP)
     assert table.c.linked_at.type.timezone is True
     assert table.c.linked_at.nullable is False
@@ -126,10 +127,11 @@ def test_terms_consent_constraints_are_sealed() -> None:
     assert isinstance(table.c.version.type, Text)
     assert table.c.version.nullable is False
     assert "raw" not in table.c
-    assert unique_constraints["uq_terms_consents_user_id_term_id_version"] == (
+    assert unique_constraints["uq_terms_consents_user_id_term_id_version_source"] == (
         "user_id",
         "term_id",
         "version",
+        "source",
     )
     assert (
         check_constraints["ck_terms_consents_terms_consents_source_allowed"]
