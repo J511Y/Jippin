@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     database_pool_url: str | None = Field(default=None)
 
     test_mode: bool = Field(default=False)
+    anon_session_ttl_days: int = Field(default=30)
 
     cors_allow_origins: list[str] = Field(default_factory=lambda: ["*"])
 

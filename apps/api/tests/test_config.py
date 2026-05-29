@@ -46,3 +46,8 @@ def test_allowed_set_is_exactly_the_sealed_four() -> None:
     assert ALLOWED_APP_ENVS == frozenset(
         {"development", "test", "staging", "production"}
     )
+
+
+def test_anonymous_session_ttl_defaults_to_env_example_value() -> None:
+    settings = Settings()
+    assert settings.anon_session_ttl_days == 30
