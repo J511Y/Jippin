@@ -89,6 +89,32 @@ services:
       PYTHONUNBUFFERED: "1"
       PORT: "8000"
       HOST: "0.0.0.0"
+      # ---------------------------------------------------------------------
+      # AUTH (CMP-557 / CMP-558 / ADR-0003).
+      # 정본·해설은 apps/api/.env.example AUTH 절. 자리표시자는
+      # infra/compose/.env.example. 본 절은 host .env → 컨테이너 전달면.
+      # 변수 누락 시 FastAPI 부팅 단계에서 차단되도록 후속 트랙 B 모델 PR
+      # 의 config 가드에 동일 키를 등록한다.
+      # ---------------------------------------------------------------------
+      KAKAO_REST_API_KEY: "${KAKAO_REST_API_KEY:-}"
+      KAKAO_CLIENT_SECRET: "${KAKAO_CLIENT_SECRET:-}"
+      KAKAO_REDIRECT_URI: "${KAKAO_REDIRECT_URI:-}"
+      GOOGLE_OAUTH_CLIENT_ID: "${GOOGLE_OAUTH_CLIENT_ID:-}"
+      GOOGLE_OAUTH_CLIENT_SECRET: "${GOOGLE_OAUTH_CLIENT_SECRET:-}"
+      GOOGLE_OAUTH_REDIRECT_URI: "${GOOGLE_OAUTH_REDIRECT_URI:-}"
+      NAVER_OAUTH_CLIENT_ID: "${NAVER_OAUTH_CLIENT_ID:-}"
+      NAVER_OAUTH_CLIENT_SECRET: "${NAVER_OAUTH_CLIENT_SECRET:-}"
+      NAVER_OAUTH_REDIRECT_URI: "${NAVER_OAUTH_REDIRECT_URI:-}"
+      OAUTH_STATE_REDIS_URL: "${OAUTH_STATE_REDIS_URL:-redis://redis:6379/1}"
+      OAUTH_STATE_TTL_SECONDS: "${OAUTH_STATE_TTL_SECONDS:-600}"
+      AUTH_JWT_SECRET: "${AUTH_JWT_SECRET:-}"
+      AUTH_JWT_ALG: "${AUTH_JWT_ALG:-HS256}"
+      AUTH_JWT_ACCESS_TTL_SECONDS: "${AUTH_JWT_ACCESS_TTL_SECONDS:-3600}"
+      AUTH_JWT_REFRESH_TTL_SECONDS: "${AUTH_JWT_REFRESH_TTL_SECONDS:-604800}"
+      ANON_SESSION_HEADER: "${ANON_SESSION_HEADER:-x-jippin-anon-id}"
+      ANON_SESSION_TTL_DAYS: "${ANON_SESSION_TTL_DAYS:-30}"
+      FRONTEND_AUTH_SUCCESS_URL: "${FRONTEND_AUTH_SUCCESS_URL:-http://localhost:3000/auth/success}"
+      FRONTEND_AUTH_FAILURE_URL: "${FRONTEND_AUTH_FAILURE_URL:-http://localhost:3000/auth/failure}"
     ports:
       - "8000:8000"
     depends_on:

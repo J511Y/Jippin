@@ -186,8 +186,8 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - `NAVER_OAUTH_CLIENT_ID`, `NAVER_OAUTH_CLIENT_SECRET`, `NAVER_OAUTH_REDIRECT_URI`
 - `OAUTH_STATE_REDIS_URL`, `OAUTH_STATE_TTL_SECONDS`
 - `AUTH_JWT_SECRET`, `AUTH_JWT_ALG`, `AUTH_JWT_ACCESS_TTL_SECONDS`, `AUTH_JWT_REFRESH_TTL_SECONDS`
-- `ANON_SESSION_COOKIE_NAME` _(필요 시)_, `ANON_SESSION_TTL_DAYS`
-- 프론트엔드: `FRONTEND_AUTH_SUCCESS_URL`, `FRONTEND_AUTH_FAILURE_URL`
+- `ANON_SESSION_HEADER` _(기본 `x-jippin-anon-id`)_, `ANON_SESSION_TTL_DAYS`
+- `FRONTEND_AUTH_SUCCESS_URL`, `FRONTEND_AUTH_FAILURE_URL` — API 가 콜백 처리 후 302 하므로 **`apps/api/.env.example`** 가 정본. `apps/web/.env.example` 의 동명 변수는 SPA 표시용 보조 표기.
 
 ---
 
@@ -215,16 +215,16 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - 이미 worktree 경로가 있으면 `git -C <path> status --short --branch` 로 같은 이슈의 깨끗한 작업공간인지 확인한 뒤 재사용한다.
 - 루트 체크아웃의 변경을 치우기 위해 stash/reset/checkout 을 하지 않는다. 충돌이 있으면 새 worktree 를 만들거나 해당 worktree 에서만 해결한다.
 
-표준 시작 절차 (PowerShell):
+표준 시작 절차 (PowerShell) — **§4.2 정합: 기본 base 는 `origin/dev`. `origin/main` base 는 hotfix/release 컷 같은 예외에만 사용**:
 
 ```powershell
-$issue = "CMP-523"
-$branch = "chore/cmp-523-bootstrap"
-$worktree = "C:\Users\jhyou\2026\jippin-worktrees\$issue-bootstrap"
+$issue = "CMP-XYZ"
+$branch = "feat/cmp-xyz-thing"     # type ∈ feat | fix | docs | refactor | chore | perf | test | security
+$worktree = "C:\Users\jhyou\2026\jippin-worktrees\$issue-thing"
 
 New-Item -ItemType Directory -Force -Path C:\Users\jhyou\2026\jippin-worktrees | Out-Null
 git -C C:\Users\jhyou\2026\jippin fetch origin
-git -C C:\Users\jhyou\2026\jippin worktree add -b $branch $worktree origin/main
+git -C C:\Users\jhyou\2026\jippin worktree add -b $branch $worktree origin/dev    # ← dev 가 정본 base
 Set-Location $worktree
 git status --short --branch
 ```
@@ -232,14 +232,20 @@ git status --short --branch
 이미 원격 브랜치가 있을 때:
 
 ```powershell
-$branch = "chore/cmp-523-bootstrap"
-$worktree = "C:\Users\jhyou\2026\jippin-worktrees\CMP-523-bootstrap"
+$branch = "feat/cmp-xyz-thing"
+$worktree = "C:\Users\jhyou\2026\jippin-worktrees\CMP-XYZ-thing"
 
 New-Item -ItemType Directory -Force -Path C:\Users\jhyou\2026\jippin-worktrees | Out-Null
 git -C C:\Users\jhyou\2026\jippin fetch origin
 git -C C:\Users\jhyou\2026\jippin worktree add -b $branch $worktree origin/$branch
 Set-Location $worktree
 ```
+
+**`origin/main` 에서 분기해도 되는 예외** (드물어야 함):
+
+- hotfix — 운영 사고 즉시 패치. 머지 후 `dev` 로 back-merge 필수.
+- release 컷 — `dev` 가 아직 머지되지 않은 채 운영에 특정 시점을 찍어야 할 때 CTO/DevOps 승인.
+- 위 외 모든 경우 `origin/dev` 를 base 로 한다.
 
 이미 로컬 브랜치가 있을 때는 `-b` 없이 붙인다: `git -C C:\Users\jhyou\2026\jippin worktree add <path> <branch>`.
 

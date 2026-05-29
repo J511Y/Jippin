@@ -58,11 +58,27 @@
 
 ### 2.1 데이터 모델 (정본)
 
+> **생성 순서 주의 (PostgreSQL).** `anonymous_users.converted_user_id` 는 `users(id)` 를 참조하므로 `users` 를 먼저 만든 뒤 `anonymous_users` 를 만든다. Alembic 작업자는 본 순서를 그대로 따른다 (반대 순서로 적용하면 FK 검증에서 실패).
+>
+> **타입 선택.** `email` / `provider_email` 은 `TEXT NULL` 을 사용한다. CMP-557 본문의 `email TEXT NULL` 과 정합하고, `citext` extension 의존을 피한다. 대소문자 무시 매칭이 필요한 쿼리는 `LOWER(email)` 의 functional index 로 처리한다 (필요해질 때 트랙 B 모델 PR 에서 추가). `CITEXT` 로 회귀하려면 마이그레이션에 `CREATE EXTENSION IF NOT EXISTS citext;` 를 명시하는 새 ADR 이 필요하다.
+
 ```sql
 -- 1) Provider ENUM — 봉인. 신규 provider 추가 시 새 ADR + 마이그레이션.
 CREATE TYPE external_sso_provider AS ENUM ('google', 'naver', 'kakao');
 
--- 2) 익명 세션 — 비회원 사전검토 컨텍스트.
+-- 2) 사용자 — password 컬럼 금지. email 은 TEXT NULL (provider 가
+--    이메일을 제공하지 않을 수 있음. citext 의존 회피).
+CREATE TABLE users (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email           TEXT NULL,
+  display_name    TEXT,
+  status          TEXT NOT NULL DEFAULT 'active', -- active | suspended | deleted
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_login_at   TIMESTAMPTZ
+  -- 의도적으로 password/hash/salt 컬럼 없음. 모델 메타데이터 테스트가 가드.
+);
+
+-- 3) 익명 세션 — 비회원 사전검토 컨텍스트. users 가 먼저 존재해야 한다.
 CREATE TABLE anonymous_users (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -71,22 +87,6 @@ CREATE TABLE anonymous_users (
   ua_hash         BYTEA,         -- User-Agent 해시.
   converted_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
   converted_at    TIMESTAMPTZ NULL
-);
-
--- 3) 사용자 — password 컬럼 금지.
---
---  email 은 NULL 허용. Kakao / Naver / Google 모두 provider 이메일 제공이
---  사용자 동의·약관·계정 상태에 따라 누락될 수 있으므로 NOT NULL 강제는 부적합.
---  CMP-557 본문의 `email TEXT NULL` 정책과 정합. 표시 가능 이메일은
---  external_sso_accounts.provider_email 에 provider 별로 별도 보관한다.
-CREATE TABLE users (
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email           CITEXT NULL,
-  display_name    TEXT,
-  status          TEXT NOT NULL DEFAULT 'active', -- active | suspended | deleted
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_login_at   TIMESTAMPTZ
-  -- 의도적으로 password/hash/salt 컬럼 없음. 모델 메타데이터 테스트가 가드.
 );
 
 -- 4) 외부 SSO 계정 — (provider, provider_subject) 가 자연 PK.
@@ -99,7 +99,7 @@ CREATE TABLE external_sso_accounts (
   user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   provider         external_sso_provider NOT NULL,
   provider_subject TEXT NOT NULL,
-  provider_email   CITEXT,
+  provider_email   TEXT,
   linked_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (provider, provider_subject),
   UNIQUE (user_id, provider)
@@ -118,39 +118,55 @@ CREATE TABLE terms_consents (
 
 > 실제 마이그레이션은 CMP-557 트랙 B (모델 PR) 에서 Alembic 으로 작성한다. 본 ADR 은 형상만 봉인한다.
 
-### 2.2 OAuth 콜백 흐름 (정본)
+### 2.2 OAuth 라우트 + 콜백 흐름 (정본)
+
+**정본 라우트.**
+
+- `POST /auth/{provider}/start` — OAuth 시작. `{provider}` ∈ `{google, naver, kakao}`. 요청 헤더 `x-jippin-anon-id: <uuid>` 로 익명 세션 식별자를 받는다. 응답: `{"authorize_url": "<provider authorize URL>"}` (JSON). **GET 으로 동작하지 않는다.** 이유: top-level `<a href>` / `window.location` 네비게이션은 `localStorage` 값을 읽지 않고 `x-jippin-anon-id` 같은 커스텀 헤더도 보내지 않기 때문에, anon → user claim 을 OAuth state 에 묶을 수 없다. **클라이언트(Next.js) 가 `fetch` 또는 axios 로 `POST` 한 뒤 `window.location.assign(authorize_url)` 로 이동한다.**
+- `GET /auth/callback/{provider}` — provider 가 Authorization Code 와 함께 리다이렉트해 오는 콜백 엔드포인트. provider 측 등록 redirect URI 와 정확히 일치해야 하므로 GET 유지.
+- `POST /auth/refresh` — access token 갱신.
+- `POST /auth/logout` — refresh token 무효화 (Redis 블랙리스트).
+
+> Codex auto-review #6 (CMP-558) 대응: `/auth/{provider}` 라우트는 사용하지 않는다. 후속 구현자는 `/auth/{provider}/start` 만 만든다.
+
+**콜백 흐름.**
 
 ```
 [비회원]                                            [Provider]
-  │  1) 익명 진입 → anonymous_users.id 발급(UUID v4)
+  │  1) 익명 진입 → 서버가 anonymous_users.id (UUID v4) 발급
   │     브라우저 localStorage.jippin_anonymous_user_id 저장
-  │  2) (전환 시점) GET /auth/{provider}
-  │     서버: state/nonce/code_verifier 발급 → Redis 저장 (TTL ≤10분)
-  │     302 → provider authorize URL                    ───▶
+  │  2) (전환 시점) 클라이언트가 POST /auth/{provider}/start
+  │     헤더: x-jippin-anon-id: <uuid>
+  │     서버: state/nonce/code_verifier 발급
+  │            Redis 에 oauth_state:<state> = {anon_id, provider, ...}
+  │                                                    (TTL ≤10분)
+  │     응답: { "authorize_url": "<provider authorize URL>" }
+  │  3) 클라이언트: window.location.assign(authorize_url)       ───▶
   │                                                          [User consents]
-  │  3) GET /auth/callback/{provider}?code=...&state=... ◀─
-  │     서버: Redis 에서 state 검증, code 교환
-  │  4) provider=kakao :
-  │       - Kakao Sync 약관 동의 결과를 받아 단일 트랜잭션에서
+  │  4) GET /auth/callback/{provider}?code=...&state=...   ◀─
+  │     서버: Redis 에서 oauth_state:<state> 검증·소비, code 교환
+  │  5) provider=kakao :
+  │       - Kakao Sync 약관 동의 결과를 함께 받아 단일 트랜잭션에서
   │         users upsert + external_sso_accounts upsert
   │         + terms_consents(source='kakao_sync') insert
   │         + anonymous_users claim 갱신.
   │       - 내부 약관 화면은 생략 (Kakao 가 표시 책임).
   │     provider in (google, naver) :
-  │       - 내부 약관 동의 화면으로 리다이렉트 — 이 시점에는 users row 미생성.
   │       - provider userinfo(subject, email 등) + anon_id + state 키를
-  │         **pending_signup** 으로 Redis 에 짧은 TTL(≤10분)로 보관해 약관
-  │         화면 왕복 중 컨텍스트가 유지되도록 한다.
-  │       - 사용자가 약관에 동의하면, **단일 트랜잭션에서**
+  │         pending_signup:<token> 으로 Redis 에 짧은 TTL(≤10분)로 보관.
+  │       - 내부 약관 동의 화면으로 리다이렉트 — 이 시점에는 users 미생성.
+  │       - 사용자가 약관에 동의하면, 단일 트랜잭션에서
   │         users upsert + external_sso_accounts upsert
   │         + terms_consents(source='internal_signup') insert
-  │         + anonymous_users.converted_user_id / converted_at 갱신 을 수행한다.
-  │         (terms_consents.user_id NOT NULL 이므로 user row 생성·연결과 약관
-  │         insert 가 같은 트랜잭션이어야 한다. 부분 커밋 금지.)
+  │         + anonymous_users.converted_user_id / converted_at 갱신.
+  │         (terms_consents.user_id NOT NULL 정합. 부분 커밋 금지.)
   │       - 사용자가 약관을 거부하면 pending_signup 폐기, users 미생성,
   │         익명 세션 유지. TERMS_DECLINED 응답.
-  │  5) JWT 발급 → 클라이언트 리다이렉트 (FRONTEND_AUTH_SUCCESS_URL).
+  │  6) JWT 발급 → 서버가 FRONTEND_AUTH_SUCCESS_URL 로 302.
+  │     실패 시 FRONTEND_AUTH_FAILURE_URL 로 302 (사유는 query string).
 ```
+
+> **API 가 redirect 의 owner.** 콜백은 API 가 처리하고 JWT 발급 후 프론트로 redirect 하므로, `FRONTEND_AUTH_SUCCESS_URL` / `FRONTEND_AUTH_FAILURE_URL` 정본은 **`apps/api/.env.example`** 에 둔다. `apps/web/.env.example` 의 동명 변수는 SPA 측 라우팅 표시용 보조 표기이며 값이 두 곳에서 어긋나면 API 측이 정본이다.
 
 실패·예외 코드 (SDD §AUTH 와 정합):
 
@@ -223,9 +239,13 @@ CREATE TABLE terms_consents (
 |---|---|---|
 | `external_sso_provider` (PG ENUM) | `google | naver | kakao` | 신규 provider 추가 = 새 ADR + 마이그레이션 |
 | `users.password*` | 컬럼 없음 | 모델 메타데이터 테스트 가드 |
+| `users.email` / `external_sso_accounts.provider_email` | `TEXT NULL` | citext 의존 회피, CMP-557 정합. 회귀 시 새 ADR + `CREATE EXTENSION` |
+| OAuth start route | `POST /auth/{provider}/start` | 클라이언트가 `x-jippin-anon-id` 헤더와 함께 호출, 응답 `authorize_url` 로 `window.location.assign` |
+| OAuth callback route | `GET /auth/callback/{provider}` | provider 측 redirect URI 와 정확히 일치 |
 | `anonymous_users` localStorage 키 | `jippin_anonymous_user_id` | 서버 발급 UUID v4 |
-| 익명 세션 전달 헤더 | `x-jippin-anon-id` | 정본 변수 = `apps/api/.env.example::ANON_SESSION_HEADER`. 다른 문서·코드는 모두 이 정본을 인용 |
+| 익명 세션 전달 헤더 | `x-jippin-anon-id` | 정본 변수 = `apps/api/.env.example::ANON_SESSION_HEADER` |
 | OAuth state store | Redis 컨테이너 (ADR-0001 §5) | TTL ≤10분, key prefix 분리 (`oauth_state:*`, `pending_signup:*`) |
+| Refresh token TTL | 7일 (604800s) | security-policy POL-AUTH-002 정합. CFLT-006. |
 | 자동 병합 | 금지 | 사용자 명시 통합 흐름만 허용 |
 | Kakao 내부 약관 화면 | 생략 | source 분리 저장으로 감사 |
 | Google/Naver 내부 약관 화면 | 필수 | `terms_consents.source='internal_signup'` |
