@@ -122,15 +122,19 @@ function setPendingAnonymousCookie(response: NextResponse, anonymousUserId: stri
   });
 }
 
-function redirectToFailure(
+function expireOAuthStartCookies(response: NextResponse): void {
+  expireCallbackCookie(response, FLOW_CONTEXT_COOKIE);
+  expireCallbackCookie(response, MERGE_INTENT_COOKIE);
+  expirePendingAnonymousCookie(response);
+}
+
+function redirectToStartFailure(
   request: NextRequest,
   response: NextResponse,
   reason: string,
   context?: { provider?: UiProvider; next?: string | null },
 ): NextResponse {
-  expireCallbackCookie(response, FLOW_CONTEXT_COOKIE);
-  expireCallbackCookie(response, MERGE_INTENT_COOKIE);
-  expirePendingAnonymousCookie(response);
+  expireOAuthStartCookies(response);
   const failure = new URL('/auth/failure', siteOriginFromRequest(request));
   failure.searchParams.set('reason', reason);
   if (context?.provider) failure.searchParams.set('provider', context.provider);
@@ -181,7 +185,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       console.warn('[auth/oauth/start] merge intent enqueue failed', {
         message: error instanceof Error ? error.message : 'unknown',
       });
-      return redirectToFailure(request, response, 'merge_unavailable', {
+      return redirectToStartFailure(request, response, 'merge_unavailable', {
         provider: providerRaw,
         next: url.searchParams.get('next'),
       });
@@ -213,7 +217,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     console.warn('[auth/oauth/start] oauth url generation failed', {
       code: result.error?.code ?? reason,
     });
-    return redirectToFailure(request, response, reason, {
+    return redirectToStartFailure(request, response, reason, {
       provider: providerRaw,
       next: url.searchParams.get('next'),
     });

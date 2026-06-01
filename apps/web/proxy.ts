@@ -67,6 +67,14 @@ function isAnonymousSupabaseUser(user: { is_anonymous?: boolean; app_metadata?: 
   );
 }
 
+function redirectToTermsGate(request: NextRequest, nextPath: string): NextResponse {
+  const termsUrl = request.nextUrl.clone();
+  termsUrl.pathname = '/auth/terms';
+  termsUrl.search = '';
+  termsUrl.searchParams.set('next', nextPath);
+  return NextResponse.redirect(termsUrl);
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
@@ -74,13 +82,8 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (request.cookies.has(TERMS_PENDING_COOKIE)) {
-    const termsUrl = request.nextUrl.clone();
-    termsUrl.pathname = '/auth/terms';
-    termsUrl.search = '';
-    termsUrl.searchParams.set('next', pathname + search);
-    return NextResponse.redirect(termsUrl);
-  }
+  const nextPath = pathname + search;
+  const isTermsPending = request.cookies.has(TERMS_PENDING_COOKIE);
 
   const response = NextResponse.next();
   const supabase = createServerClient(supabaseUrl(), supabaseAnonKey(), {
@@ -102,13 +105,18 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (user && !isAnonymousSupabaseUser(user)) {
+  if (isTermsPending) {
+    return redirectToTermsGate(request, nextPath);
+  }
+
+  const hasAuthenticatedUser = Boolean(user && !isAnonymousSupabaseUser(user));
+  if (hasAuthenticatedUser) {
     return response;
   }
 
   const loginUrl = request.nextUrl.clone();
   loginUrl.pathname = '/login';
-  loginUrl.searchParams.set('next', pathname + search);
+  loginUrl.searchParams.set('next', nextPath);
   return NextResponse.redirect(loginUrl);
 }
 
