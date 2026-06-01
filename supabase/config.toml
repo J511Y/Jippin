@@ -1,0 +1,296 @@
+# 집핀(Jippin) Supabase CLI 설정 — CMP-574 스캐폴드
+#
+# 본 파일은 Supabase GitHub integration 과 `supabase` CLI 가 모노레포 루트에서
+# 동작하도록 하는 **최소 스캐폴드**다. 실제 운영 값은 사용자가 콘솔에서 발급한 뒤
+# 본 파일과 GitHub Secrets/Variables 를 통해 주입한다.
+#
+# 정본 절차: docs/runbooks/supabase-branching.md (CMP-574 인도물)
+# 정책 정본: docs/adr/0004-supabase-transition.md (CMP-573 인도물 — Pending)
+#
+# 봉인 가드 (CMP-574 §0):
+#   1. `project_id` 는 placeholder 만 사용한다. 실제 project ref 는 CMP-574 PR 머지 후
+#      사용자가 별도 PR / 콘솔 작업으로 채운다.
+#   2. 본 파일에는 절대 `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_PASSWORD`,
+#      `*_CLIENT_SECRET` 평문을 쓰지 않는다. 모든 비밀은 `env(VAR_NAME)` 으로만 참조한다.
+#   3. `[auth]`, `[storage]`, `[edge_runtime]` 등의 활성화 토글은 본 PR 시점에서는
+#      모두 보수적인 값으로 둔다. 실제 활성화는 후속 트랙 (CMP-576 Auth, CMP-575 DB,
+#      차후 Storage ADR) 이 개별 PR 로 켠다.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# project_id — Supabase project ref (placeholder)
+# ─────────────────────────────────────────────────────────────────────────────
+# 사용자 작업: `supabase projects list` 의 `Reference ID` 값으로 교체한다.
+# 예: "abcdefghijklmnopqrst" (20자 lowercase)
+# **본 PR 머지 시점에는 placeholder 그대로 둔다.**
+project_id = "jippin-placeholder"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [remotes.*] — persistent branch 별 remote 설정
+# ─────────────────────────────────────────────────────────────────────────────
+# Supabase CLI 는 본 섹션을 읽어 persistent branch 별 project_id 와 비밀 키를
+# 분리한다. `[remotes.development]` 가 선언되어 있어야 development branch 를 대상
+# 으로 한 명령이 production 으로 잘못 흐르지 않는다. 본 섹션을 활용하는 supported
+# 명령 시퀀스는 런북 §3.2 A1.1 참조 (`link --project-ref` 또는 `--db-url` 기반).
+# Supabase CLI 는 `--remote <name>` 플래그를 지원하지 않는다.
+# 정본: https://supabase.com/docs/guides/deployment/branching/configuration#remote-specific-configuration
+#
+# 사용자 작업 (CMP-574 머지 후 §3.2 A1 후속 PR):
+#   1. `supabase --experimental branches list` 의 `BRANCH PROJECT ID` 값을 본 절의
+#      `project_id` 에 채운다.
+#   2. 같은 PR 에서 `[remotes.staging]` 도 동일 패턴으로 추가한다.
+[remotes.development]
+project_id = "jippin-development-placeholder"
+
+# staging persistent branch — §7.1.1 G3 / §7.1.3 A5 / §7.1.4 O3 PoC 의 대상 환경.
+# staging 은 Supabase-only branch (GitHub 측 트리거 없음) 이지만 CMP-576 가 PoC
+# 시나리오를 적용하려면 CLI 가 staging 의 BRANCH PROJECT ID 를 알아야 한다.
+# 사용자 작업 (CMP-574 머지 후 §3.2 A1.2 후속 PR): `SUPABASE_PROJECT_REF_STAGING`
+# (U5) 값을 본 절의 project_id 에 채운다.
+[remotes.staging]
+project_id = "jippin-staging-placeholder"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [api] — PostgREST 자동 생성 REST API
+# ─────────────────────────────────────────────────────────────────────────────
+# 집핀은 FastAPI(apps/api) 가 1차 API 게이트웨이이며, PostgREST 는 RLS 정책이
+# 완성되기 전까지 외부에 노출하지 않는다.
+#
+# **PostgREST 노출 봉인 (MUST).** 본 PR 시점에는 `enabled = false` 다. CMP-575 가
+# 현 Alembic 테이블(users, request_logs, anonymous_users, consultations 등)을
+# Supabase 마이그레이션으로 변환할 때 `public` 스키마의 모든 테이블에 RLS 가 비어 있고
+# `ENABLE ROW LEVEL SECURITY` 도 걸려 있지 않다. `[api]` 가 켜진 상태로 본 마이그
+# 레이션을 적용하면 anon key 보유자가 PostgREST/GraphQL 로 `public` 테이블을 직접
+# 조회할 수 있어 FastAPI 게이트웨이를 우회한다.
+#
+# **`schemas` 만으로는 `public` 을 가릴 수 없다.** Supabase CLI 정본
+# (https://supabase.com/docs/guides/local-development/cli/config#api-schemas) 은
+# `api.schemas` 가 PostgREST 의 db-schema 에 더해지는 allow-list 라고 명시하고,
+# Supabase 내부 동작은 `public` 과 `storage` 스키마를 항상 PostgREST 의 `db-schema`
+# 에 포함시킨다 (정본: https://supabase.com/docs/guides/api/securing-your-api).
+# 즉 `enabled = true` 가 되는 순간 `schemas` 가 `["graphql_public"]` 이어도 anon key
+# 로 `public.users` 등이 조회된다. 따라서 **유일한 차단점은 `[api].enabled = false`**
+# 이다. RLS 가 완성되기 전에는 `schemas` 만 수정해서 `enabled = true` 로 바꾸지 않는다.
+#
+# 본 토글을 true 로 바꾸는 PR (또는 `schemas` 에 `"public"` 을 추가하는 PR) 은
+# 다음 조건을 모두 만족해야 한다:
+#   1. CMP-575 트랙이 `public` 의 민감 테이블 전체에 `ALTER TABLE ... ENABLE ROW
+#      LEVEL SECURITY` + 운영 RLS policy 를 SQL 마이그레이션으로 봉인.
+#   2. `docs/runbooks/supabase-branching.md` §7.2 (PostgREST 노출 게이트) 가
+#      검증 결과 (정책 누락 0건) 를 PR 본문에 첨부.
+#   3. RLS 가 미완성된 상태로는 `[api].enabled = true` 로 바꾸지 않는다 (위 박스
+#      참고 — `schemas` 만 좁히는 우회는 무효).
+[api]
+enabled = false
+schemas = ["graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [db] — Postgres
+# ─────────────────────────────────────────────────────────────────────────────
+# CMP-573 ADR 봉인 후: Supabase 는 Postgres 17 (2026-05 기준 기본) 을 사용한다.
+# 로컬 dev 포트: 콘솔 default (54322) 유지.
+[db]
+major_version = 17
+port = 54322
+shadow_port = 54320
+
+# 마이그레이션 정본 위치 — CMP-575 가 Alembic → SQL 변환 결과를 여기에 쌓는다.
+# 본 PR 시점에는 `supabase/migrations/` 디렉터리만 비워두고 `.gitkeep` 으로 보존.
+#
+# `schema_paths` 의 glob 은 본 `config.toml` 이 있는 디렉터리(`supabase/`) 기준 상대 경로다.
+# 따라서 `supabase/schemas/*.sql` 파일을 가리키려면 `./schemas/*.sql` 로 적는다.
+# Supabase 공식 declarative schema 예시:
+# https://supabase.com/docs/guides/local-development/declarative-database-schemas#declaring-your-schema
+[db.migrations]
+schema_paths = ["./schemas/*.sql"]
+
+[db.pooler]
+enabled = false
+port = 54329
+pool_mode = "transaction"
+default_pool_size = 20
+max_client_conn = 100
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [studio] — Supabase Studio (local)
+# ─────────────────────────────────────────────────────────────────────────────
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [inbucket] — 로컬 메일 캡처 (Auth confirmation 메일 등 테스트용)
+# ─────────────────────────────────────────────────────────────────────────────
+[inbucket]
+enabled = true
+port = 54324
+smtp_port = 54325
+pop3_port = 54326
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [storage] — Supabase Storage
+# ─────────────────────────────────────────────────────────────────────────────
+# CMP-573 ADR 봉인: R2 는 당장 유지. Supabase Storage 전환은 별도 ADR.
+# 본 PR 시점에는 enabled=false 로 비활성화하여 사용자가 의도치 않게 켜지 않도록 한다.
+[storage]
+enabled = false
+file_size_limit = "50MiB"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [auth] — Supabase Auth (CMP-576 트랙이 provider 활성화)
+# ─────────────────────────────────────────────────────────────────────────────
+# 본 PR 시점에는 enabled=true (콘솔 default) 로 두되, **모든 가입 표면을 닫는다**.
+# Provider 활성화·anonymous 활성화는 CMP-576 Auth 트랙이 별도 PR 로 켠다.
+#
+# 정책 정본 (CEO 결정 CMP-572, AGENTS.md §4.7, ADR-0003 자동 병합 금지):
+#   - **Signup gate 는 2-layer 다.**
+#     `[auth].enable_signup` 은 **글로벌 gate** — false 이면 OAuth/anonymous 포함
+#     모든 새 user 생성이 막힌다. 따라서 CMP-576 가 OAuth/anonymous 를 활성화하는
+#     PR 에서는 본 값을 **true 로 켠다**. 본 PR (단계 0, 스캐폴드) 시점에는
+#     auth flow 가 아예 없으므로 false 로 봉인.
+#     `[auth.email].enable_signup` 은 **이메일/암호 가입만의 gate** — 영구 false.
+#     본 토글은 글로벌 gate 가 true 가 되어도 켜지지 않는다. 이메일/암호 가입은
+#     AGENTS.md §4.7 봉인으로 영구 금지.
+#   - **Automatic identity linking 영구 금지.** 같은 verified email 의 OAuth identity
+#     를 한 user 로 자동 병합하지 않는다 (계정 탈취 벡터). Supabase 는 default 로
+#     자동 link 하므로 `supabase/config.toml` 의 토글로는 끌 수 없다 — 콘솔 가드 +
+#     DB 트리거 fallback 으로 봉인한다. 절차는 `docs/runbooks/supabase-branching.md`
+#     §7.1.1 (Automatic linking 가드, MUST) 가 정본.
+#   - **Manual identity linking 우선 (MVP).** anonymous → OAuth upgrade 와 사용자가
+#     명시적으로 요청한 "계정 통합" 흐름은 manual linking 으로 처리한다.
+#     `enable_manual_linking = true` 로 둔다. 절차는 §7.1.2 (Manual linking 활성화)
+#     와 §7.1.3 (Anonymous upgrade) 가 정본.
+[auth]
+enabled = true
+# 사용자 작업: 운영 도메인 확정 후 `site_url` 과 `additional_redirect_urls` 를 갱신.
+# local dev 는 Next.js 가 `localhost` 와 `127.0.0.1` 둘 다 응답하므로 양쪽 모두
+# 허용한다. Supabase Auth 는 redirect URL 을 엄격히 매칭하므로 한쪽만 두면
+# `http://localhost:3000` dev flow 가 redirect rejection 으로 실패한다.
+#
+# **callback path 명시 봉인.** Supabase 는 `redirectTo` URL 을 본 allow-list 와
+# 정확히 매칭하거나 `/**` wildcard 로만 통과시킨다 (정본:
+# https://supabase.com/docs/guides/auth/redirect-urls). CMP-577 Web 트랙은
+# `@supabase/ssr` 패턴을 따라 `redirectTo=http://localhost:3000/auth/callback`
+# 으로 OAuth 콜백을 보낸다 — 따라서 본 allow-list 에는 origin 뿐 아니라
+# `/auth/callback` 정확 경로와 `/**` wildcard 가 함께 들어가야 한다. wildcard
+# 만으로도 매칭은 통과하지만 origin/exact 가 빠지면 일부 SDK 의 redirect-to-root
+# fallback 경로에서 거부될 수 있어 origin + `/auth/callback` + `/**` 3종 모두 둔다.
+site_url = "http://localhost:3000"
+additional_redirect_urls = [
+  "http://localhost:3000",
+  "http://localhost:3000/auth/callback",
+  "http://localhost:3000/**",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3000/auth/callback",
+  "http://127.0.0.1:3000/**",
+]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+# 글로벌 signup gate (위 정책 블록 참고). 스캐폴드 단계 0 시점에는 false. CMP-576 이
+# OAuth/anonymous 를 활성화하는 PR 에서 true 로 켠다. 본 토글이 false 이면 OAuth
+# conversion 도 같이 막히므로, OAuth provider 활성화 PR 은 반드시 본 값을 true 로
+# 함께 바꾼다. 이메일/암호 가입은 본 토글과 독립으로 `[auth.email].enable_signup`
+# 이 영구 false 다.
+enable_signup = false
+# anonymous sign-in 은 CMP-577 PoC 후 활성화 (§7.1.3 A5). 본 PR 시점은 false.
+# CMP-577 이 켤 때 manual linking 흐름과 같은 PR 로 묶고, 같은 PR 에서 글로벌
+# `enable_signup` 도 true 로 함께 바꾼다.
+enable_anonymous_sign_ins = false
+# Manual identity linking — CEO 결정 (CMP-572) 봉인: MVP 는 manual linking 우선.
+# 본 토글이 true 여야 anonymous → OAuth upgrade 와 사용자 명시적 "계정 통합" 흐름이
+# 동작한다. **자동 linking 은 본 토글로 통제되지 않는다** — 자동 linking 금지 가드는
+# §7.1.1 (콘솔 가드 + DB 트리거) 가 책임진다. 콘솔 가드의 ON/OFF 방향은 라벨에
+# 의존하지 않고 §7.1.1 G3 PoC (Google + Kakao 같은 verified email → 두 user 분리)
+# 결과를 SSOT 로 봉인한다 — 라벨이 ON 이든 OFF 든 PoC 가 통과한 설정이 정답.
+# Email-based automatic identity linking is disabled by policy (ADR-0003 영속화 + CEO CMP-572). Use `supabase.auth.linkIdentity()` only. 정책 변경은 별도 이슈/ADR 에서만.
+enable_manual_linking = true
+
+[auth.email]
+# 이메일/암호 가입 영구 금지 — AGENTS.md §4.7. 본 토글은 글로벌
+# `[auth].enable_signup` 이 true 가 되어도 켜지지 않는다. true 로 변경하려면 새 ADR
+# + CEO 결정이 필요하다.
+enable_signup = false
+double_confirm_changes = true
+enable_confirmations = false
+
+[auth.sms]
+enable_signup = false
+enable_confirmations = false
+
+# Built-in OAuth providers — CMP-576 트랙이 실제 client_id/secret 발급 후 활성화.
+# 본 PR 시점에는 모두 disabled. `env()` 미해석으로 `supabase link`, `supabase db diff`
+# 등 CLI 명령이 깨지지 않도록 client_id / secret 은 **빈 문자열**로 둔다 (Supabase
+# 공식 disabled-provider 예시와 동일).
+#
+# **`redirect_uri` 봉인 (provider 콘솔에 등록하는 OAuth Authorized redirect URI).**
+# 본 필드는 **Supabase Auth 서버의 OAuth callback URL** 을 가리키며 **환경별로
+# 다른 BRANCH PROJECT REF 의 callback** 을 사용한다. 단일 PROD URL 로 고정하면
+# staging/development PoC 가 production Auth 로 인가코드를 보내 환경별 검증이
+# 무효화된다. 따라서 본 필드는 `env(SUPABASE_AUTH_EXTERNAL_REDIRECT_URI)` 로
+# variable 화해 W1~W4 (§7.4) 채널 별로 환경 값을 등록한다:
+#   - production: https://<SUPABASE_PROJECT_REF_PROD>.supabase.co/auth/v1/callback
+#   - development persistent branch: https://<SUPABASE_PROJECT_REF_DEV>.supabase.co/auth/v1/callback
+#   - staging persistent branch: https://<SUPABASE_PROJECT_REF_STAGING>.supabase.co/auth/v1/callback
+#   - local (`supabase start`): http://127.0.0.1:54321/auth/v1/callback
+# provider (Google/Kakao/Naver) 콘솔의 Authorized redirect URIs 에는 **위 4개를
+# 모두 등록**해야 환경별 PoC + production 운영이 모두 통과한다. **app 의 Next.js
+# `/auth/callback` 경로는 본 필드에 절대 넣지 않는다** — app callback 은
+# `[auth].site_url` + `[auth].additional_redirect_urls` (위) 책임이고, OAuth 흐름은
+#   provider → Supabase `/auth/v1/callback` (본 필드) → Supabase 가 세션 발급 →
+#   `redirectTo` 로 지정된 app `/auth/callback`
+# 순서다. 본 필드에 app URL 을 넣으면 provider 가 인가코드를 Next.js 로 직접 보내
+# Supabase Auth 가 code 교환을 못 하고 흐름이 깨진다 (정본:
+# https://supabase.com/docs/guides/auth/social-login + Supabase CLI config 가이드).
+#
+# **env() wiring 정본.** 활성화 시점에는 CMP-576 PR 이 본 값을 `env(VAR)` 로 바꾼다.
+# `env()` 는 **Supabase CLI/integration 이 보는 환경변수만** 읽는다 — 구체적으로
+# (a) local 은 **project root `.env`** (즉 본 `config.toml` 의 parent 의 parent,
+# repo root `.env`. `supabase/.env` 가 아님 — Supabase 공식:
+# https://supabase.com/docs/guides/local-development/managing-config#using-secrets-inside-configtoml),
+# (b) Supabase GitHub integration 의 preview/production 배포는 Supabase 콘솔의
+# Edge Functions Secrets / Vault 또는 `supabase secrets set --project-ref <REF>
+# VAR=...` 로 등록된 값. **`apps/api/.env.example`, `apps/web/.env.example` 은 app
+# runtime 용 placeholder 일 뿐 Supabase CLI 가 읽지 않는다** — provider 활성화 PR 은
+# repo root `.env.example` (또는 `supabase/.env.example`) 에 변수명을 추가해야 한다.
+# 자세한 절차는 `docs/runbooks/supabase-branching.md` §7.4 W1~W4 / W-A~W-D 참고.
+[auth.external.google]
+enabled = false
+client_id = ""
+secret = ""
+# 활성화 시 값 (env() 로 환경별 parameterize — 위 봉인 박스 참고):
+#   redirect_uri = "env(SUPABASE_AUTH_EXTERNAL_REDIRECT_URI)"
+# 환경별 값은 W1~W4 채널 (§7.4) 별로 등록.
+redirect_uri = ""
+skip_nonce_check = false
+
+[auth.external.kakao]
+enabled = false
+client_id = ""
+secret = ""
+# 활성화 시 값 (Google 과 동일 env() 사용):
+#   redirect_uri = "env(SUPABASE_AUTH_EXTERNAL_REDIRECT_URI)"
+redirect_uri = ""
+
+# Naver — built-in provider 가 아니다. Custom OAuth/OIDC 로 PoC 후 활성화 (CMP-576).
+# 본 파일에는 정의하지 않는다 (CLI 가 unknown provider 로 거부할 수 있음).
+# Naver 도 활성화 시 redirect_uri 는 동일하게 `env(SUPABASE_AUTH_EXTERNAL_REDIRECT_URI)`
+# 환경별 callback (production/dev/staging/local) 을 가리키도록 봉인.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [realtime] — 실시간 채널
+# ─────────────────────────────────────────────────────────────────────────────
+# 집핀 MVP 는 채팅/스트림에 SSE/WebSocket 자체 구현 예정. Realtime 활성화는 후속 ADR.
+[realtime]
+enabled = false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [edge_runtime] — Edge Functions (Deno)
+# ─────────────────────────────────────────────────────────────────────────────
+# 집핀은 FastAPI(apps/api) 가 백엔드 정본. Edge Functions 도입은 후속 ADR.
+[edge_runtime]
+enabled = false
+policy = "oneshot"
+inspector_port = 8083
