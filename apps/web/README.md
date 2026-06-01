@@ -54,6 +54,7 @@ apps/web/
 - 클라이언트: `@supabase/supabase-js` + `@supabase/ssr` 도입 (Next.js 16 App Router · Edge proxy / Route Handler / Server Component cookie 통합).
 - 비회원 흐름: `supabase.auth.signInAnonymously()` 로 익명 세션 발급. **Phase 1 동안 `localStorage.jippin_anonymous_user_id` + `POST /auth/anonymous-users` 호출도 그대로 유지** (도면/리포트 claim 경로 보존). Phase 2 에서 일괄 폐기.
 - 전환 시점: 익명 user 는 `supabase.auth.linkIdentity({ provider })`, 신규 로그인은 `supabase.auth.signInWithOAuth({ provider })`. `linkIdentity` 실패 시 "익명 데이터 이전" 모달 ladder 로 fallback (runbook §4.2.2). provider 화이트리스트는 `google | kakao | naver` (ADR-0003 봉인). SDK 에 넘기는 식별자는 `lib/supabase/providers.ts` 매핑을 거치며 Naver 는 `custom:naver`.
+- **MVP linking 정책 (CMP-572 CEO 결정)** — Manual identity linking only. 동일 verified email 자동 link 는 Supabase 콘솔에서 OFF 봉인. 이미 다른 user 에 연결된 provider identity 의 익명 세션 연결 시도는 §4.2.2 fallback ladder (기존 계정 로그인 + 데이터 이관 분기) 로만 처리하며 자동 병합 금지. 상세는 runbook §0.0.
 - OAuth callback: `/auth/callback?next=<원래 목적지>` Route Handler 가 `exchangeCodeForSession` 으로 세션 쿠키를 저장한 뒤 `next` 로 302. Supabase 콘솔 redirect allow list 도 `/auth/callback` 기준 (runbook §4.7).
 - Kakao Sync 동의 audit: callback Route Handler 가 `POST /auth/terms/kakao-sync` 를 호출 → 백엔드가 `terms_consents(source='kakao_sync')` 단일 트랜잭션 insert (runbook §4.5.2).
 - FastAPI 호출: `Authorization: Bearer <session.access_token>` 헤더 + Phase 1 동안 `x-jippin-anon-id: <legacy uuid>` 동시 전송. 자체 refresh 인터셉터 폐기 (SDK 자동 갱신 신뢰).
