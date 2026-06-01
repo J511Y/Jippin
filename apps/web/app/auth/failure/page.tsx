@@ -5,6 +5,8 @@ import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 import { IdentityAlreadyExistsModal } from '@/app/(auth)/login/identity-already-exists-modal';
+import { isSafeNext } from '@/lib/safe-redirect';
+import { isUiProvider, type UiProvider } from '@/lib/supabase/providers';
 
 const OAUTH_GUARD_KEY = 'jippin_oauth_in_progress';
 
@@ -37,6 +39,14 @@ const REASON_COPY: Record<string, { title: string; body: string }> = {
     title: '로그인 시간이 만료되었습니다',
     body: '소셜 로그인 요청이 만료되었습니다. 로그인 화면에서 다시 시작해 주세요.',
   },
+  merge_commit_failed: {
+    title: '이전 데이터를 옮기지 못했습니다',
+    body: '로그인은 완료되었지만 비회원 검토 데이터를 기존 계정으로 옮기지 못했습니다. 다시 시도해 주세요.',
+  },
+  merge_unavailable: {
+    title: '이전 기능을 준비 중입니다',
+    body: '기존 계정으로 비회원 검토 데이터를 옮기는 서버 기능이 아직 준비되지 않았습니다.',
+  },
 };
 
 function clearOAuthGuard(): void {
@@ -47,14 +57,30 @@ function clearOAuthGuard(): void {
   }
 }
 
-export function AuthFailureView({ reason }: { reason: string | null }) {
+type AuthFailureViewProps = {
+  reason: string | null;
+  provider?: string | null;
+  nextPath?: string | null;
+};
+
+function normalizeProvider(value: string | null | undefined): UiProvider {
+  return isUiProvider(value) ? value : 'kakao';
+}
+
+function normalizeNext(value: string | null | undefined): string {
+  return value && isSafeNext(value) ? value : '/';
+}
+
+export function AuthFailureView({ reason, provider, nextPath }: AuthFailureViewProps) {
   const normalized = reason && REASON_COPY[reason] ? reason : 'oauth_error';
   const copy = REASON_COPY[normalized] ?? {
     title: '로그인을 시작할 수 없습니다',
     body: '소셜 로그인 처리 중 오류가 발생했습니다. 다시 시도해 주세요.',
   };
-  const isIdentityConflict = normalized === 'identity_already_exists';
-  const [modalOpen, setModalOpen] = useState(isIdentityConflict);
+  const canRetryMerge = normalized === 'identity_already_exists' || normalized === 'merge_commit_failed';
+  const [modalOpen, setModalOpen] = useState(canRetryMerge);
+  const initialProvider = normalizeProvider(provider);
+  const safeNext = normalizeNext(nextPath);
 
   useEffect(() => {
     clearOAuthGuard();
@@ -68,7 +94,7 @@ export function AuthFailureView({ reason }: { reason: string | null }) {
       </header>
 
       <div className="flex flex-wrap gap-2">
-        {isIdentityConflict ? (
+        {canRetryMerge ? (
           <button
             type="button"
             onClick={() => setModalOpen(true)}
@@ -88,7 +114,8 @@ export function AuthFailureView({ reason }: { reason: string | null }) {
       <IdentityAlreadyExistsModal
         open={modalOpen}
         onOpenChange={setModalOpen}
-        nextPath="/"
+        initialProvider={initialProvider}
+        nextPath={safeNext}
       />
     </main>
   );
@@ -96,7 +123,13 @@ export function AuthFailureView({ reason }: { reason: string | null }) {
 
 function AuthFailureReader() {
   const searchParams = useSearchParams();
-  return <AuthFailureView reason={searchParams.get('reason')} />;
+  return (
+    <AuthFailureView
+      reason={searchParams.get('reason')}
+      provider={searchParams.get('provider')}
+      nextPath={searchParams.get('next')}
+    />
+  );
 }
 
 export default function AuthFailurePage() {

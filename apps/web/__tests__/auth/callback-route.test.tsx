@@ -34,14 +34,14 @@ function expectCallbackCookiesExpired(response: Response): void {
   expect(header).toContain('Path=/auth/callback');
 }
 
-function mockSession() {
+function mockSession(provider = 'custom:kakao') {
   return {
     access_token: 'access-token',
     provider_token: null,
     provider_refresh_token: null,
     user: {
       id: 'user-1',
-      identities: [{ provider: 'google', created_at: '2026-06-01T00:00:00.000Z' }],
+      identities: [{ provider, created_at: '2026-06-01T00:00:00.000Z' }],
     },
   };
 }
@@ -113,6 +113,7 @@ describe('/auth/callback route', () => {
   });
 
   it('expires callback cookies after successful exchange', async () => {
+    const freshContext = encodeURIComponent(`custom:kakao|${Date.now()}`);
     supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
       data: { session: mockSession() },
       error: null,
@@ -120,7 +121,11 @@ describe('/auth/callback route', () => {
 
     const { GET } = await import('@/app/auth/callback/route');
     const response = await GET(
-      new NextRequest('http://localhost/auth/callback?code=ok&next=/app/reports'),
+      new NextRequest('http://localhost/auth/callback?code=ok&next=/app/reports', {
+        headers: {
+          cookie: `jippin_oauth_provider=${freshContext}`,
+        },
+      }),
     );
 
     expect(response.status).toBe(302);
@@ -134,7 +139,7 @@ describe('/auth/callback route', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
     supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
-      data: { session: mockSession() },
+      data: { session: mockSession('google') },
       error: null,
     });
 
@@ -159,6 +164,53 @@ describe('/auth/callback route', () => {
     );
   });
 
+  it('gates Google and Naver callbacks on internal terms', async () => {
+    const freshContext = encodeURIComponent(`google|${Date.now()}`);
+    supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { session: mockSession('google') },
+      error: null,
+    });
+
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/callback?code=ok&next=/app/reports', {
+        headers: {
+          cookie: `jippin_oauth_provider=${freshContext}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/auth/terms?next=%2Fapp%2Freports',
+    );
+    expectCallbackCookiesExpired(response);
+  });
+
+  it('surfaces merge commit failures on the failure page with retry context', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
+    const freshContext = encodeURIComponent(`google|${Date.now()}`);
+    supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { session: mockSession('google') },
+      error: null,
+    });
+
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/callback?code=ok&next=/app/reports', {
+        headers: {
+          cookie: `jippin_merge_intent=signed-intent; jippin_oauth_provider=${freshContext}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/auth/failure?reason=merge_commit_failed&next=%2Fapp%2Freports&provider=google',
+    );
+    expectCallbackCookiesExpired(response);
+  });
+
   it('rejects stale OAuth guard cookies before code exchange', async () => {
     const staleContext = encodeURIComponent('google|1');
     const { GET } = await import('@/app/auth/callback/route');
@@ -172,7 +224,7 @@ describe('/auth/callback route', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe(
-      'http://localhost/auth/failure?reason=oauth_guard_stale',
+      'http://localhost/auth/failure?reason=oauth_guard_stale&provider=google',
     );
     expect(supabaseMocks.exchangeCodeForSession).not.toHaveBeenCalled();
     expectCallbackCookiesExpired(response);
@@ -201,7 +253,12 @@ describe('/auth/oauth/start BFF', () => {
     expect(cookieHeader(response)).toContain('Max-Age=300');
   });
 
-  it('sets merge intent cookie from signed_token for link-merge starts', async () => {
+  it('sets merge intent cookie from server-side enqueue for link-merge starts', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ signed_token: 'signed-token' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
     supabaseMocks.signOut.mockResolvedValueOnce({ error: null });
     supabaseMocks.signInWithOAuth.mockResolvedValueOnce({
       data: { url: 'https://supabase.test/auth/v1/authorize?provider=google' },
@@ -211,7 +268,7 @@ describe('/auth/oauth/start BFF', () => {
     const { GET } = await import('@/app/auth/oauth/start/route');
     const response = await GET(
       new NextRequest(
-        'http://localhost/auth/oauth/start?provider=google&intent=link-merge&signed_token=signed-token',
+        'http://localhost/auth/oauth/start?provider=google&intent=link-merge&anonymous_user_id=anon-1&next=/app/reports',
       ),
     );
 
@@ -222,6 +279,38 @@ describe('/auth/oauth/start BFF', () => {
     expect(cookieHeader(response)).toContain('jippin_merge_intent=signed-token');
     expect(cookieHeader(response)).toContain('Path=/auth/callback');
     expect(cookieHeader(response)).toContain('Max-Age=300');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/auth/anon-merge-intents',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          anonymous_user_id: 'anon-1',
+          provider: 'google',
+          next: '/app/reports',
+        }),
+      }),
+    );
+    expect(supabaseMocks.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not sign out when merge intent enqueue fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+
+    const { GET } = await import('@/app/auth/oauth/start/route');
+    const response = await GET(
+      new NextRequest(
+        'http://localhost/auth/oauth/start?provider=google&intent=link-merge&anonymous_user_id=anon-1&next=/app/reports&signed_token=leaked',
+      ),
+    );
+
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get('location') ?? '');
+    expect(location.pathname).toBe('/auth/failure');
+    expect(location.searchParams.get('reason')).toBe('merge_unavailable');
+    expect(location.searchParams.get('provider')).toBe('google');
+    expect(location.searchParams.get('next')).toBe('/app/reports');
+    expect(supabaseMocks.signOut).not.toHaveBeenCalled();
+    expect(cookieHeader(response)).not.toContain('leaked');
   });
 
   it('redirects to failure and clears callback cookies when OAuth URL generation fails', async () => {
@@ -237,7 +326,7 @@ describe('/auth/oauth/start BFF', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe(
-      'http://localhost/auth/failure?reason=oauth_init_failed',
+      'http://localhost/auth/failure?reason=oauth_init_failed&provider=google',
     );
     expectCallbackCookiesExpired(response);
   });
@@ -280,9 +369,16 @@ describe('/auth/failure page', () => {
   it('shows the identity conflict ladder entry for identity_already_exists', async () => {
     const { AuthFailureView } = await import('@/app/auth/failure/page');
 
-    render(<AuthFailureView reason="identity_already_exists" />);
+    render(
+      <AuthFailureView
+        reason="identity_already_exists"
+        provider="google"
+        nextPath="/app/reports"
+      />,
+    );
 
     expect(screen.getByRole('heading', { name: '이미 가입된 계정이 있습니다' })).toBeVisible();
     expect(screen.getByRole('button', { name: '예, 옮기고 로그인' })).toBeVisible();
+    expect(screen.getByRole('combobox')).toHaveValue('google');
   });
 });

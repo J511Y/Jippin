@@ -1,4 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { createServerClient } from '@supabase/ssr';
+
+import { supabaseAnonKey, supabaseUrl } from '@/lib/supabase/env';
 
 /**
  * 보호 경로 미인증 가드 (CMP-529, CMP-557, CMP-564, CMP-571).
@@ -14,11 +17,9 @@ import { NextResponse, type NextRequest } from 'next/server';
  *   - 본 가드는 쿠키 존재 여부만 확인한다. 실제 검증(서명, 만료)은 백엔드(`apps/api`) 책임이며,
  *     보호 경로 진입 후 백엔드 호출이 401 을 돌려주면 클라이언트가 로그인으로 유도한다.
  *
- * 인증 쿠키 이름은 백엔드 AUTH 모듈과 합의된 `jippin_session` 을 가정한다
- * (env `AUTH_COOKIE_NAME` 으로 override 가능).
+ * Phase 1 Supabase 전환 후 보호 경로는 `jippin_session` legacy cookie 가 아니라
+ * Supabase SSR auth cookie 를 정본으로 삼는다.
  */
-
-const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME ?? 'jippin_session';
 
 /**
  * 쿠키 없이도 접근 가능한 `/app/*` 하위 경로 (prefix 매칭).
@@ -52,15 +53,47 @@ function isProtected(pathname: string): boolean {
   return PROTECTED_APP_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
-export function proxy(request: NextRequest) {
+function isAnonymousSupabaseUser(user: { is_anonymous?: boolean; app_metadata?: unknown } | null): boolean {
+  if (!user) return false;
+  if (user.is_anonymous === true) return true;
+  const metadata = user.app_metadata;
+  return (
+    typeof metadata === 'object' &&
+    metadata !== null &&
+    'provider' in metadata &&
+    metadata.provider === 'anonymous'
+  );
+}
+
+export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
   if (!isProtected(pathname)) {
     return NextResponse.next();
   }
 
-  if (request.cookies.has(AUTH_COOKIE_NAME)) {
-    return NextResponse.next();
+  const response = NextResponse.next();
+  const supabase = createServerClient(supabaseUrl(), supabaseAnonKey(), {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        for (const { name, value } of cookiesToSet) {
+          request.cookies.set(name, value);
+        }
+        for (const { name, value, options } of cookiesToSet) {
+          response.cookies.set(name, value, options);
+        }
+      },
+    },
+  });
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (user && !isAnonymousSupabaseUser(user)) {
+    return response;
   }
 
   const loginUrl = request.nextUrl.clone();

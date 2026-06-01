@@ -22,14 +22,6 @@ function CallbackDoneRunner(): null {
 
   useEffect(() => {
     clearOAuthGuard();
-    if (searchParams.get('merge') === 'failed') {
-      try {
-        window.sessionStorage.setItem('jippin_merge_hint', 'failed');
-      } catch {
-        // Best-effort hint for the destination page.
-      }
-    }
-
     const nextRaw = searchParams.get('next');
     router.replace(nextRaw && isSafeNext(nextRaw) ? nextRaw : DEFAULT_NEXT);
   }, [router, searchParams]);

@@ -8,6 +8,7 @@ import { encodeOAuthFlowContext } from '@/lib/supabase/flow-context';
 import {
   isUiProvider,
   toSupabaseProviderId,
+  type UiProvider,
   type SupabaseProvider,
 } from '@/lib/supabase/providers';
 
@@ -16,7 +17,9 @@ export const runtime = 'nodejs';
 
 const FLOW_CONTEXT_COOKIE = 'jippin_oauth_provider';
 const MERGE_INTENT_COOKIE = 'jippin_merge_intent';
+const PENDING_ANONYMOUS_COOKIE = 'jippin_pending_anonymous_user_id';
 const CALLBACK_COOKIE_MAX_AGE_SECONDS = 300;
+const PENDING_ANONYMOUS_MAX_AGE_SECONDS = 10 * 60;
 const VALID_INTENTS = ['link', 'signin', 'link-merge'] as const;
 
 type Intent = (typeof VALID_INTENTS)[number];
@@ -47,14 +50,22 @@ function callbackUrl(request: NextRequest): string {
   return callback.toString();
 }
 
+function anonymousUserIdFromRequest(request: NextRequest): string | null {
+  return (
+    request.nextUrl.searchParams.get('anonymous_user_id') ??
+    request.cookies.get('jippin_anonymous_user_id')?.value ??
+    null
+  );
+}
+
 async function enqueueMergeIntent(
   request: NextRequest,
   provider: SupabaseProvider,
 ): Promise<string> {
-  const anonymousUserId =
-    request.nextUrl.searchParams.get('anonymous_user_id') ??
-    request.cookies.get('jippin_anonymous_user_id')?.value ??
-    null;
+  const anonymousUserId = anonymousUserIdFromRequest(request);
+  if (!anonymousUserId) {
+    throw new Error('anonymous_user_id is required for merge intent enqueue');
+  }
   const response = await fetch(`${apiBaseUrl()}/auth/anon-merge-intents`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -95,15 +106,31 @@ function expireCallbackCookie(response: NextResponse, name: string): void {
   response.cookies.set(name, '', { path: '/auth/callback', maxAge: 0 });
 }
 
+function setPendingAnonymousCookie(response: NextResponse, anonymousUserId: string): void {
+  response.cookies.set({
+    name: PENDING_ANONYMOUS_COOKIE,
+    value: anonymousUserId,
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: '/auth',
+    maxAge: PENDING_ANONYMOUS_MAX_AGE_SECONDS,
+  });
+}
+
 function redirectToFailure(
   request: NextRequest,
   response: NextResponse,
   reason: string,
+  context?: { provider?: UiProvider; next?: string | null },
 ): NextResponse {
   expireCallbackCookie(response, FLOW_CONTEXT_COOKIE);
   expireCallbackCookie(response, MERGE_INTENT_COOKIE);
   const failure = new URL('/auth/failure', siteOriginFromRequest(request));
   failure.searchParams.set('reason', reason);
+  if (context?.provider) failure.searchParams.set('provider', context.provider);
+  const safeNext = resolveSafeNext(context?.next ?? request.nextUrl.searchParams.get('next'), '/');
+  if (safeNext !== '/') failure.searchParams.set('next', safeNext);
   response.headers.set('Location', failure.toString());
   return new NextResponse(null, { status: 302, headers: response.headers });
 }
@@ -128,12 +155,26 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // The final return is always a real 302/JSON response carrying this accumulator's headers.
   const response = new NextResponse(null);
   const supabase = createRouteHandlerClient({ request, response });
+  const anonymousUserId = anonymousUserIdFromRequest(request);
 
   setCallbackCookie(response, FLOW_CONTEXT_COOKIE, encodeOAuthFlowContext(provider));
+  if (anonymousUserId) {
+    setPendingAnonymousCookie(response, anonymousUserId);
+  }
 
   if (intent === 'link-merge') {
-    const signedToken =
-      url.searchParams.get('signed_token') ?? (await enqueueMergeIntent(request, provider));
+    let signedToken: string;
+    try {
+      signedToken = await enqueueMergeIntent(request, provider);
+    } catch (error) {
+      console.warn('[auth/oauth/start] merge intent enqueue failed', {
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+      return redirectToFailure(request, response, 'merge_unavailable', {
+        provider: providerRaw,
+        next: url.searchParams.get('next'),
+      });
+    }
     setCallbackCookie(response, MERGE_INTENT_COOKIE, signedToken);
     await supabase.auth.signOut();
   }
@@ -154,10 +195,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         });
 
   if (result.error || !result.data?.url) {
+    const reason =
+      result.error?.code === 'identity_already_exists'
+        ? 'identity_already_exists'
+        : 'oauth_init_failed';
     console.warn('[auth/oauth/start] oauth url generation failed', {
-      code: result.error?.code ?? 'oauth_init_failed',
+      code: result.error?.code ?? reason,
     });
-    return redirectToFailure(request, response, 'oauth_init_failed');
+    return redirectToFailure(request, response, reason, {
+      provider: providerRaw,
+      next: url.searchParams.get('next'),
+    });
   }
 
   return redirectWithAccumulatedCookies(response, result.data.url);

@@ -3,7 +3,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMemo, useState } from 'react';
 
-import { apiBaseUrl } from '@/lib/api-base-url';
 import { getOrCreateAnonymousUserId } from '@/lib/anonymous-user';
 import { isSafeNext } from '@/lib/safe-redirect';
 import { UI_PROVIDERS, type UiProvider } from '@/lib/supabase/providers';
@@ -25,6 +24,10 @@ function resolveNext(nextPath: string | null | undefined): string {
   return nextPath && isSafeNext(nextPath) ? nextPath : '/';
 }
 
+function mergeIntentEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_AUTH_MERGE_INTENTS_ENABLED === 'true';
+}
+
 export function IdentityAlreadyExistsModal({
   open,
   onOpenChange,
@@ -35,32 +38,15 @@ export function IdentityAlreadyExistsModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const safeNext = useMemo(() => resolveNext(nextPath), [nextPath]);
+  const canMerge = mergeIntentEnabled();
 
   async function continueWithMerge() {
+    if (!canMerge) return;
     setIsSubmitting(true);
     setErrorMessage(null);
 
     try {
       const anonymousUserId = await getOrCreateAnonymousUserId();
-      const response = await fetch(`${apiBaseUrl()}/auth/anon-merge-intents`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          anonymous_user_id: anonymousUserId,
-          provider,
-          next: safeNext,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`이전 요청 생성 실패 (${response.status})`);
-      }
-
-      const data = (await response.json()) as { signed_token?: string };
-      if (!data.signed_token) {
-        throw new Error('이전 요청 응답에 signed_token 이 없습니다.');
-      }
-
       try {
         window.sessionStorage.setItem('jippin_oauth_in_progress', '1');
       } catch {
@@ -70,7 +56,6 @@ export function IdentityAlreadyExistsModal({
       const url = new URL('/auth/oauth/start', window.location.origin);
       url.searchParams.set('provider', provider);
       url.searchParams.set('intent', 'link-merge');
-      url.searchParams.set('signed_token', data.signed_token);
       url.searchParams.set('anonymous_user_id', anonymousUserId);
       url.searchParams.set('next', safeNext);
       window.location.assign(url.toString());
@@ -113,6 +98,12 @@ export function IdentityAlreadyExistsModal({
           </label>
 
           {errorMessage ? <p className="text-sm text-red-600">{errorMessage}</p> : null}
+          {!canMerge ? (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              기존 계정으로 데이터 이전 기능은 서버 API 준비 후 활성화됩니다. 지금은 다른
+              계정으로 로그인하거나 잠시 후 다시 시도해 주세요.
+            </p>
+          ) : null}
 
           <div className="flex justify-end gap-2">
             <Dialog.Close asChild>
@@ -127,7 +118,7 @@ export function IdentityAlreadyExistsModal({
             <button
               type="button"
               onClick={() => void continueWithMerge()}
-              disabled={isSubmitting}
+              disabled={isSubmitting || !canMerge}
               className="rounded-md bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
             >
               {isSubmitting ? '준비 중...' : '예, 옮기고 로그인'}

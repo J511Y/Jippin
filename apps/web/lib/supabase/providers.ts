@@ -5,8 +5,15 @@ export const UI_PROVIDERS: readonly UiProvider[] = ['kakao', 'naver', 'google'];
 
 const MAP: Record<UiProvider, SupabaseProvider> = {
   google: 'google',
-  kakao: 'kakao',
+  kakao: 'custom:kakao',
   naver: 'custom:naver',
+};
+
+const REVERSE_MAP: Record<SupabaseProvider, UiProvider> = {
+  google: 'google',
+  kakao: 'kakao',
+  'custom:kakao': 'kakao',
+  'custom:naver': 'naver',
 };
 
 export function isUiProvider(value: string | null | undefined): value is UiProvider {
@@ -26,4 +33,20 @@ export function isSupabaseProvider(
 
 export function toSupabaseProviderId(ui: UiProvider): SupabaseProvider {
   return MAP[ui];
+}
+
+export function toUiProviderId(provider: SupabaseProvider): UiProvider {
+  return REVERSE_MAP[provider];
+}
+
+export function isKakaoProvider(
+  provider: SupabaseProvider | null | undefined,
+): provider is Extract<SupabaseProvider, 'kakao' | 'custom:kakao'> {
+  return provider === 'kakao' || provider === 'custom:kakao';
+}
+
+export function requiresInternalTerms(
+  provider: SupabaseProvider | null | undefined,
+): provider is Extract<SupabaseProvider, 'google' | 'custom:naver'> {
+  return provider === 'google' || provider === 'custom:naver';
 }

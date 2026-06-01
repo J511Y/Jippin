@@ -4,10 +4,15 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { apiBaseUrl } from '@/lib/api-base-url';
 import { isSafeNext, resolveSafeNext } from '@/lib/safe-redirect';
 import { siteOriginFromRequest } from '@/lib/site-url';
-import { isOAuthFlowContextStale } from '@/lib/supabase/flow-context';
+import { isOAuthFlowContextStale, parseOAuthFlowContext } from '@/lib/supabase/flow-context';
 import { detectNewlyLinkedProvider } from '@/lib/supabase/identities';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
-import type { SupabaseProvider } from '@/lib/supabase/providers';
+import {
+  isKakaoProvider,
+  requiresInternalTerms,
+  toUiProviderId,
+  type SupabaseProvider,
+} from '@/lib/supabase/providers';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -25,6 +30,8 @@ const KNOWN_REASONS = new Set([
   'identity_already_exists',
   'oauth_init_failed',
   'oauth_guard_stale',
+  'merge_commit_failed',
+  'merge_unavailable',
 ]);
 
 function origin(request: NextRequest): string {
@@ -50,6 +57,10 @@ function sanitizeFailureBase(request: NextRequest): string {
   }
 }
 
+function kakaoAuditEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_AUTH_KAKAO_SYNC_AUDIT_ENABLED === 'true';
+}
+
 export function expireCallbackCookies(response: NextResponse): NextResponse {
   for (const name of CALLBACK_COOKIES) {
     response.cookies.set(name, '', { path: '/auth/callback', maxAge: 0 });
@@ -66,10 +77,14 @@ function failureRedirect(
   request: NextRequest,
   reason: string | null | undefined,
   seed: NextResponse = new NextResponse(null),
+  context?: { next?: string | null; provider?: SupabaseProvider | null },
 ): NextResponse {
   const target = new URL(sanitizeFailureBase(request), origin(request));
   target.search = '';
   target.searchParams.set('reason', sanitizeReason(reason));
+  const safeNext = resolveSafeNext(context?.next ?? request.nextUrl.searchParams.get('next'), '/');
+  if (safeNext !== '/') target.searchParams.set('next', safeNext);
+  if (context?.provider) target.searchParams.set('provider', toUiProviderId(context.provider));
   return expireCallbackCookies(redirectFromSeed(seed, target));
 }
 
@@ -89,8 +104,12 @@ async function persistKakaoSyncConsent(
   session: Session,
   linkedProvider: Extract<SupabaseProvider, 'kakao' | 'custom:kakao'>,
 ): Promise<void> {
+  if (!kakaoAuditEnabled()) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 750);
   await fetch(`${apiBaseUrl()}/auth/terms/kakao-sync`, {
     method: 'POST',
+    signal: controller.signal,
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${session.access_token}`,
@@ -101,7 +120,13 @@ async function persistKakaoSyncConsent(
       provider_access_token: session.provider_token ?? null,
       provider_refresh_token: session.provider_refresh_token ?? null,
     }),
-  });
+  }).finally(() => clearTimeout(timeout));
+}
+
+function termsRedirect(request: NextRequest, seed: NextResponse, safeNext: string): NextResponse {
+  const target = new URL('/auth/terms', origin(request));
+  target.searchParams.set('next', safeNext);
+  return expireCallbackCookies(redirectFromSeed(seed, target));
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -111,11 +136,25 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const nextRaw = url.searchParams.get('next');
   const safeNext = nextRaw && isSafeNext(nextRaw) ? nextRaw : defaultNext();
   const intendedProviderCookie = request.cookies.get('jippin_oauth_provider')?.value ?? null;
+  const flowContext = parseOAuthFlowContext(intendedProviderCookie);
 
-  if (errorCode) return failureRedirect(request, errorCode);
-  if (!code) return failureRedirect(request, 'missing_code');
+  if (errorCode) {
+    return failureRedirect(request, errorCode, undefined, {
+      next: nextRaw,
+      provider: flowContext?.provider,
+    });
+  }
+  if (!code) {
+    return failureRedirect(request, 'missing_code', undefined, {
+      next: nextRaw,
+      provider: flowContext?.provider,
+    });
+  }
   if (isOAuthFlowContextStale(intendedProviderCookie)) {
-    return failureRedirect(request, 'oauth_guard_stale');
+    return failureRedirect(request, 'oauth_guard_stale', undefined, {
+      next: nextRaw,
+      provider: flowContext?.provider,
+    });
   }
 
   const seed = new NextResponse(null);
@@ -123,7 +162,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
   if (error || !data?.session) {
-    return failureRedirect(request, error?.code ?? 'exchange_failed', seed);
+    return failureRedirect(request, error?.code ?? 'exchange_failed', seed, {
+      next: nextRaw,
+      provider: flowContext?.provider,
+    });
   }
 
   const mergeIntentCookie = request.cookies.get('jippin_merge_intent')?.value ?? null;
@@ -139,15 +181,23 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   const linkedProvider = detectNewlyLinkedProvider(data.session.user, intendedProviderCookie);
-  if (linkedProvider === 'kakao' || linkedProvider === 'custom:kakao') {
+  if (isKakaoProvider(linkedProvider)) {
     await persistKakaoSyncConsent(data.session, linkedProvider).catch(() => undefined);
+  }
+
+  if (mergeStatus === 'commit_failed') {
+    return failureRedirect(request, 'merge_commit_failed', seed, {
+      next: safeNext,
+      provider: linkedProvider,
+    });
+  }
+
+  if (requiresInternalTerms(linkedProvider)) {
+    return termsRedirect(request, seed, safeNext);
   }
 
   const done = new URL('/auth/callback-done', origin(request));
   done.searchParams.set('next', safeNext);
-  if (mergeStatus === 'commit_failed') {
-    done.searchParams.set('merge', 'failed');
-  }
 
   return expireCallbackCookies(redirectFromSeed(seed, done));
 }
