@@ -104,13 +104,42 @@ jobs:
         shell: bash
         run: echo "EXPIRES_AT=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
 
-      - name: Create Neon Branch
+      - name: Pre-flight Neon capacity check
         if: steps.guard.outputs.skip == 'false'
+        id: capacity
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+          # Neon free-tier hard cap is 10 branches. Override via repo variable
+          # `NEON_BRANCH_CAP` when on a paid plan with a higher limit.
+          NEON_BRANCH_CAP: ${{ vars.NEON_BRANCH_CAP }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cap="${NEON_BRANCH_CAP:-10}"
+          # `jq` is preinstalled on ubuntu-latest runners.
+          branches_json=$(curl -fsS \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            -H "Accept: application/json" \
+            "https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}/branches")
+          count=$(echo "${branches_json}" | jq '.branches | length')
+          echo "branch_count=${count}" >> "$GITHUB_OUTPUT"
+          echo "branch_cap=${cap}" >> "$GITHUB_OUTPUT"
+          if [[ "${count}" -ge "${cap}" ]]; then
+            echo "::warning::Neon project at branch capacity (${count} of ${cap}). Skipping preview branch creation for this PR — preview migration validation paused until a slot frees up or the plan is upgraded."
+            echo "at_capacity=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Neon branch usage: ${count}/${cap}."
+            echo "at_capacity=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Neon Branch
+        # CMP-594: only call the create-branch action when the project is below
+        # its branch cap (verified via Neon API above). This means a failure
+        # here is a real misconfiguration (bad API key / project id / parent
+        # branch / Neon outage) and we want the job to fail loud, not silently.
+        if: steps.guard.outputs.skip == 'false' && steps.capacity.outputs.at_capacity == 'false'
         id: create_neon_branch
-        # CMP-594: free-tier branch limit (10) returns HTTP 422; degrade gracefully
-        # instead of failing the whole job so unrelated PR checks stay green. The
-        # alembic + PR-comment steps below skip when db_url is unset.
-        continue-on-error: true
         uses: neondatabase/create-branch-action@v6
         with:
           project_id: ${{ vars.NEON_PROJECT_ID }}
@@ -118,12 +147,6 @@ jobs:
           parent_branch: ${{ needs.setup.outputs.parent_branch }}
           api_key: ${{ secrets.NEON_API_KEY }}
           expires_at: ${{ env.EXPIRES_AT }}
-
-      - name: Warn if Neon branch creation failed
-        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outputs.db_url == ''
-        shell: bash
-        run: |
-          echo "::warning::Neon preview branch 생성이 실패했거나 db_url 이 비어 있습니다 (free-tier 한계 또는 일시 오류). preview migration / PR 코멘트 단계를 건너뜁니다."
 
       - uses: actions/checkout@v4
         if: steps.guard.outputs.skip == 'false'
