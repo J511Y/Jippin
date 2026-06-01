@@ -160,6 +160,27 @@ describe('/auth/callback route', () => {
 });
 
 describe('/auth/oauth/start BFF', () => {
+  it('returns a real 302 with flow cookies before provider redirect', async () => {
+    supabaseMocks.signInWithOAuth.mockResolvedValueOnce({
+      data: { url: 'https://supabase.test/auth/v1/authorize?provider=google' },
+      error: null,
+    });
+
+    const { GET } = await import('@/app/auth/oauth/start/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/oauth/start?provider=google&intent=signin'),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      'https://supabase.test/auth/v1/authorize?provider=google',
+    );
+    expect(response.headers.get('x-middleware-next')).toBeNull();
+    expect(cookieHeader(response)).toContain('jippin_oauth_provider=google');
+    expect(cookieHeader(response)).toContain('Path=/auth/callback');
+    expect(cookieHeader(response)).toContain('Max-Age=300');
+  });
+
   it('sets merge intent cookie from signed_token for link-merge starts', async () => {
     supabaseMocks.signOut.mockResolvedValueOnce({ error: null });
     supabaseMocks.signInWithOAuth.mockResolvedValueOnce({

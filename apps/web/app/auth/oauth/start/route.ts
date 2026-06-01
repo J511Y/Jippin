@@ -123,6 +123,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const intentRaw = url.searchParams.get('intent');
   const intent: Intent = isIntent(intentRaw) ? intentRaw : 'link';
   const provider = toSupabaseProviderId(providerRaw);
+  // Route Handler accumulator only. Do not use NextResponse.next() here; that is middleware-only.
+  // The final return is always a real 302/JSON response carrying this accumulator's headers.
   const response = new NextResponse(null);
   const supabase = createRouteHandlerClient({ request, response });
 
