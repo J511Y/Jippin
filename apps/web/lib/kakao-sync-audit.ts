@@ -6,9 +6,28 @@
  *   - `docs/adr/0003-anon-user-and-sso.md` §2 — Kakao Sync 약관은 `terms_consents.
  *     source = 'kakao_sync'` 로 별도 저장. 내부 약관 화면은 Google/Naver 만 통과.
  *
+ * **id_token 검증 위임 봉인 (round-11 항목 1 보강 / CMP-577 2차 리뷰).** Supabase
+ * Auth 가 Kakao 를 social provider (native `kakao` 또는 Custom OIDC `custom:kakao`)
+ * 로 처리하므로, 웹/API 레이어는 Kakao 의 `id_token` 을 **직접 파싱하거나 캐싱하지
+ * 않는다**. id_token 의 issuer/audience/expiry/signature 검증, nonce 매칭, JWKS
+ * rotation 추적은 모두 Supabase Auth 서버 책임이다. 본 헬퍼의 input 인터페이스
+ * (`KakaoSyncAuditInput`) 에는 id_token 류 필드 (`id_token`, `oidc_token`,
+ * `raw_kakao_payload`) 가 **존재하지 않으며**, FastAPI 의 `/auth/terms/kakao-sync`
+ * 라우트로 보내는 본 payload 에도 절대 포함되지 않는다 (R3 + 회귀 방지 테스트로
+ * 봉인).
+ *
+ * **허용 경로 (round-11 항목 1 보강).** 본 헬퍼가 FastAPI 와 통신하는 정본 흐름은
+ * 단 하나:
+ *   `(1) Supabase callback Route Handler 가 exchangeCodeForSession 으로 session 획득`
+ *   → `(2) session.access_token` (Supabase 가 발급한 자체 JWT) 을 본 헬퍼의
+ *       `supabaseAccessToken` 으로 전달`
+ *   → `(3) Authorization: Bearer <supabaseAccessToken>` 헤더로 FastAPI 호출`.
+ * Kakao 의 `id_token` 을 Bearer 로 쓰거나 본문에 직접 싣는 경로는 금지 — FastAPI 는
+ * Supabase JWKS 만으로 호출자 인증을 수행한다.
+ *
  * 세 가지 회귀 방지 책임:
  *   - R3: callback payload 정본은 `provider_access_token` 이다. `id_token` 은 SDK 가
- *         안정적으로 노출하지 않으므로 보내지 않는다.
+ *         안정적으로 노출하지 않으며, 본 모듈은 그 값을 받지도 보내지도 않는다.
  *   - R13: backend 의 4xx/5xx 응답이 silent success 로 처리돼 `terms_consents(source='kakao_sync')`
  *         가 누락되는 회귀를 막기 위해 `response.ok` 를 명시 검증한다. 4xx/5xx 는
  *         throw — 호출부(callback Route Handler) 가 Sentry alert + reconcile 잡 트리거.
@@ -49,7 +68,11 @@ export interface KakaoSyncAuditInput {
   supabaseAccessToken: string;
   /**
    * provider OAuth access token. Supabase session.provider_token.
-   * id_token 이 아니다 (R3 / runbook §4.5.2.2).
+   * id_token 이 아니다 (R3 / runbook §4.5.2.2). 본 필드는 Kakao OpenAPI
+   * (예: `/v2/user/scopes`) 를 backend 가 호출할 때 쓰는 *access* token 이며,
+   * id_token (OIDC subject claim 보유 JWT) 과는 다르다. backend 도 access_token
+   * 의 issuer 를 직접 검증하지 않고 (Kakao 가 OAuth 표준상 access_token 자체
+   * 검증 엔드포인트가 없다), 응답 본문의 200/4xx 만으로 판정한다.
    * Custom OIDC provider 가 access_token 을 노출하지 않으면 null.
    */
   providerAccessToken: string | null;

@@ -26,6 +26,14 @@
  * 환경변수 미지정 시 fallback 은 `'kakao'`. 콘솔 트랙이 Custom 경로를 선택했음에도
  * 환경변수를 잊은 채 라이브 진입하는 케이스는 §4.2.4 의 `provider_not_enabled` /
  * `redirect_uri_mismatch` UX 매트릭스로 Sentry alert 가 떨어진다.
+ *
+ * **id_token 검증 위임 봉인 (round-11 항목 1 보강).** native `kakao` 든 Custom OIDC
+ * `custom:kakao` 든, Kakao 의 `id_token` 검증 (issuer/audience/expiry/signature/nonce/
+ * JWKS rotation) 은 **Supabase Auth 가 단독 책임**. 본 매핑이 가리키는 provider 가
+ * `custom:` prefix 라고 해서 웹/API 레이어가 OIDC discovery 나 id_token 파싱을
+ * 직접 수행하지 않는다 — Supabase 콘솔의 Custom OIDC discovery URL / JWKS URL
+ * 설정 (§4.2.3) 이 SSOT 다. 본 매핑 export 는 단지 콘솔 등록 id 와 SDK 호출 id 를
+ * 정합시키는 라벨이며, id_token 검증 책임 경계와는 무관함을 명시한다.
  */
 
 export type UiProvider = 'google' | 'kakao' | 'naver';

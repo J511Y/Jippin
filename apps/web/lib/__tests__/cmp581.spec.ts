@@ -166,6 +166,52 @@ describe('CMP-581 kakao-sync-audit (R3, R13)', () => {
       expect(caught.responseBody).toBe('upstream timeout');
     }
   });
+
+  it('round-11 item 1: stale id_token fields on caller input never leak into the request body', async () => {
+    // Defence in depth — even if a careless caller spreads a Kakao SDK payload that
+    // still carries id_token / oidc_token / raw_kakao_payload, the audit helper must
+    // only forward the explicit fields it owns. Supabase Auth is the single id_token
+    // verifier; the web/API layer never parses or forwards id_token.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    // The cast forces a careless caller's payload through the helper. The
+    // structural-type fence below (`Keys` test) enforces the *type* boundary —
+    // this test enforces the *runtime* boundary by proving the helper only
+    // serializes its declared fields even when extras are present.
+    const dirtyInput = {
+      ...input,
+      id_token: 'kakao-oidc-jwt',
+      oidc_token: 'kakao-oidc-jwt',
+      raw_kakao_payload: { id_token: 'kakao-oidc-jwt' },
+    } as unknown as KakaoSyncAuditInput;
+    await persistKakaoSyncConsent(dirtyInput, {
+      apiBaseUrl: 'http://api.test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body).not.toHaveProperty('id_token');
+    expect(body).not.toHaveProperty('oidc_token');
+    expect(body).not.toHaveProperty('raw_kakao_payload');
+    // And the allowed path is preserved.
+    expect(body.provider_access_token).toBe('kakao-oauth-access-token');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer supabase-jwt');
+  });
+
+  it('round-11 item 1: KakaoSyncAuditInput type does not declare any id_token-like field', () => {
+    // Compile-time fence: this block intentionally lists every forbidden key and
+    // requires TypeScript to reject it. If a future refactor adds id_token to the
+    // interface, this test fails to compile.
+    type Keys = keyof KakaoSyncAuditInput;
+    const _forbidden: ReadonlyArray<Exclude<'id_token' | 'oidc_token' | 'idToken' | 'raw_kakao_payload', Keys>> = [
+      'id_token',
+      'oidc_token',
+      'idToken',
+      'raw_kakao_payload',
+    ];
+    expect(_forbidden).toHaveLength(4);
+  });
 });
 
 describe('CMP-581 anonymous-gate single-flight (round-11 race)', () => {
