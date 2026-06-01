@@ -32,14 +32,14 @@ describe('Naver Custom OAuth2 adapter — OAuth2 (not OIDC)', () => {
     }
   });
 
-  it('env var keys document NAVER_* names only (no live values)', () => {
+  it('env var keys document NAVER_OAUTH_* names only (no live values, AGENTS.md §4.7 정합)', () => {
     expect(NAVER_ENV_KEYS).toEqual({
-      clientId: 'NAVER_CLIENT_ID',
-      clientSecret: 'NAVER_CLIENT_SECRET',
-      authorizeUrl: 'NAVER_AUTHORIZE_URL',
-      tokenUrl: 'NAVER_TOKEN_URL',
-      userInfoUrl: 'NAVER_USERINFO_URL',
-      scope: 'NAVER_SCOPE'
+      clientId: 'NAVER_OAUTH_CLIENT_ID',
+      clientSecret: 'NAVER_OAUTH_CLIENT_SECRET',
+      authorizeUrl: 'NAVER_OAUTH_AUTHORIZE_URL',
+      tokenUrl: 'NAVER_OAUTH_TOKEN_URL',
+      userInfoUrl: 'NAVER_OAUTH_USERINFO_URL',
+      scope: 'NAVER_OAUTH_SCOPE'
     });
   });
 
@@ -47,12 +47,12 @@ describe('Naver Custom OAuth2 adapter — OAuth2 (not OIDC)', () => {
     expect(NAVER_DEFAULT_SCOPE).toBe('account');
   });
 
-  it('resolveNaverScope falls back to the default when NAVER_SCOPE is unset', () => {
+  it('resolveNaverScope falls back to the default when NAVER_OAUTH_SCOPE is unset', () => {
     expect(resolveNaverScope({})).toBe('account');
   });
 
-  it('resolveNaverScope honors NAVER_SCOPE env override (post biz-app approval)', () => {
-    expect(resolveNaverScope({ NAVER_SCOPE: 'account,email' })).toBe(
+  it('resolveNaverScope honors NAVER_OAUTH_SCOPE env override (post biz-app approval)', () => {
+    expect(resolveNaverScope({ NAVER_OAUTH_SCOPE: 'account,email' })).toBe(
       'account,email'
     );
   });
@@ -64,9 +64,9 @@ describe('Naver Custom OAuth2 adapter — OAuth2 (not OIDC)', () => {
 
   it('resolveNaverEndpoints honors env overrides (Naver-prod relocation drill)', () => {
     const result = resolveNaverEndpoints({
-      NAVER_AUTHORIZE_URL: 'https://nid.naver.com/oauth2.0/authorize?v=2',
-      NAVER_TOKEN_URL: 'https://nid.naver.com/oauth2.0/token?v=2',
-      NAVER_USERINFO_URL: 'https://openapi.naver.com/v1/nid/me?v=2'
+      NAVER_OAUTH_AUTHORIZE_URL: 'https://nid.naver.com/oauth2.0/authorize?v=2',
+      NAVER_OAUTH_TOKEN_URL: 'https://nid.naver.com/oauth2.0/token?v=2',
+      NAVER_OAUTH_USERINFO_URL: 'https://openapi.naver.com/v1/nid/me?v=2'
     });
     expect(result.authorizeUrl).toBe(
       'https://nid.naver.com/oauth2.0/authorize?v=2'

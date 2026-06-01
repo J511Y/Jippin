@@ -37,7 +37,7 @@
 | **클라이언트 라이브러리** | `@supabase/supabase-js` + `@supabase/ssr` (Next.js 16 App Router · Edge proxy / Route Handler / Server Component cookie 통합). |
 | **익명 흐름** | `supabase.auth.signInAnonymously()` — 페이지 첫 진입 시 세션이 없으면 1회 호출. Supabase user `id` 가 익명/실명 user 의 단일 키. **단계적 폐기.** 기존 `localStorage.jippin_anonymous_user_id` 와 `POST /auth/anonymous-users` 는 **ADR-0003 §2 supersede 가 Accepted 되기 전까지 코드에서 제거하지 않는다** (§9 Phase 표 / [§6 Phase Gate](#6-트랙-간-의존--연결점) 참조). Phase 1 에서는 dual-write 로 양쪽을 동시에 갱신하고 도면/리포트 claim 경로를 끊지 않는다. |
 | **전환 시점 CTA** | 익명 세션 존재 시 1) `supabase.auth.linkIdentity({ provider })` 시도 → 2) 실패(provider identity 가 다른 user 에 이미 연결)면 [§4.2.2 fallback ladder](#422-linkidentity-실패-fallback) 진입: 사용자에게 "익명 데이터를 기존 계정으로 이전하시겠습니까?" 명시 confirm → 수락 시 익명 데이터 merge 큐 enqueue + `supabase.auth.signOut()` → `signInWithOAuth`. 익명 세션이 아닌 비로그인 진입은 곧바로 `signInWithOAuth({ provider, options: { redirectTo } })`. 두 경로 모두 Supabase 가 hosted login page / provider redirect 를 owner 로 가진다. |
-| **OAuth provider** | UI 노출 정본은 `google`, `kakao`, `naver` (ADR-0003 봉인). Supabase native = `google` 만. Kakao / Naver 는 Supabase Custom OAuth (OIDC) 로 등록하고 SDK 호출 시 `custom:<id>` 식별자로 매핑한다 — UI provider id → Supabase provider id 변환은 [§4.2.3 provider mapping](#423-provider-id-매핑) 표 단일 SSOT 가 owner. |
+| **OAuth provider** | UI 노출 정본은 `google`, `kakao`, `naver` (ADR-0003 봉인). Supabase native = `google` + `kakao` (Supabase Auth 가 Kakao 를 built-in provider 로 지원). **Naver 만** Supabase Custom OAuth Provider 의 **OAuth2 모드 (not OIDC)** 로 등록하고 SDK 호출 시 `custom:naver` 식별자로 매핑한다 — UI provider id → Supabase provider id 변환은 [§4.2.3 provider mapping](#423-provider-id-매핑) 표 단일 SSOT 가 owner. Naver = OAuth2 봉인의 근거는 [§4.3.1](#431-naver--custom-oauth2-not-oidc-봉인-cmp-584). |
 | **OAuth callback route** | provider redirect URL 은 `/auth/success` 가 아니라 **`/auth/callback?next=<원래 목적지>`**. 콜백 Route Handler 가 `exchangeCodeForSession(code)` 로 PKCE 코드를 세션 쿠키로 교환한 뒤 `next` 로 302. **failure redirect 는 query 비상속 fresh URL + sanitize 된 `reason` 만** — `?code=…` 가 `/auth/failure` URL / log / Referer 에 절대 남지 않게 한다. merge intent 쿠키 `jippin_merge_intent` 가 있으면 commit 후 1회용 expire. Supabase 콘솔 redirect allow list 도 `/auth/callback` 기준으로 등록한다 ([§4.7](#47-oauth-callback-route--exchangecodeforsession)). |
 | **FastAPI 호출** | `Authorization: Bearer <session.access_token>` 헤더 주입. 자체 refresh 인터셉터 폐기 — Supabase SDK 의 토큰 자동 갱신을 신뢰. **API 측 anonymous 거부 계약.** Conversion-only 엔드포인트(상담 저장 / 리드 / 리포트 발급)는 token 의 `is_anonymous` claim 이 `false` 임을 강제하거나 backend 측 user state 로 거부한다 ([§4.4 anonymous gating contract](#44-anonymous-gating-contract-conversion-only-엔드포인트)). |
 | **Edge proxy 가드** | `proxy.ts` 는 `jippin_session` 쿠키 대신 `@supabase/ssr` 의 `createServerClient` 로 세션을 읽고, anonymous user 도 비보호 경로(`/app/pre-review`)에 들어올 수 있게 한다. |
@@ -69,16 +69,18 @@
 
 ## 2. 패키지 / 디렉터리 도입
 
-### 2.1 의존성
+### 2.1 의존성 (Phase 1 (a) 자식 이슈 설치 예정 — 본 절은 설계 정본)
 
-`apps/web/package.json` `dependencies` 에 추가:
+> **상태 (review item 5 정합).** 본 절은 **설계 의도** 이며 `apps/web/package.json` 에 두 패키지가 아직 추가되지 않았다. 실제 install 은 Phase 1 (a) 자식 이슈 (Supabase 클라이언트 도입 / SSR cookie adapter — CMP-580 계열) 에서 수행한다. 본 runbook 의 §2.2 / §4.1 / §4.2 의 의사 코드는 모두 본 패키지가 설치된 시점을 가정한 설계이며, Phase 1 (e) 코드 (provider 화이트리스트 + Naver 어댑터) 는 Supabase SDK 를 직접 호출하지 않으므로 본 패키지 부재와 무관하게 supabaseScopeed pure 모듈로 봉인되어 있다.
+
+`apps/web/package.json` `dependencies` 에 **Phase 1 (a) 시점에** 추가:
 
 ```json
 "@supabase/supabase-js": "^2.45.0",
 "@supabase/ssr": "^0.5.0"
 ```
 
-> 정확한 minor 는 설치 시점에 lockfile 로 봉인한다. Major 만 ^2 / ^0 으로 명시. Next.js 16 App Router 와 `@supabase/ssr` 의 cookie 통합은 v0.5+ 가 안정 라인.
+> 정확한 minor 는 설치 시점에 lockfile 로 봉인한다. Major 만 `^2` / `^0` 으로 명시. Next.js 16 App Router 와 `@supabase/ssr` 의 cookie 통합은 v0.5+ 가 안정 라인. 본 install PR 이 머지되기 전까지는 본 runbook 의 `@supabase/*` import 가 등장하는 코드 블록은 모두 의사 코드로 취급한다.
 
 ### 2.2 신설 SSOT 디렉터리
 
@@ -414,8 +416,8 @@ linkIdentity({ provider }) 실패
 | UI provider (ADR-0003) | Supabase SDK 인자 (`signInWithOAuth` / `linkIdentity` 의 `provider`) | 비고 |
 |---|---|---|
 | `google` | `'google'` (native) | Supabase native. |
-| `kakao` | `'kakao'` (native) — Supabase 가 native 로 추가했는지 콘솔 세팅 트랙이 확인. **없으면 `'custom:kakao'`** 로 fallback. | Kakao Sync 동의 화면을 OAuth 화면에서 표시하려면 콘솔에서 `scope=profile_nickname,profile_image,account_email,gender,birthyear,birthday,terms_of_service` 등 명시적 입력 필요. |
-| `naver` | **`'custom:naver'`** | Supabase 는 Naver native provider 를 제공하지 않으므로 **Custom OAuth Provider 의 OAuth2 모드 (not OIDC)** 로 등록한다 (§4.3.1 / §8 봉인). Naver 는 `id_token` 을 발급하지 않고 OIDC discovery URL (`.well-known/openid-configuration`) 도 노출하지 않으므로 콘솔에서 OIDC 모드로 등록하면 라이브에서 즉시 실패한다. UI / 분석 / 텔레메트리 코드는 여전히 `'naver'` 식별자를 그대로 쓰며, **본 매핑 함수만이 SDK 경계에서 변환** 한다. |
+| `kakao` | `'kakao'` (native) | **Supabase Auth 는 Kakao 를 built-in provider 로 지원** (`Authentication → Providers → Kakao` 패널에서 직접 입력) — Custom OAuth provider 경로로 가지 않는다. Kakao Sync 동의 화면을 OAuth 화면에서 표시하려면 콘솔에서 `scope=profile_nickname,profile_image,account_email,gender,birthyear,birthday,terms_of_service` 등 명시적 입력 필요. |
+| `naver` | **`'custom:naver'`** | Supabase 는 Naver native provider 를 제공하지 않으므로 **Custom OAuth Provider 의 OAuth2 모드 (not OIDC)** 로 등록한다 (§4.3.1 / §8 봉인). Naver 는 `id_token` 을 발급하지 않고 OIDC discovery URL (`.well-known/openid-configuration`) 도 노출하지 않으므로 콘솔에서 OIDC 모드로 등록하면 라이브에서 즉시 실패한다. **SDK 가 받는 canonical provider id 는 `custom:naver` (콘솔 등록 identifier `naver` + Supabase 가 부여하는 `custom:` prefix 의 합).** UI / 분석 / 텔레메트리 코드는 여전히 `'naver'` 식별자를 그대로 쓰며, **본 매핑 함수만이 SDK 경계에서 변환** 한다. |
 
 매핑 함수 서명 (의사 코드):
 
@@ -425,9 +427,9 @@ export type UiProvider = 'google' | 'kakao' | 'naver';
 export type SupabaseProvider = 'google' | 'kakao' | `custom:${string}`;
 
 const MAP: Record<UiProvider, SupabaseProvider> = {
-  google: 'google',
-  kakao:  'kakao',       // Supabase 가 native 미지원이면 'custom:kakao' 로 교체 (콘솔 세팅 트랙 결정).
-  naver:  'custom:naver',
+  google: 'google',         // Supabase native.
+  kakao:  'kakao',          // Supabase native (Auth → Providers → Kakao 패널). custom 경로 없음.
+  naver:  'custom:naver',   // Supabase 가 Naver native 미지원 — Custom OAuth2 (not OIDC).
 };
 
 export function toSupabaseProviderId(ui: UiProvider): SupabaseProvider {
@@ -436,9 +438,9 @@ export function toSupabaseProviderId(ui: UiProvider): SupabaseProvider {
 ```
 
 - 본 매핑을 거치지 않은 raw UI 식별자가 SDK 에 도달하면 `signInWithOAuth({ provider: 'naver' })` 가 Supabase 측에서 invalid provider 로 실패한다.
-- **콘솔 identifier 일치 봉인 (review item 4 new).** `MAP.naver = 'custom:naver'` 의 `naver` 부분은 **Supabase 콘솔의 Custom OIDC Provider 등록 시 identifier 필드값과 정확히 일치** 해야 한다. 콘솔에서 `naver-prod` / `naver_kr` 같은 변형으로 등록하면 SDK 가 `signInWithOAuth({ provider: 'custom:naver' })` 를 호출했을 때 "provider not enabled" 에러가 난다. §8 입력 항목 표가 콘솔 등록 identifier 의 SSOT — 콘솔 세팅 트랙은 이 표의 값으로만 등록한다.
-- Custom Provider 등록 시 콘솔에서 부여하는 identifier 가 `naver` 가 아닌 다른 값으로 결정되면 (불가피한 사유) 본 매핑 함수와 §8 입력 항목 표를 **같은 PR 에서** 한 줄씩 갱신하고 UI 는 손대지 않는다.
-- 라이브 검증 단계에서 카카오 native 지원 여부가 확정되면 `MAP.kakao` 도 한 줄로 교체. Custom 으로 갈 경우 (`custom:kakao`) 도 콘솔 identifier 일치 봉인 적용.
+- **콘솔 identifier 일치 봉인 (review item 4 new).** `MAP.naver = 'custom:naver'` 의 `naver` 부분은 **Supabase 콘솔의 Custom OAuth Provider (OAuth2 모드) 등록 시 identifier 필드값과 정확히 일치** 해야 한다. 콘솔에서 `naver-prod` / `naver_kr` 같은 변형으로 등록하면 SDK 가 `signInWithOAuth({ provider: 'custom:naver' })` 를 호출했을 때 `provider_not_enabled` 에러가 난다. Supabase 가 콘솔 identifier `naver` 에 `custom:` prefix 를 자동으로 prepend 하여 SDK provider id `custom:naver` 를 만든다 — 콘솔에 직접 `custom:naver` 를 입력하면 결과 id 가 `custom:custom:naver` 로 이중 prepend 되므로 **콘솔 identifier 는 반드시 `naver` (prefix 없이) 입력**. §8 입력 항목 표가 콘솔 등록 identifier 의 SSOT.
+- Custom Provider 등록 시 콘솔에서 부여하는 identifier 가 `naver` 가 아닌 다른 값으로 결정되면 (불가피한 사유) 본 매핑 함수의 `naver` 부분과 §8 입력 항목 표를 **같은 PR 에서** 한 줄씩 갱신하고 UI 는 손대지 않는다.
+- Kakao 는 Supabase native provider 이므로 콘솔 identifier 일치 봉인이 별도로 필요하지 않다 — 콘솔의 `kakao` 패널 ON / 자격증명 입력 / scope 입력만 §8 가이드대로 따른다.
 
 #### 4.2.4 일반 에러 처리 + `linkIdentity` 실패 UX 매트릭스 (review item 7 new)
 
@@ -532,21 +534,21 @@ client.interceptors.request.use(async (config) => {
 **Web 트랙 봉인 (CMP-584 산출물):**
 
 - `apps/web/lib/oauth-providers/naver.ts` — Naver Custom OAuth2 어댑터. `NAVER_PROTOCOL = 'oauth2' as const`. `NAVER_DEFAULT_ENDPOINTS` 가 authorize / token / user-info URL 3개를 명시.
-- **변수명만 SSOT, 실값 금지** (AGENTS.md §4.4 / ADR-0003 시크릿 봉인 정합): `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `NAVER_AUTHORIZE_URL`, `NAVER_TOKEN_URL`, `NAVER_USERINFO_URL`, (옵션) `NAVER_SCOPE`. 실값은 Supabase 콘솔 입력 또는 `.env.local`, **코드 / 문서 / 이슈 / PR 본문에 절대 기재 금지**.
+- **변수명만 SSOT, 실값 금지** (AGENTS.md §4.7 + `apps/api/.env.example` + `apps/api/src/config.py` 정합): `NAVER_OAUTH_CLIENT_ID`, `NAVER_OAUTH_CLIENT_SECRET`, `NAVER_OAUTH_AUTHORIZE_URL`, `NAVER_OAUTH_TOKEN_URL`, `NAVER_OAUTH_USERINFO_URL`, (옵션) `NAVER_OAUTH_SCOPE`. 실값은 Supabase 콘솔 입력 또는 `.env.local`, **코드 / 문서 / 이슈 / PR 본문에 절대 기재 금지**.
 - `assertNaverIsOAuth2()` — endpoint 가 `.well-known/openid-configuration` 패턴을 포함하면 throw. vitest unit test 가 default endpoints + 의도된 override + 잘못된 OIDC discovery URL 시나리오 모두 검증 (`naver.test.ts`).
-- **`NAVER_DEFAULT_SCOPE = 'account'`** — Phase 1 기본 scope. `resolveNaverScope()` 가 `NAVER_SCOPE` env 가 있으면 그 값을, 없으면 default 를 반환. Supabase 콘솔 scope 필드 입력값과 정합.
+- **`NAVER_DEFAULT_SCOPE = 'account'`** — Phase 1 기본 scope. `resolveNaverScope()` 가 `NAVER_OAUTH_SCOPE` env 가 있으면 그 값을, 없으면 default 를 반환. Supabase 콘솔 scope 필드 입력값과 정합.
 
 **Scope 정책 (Phase 1):**
 
 - 기본 scope 는 **`account`** (식별 전용 최소 권한). Naver 인증 화면이 최소 항목만 묻고, 가입 거부율을 낮춘다.
 - `email` scope 는 **Naver 비즈니스 앱 심사 통과 후에만** 추가 가능. Phase 1 에서는 요구하지 않으며, user-info 응답의 `response.email` 이 `undefined` 일 수 있다는 전제로 callback / backend sync 가 동작해야 한다 (§4.5.1 internal_signup 약관 화면이 email 을 user 입력으로 받는 분기 정합).
-- 향후 email scope 가 필요해지면 별도 자식 이슈에서 (1) Naver 비즈니스 심사 통과, (2) Supabase 콘솔 scope 필드 갱신, (3) `NAVER_SCOPE` env 갱신, (4) callback 분기 정리를 한 set 로 처리한다. raw scope 문자열을 코드에 hardcode 하는 PR 은 reject.
+- 향후 email scope 가 필요해지면 별도 자식 이슈에서 (1) Naver 비즈니스 심사 통과, (2) Supabase 콘솔 scope 필드 갱신, (3) `NAVER_OAUTH_SCOPE` env 갱신, (4) callback 분기 정리를 한 set 로 처리한다. raw scope 문자열을 코드에 hardcode 하는 PR 은 reject.
 
 **Supabase 콘솔 봉인 (§8 보강 — 운영자 SSOT):**
 
 - Authentication → Providers → Add custom OAuth provider → **`OAuth2 (Generic)`** 모드 선택 (OIDC 모드 절대 금지).
-- 입력 필드: `Client ID` (= `NAVER_CLIENT_ID`), `Client Secret` (= `NAVER_CLIENT_SECRET`), `Authorize URL` (= `NAVER_AUTHORIZE_URL`), `Token URL` (= `NAVER_TOKEN_URL`), `User-Info URL` (= `NAVER_USERINFO_URL`), `Scope` (= `NAVER_DEFAULT_SCOPE` = `account`).
-- `provider identifier` 필드는 **반드시 `naver`** 로 등록 (§4.2.3 매핑 + §8 입력 항목 표 정합). 다른 식별자로 등록하면 SDK `signInWithOAuth({ provider: 'custom:naver' })` 호출 시 `provider not enabled`.
+- 입력 필드: `Client ID` (= `NAVER_OAUTH_CLIENT_ID`), `Client Secret` (= `NAVER_OAUTH_CLIENT_SECRET`), `Authorize URL` (= `NAVER_OAUTH_AUTHORIZE_URL`), `Token URL` (= `NAVER_OAUTH_TOKEN_URL`), `User-Info URL` (= `NAVER_OAUTH_USERINFO_URL`), `Scope` (= `NAVER_DEFAULT_SCOPE` = `account`, env override `NAVER_OAUTH_SCOPE`).
+- `provider identifier` 필드는 **반드시 `naver`** 로 (prefix 없이) 등록한다. Supabase 가 내부적으로 `custom:` prefix 를 prepend 하여 **SDK 가 보는 canonical provider id = `custom:naver`** 가 된다. 콘솔에 직접 `custom:naver` 를 입력하면 결과가 `custom:custom:naver` 로 이중 prepend 되어 SDK `signInWithOAuth({ provider: 'custom:naver' })` 호출 시 `provider_not_enabled`. §4.2.3 매핑 + §8 입력 항목 표가 SSOT.
 - redirect allow list 에 `/auth/callback` 추가 (§4.7.2).
 
 **사전 등록 가드 (signInWithOAuth 콜 전 운영 SSOT 확인):**
@@ -646,7 +648,7 @@ ADR-0003 §2.2 의 `terms_consents` 흐름은 그대로 유지. 변경 포인트
 
 | # | 경로 | Owner | 장점 | 단점 |
 |---|---|---|---|---|
-| **(a)** | **Callback Route Handler 직후 backend sync** — `/auth/callback` 가 `exchangeCodeForSession` 성공 직후, Supabase session 의 provider id (`'kakao'` / `'custom:kakao'`) 가 카카오인 경우 `POST /auth/terms/kakao-sync` 호출. payload = `{ supabase_user_id, id_token, raw_kakao_payload(있을 시) }`. backend 가 token claims 에서 동의 항목을 파싱 또는 카카오 user-info API 를 재조회하여 `terms_consents(source='kakao_sync')` 단일 트랜잭션 insert. | Web (호출 위치) + Backend (검증/저장) | 흐름이 명시적이고 추적 가능. Supabase webhook 의존 없음. | callback 가 실패하면 동의 기록이 누락 — fallback 필요 (§4.5.2 끝). |
+| **(a)** | **Callback Route Handler 직후 backend sync** — `/auth/callback` 가 `exchangeCodeForSession` 성공 직후, Supabase session 의 provider id 가 카카오 (`'kakao'` Supabase native) 인 경우 `POST /auth/terms/kakao-sync` 호출. payload = `{ supabase_user_id, provider_access_token, raw_kakao_payload(있을 시) }` — **`provider_access_token` = `session.provider_token`** (Kakao OAuth access token, **`id_token` 아님** — §4.5.2.2 정합). backend 가 이 access token 으로 Kakao `/v2/user/scopes` 를 재호출하여 동의 항목을 audit 한 뒤 `terms_consents(source='kakao_sync')` 단일 트랜잭션 insert. | Web (호출 위치) + Backend (검증/저장) | 흐름이 명시적이고 추적 가능. Supabase webhook 의존 없음. | callback 가 실패하면 동의 기록이 누락 — fallback 필요 (§4.5.2 끝). |
 | (b) | Supabase Auth Hook (Beta) — `auth.users` insert 시 trigger 가 fire → edge function 이 Kakao identity provider 의 payload 를 읽어 backend 로 forward. | Supabase / Backend | callback 누락에 강함 (서버 측 fire). | Supabase 기능 의존성 + provider raw payload 접근 가능 여부 검증 필요. |
 | (c) | Postgres trigger on `auth.identities` insert — provider='kakao' 일 때 backend 의 별도 함수 호출. | DBA / Backend | DB level 보장. | Kakao 가 보낸 동의 payload 가 `auth.identities.identity_data` 에 들어오는지 콘솔 세팅과 함께 확인 필요. 가능하지 않으면 (c) 채택 불가. |
 
@@ -1164,8 +1166,8 @@ export const config = { matcher: ['/app/:path*'] };
 | Supabase `anon` key | `apps/web/.env.local::NEXT_PUBLIC_SUPABASE_ANON_KEY` | 브라우저 노출 OK. |
 | Supabase `service_role` key | `apps/api/.env.local::SUPABASE_SERVICE_ROLE_KEY` | **웹에 두지 않음.** |
 | Google OAuth client ID/secret | Supabase 콘솔 → Auth → Providers → Google | 웹·API 모두에 두지 않음. |
-| Kakao OAuth client ID/secret | Supabase 콘솔 → Auth → Providers → Custom (네이티브 미지원 시 Custom OIDC 또는 OAuth2 — 콘솔 세팅 트랙 결정) | 동일. provider identifier = `kakao` 고정. |
-| **Naver Custom OAuth2 (not OIDC)** — client ID / secret / authorize URL / token URL / user-info URL | Supabase 콘솔 → Auth → Providers → **Custom OAuth Provider (`OAuth2 (Generic)` 모드)** | §4.3.1 봉인. **OIDC 모드 금지** (Naver 는 `.well-known/openid-configuration` 미지원). 입력 필드는 변수명 `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` / `NAVER_AUTHORIZE_URL` / `NAVER_TOKEN_URL` / `NAVER_USERINFO_URL` 로 SSOT. 실값은 코드 / 문서 / 이슈에 절대 기재 금지. provider identifier = `naver` 고정 (§4.2.3 매핑). |
+| Kakao OAuth client ID/secret | Supabase 콘솔 → Auth → Providers → **Kakao** (Supabase native built-in provider 패널) | 동일. **Custom 경로 없음** — §4.2.3 매핑 표 정합. provider identifier = `kakao` 고정. |
+| **Naver Custom OAuth2 (not OIDC)** — client ID / secret / authorize URL / token URL / user-info URL / scope | Supabase 콘솔 → Auth → Providers → **Custom OAuth Provider (`OAuth2 (Generic)` 모드)** | §4.3.1 봉인. **OIDC 모드 금지** (Naver 는 `.well-known/openid-configuration` 미지원). 입력 필드는 변수명 `NAVER_OAUTH_CLIENT_ID` / `NAVER_OAUTH_CLIENT_SECRET` / `NAVER_OAUTH_AUTHORIZE_URL` / `NAVER_OAUTH_TOKEN_URL` / `NAVER_OAUTH_USERINFO_URL` / (옵션) `NAVER_OAUTH_SCOPE` 로 SSOT — AGENTS.md §4.7 정합. 실값은 코드 / 문서 / 이슈에 절대 기재 금지. provider identifier = `naver` (prefix 없이) 고정 — Supabase 가 SDK 측에서 `custom:` 를 자동 prepend 하여 `custom:naver` 가 된다 (§4.2.3 매핑). Scope 기본값 = `account` (§4.3.1 Scope 정책). |
 | **Provider 화이트리스트 정책** | Supabase 콘솔 → Auth → Providers — **Email provider OFF**, Phone provider OFF, magic link OFF, OTP OFF, SMS OFF, anonymous sign-in 만 별도 ON. UI 노출은 `ALLOWED_PROVIDERS = ['google','kakao','naver']` 한정 (§4.2.5). | §4.2.5 / CMP-584. 위 비-OAuth 경로 중 하나라도 ON 인 상태로 라이브 가면 §0.0 CMP-572 CEO 결정의 "자동 verified email merge 우회로" 위험. 즉시 라이브 차단. |
 | Identity Linking 정책 | Supabase 콘솔 → Auth → Settings → **Account Linking = `manual only`**, "Auto-link verified emails" / "Link accounts with same email" 모두 OFF | **§0.0 CMP-572 CEO 결정 + ADR-0003 §2.3.** 위 토글 중 하나라도 ON 인 상태로 라이브 가면 본 runbook 위반 → 즉시 라이브 차단. Identity Linking 자체 기능 (`auth.linkIdentity` 호출 권한) 은 ON 이어야 한다 (manual flow 의 진입 권한). |
 | **ADR-0003 supersede 결정 (=ADR-0004)** | `docs/adr/0004-*.md` 신규 + Accepted | Phase 2 (localStorage 키 제거, `lib/anonymous-user.ts` 제거, dual-write 종료) 가 시작될 수 있는 유일한 gate. ADR-0004 가 Accepted 되기 전에는 본 runbook 도 Phase 1 동작만 봉인한다. |

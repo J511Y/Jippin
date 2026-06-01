@@ -12,22 +12,22 @@
  *  - Phase 1 에서는 endpoint 메타데이터를 export 하여 Supabase 콘솔 등록값과 코드 측의
  *    정합을 단위 테스트로만 검증한다. 라이브 OAuth 호출은 Supabase hosted OAuth 가 owner.
  *
- * 환경변수 (실값 금지 — 변수명만 SSOT):
+ * 환경변수 (실값 금지 — 변수명만 SSOT, AGENTS.md §4.7 + apps/api/.env.example + apps/api/src/config.py 정합):
  *  | 변수 | 책임 |
  *  |---|---|
- *  | `NAVER_CLIENT_ID` | Naver Developers 콘솔에서 발급한 client ID. Supabase 콘솔 입력. |
- *  | `NAVER_CLIENT_SECRET` | client secret. Supabase 콘솔 입력. backend / web 코드에서 직접 읽지 않는다. |
- *  | `NAVER_AUTHORIZE_URL` | OAuth2 authorize endpoint (`https://nid.naver.com/oauth2.0/authorize`). |
- *  | `NAVER_TOKEN_URL` | OAuth2 token endpoint (`https://nid.naver.com/oauth2.0/token`). |
- *  | `NAVER_USERINFO_URL` | OAuth2 user-info endpoint (`https://openapi.naver.com/v1/nid/me`). |
- *  | `NAVER_SCOPE` | (옵션) Supabase 콘솔에 입력하는 scope. 기본은 `account` (runbook §4.3.1). |
+ *  | `NAVER_OAUTH_CLIENT_ID` | Naver Developers 콘솔에서 발급한 client ID. Supabase 콘솔 입력. |
+ *  | `NAVER_OAUTH_CLIENT_SECRET` | client secret. Supabase 콘솔 입력. backend / web 코드에서 직접 읽지 않는다. |
+ *  | `NAVER_OAUTH_AUTHORIZE_URL` | OAuth2 authorize endpoint (`https://nid.naver.com/oauth2.0/authorize`). |
+ *  | `NAVER_OAUTH_TOKEN_URL` | OAuth2 token endpoint (`https://nid.naver.com/oauth2.0/token`). |
+ *  | `NAVER_OAUTH_USERINFO_URL` | OAuth2 user-info endpoint (`https://openapi.naver.com/v1/nid/me`). |
+ *  | `NAVER_OAUTH_SCOPE` | (옵션) Supabase 콘솔에 입력하는 scope. 기본은 `account` (runbook §4.3.1). |
  *
  * Scope 정책 (runbook §4.3.1 정합):
  *  - 기본 scope 는 `account` — 식별만 필요하므로 최소 권한. Naver 인증 화면이 가장 적게 묻는다.
  *  - `email` scope 는 Naver 비즈니스 앱 심사 통과 후에만 추가 가능하므로 Phase 1 에서는
  *    요구하지 않는다. 그러므로 user-info 응답의 `response.email` 은 `undefined` 일 수 있다는
  *    가정으로 callback / backend sync 가 동작해야 한다 (runbook §4.5.1 정합).
- *  - 변수만 노출하고 실 scope 토큰 문자열은 Supabase 콘솔 입력 또는 `NAVER_SCOPE` env 로만
+ *  - 변수만 노출하고 실 scope 토큰 문자열은 Supabase 콘솔 입력 또는 `NAVER_OAUTH_SCOPE` env 로만
  *    주입한다. 본 모듈은 default 값을 export 하여 단위 테스트로 정합만 검증.
  *
  * **사전 등록 가드 (Phase 1 (e) — review item 5 정합).**
@@ -63,12 +63,12 @@ export const NAVER_DEFAULT_ENDPOINTS: NaverOAuth2Endpoints = {
 };
 
 export const NAVER_ENV_KEYS = {
-  clientId: 'NAVER_CLIENT_ID',
-  clientSecret: 'NAVER_CLIENT_SECRET',
-  authorizeUrl: 'NAVER_AUTHORIZE_URL',
-  tokenUrl: 'NAVER_TOKEN_URL',
-  userInfoUrl: 'NAVER_USERINFO_URL',
-  scope: 'NAVER_SCOPE'
+  clientId: 'NAVER_OAUTH_CLIENT_ID',
+  clientSecret: 'NAVER_OAUTH_CLIENT_SECRET',
+  authorizeUrl: 'NAVER_OAUTH_AUTHORIZE_URL',
+  tokenUrl: 'NAVER_OAUTH_TOKEN_URL',
+  userInfoUrl: 'NAVER_OAUTH_USERINFO_URL',
+  scope: 'NAVER_OAUTH_SCOPE'
 } as const;
 
 /**
