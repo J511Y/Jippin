@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { getOrCreateAnonymousUserId } from '@/lib/anonymous-user';
+import { DEFAULT_NEXT, resolveSafeNext } from '@/lib/safe-redirect';
 
 /**
  * 간편가입 OAuth 시작 버튼 (CMP-557, CMP-564).
@@ -10,7 +11,7 @@ import { getOrCreateAnonymousUserId } from '@/lib/anonymous-user';
  * - 자체 가입/아이디 찾기/비밀번호 찾기 UI 는 정책상 존재하지 않는다.
  * - 흐름: 버튼 클릭 → Web BFF `GET /auth/oauth/start?provider=<id>&intent=signin&next=<path>` 로
  *   브라우저를 이동시킨다. BFF 는 Supabase PKCE cookie 를 보존한 뒤 provider authorization URL 로 302 한다.
- * - `next` 는 상대 경로만 전달한다. 절대 URL / protocol-relative / backslash payload 는 폐기한다.
+ * - `next` 는 lib/safe-redirect 의 `isSafeNext` SSOT 를 거친 상대 경로만 전달한다.
  */
 
 const PROVIDERS = [
@@ -26,10 +27,7 @@ type LoginButtonsProps = {
 };
 
 function safeNextPath(nextPath: string | null): string | null {
-  if (!nextPath || !nextPath.startsWith('/') || nextPath.startsWith('//') || nextPath.includes('\\')) {
-    return null;
-  }
-  return nextPath;
+  return resolveSafeNext(nextPath, DEFAULT_NEXT);
 }
 
 export function LoginButtons({ nextPath }: LoginButtonsProps) {
