@@ -151,10 +151,23 @@ enabled = true
 # local dev 는 Next.js 가 `localhost` 와 `127.0.0.1` 둘 다 응답하므로 양쪽 모두
 # 허용한다. Supabase Auth 는 redirect URL 을 엄격히 매칭하므로 한쪽만 두면
 # `http://localhost:3000` dev flow 가 redirect rejection 으로 실패한다.
+#
+# **callback path 명시 봉인.** Supabase 는 `redirectTo` URL 을 본 allow-list 와
+# 정확히 매칭하거나 `/**` wildcard 로만 통과시킨다 (정본:
+# https://supabase.com/docs/guides/auth/redirect-urls). CMP-577 Web 트랙은
+# `@supabase/ssr` 패턴을 따라 `redirectTo=http://localhost:3000/auth/callback`
+# 으로 OAuth 콜백을 보낸다 — 따라서 본 allow-list 에는 origin 뿐 아니라
+# `/auth/callback` 정확 경로와 `/**` wildcard 가 함께 들어가야 한다. wildcard
+# 만으로도 매칭은 통과하지만 origin/exact 가 빠지면 일부 SDK 의 redirect-to-root
+# fallback 경로에서 거부될 수 있어 origin + `/auth/callback` + `/**` 3종 모두 둔다.
 site_url = "http://localhost:3000"
 additional_redirect_urls = [
   "http://localhost:3000",
+  "http://localhost:3000/auth/callback",
+  "http://localhost:3000/**",
   "http://127.0.0.1:3000",
+  "http://127.0.0.1:3000/auth/callback",
+  "http://127.0.0.1:3000/**",
 ]
 jwt_expiry = 3600
 enable_refresh_token_rotation = true
