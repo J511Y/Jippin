@@ -20,7 +20,7 @@
 | Automatic branching 트리거 범위 | **"Supabase changes only"** — `supabase/**` 또는 `supabase/migrations/**` 변경이 있는 PR 에만 preview branch 생성. (콘솔 토글 1회 설정) |
 | Preview branch 정리 | PR closed → Supabase integration 이 자동 삭제. 14일 이상 머지/닫힘 없는 PR 은 콘솔 정책으로 만료 (§5). |
 | 기존 Neon workflow 처리 | **단계 0~3 의 단계적 deprecation**. 본 PR(단계 0)은 Neon workflow 를 **유지·격리**만 한다. |
-| GitHub required check | 전환 완료 시점에 **`ci-status`** (CMP-574 변경 없음) + **`Supabase / Migration check` (integration 제공)** 2개를 필수로 둔다. 본 PR 에서는 변경 없음. |
+| GitHub required check | 전환 완료 시점에 **`ci-status`** (CMP-574 변경 없음) + Supabase integration 의 preview check (콘솔/실행 후 실제 context 이름을 확인해 등록 — Supabase 공식 예시는 **`Supabase Preview`**, 콘솔 옵션·버전에 따라 달라질 수 있음). path-filter deadlock 회피 패턴은 §6.3. 본 PR 에서는 변경 없음. |
 | Identity linking 정책 (CEO 결정 CMP-572) | **Automatic linking 영구 금지** (§7.1.1 콘솔 토글 + DB 트리거 가드 봉인). **Manual linking 우선** — `enable_manual_linking = true` 봉인 (§7.1.2). Anonymous → OAuth upgrade 는 manual linking 흐름으로만 (§7.1.3). |
 | 시크릿 추가 (사용자 작업) | `SUPABASE_ACCESS_TOKEN` (org/personal), `SUPABASE_PROJECT_REF_PROD`, `SUPABASE_PROJECT_REF_DEV`, `SUPABASE_DB_PASSWORD_*` — §3.2 참조. |
 
@@ -97,14 +97,15 @@ supabase project (jippin)
   - Secret: `SUPABASE_DB_PASSWORD_DEV` (development persistent branch 용 DB password — production 과 별도)
   - Variable: `SUPABASE_PROJECT_REF_PROD` (production project ref; `supabase projects list` 의 Reference ID)
   - Variable: `SUPABASE_PROJECT_REF_DEV` (**development persistent branch 의 BRANCH PROJECT ID — production ref 와 별도 값**. `supabase --experimental branches list` 의 `BRANCH PROJECT ID` 컬럼 값을 입력한다. Supabase 공식: https://supabase.com/docs/guides/deployment/branching/configuration#remote-specific-configuration)
-- [ ] **U6.** GitHub Settings → Branches → `main` / `dev` 보호 규칙 확인. **본 PR 시점에는 required check 변경 없음** (`ci-status` 만 required). `Supabase / Migration check` 는 §6 단계 2 에서 추가.
+- [ ] **U6.** GitHub Settings → Branches → `main` / `dev` 보호 규칙 확인. **본 PR 시점에는 required check 변경 없음** (`ci-status` 만 required). Supabase preview check 는 §6 단계 2 에서 wrapper (§6.3) 로 추가.
 
 ### 3.2 에이전트(또는 사용자) 후속 작업 — CMP-574 PR 머지 후
 
 - [ ] **A1.** 사용자가 `SUPABASE_PROJECT_REF_PROD` 값을 별도 PR(또는 `chore/CMP-574-project-ref` 후속 브랜치)로 `supabase/config.toml` 의 `project_id` 에 채운다. **이 값은 비밀이 아니므로 커밋 가능.** 단 본 PR 에서는 placeholder.
+- [ ] **A1.1** 같은 PR 에서 `[remotes.development].project_id` 를 `SUPABASE_PROJECT_REF_DEV` (development persistent branch 의 BRANCH PROJECT ID, U5 참고) 값으로 채운다. 본 절이 빠지면 `supabase --remote development db diff/push` 가 production 으로 잘못 흐른다. staging persistent branch 를 도입할 때 `[remotes.staging]` 도 같은 패턴으로 추가.
 - [ ] **A2.** CMP-575 (DB 트랙) 가 Alembic → SQL migration 변환 결과를 `supabase/migrations/` 에 채운다.
-- [ ] **A3.** CMP-576 (Auth 트랙) 이 `supabase/config.toml` 의 `[auth.external.*]` 를 켜고 `[auth].enable_anonymous_sign_ins=true` 로 전환한다.
-- [ ] **A4.** §6 단계 1~3 에 따라 Neon workflow 를 단계적으로 제거하고 Supabase integration 으로 대체한다.
+- [ ] **A3.** CMP-576 (Auth 트랙) 이 `supabase/config.toml` 의 `[auth.external.*]` 를 켜고 **같은 PR 에서 `[auth].enable_signup` 글로벌 gate 를 `true` 로 함께 바꾼다** (글로벌 gate 가 false 면 OAuth signup 도 막힘). `[auth.email].enable_signup` 은 영구 false 유지. CMP-577 트랙이 `[auth].enable_anonymous_sign_ins=true` 로 전환하며 §7.1.3 PoC 절차 (A5) 를 함께 수행.
+- [ ] **A4.** §6 단계 1~3 에 따라 Neon workflow 를 단계적으로 제거하고 Supabase integration 으로 대체한다. 단계 2 PR 은 §6.3 wrapper workflow (`.github/workflows/supabase-status.yml`) 를 추가하고 §6.3.1 의 컨텍스트 식별 절차로 polling 대상을 박는다.
 
 ---
 
@@ -174,10 +175,34 @@ if: |
 | 단계 | 필수 check 목록 | 비고 |
 |---|---|---|
 | 단계 0~1 | `ci-status` | 현재 상태. |
-| 단계 2 | `ci-status`, `Supabase / Migration check` | Supabase integration 이 제공하는 check 이름. PR 별 preview branch 의 migration 적용 성공/실패를 PR 에 표시. |
-| 단계 3 | `ci-status`, `Supabase / Migration check` | Neon workflow 제거 후에도 동일. `ci-status` 안의 `migrate-check` job 은 빈 skeleton 으로 둘지 삭제할지 단계 3 PR 에서 결정. |
+| 단계 2 | `ci-status`, `supabase-status` (wrapper) | wrapper 이름은 §6.3 가 정의. 실제 Supabase integration check 이름은 §6.3.1 의 컨텍스트 식별 절차로 확정. |
+| 단계 3 | `ci-status`, `supabase-status` | Neon workflow 제거 후에도 동일. `ci-status` 안의 `migrate-check` job 은 빈 skeleton 으로 둘지 삭제할지 단계 3 PR 에서 결정. |
 
-**왜 `Supabase / Migration check` 를 required 로 두는가**: production/development 매핑 PR 이 migration 깨진 채 머지되면 Supabase 가 `main`/`dev` push 에서 production/development DB 에 직접 적용하기 때문. preview branch 에서 미리 잡아야 운영 사고를 막는다.
+**왜 Supabase preview check 를 required 로 두는가**: production/development 매핑 PR 이 migration 깨진 채 머지되면 Supabase 가 `main`/`dev` push 에서 production/development DB 에 직접 적용하기 때문. preview branch 에서 미리 잡아야 운영 사고를 막는다.
+
+### 6.3 path-filter deadlock 회피 (wrapper workflow 패턴)
+
+**문제.** Automatic branching 을 "Supabase changes only" 로 제한하면 `supabase/**` 를 안 건드린 PR 에는 integration 이 만든 preview check 가 아예 나타나지 않는다. 이 상태에서 같은 context 를 GitHub branch protection 의 required check 로 등록하면 머지 deadlock 이 발생한다 (PR 이 미해결 required check 를 영원히 기다림).
+
+**해결.** 단일 wrapper check (`supabase-status`) 를 항상 실행되는 workflow 로 두고, branch protection 은 wrapper 만 required 로 등록한다. wrapper 가 PR 안의 변경 파일을 보고 결정한다:
+
+- `supabase/**` 변경 없음 → wrapper 자체로 succeed (skip 의미).
+- `supabase/**` 변경 있음 → 실제 Supabase integration check 의 결과를 기다린 뒤 그 결과를 그대로 wrapper 결과로 반영. `gh api` 폴링 또는 `wait-on-check-action` 류 액션을 사용. timeout 발생 시 fail.
+
+이는 본 PR 의 `ci-status` 메타 게이트와 동일한 패턴이다 (`ci-status` 가 하위 jobs 의 결과를 집계해 단일 required check 를 제공).
+
+**적용 시점.** 단계 2 PR (CMP-575 후속 또는 별도 후속 이슈) 이 `.github/workflows/supabase-status.yml` skeleton 을 추가하고 branch protection 을 갱신한다. 본 PR (단계 0) 은 wrapper workflow 를 만들지 않는다.
+
+#### 6.3.1 실제 Supabase integration check context 식별 절차
+
+Supabase 가 integration check context 이름을 콘솔 옵션·버전에 따라 변경할 수 있으므로 단계 2 PR 머지 직전에 실제 이름을 확정한다.
+
+1. 단계 1 토글 ON 후 `supabase/**` 를 변경하는 dummy PR 을 1개 연다.
+2. PR check 목록에 나타나는 Supabase 측 check 의 context 이름을 기록한다 (예: `Supabase Preview`, `Supabase / Preview`, `Supabase Migrations` 등).
+3. 그 이름을 §6.3 wrapper workflow 의 polling 대상으로 박는다.
+4. branch protection 의 required check 는 wrapper (`supabase-status`) 만 등록한다 — Supabase 측 context 를 직접 required 로 등록하지 않는다 (path-filter deadlock 회피).
+
+`Supabase Preview` 가 2026-05 기준 Supabase 공식 예시 context 이름이지만, 본 런북은 **wrapper 가 단계 2 PR 시점의 실제 이름을 polling 한다**는 운영 절차만 봉인한다.
 
 ---
 
@@ -291,12 +316,19 @@ git grep -nE "supabase\.co.*[A-Za-z0-9]{40,}.*password" supabase/ docs/
 # → 두 명령 모두 결과 0건.
 
 # 4) 본 PR 의 placeholder 가 정확히 placeholder 다.
-git grep -n "jippin-placeholder" supabase/config.toml
-# → 정확히 1건 (project_id).
+git grep -n "placeholder" supabase/config.toml
+# → 2건: project_id (jippin-placeholder) + [remotes.development].project_id
+#       (jippin-development-placeholder).
 
-# 5) 가입 표면 봉인 — `enable_signup` 가 [auth], [auth.email], [auth.sms] 모두 false.
+# 4.1) [remotes.development] 선언이 존재한다 (A1.1 후속에서 실제 BRANCH PROJECT ID
+#      로 교체).
+git grep -n "^\[remotes\.development\]" supabase/config.toml
+# → 정확히 1건.
+
+# 5) 가입 게이트 봉인 — 단계 0 시점 모두 false. CMP-576/CMP-577 이 글로벌만 true 로
+#    바꾸고 `[auth.email]/[auth.sms]` 는 영구 false.
 git grep -n "enable_signup" supabase/config.toml
-# → 정확히 3건, 모두 false.
+# → [auth] / [auth.email] / [auth.sms] 3건, 본 PR 시점 모두 false.
 
 # 6) Identity linking 봉인 (CEO 결정 CMP-572):
 #     - `enable_manual_linking = true` (MVP manual linking 우선 — §7.1.2)

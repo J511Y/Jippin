@@ -25,6 +25,21 @@
 project_id = "jippin-placeholder"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# [remotes.*] — persistent branch 별 remote 설정
+# ─────────────────────────────────────────────────────────────────────────────
+# Supabase CLI 는 `supabase --remote <name>` 호출 시 본 섹션을 읽어 해당 persistent
+# branch 의 project_id 와 비밀 키를 분기시킨다. `[remotes.development]` 가 선언되어
+# 있어야 development branch 의 `db diff`/`db push` 가 production 으로 잘못 흐르지 않는다.
+# 정본: https://supabase.com/docs/guides/deployment/branching/configuration#remote-specific-configuration
+#
+# 사용자 작업 (CMP-574 머지 후 §3.2 A1 후속 PR):
+#   1. `supabase --experimental branches list` 의 `BRANCH PROJECT ID` 값을 본 절의
+#      `project_id` 에 채운다.
+#   2. 같은 PR 에서 `[remotes.staging]` 도 동일 패턴으로 추가한다.
+[remotes.development]
+project_id = "jippin-development-placeholder"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # [api] — PostgREST 자동 생성 REST API
 # ─────────────────────────────────────────────────────────────────────────────
 # 집핀은 FastAPI(apps/api) 가 1차 API 게이트웨이이며, PostgREST 는 보조 (관리·디버그)
@@ -95,7 +110,14 @@ file_size_limit = "50MiB"
 # Provider 활성화·anonymous 활성화는 CMP-576 Auth 트랙이 별도 PR 로 켠다.
 #
 # 정책 정본 (CEO 결정 CMP-572, AGENTS.md §4.7, ADR-0003 자동 병합 금지):
-#   - 자체 password signup **영구 금지** → `[auth.email] enable_signup = false`.
+#   - **Signup gate 는 2-layer 다.**
+#     `[auth].enable_signup` 은 **글로벌 gate** — false 이면 OAuth/anonymous 포함
+#     모든 새 user 생성이 막힌다. 따라서 CMP-576 가 OAuth/anonymous 를 활성화하는
+#     PR 에서는 본 값을 **true 로 켠다**. 본 PR (단계 0, 스캐폴드) 시점에는
+#     auth flow 가 아예 없으므로 false 로 봉인.
+#     `[auth.email].enable_signup` 은 **이메일/암호 가입만의 gate** — 영구 false.
+#     본 토글은 글로벌 gate 가 true 가 되어도 켜지지 않는다. 이메일/암호 가입은
+#     AGENTS.md §4.7 봉인으로 영구 금지.
 #   - **Automatic identity linking 영구 금지.** 같은 verified email 의 OAuth identity
 #     를 한 user 로 자동 병합하지 않는다 (계정 탈취 벡터). Supabase 는 default 로
 #     자동 link 하므로 `supabase/config.toml` 의 토글로는 끌 수 없다 — 콘솔 가드 +
@@ -113,13 +135,15 @@ additional_redirect_urls = ["http://127.0.0.1:3000"]
 jwt_expiry = 3600
 enable_refresh_token_rotation = true
 refresh_token_reuse_interval = 10
-# AGENTS.md §4.7 봉인: 자체 password signup 금지. anon key 클라이언트가 이메일/암호
-# 가입을 만들 수 없도록 scaffold 단계에서 false 로 둔다. 이 값을 true 로 바꾸려면
-# 새 ADR + CEO 결정이 필요하다.
+# 글로벌 signup gate (위 정책 블록 참고). 스캐폴드 단계 0 시점에는 false. CMP-576 이
+# OAuth/anonymous 를 활성화하는 PR 에서 true 로 켠다. 본 토글이 false 이면 OAuth
+# conversion 도 같이 막히므로, OAuth provider 활성화 PR 은 반드시 본 값을 true 로
+# 함께 바꾼다. 이메일/암호 가입은 본 토글과 독립으로 `[auth.email].enable_signup`
+# 이 영구 false 다.
 enable_signup = false
-# anonymous sign-in 은 CMP-576 PoC 후 활성화. 본 PR 시점은 false.
-# CMP-576 이 켤 때 manual linking 과 같은 PR 로 묶어 §7.1.3 의 PoC 게이트(G3~G4)
-# 를 통과시킨다.
+# anonymous sign-in 은 CMP-577 PoC 후 활성화 (§7.1.3 A5). 본 PR 시점은 false.
+# CMP-577 이 켤 때 manual linking 흐름과 같은 PR 로 묶고, 같은 PR 에서 글로벌
+# `enable_signup` 도 true 로 함께 바꾼다.
 enable_anonymous_sign_ins = false
 # Manual identity linking — CEO 결정 (CMP-572) 봉인: MVP 는 manual linking 우선.
 # 본 토글이 true 여야 anonymous → OAuth upgrade 와 사용자 명시적 "계정 통합" 흐름이
@@ -129,7 +153,9 @@ enable_anonymous_sign_ins = false
 enable_manual_linking = true
 
 [auth.email]
-# 자체 이메일/암호 가입 금지 봉인 (위 [auth] 주석 참고).
+# 이메일/암호 가입 영구 금지 — AGENTS.md §4.7. 본 토글은 글로벌
+# `[auth].enable_signup` 이 true 가 되어도 켜지지 않는다. true 로 변경하려면 새 ADR
+# + CEO 결정이 필요하다.
 enable_signup = false
 double_confirm_changes = true
 enable_confirmations = false
