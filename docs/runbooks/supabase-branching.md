@@ -193,6 +193,8 @@ Supabase integration 은 `main` push 시 production DB 에 migration 을 직접 
 
 ### 7.1 Identity linking 가드 (CEO 결정 CMP-572 봉인)
 
+> **Policy guard (영구 봉인).** Email-based automatic identity linking is disabled by policy (ADR-0003 영속화 + CEO CMP-572). Use `supabase.auth.linkIdentity()` only.
+
 CEO 결정 (CMP-572, 2026-06-01): **MVP 는 Manual identity linking 우선, Automatic identity linking 금지.** ADR-0003 의 자동 병합 금지 원칙은 유지된다.
 
 집핀의 linking 정책은 두 흐름으로 분리한다.

@@ -125,6 +125,7 @@ enable_anonymous_sign_ins = false
 # 본 토글이 true 여야 anonymous → OAuth upgrade 와 사용자 명시적 "계정 통합" 흐름이
 # 동작한다. **자동 linking 은 본 토글로 통제되지 않는다** — 자동 linking 금지 가드는
 # §7.1.1 (콘솔 OFF + DB 트리거) 가 책임진다.
+# Email-based automatic linking is OFF by policy (ADR-0003 영속화 + CEO CMP-572). Use `supabase.auth.linkIdentity()` only. 켜는 정책 변경은 별도 이슈에서만.
 enable_manual_linking = true
 
 [auth.email]
