@@ -64,12 +64,22 @@ describe('CMP-581 anonymous-gate (R4)', () => {
   });
 
   it('enforces challenge token when requireChallengeToken is true', async () => {
+    // round-15 — verifier is now required first, so existing token-missing case
+    // must also supply a verifier; the verifier-missing case is covered in the
+    // round-15 fix tests below.
+    const verifyForMissingTokenCase = vi.fn();
     const missing = await evaluateAnonymousGate(
-      { ...BASE_GATE, requireChallengeToken: true },
+      {
+        ...BASE_GATE,
+        requireChallengeToken: true,
+        verifyChallengeToken: verifyForMissingTokenCase,
+      },
       { reason: 'challenge', storage: new MemoryStorage() },
     );
     expect(missing.allowed).toBe(false);
     if (!missing.allowed) expect(missing.reason).toBe('challenge_token_required');
+    // verifier never invoked when token is missing.
+    expect(verifyForMissingTokenCase).not.toHaveBeenCalled();
 
     const verify = vi.fn().mockResolvedValue(false);
     const invalid = await evaluateAnonymousGate(
@@ -846,6 +856,131 @@ describe('CMP-581 round-14 review fixes', () => {
       expect(caught.status).toBe(0);
       expect(caught.message).toContain('Failed to fetch');
     }
+  });
+
+  it('item r15-1: requireChallengeToken=true without verifier blocks as challenge_verifier_missing', async () => {
+    // Reviewer round-15 — verifier 가 없으면 CAPTCHA/Turnstile 이 사실상 무효화.
+    // configuration failure 로 즉시 차단.
+    const decision = await evaluateAnonymousGate(
+      {
+        requireExplicitIntent: false,
+        requireChallengeToken: true,
+        minIntervalMs: 0,
+        maxAttemptsPerSession: 0,
+        // verifyChallengeToken intentionally omitted.
+      },
+      { reason: 'challenge', challengeToken: 'some-token', storage: new MemoryStorage() },
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toBe('challenge_verifier_missing');
+      expect(decision.detail).toContain('verifyChallengeToken');
+    }
+  });
+
+  it('item r15-1: missing verifier blocks regardless of whether the token is also missing', async () => {
+    // 토큰까지 없어도 verifier 부재가 우선 — 잘못된 설정을 가장 먼저 감지.
+    const decision = await evaluateAnonymousGate(
+      {
+        requireExplicitIntent: false,
+        requireChallengeToken: true,
+        minIntervalMs: 0,
+        maxAttemptsPerSession: 0,
+      },
+      { reason: 'challenge', storage: new MemoryStorage() },
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe('challenge_verifier_missing');
+  });
+
+  it('item r15-2: 2xx response with stubbed:true body throws KakaoSyncAuditError(code=stub_response)', async () => {
+    // Reviewer round-15 — backend stub 의 202 + {stubbed:true} 를 success 로
+    // 처리하면 `terms_consents(source='kakao_sync')` 가 비는 회귀. helper 가
+    // explicit fail 로 surface 해야 callsite 가 reconcile 경로 진입 가능.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ accepted: true, stubbed: true, detail: 'Phase 1 stub' }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    let caught: unknown;
+    try {
+      await persistKakaoSyncConsent(
+        {
+          supabaseUserId: 'u',
+          linkedProvider: 'kakao',
+          supabaseAccessToken: 'jwt',
+          providerAccessToken: 'tok',
+          providerRefreshToken: null,
+        },
+        {
+          apiBaseUrl: 'http://api.test',
+          enabled: true,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(KakaoSyncAuditError);
+    if (caught instanceof KakaoSyncAuditError) {
+      expect(caught.code).toBe('stub_response');
+      expect(caught.status).toBe(202);
+      // responseBody 에는 stub body 가 보존되어 운영이 forensics 가능해야 한다.
+      expect(caught.responseBody).toContain('stubbed');
+    }
+  });
+
+  it('item r15-2: 2xx with stubbed:false (or no stubbed key) is treated as success (no false positive)', async () => {
+    // Backend 가 production 진입 후 `stubbed: false` 또는 stubbed 키 미포함을
+    // 반환할 때 helper 가 정상 success 로 통과해야 한다 — round-15 fence 가
+    // 모든 2xx 를 throw 시키지 않음을 검증.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ accepted: true, stubbed: false }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    await expect(
+      persistKakaoSyncConsent(
+        {
+          supabaseUserId: 'u',
+          linkedProvider: 'kakao',
+          supabaseAccessToken: 'jwt',
+          providerAccessToken: 'tok',
+          providerRefreshToken: null,
+        },
+        {
+          apiBaseUrl: 'http://api.test',
+          enabled: true,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('item r15-2: 2xx with non-JSON body still succeeds (graceful)', async () => {
+    // production 백엔드가 empty body / plain text 를 반환해도 stub 신호 부재로
+    // 정상 success.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response('', { status: 200 }),
+    );
+    await expect(
+      persistKakaoSyncConsent(
+        {
+          supabaseUserId: 'u',
+          linkedProvider: 'kakao',
+          supabaseAccessToken: 'jwt',
+          providerAccessToken: 'tok',
+          providerRefreshToken: null,
+        },
+        {
+          apiBaseUrl: 'http://api.test',
+          enabled: true,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        },
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it('item 3: fetch reject of non-Error value also wraps cleanly (no leaked raw value)', async () => {

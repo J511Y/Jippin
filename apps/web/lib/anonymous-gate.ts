@@ -96,6 +96,7 @@ export type AnonymousGateBlockReason =
   | 'explicit_intent_required'
   | 'challenge_token_required'
   | 'challenge_token_invalid'
+  | 'challenge_verifier_missing'
   | 'rate_limited'
   | 'storage_unavailable';
 
@@ -131,23 +132,32 @@ export async function evaluateAnonymousGate(
 
   // G2 — challenge token.
   if (config.requireChallengeToken) {
+    // round-15 항목 1 — verifier 가 없으면 CAPTCHA / Turnstile abuse-control 이
+    // 사실상 무효 (토큰만 있으면 통과). configuration failure 로 즉시 차단.
+    if (!config.verifyChallengeToken) {
+      return {
+        allowed: false,
+        reason: 'challenge_verifier_missing',
+        detail:
+          'requireChallengeToken=true 인데 verifyChallengeToken 콜백이 전달되지 않았습니다. ' +
+          'Turnstile/hCAPTCHA verifier 가 없으면 abuse-control gate 가 무효화되므로 발급을 차단합니다.',
+      };
+    }
     if (!request.challengeToken) {
       return { allowed: false, reason: 'challenge_token_required' };
     }
-    if (config.verifyChallengeToken) {
-      let ok = false;
-      try {
-        ok = await config.verifyChallengeToken(request.challengeToken);
-      } catch (err) {
-        return {
-          allowed: false,
-          reason: 'challenge_token_invalid',
-          detail: err instanceof Error ? err.message : String(err),
-        };
-      }
-      if (!ok) {
-        return { allowed: false, reason: 'challenge_token_invalid' };
-      }
+    let ok = false;
+    try {
+      ok = await config.verifyChallengeToken(request.challengeToken);
+    } catch (err) {
+      return {
+        allowed: false,
+        reason: 'challenge_token_invalid',
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (!ok) {
+      return { allowed: false, reason: 'challenge_token_invalid' };
     }
   }
 

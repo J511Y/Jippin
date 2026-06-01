@@ -152,7 +152,8 @@ export type KakaoSyncAuditErrorCode =
   | 'http_error'
   | 'endpoint_not_enabled'
   | 'invalid_input'
-  | 'network_error';
+  | 'network_error'
+  | 'stub_response';
 
 /**
  * `/auth/terms/kakao-sync` 호출 — backend 가 endpoint 를 ship 한 이후에만 활성화.
@@ -257,6 +258,30 @@ export async function persistKakaoSyncConsent(
       response.status,
       responseBody,
       'http_error',
+    );
+  }
+
+  // round-15 항목 2 — backend 가 2xx 를 반환했어도 body 의 `stubbed: true` 는
+  // 실 `terms_consents(source='kakao_sync')` persistence 가 아직 일어나지 않은
+  // Phase 1 stub 상태를 의미한다. callsite 가 success page 로 진입하면 약관
+  // 동의 SSOT 가 비는 회귀가 발생하므로 throw 로 surface — `KakaoSyncAuditError.
+  // code === 'stub_response'` 에서 reconcile / explicit fallback 페이지로 분기.
+  let parsedBody: { stubbed?: unknown; accepted?: unknown; detail?: unknown } | null = null;
+  try {
+    parsedBody = await response.json();
+  } catch {
+    // JSON 이 아닌 2xx 응답 (예: 빈 body, plain text) 은 stub 신호가 없으므로 성공.
+    parsedBody = null;
+  }
+
+  if (parsedBody && parsedBody.stubbed === true) {
+    throw new KakaoSyncAuditError(
+      'Kakao Sync audit endpoint 가 stub 응답 (`stubbed: true`) 을 반환했습니다 — ' +
+        '실 `terms_consents(source=\'kakao_sync\')` persistence 가 아직 일어나지 않았습니다. ' +
+        'callsite 는 reconcile / explicit fallback 경로로 진입해야 하며 success page 진입을 금지합니다.',
+      response.status,
+      JSON.stringify(parsedBody),
+      'stub_response',
     );
   }
 }
