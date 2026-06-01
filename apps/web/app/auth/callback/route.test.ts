@@ -21,9 +21,12 @@ vi.mock('@supabase/ssr', () => ({
 
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';
+process.env.NEXT_PUBLIC_API_BASE_URL = 'http://api.localhost';
 
 const SESSION_COOKIE_NAME = 'sb-example-auth-token';
 const SESSION_COOKIE_VALUE = 'session-value';
+const BACKEND_SESSION_COOKIE_NAME = 'jippin_session';
+const BACKEND_SESSION_COOKIE_VALUE = 'backend-session-value';
 const EXPIRED_SESSION_COOKIE_NAME = 'sb-example-refresh-token';
 const EXPIRED_SESSION_COOKIE_VALUE = '';
 
@@ -45,6 +48,17 @@ function setCookieValues(response: Response): string[] {
 describe('GET /auth/callback — session cookie preservation', () => {
   beforeEach(() => {
     mocks.createServerClient.mockReset();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('{}', {
+          status: 200,
+          headers: {
+            'Set-Cookie': `${BACKEND_SESSION_COOKIE_NAME}=${BACKEND_SESSION_COOKIE_VALUE}; Path=/; HttpOnly; SameSite=Lax`,
+          },
+        }),
+      ),
+    );
   });
 
   it('flushes every exchangeCodeForSession cookie onto the final redirect response', async () => {
@@ -58,7 +72,7 @@ describe('GET /auth/callback — session cookie preservation', () => {
               options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 3600 },
             },
           ]);
-          return { data: { session: {} }, error: null };
+          return { data: { session: { access_token: 'supabase-access-token' } }, error: null };
         }),
       },
     }));
@@ -68,9 +82,19 @@ describe('GET /auth/callback — session cookie preservation', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('http://localhost:3000/app/reports/1');
-    expect(setCookieValues(response).join('\n')).toMatch(
+    const cookies = setCookieValues(response).join('\n');
+    expect(cookies).toMatch(
       new RegExp(`(?:^|\\n)${SESSION_COOKIE_NAME}=${SESSION_COOKIE_VALUE}`),
     );
+    expect(cookies).toMatch(new RegExp(`(?:^|\\n)${BACKEND_SESSION_COOKIE_NAME}=${BACKEND_SESSION_COOKIE_VALUE}`));
+    expect(fetch).toHaveBeenCalledWith('http://api.localhost/auth/supabase/session', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer supabase-access-token',
+        Accept: 'application/json',
+      },
+      cache: 'no-store',
+    });
   });
 
   it('rejects backslash-prefixed next values to avoid post-auth open redirects', async () => {
@@ -84,7 +108,7 @@ describe('GET /auth/callback — session cookie preservation', () => {
               options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 3600 },
             },
           ]);
-          return { data: { session: {} }, error: null };
+          return { data: { session: { access_token: 'supabase-access-token' } }, error: null };
         }),
       },
     }));
@@ -97,6 +121,31 @@ describe('GET /auth/callback — session cookie preservation', () => {
     expect(setCookieValues(response).join('\n')).toMatch(
       new RegExp(`(?:^|\\n)${SESSION_COOKIE_NAME}=${SESSION_COOKIE_VALUE}`),
     );
+  });
+
+  it('fails closed when backend session minting fails after Supabase exchange', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 503 })));
+    mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
+      auth: {
+        exchangeCodeForSession: vi.fn().mockImplementation(async () => {
+          init.cookies.setAll([
+            {
+              name: SESSION_COOKIE_NAME,
+              value: SESSION_COOKIE_VALUE,
+              options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 3600 },
+            },
+          ]);
+          return { data: { session: { access_token: 'supabase-access-token' } }, error: null };
+        }),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(makeRequest('/auth/callback?code=abc&next=/app/reports/1'));
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('Location')).toBe('http://localhost:3000/login?error=oauth_callback_failed');
+    expect(setCookieValues(response).join('\n')).not.toContain(BACKEND_SESSION_COOKIE_NAME);
   });
 
   it('preserves exchangeCodeForSession cleanup cookies on callback failure redirects', async () => {

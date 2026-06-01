@@ -58,18 +58,40 @@ describe('proxy — Supabase Set-Cookie flush invariant', () => {
     const response = await proxy(new NextRequest('http://localhost:3000/auth/callback'));
 
     expect(response.status).toBe(200);
-    expect(setCookieValues(response).join('\n')).toMatch(
-      new RegExp(`(?:^|\\n)${ROTATED_COOKIE_NAME}=${ROTATED_COOKIE_VALUE}`),
-    );
+    expect(mocks.createServerClient).not.toHaveBeenCalled();
+    expect(setCookieValues(response)).toHaveLength(0);
   });
 
-  it('copies token rotation cookies onto protected-route login redirects', async () => {
+  it('skips Supabase lookup on anonymous pre-review routes', async () => {
+    mockGetUser();
+    const { proxy } = await import('./proxy');
+    const response = await proxy(new NextRequest('http://localhost:3000/app/pre-review/upload'));
+
+    expect(response.status).toBe(200);
+    expect(mocks.createServerClient).not.toHaveBeenCalled();
+  });
+
+  it('redirects protected routes without backend session before Supabase lookup', async () => {
     mockGetUser();
     const { proxy } = await import('./proxy');
     const response = await proxy(new NextRequest('http://localhost:3000/app/consult?draft=1'));
 
     expect(response.status).toBe(307);
     expect(response.headers.get('Location')).toBe('http://localhost:3000/login?next=%2Fapp%2Fconsult%3Fdraft%3D1');
+    expect(mocks.createServerClient).not.toHaveBeenCalled();
+    expect(setCookieValues(response)).toHaveLength(0);
+  });
+
+  it('refreshes Supabase cookies only after backend session guard passes', async () => {
+    mockGetUser();
+    const { proxy } = await import('./proxy');
+    const response = await proxy(
+      new NextRequest('http://localhost:3000/app/consult?draft=1', {
+        headers: { Cookie: 'jippin_session=backend-session' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
     expect(setCookieValues(response).join('\n')).toMatch(
       new RegExp(`(?:^|\\n)${ROTATED_COOKIE_NAME}=${ROTATED_COOKIE_VALUE}`),
     );

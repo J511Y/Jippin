@@ -248,6 +248,19 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     expect(response.status).toBe(400);
   });
 
+  it('rejects missing or invalid intent with 400 instead of defaulting to link', async () => {
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: { linkIdentity: vi.fn(), signInWithOAuth: vi.fn(), signOut: vi.fn() },
+    }));
+    const { GET } = await import('./route');
+    const missing = await GET(makeRequest('/auth/oauth/start?provider=google'));
+    const typo = await GET(makeRequest('/auth/oauth/start?provider=google&intent=singin'));
+
+    expect(missing.status).toBe(400);
+    expect(typo.status).toBe(400);
+    expect(mocks.createServerClient).not.toHaveBeenCalled();
+  });
+
   it('returns fresh 500 when SDK fails to mint OAuth URL and drops all Set-Cookie headers', async () => {
     mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
       auth: {

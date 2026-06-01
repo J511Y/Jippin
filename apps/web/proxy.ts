@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { copySupabaseResponse, updateSession } from '@/lib/supabase/proxy';
+import { updateSession } from '@/lib/supabase/proxy';
 
 /**
  * 보호 경로 미인증 가드 (CMP-529, CMP-557, CMP-564, CMP-571).
@@ -56,23 +56,25 @@ function isProtected(pathname: string): boolean {
 
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
-  const { response, user } = await updateSession(request);
 
   if (!isProtected(pathname)) {
-    return response;
+    return NextResponse.next();
   }
 
-  if (user || request.cookies.has(AUTH_COOKIE_NAME)) {
-    return response;
+  if (request.cookies.has(AUTH_COOKIE_NAME)) {
+    try {
+      const { response } = await updateSession(request);
+      return response;
+    } catch {
+      return NextResponse.next();
+    }
   }
 
   const loginUrl = request.nextUrl.clone();
   loginUrl.pathname = '/login';
   loginUrl.search = '';
   loginUrl.searchParams.set('next', pathname + search);
-  const redirect = NextResponse.redirect(loginUrl);
-  copySupabaseResponse(response, redirect);
-  return redirect;
+  return NextResponse.redirect(loginUrl);
 }
 
 export const config = {

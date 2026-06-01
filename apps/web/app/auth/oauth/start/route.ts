@@ -87,7 +87,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (!isUiProvider(uiProviderRaw)) {
     return badRequest('provider must be one of google | kakao | naver');
   }
-  const intent: Intent = isIntent(intentRaw) ? intentRaw : 'link';
+  if (!isIntent(intentRaw)) {
+    return badRequest('intent must be one of link | signin | link-merge');
+  }
+  const intent: Intent = intentRaw;
   const sbProvider: SupabaseProvider = toSupabaseProviderId(uiProviderRaw);
 
   // ★ Step 1 — 응답 객체 먼저 생성. SDK 의 setAll 콜백이 본 객체에 누적한다.
