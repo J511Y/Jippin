@@ -46,16 +46,21 @@ apps/web/
 └── package.json
 ```
 
-## 인증 전략 (CMP-529 선택)
+## 인증 전략 (CMP-577 — Supabase Auth 전환 중, Phase 1 dual-write)
 
-본 골격은 자체 발급 JWT + HttpOnly 리프레시 쿠키 경로를 채택합니다.
+본 골격은 CMP-529 시점에 자체 발급 JWT + HttpOnly 리프레시 쿠키 경로로 시작되었으나, CMP-577 부터 **Supabase Auth 를 세션 1차 소스로 채택**합니다. 다만 ADR-0003 §2 의 익명 식별자 / 발급 라우트 정본을 supersede 하는 ADR-0004 가 아직 Accepted 되지 않았으므로, 본 트랙은 **Phase 1 dual-write** 로 진입하고 ADR-0003 호환 흐름과 Supabase 흐름을 병행 유지합니다. Phase 2 (legacy 폐기) 는 ADR-0004 Accepted 이후 별도 PR 에서 한 번에 처리합니다.
 
-- 액세스 토큰은 `lib/auth-token.ts` 메모리 저장소에 보관되며 `apiClient` 가 자동 주입합니다.
-- 리프레시는 HttpOnly Secure 쿠키로 백엔드에서 발급되어, `/auth/refresh` 호출 시 자동 전달됩니다.
-- 401 응답 시 단일 refresh 큐로 직렬화하여 동시 갱신 폭주를 방지합니다.
+- 설계 정본: [`docs/runbooks/supabase-web-auth.md`](../../docs/runbooks/supabase-web-auth.md) (CMP-577) — Phase 표는 §9.
+- 클라이언트: `@supabase/supabase-js` + `@supabase/ssr` 도입 (Next.js 16 App Router · Edge proxy / Route Handler / Server Component cookie 통합).
+- 비회원 흐름: `supabase.auth.signInAnonymously()` 로 익명 세션 발급. **Phase 1 동안 `localStorage.jippin_anonymous_user_id` + `POST /auth/anonymous-users` 호출도 그대로 유지** (도면/리포트 claim 경로 보존). Phase 2 에서 일괄 폐기.
+- 전환 시점: 익명 user 는 `supabase.auth.linkIdentity({ provider })`, 신규 로그인은 `supabase.auth.signInWithOAuth({ provider })`. `linkIdentity` 실패 시 "익명 데이터 이전" 모달 ladder 로 fallback (runbook §4.2.2). provider 화이트리스트는 `google | kakao | naver` (ADR-0003 봉인). SDK 에 넘기는 식별자는 `lib/supabase/providers.ts` 매핑을 거치며 Naver 는 `custom:naver`.
+- **MVP linking 정책 (CMP-572 CEO 결정)** — Manual identity linking only. 동일 verified email 자동 link 는 Supabase 콘솔에서 OFF 봉인. 이미 다른 user 에 연결된 provider identity 의 익명 세션 연결 시도는 §4.2.2 fallback ladder (기존 계정 로그인 + 데이터 이관 분기) 로만 처리하며 자동 병합 금지. 상세는 runbook §0.0.
+- OAuth callback: `/auth/callback?next=<원래 목적지>` Route Handler 가 `exchangeCodeForSession` 으로 세션 쿠키를 저장한 뒤 `next` 로 302. Supabase 콘솔 redirect allow list 도 `/auth/callback` 기준 (runbook §4.7).
+- Kakao Sync 동의 audit: callback Route Handler 가 `POST /auth/terms/kakao-sync` 를 호출 → 백엔드가 `terms_consents(source='kakao_sync')` 단일 트랜잭션 insert (runbook §4.5.2).
+- FastAPI 호출: `Authorization: Bearer <session.access_token>` 헤더 + Phase 1 동안 `x-jippin-anon-id: <legacy uuid>` 동시 전송. 자체 refresh 인터셉터 폐기 (SDK 자동 갱신 신뢰).
+- API anonymous gating: conversion-only 라우트 (상담 / 리드 / 리포트) 는 403 `AUTH_ANONYMOUS_NOT_ALLOWED` 로 익명 token 을 거부한다 — 계약은 runbook §4.4.
 
-NextAuth v5 도입 여부는 후속 [Frontend] 이슈에서 재검토합니다
-(교체 시 `lib/auth-token.ts` / `lib/api-client.ts` 만 갈아끼울 수 있도록 책임을 격리해 두었습니다).
+env 추가 변수는 `apps/web/.env.example` 의 `NEXT_PUBLIC_SUPABASE_*` 두 라인을 참조하십시오. 실제 값은 `.env.local` 또는 운영 시크릿 매니저에만 보관합니다.
 
 ## A2UI
 

@@ -41,6 +41,31 @@ class AuthLogoutResponse(BaseModel):
     ok: bool = True
 
 
+class SupabaseSessionBridgeRequest(BaseModel):
+    anonymous_user_id: uuid.UUID | None = Field(
+        default=None,
+        description="Client-stored localStorage.jippin_anonymous_user_id value.",
+    )
+    requested_provider: Literal["google", "kakao", "naver"] | None = Field(
+        default=None,
+        description="Provider selected by the signed web OAuth flow context.",
+    )
+
+
+class SupabaseSessionBridgeResponse(BaseModel):
+    signup_complete: bool
+    missing_required_terms: list[str]
+    redirect_url: str | None = None
+
+
+class SupabaseAccountLinkResponse(BaseModel):
+    ok: bool = True
+
+
+class SupabaseAccountLinkRequest(BaseModel):
+    requested_provider: Literal["google", "kakao", "naver"]
+
+
 class TermsConsentInput(BaseModel):
     term_id: str | int
     agreed: bool

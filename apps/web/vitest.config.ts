@@ -1,14 +1,20 @@
-import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  plugins: [react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '.'),
+      '@contracts': path.resolve(__dirname, '../../packages/contracts/ts'),
     },
   },
   test: {
     environment: 'node',
-    include: ['lib/__tests__/**/*.spec.ts'],
+    environmentMatchGlobs: [['**/*.test.tsx', 'jsdom']],
+    include: ['**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts'],
+    exclude: ['node_modules/**', '.next/**'],
+    pool: 'forks',
   },
 });

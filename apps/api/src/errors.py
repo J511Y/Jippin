@@ -75,7 +75,12 @@ async def _validation_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     body = _envelope("VALIDATION_ERROR", "Request validation failed", _rid(request))
-    body["detail"] = exc.errors()
+    # Drop the `ctx` field — pydantic v2 stores raw exception objects there
+    # (e.g. ValueError from custom @field_validator) which Starlette's default
+    # JSON encoder cannot serialize.
+    body["detail"] = [
+        {k: v for k, v in err.items() if k != "ctx"} for err in exc.errors()
+    ]
     return JSONResponse(status_code=422, content=body)
 
 
