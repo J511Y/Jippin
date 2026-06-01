@@ -3,9 +3,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from jose import JWTError, jwt
 
 from ..config import get_settings
 from ..db import get_engine
@@ -28,6 +30,13 @@ class OAuthLoginResult:
     user_id: uuid.UUID
     signup_completed: bool
     claimed_anonymous_user_id: uuid.UUID | None
+
+
+@dataclass(frozen=True)
+class SupabaseSessionBridgeResult:
+    user_id: uuid.UUID
+    pending_anonymous_user_id: uuid.UUID | None
+    missing_required_terms: list[str]
 
 
 @dataclass(frozen=True)
@@ -205,6 +214,38 @@ async def complete_oauth_login(
         user_id=user_id,
         signup_completed=signup_completed,
         claimed_anonymous_user_id=claimed_anonymous_user_id,
+    )
+
+
+async def complete_supabase_session(
+    *,
+    access_token: str,
+    anonymous_user_id: str | None,
+) -> SupabaseSessionBridgeResult:
+    settings = get_settings()
+    claims = _decode_supabase_access_token(access_token, settings)
+    provider = _supabase_provider_from_claims(claims)
+    profile = ProviderProfile(
+        provider_subject=str(claims["sub"]),
+        email=_optional_str(claims.get("email")),
+        display_name=_supabase_display_name(claims),
+        profile_image_url=_supabase_avatar_url(claims),
+        agreed_terms_tags=tuple(_string_list(claims.get("agreed_terms_tags"))),
+    )
+    parsed_anonymous_user_id = parse_existing_anonymous_user_id(anonymous_user_id)
+    login_result = await complete_oauth_login(
+        provider=provider,
+        profile=profile,
+        anonymous_user_id=parsed_anonymous_user_id,
+    )
+    context = await get_current_user_context(login_result.user_id)
+    pending_anonymous_user_id = (
+        parsed_anonymous_user_id if context.missing_required_terms else None
+    )
+    return SupabaseSessionBridgeResult(
+        user_id=login_result.user_id,
+        pending_anonymous_user_id=pending_anonymous_user_id,
+        missing_required_terms=context.missing_required_terms,
     )
 
 
@@ -420,6 +461,100 @@ def _signup_completed(
     if not required_tags:
         return True
     return required_tags.issubset(set(profile.agreed_terms_tags))
+
+
+def _decode_supabase_access_token(access_token: str, settings) -> dict[str, Any]:
+    if not settings.supabase_jwt_secret:
+        raise ZippinException(
+            "Supabase JWT verification secret is not configured.",
+            code="SUPABASE_SESSION_CONFIG_MISSING",
+            http_status=503,
+        )
+    try:
+        claims = jwt.decode(
+            access_token,
+            settings.supabase_jwt_secret,
+            algorithms=["HS256"],
+            audience=settings.supabase_jwt_audience,
+        )
+    except JWTError as exc:
+        raise ZippinException(
+            "Supabase access token is invalid.",
+            code="SUPABASE_SESSION_INVALID",
+            http_status=401,
+        ) from exc
+    if not claims.get("sub"):
+        raise ZippinException(
+            "Supabase access token is missing subject.",
+            code="SUPABASE_SESSION_INVALID",
+            http_status=401,
+        )
+    return claims
+
+
+def _supabase_provider_from_claims(claims: dict[str, Any]) -> OAuthProvider:
+    app_metadata = claims.get("app_metadata")
+    if not isinstance(app_metadata, dict):
+        app_metadata = {}
+    candidates = [
+        app_metadata.get("provider"),
+        *(
+            app_metadata.get("providers")
+            if isinstance(app_metadata.get("providers"), list)
+            else []
+        ),
+    ]
+    for candidate in candidates:
+        normalized = _normalize_supabase_provider(candidate)
+        if normalized is not None:
+            return normalized
+    raise ZippinException(
+        "Supabase access token does not contain a supported OAuth provider.",
+        code="SUPABASE_PROVIDER_UNSUPPORTED",
+        http_status=422,
+    )
+
+
+def _normalize_supabase_provider(value: object) -> OAuthProvider | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.removeprefix("custom:").lower()
+    if normalized in {provider.value for provider in OAuthProvider}:
+        return OAuthProvider(normalized)
+    return None
+
+
+def _supabase_user_metadata(claims: dict[str, Any]) -> dict[str, Any]:
+    metadata = claims.get("user_metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _supabase_display_name(claims: dict[str, Any]) -> str | None:
+    metadata = _supabase_user_metadata(claims)
+    for key in ("name", "full_name", "display_name"):
+        value = _optional_str(metadata.get(key))
+        if value:
+            return value
+    return None
+
+
+def _supabase_avatar_url(claims: dict[str, Any]) -> str | None:
+    metadata = _supabase_user_metadata(claims)
+    for key in ("avatar_url", "picture", "profile_image_url"):
+        value = _optional_str(metadata.get(key))
+        if value:
+            return value
+    return None
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 async def _missing_required_terms(conn, user_id: uuid.UUID, settings) -> list[str]:

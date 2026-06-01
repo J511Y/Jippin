@@ -140,6 +140,31 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     });
   });
 
+  it('preserves the legacy anonymous user id on the Supabase callback redirectTo URL', async () => {
+    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'google' }, error: null });
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        linkIdentity,
+        signInWithOAuth: vi.fn(),
+        signOut: vi.fn(),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(
+      makeRequest('/auth/oauth/start?provider=google&intent=link&anonymous_user_id=anon-123'),
+    );
+
+    expect(response.status).toBe(302);
+    expect(linkIdentity).toHaveBeenCalledWith({
+      provider: 'google',
+      options: {
+        redirectTo: 'http://localhost:3000/auth/callback?anonymous_user_id=anon-123',
+        skipBrowserRedirect: true,
+      },
+    });
+  });
+
   it('drops unsafe backslash next paths before building redirectTo', async () => {
     const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'google' }, error: null });
     mocks.createServerClient.mockImplementation(() => ({

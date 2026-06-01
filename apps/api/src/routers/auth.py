@@ -7,7 +7,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from ..auth.providers import PROVIDER_MODULES, OAuthProvider
@@ -27,12 +27,15 @@ from ..schemas.auth import (
     AuthMeResponse,
     AuthUserResponse,
     OAuthStartResponse,
+    SupabaseSessionBridgeRequest,
+    SupabaseSessionBridgeResponse,
     TermsAcceptRequest,
     TermsAcceptResponse,
 )
 from ..services.auth import (
     OAuthLoginResult,
     accept_required_terms,
+    complete_supabase_session,
     complete_oauth_login,
     create_or_reuse_anonymous_user,
     get_current_user_context,
@@ -147,6 +150,45 @@ async def get_me(request: Request) -> AuthMeResponse:
 async def logout() -> JSONResponse:
     response = JSONResponse(AuthLogoutResponse().model_dump())
     clear_session_cookie(response)
+    return response
+
+
+@router.post("/supabase/session", response_model=SupabaseSessionBridgeResponse)
+async def bridge_supabase_session(
+    request: Request,
+    payload: SupabaseSessionBridgeRequest = Body(
+        default_factory=SupabaseSessionBridgeRequest
+    ),
+) -> JSONResponse:
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise ZippinException(
+            "Supabase bearer token is required.",
+            code="SUPABASE_SESSION_BEARER_REQUIRED",
+            http_status=401,
+        )
+    settings = get_settings()
+    result = await complete_supabase_session(
+        access_token=token,
+        anonymous_user_id=payload.anonymous_user_id,
+    )
+    response_body = SupabaseSessionBridgeResponse(
+        signup_complete=not result.missing_required_terms,
+        missing_required_terms=result.missing_required_terms,
+        redirect_url=(
+            None
+            if not result.missing_required_terms
+            else settings.frontend_auth_terms_url
+        ),
+    )
+    response = JSONResponse(response_body.model_dump())
+    set_session_cookie(
+        response,
+        result.user_id,
+        settings,
+        pending_anonymous_user_id=result.pending_anonymous_user_id,
+    )
     return response
 
 

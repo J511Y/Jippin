@@ -30,37 +30,56 @@ function copyBackendSessionCookies(source: Response, target: NextResponse): void
   }
 }
 
-async function mintBackendSession(accessToken: string, response: NextResponse): Promise<boolean> {
+type BackendSessionBridgeResult = {
+  signup_complete?: boolean;
+  missing_required_terms?: string[];
+  redirect_url?: string | null;
+};
+
+async function mintBackendSession(
+  accessToken: string,
+  anonymousUserId: string | null,
+  response: NextResponse,
+): Promise<BackendSessionBridgeResult | null> {
   try {
     const bridge = await fetch(`${apiBaseUrl()}/auth/supabase/session`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json',
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify({ anonymous_user_id: anonymousUserId }),
       cache: 'no-store',
     });
     if (!bridge.ok) {
-      return false;
+      return null;
     }
     copyBackendSessionCookies(bridge, response);
-    return true;
+    return (await bridge.json()) as BackendSessionBridgeResult;
   } catch {
-    return false;
+    return null;
   }
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = request.nextUrl.searchParams.get('code');
   const next = safeRelativeRedirect(request.nextUrl.searchParams.get('next'));
+  const anonymousUserId = request.nextUrl.searchParams.get('anonymous_user_id');
   const response = new NextResponse(null);
 
   if (code) {
     const supabase = createRouteHandlerClient({ request, response });
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+    const bridge = data.session?.access_token
+      ? await mintBackendSession(data.session.access_token, anonymousUserId, response)
+      : null;
 
-    if (!error && data.session?.access_token && (await mintBackendSession(data.session.access_token, response))) {
-      response.headers.set('Location', new URL(next, request.nextUrl.origin).toString());
+    if (!error && bridge) {
+      const redirectTarget = bridge.signup_complete === false
+        ? (bridge.redirect_url ?? '/auth/terms')
+        : next;
+      response.headers.set('Location', new URL(redirectTarget, request.nextUrl.origin).toString());
       return new NextResponse(null, { status: 302, headers: response.headers });
     }
   }

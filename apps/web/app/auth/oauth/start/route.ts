@@ -60,6 +60,10 @@ function callbackUrl(request: NextRequest): string {
   if (next) {
     callback.searchParams.set('next', next);
   }
+  const anonymousUserId = request.nextUrl.searchParams.get('anonymous_user_id');
+  if (anonymousUserId) {
+    callback.searchParams.set('anonymous_user_id', anonymousUserId);
+  }
   return callback.toString();
 }
 

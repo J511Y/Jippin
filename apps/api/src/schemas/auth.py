@@ -40,6 +40,19 @@ class AuthLogoutResponse(BaseModel):
     ok: bool = True
 
 
+class SupabaseSessionBridgeRequest(BaseModel):
+    anonymous_user_id: str | None = Field(
+        default=None,
+        description="Client-stored localStorage.jippin_anonymous_user_id value.",
+    )
+
+
+class SupabaseSessionBridgeResponse(BaseModel):
+    signup_complete: bool
+    missing_required_terms: list[str]
+    redirect_url: str | None = None
+
+
 class TermsConsentInput(BaseModel):
     term_id: str | int
     agreed: bool

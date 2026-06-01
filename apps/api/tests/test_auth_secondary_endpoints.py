@@ -15,7 +15,7 @@ from src.errors import ZippinException
 from src.main import create_app
 from src.routers import auth as auth_router
 from src.services import auth as auth_service
-from src.services.auth import CurrentUserContext, TermsAcceptResult
+from src.services.auth import CurrentUserContext, SupabaseSessionBridgeResult, TermsAcceptResult
 
 
 class _FakeStateStore:
@@ -150,6 +150,92 @@ def test_logout_expires_session_cookie(monkeypatch, auth_env):
     assert "jippin_session=" in logout_response.headers["set-cookie"]
     assert "Max-Age=0" in logout_response.headers["set-cookie"]
     assert me_response.status_code == 401
+
+
+def test_supabase_session_bridge_requires_bearer_token(auth_env):
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post("/auth/supabase/session", json={})
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "SUPABASE_SESSION_BEARER_REQUIRED"
+
+
+def test_supabase_session_bridge_sets_backend_cookie_and_forwards_anonymous_id(
+    monkeypatch, auth_env
+):
+    user_id = uuid.uuid4()
+    anonymous_user_id = uuid.uuid4()
+    calls = []
+
+    async def fake_complete_supabase_session(*, access_token, anonymous_user_id):
+        calls.append((access_token, anonymous_user_id))
+        return SupabaseSessionBridgeResult(
+            user_id=user_id,
+            pending_anonymous_user_id=None,
+            missing_required_terms=[],
+        )
+
+    monkeypatch.setattr(
+        auth_router, "complete_supabase_session", fake_complete_supabase_session
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": "Bearer supabase-access-token"},
+            json={"anonymous_user_id": str(anonymous_user_id)},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "signup_complete": True,
+        "missing_required_terms": [],
+        "redirect_url": None,
+    }
+    assert calls == [("supabase-access-token", str(anonymous_user_id))]
+    assert "jippin_session=" in response.headers["set-cookie"]
+
+
+def test_supabase_session_bridge_routes_incomplete_signup_to_terms(
+    monkeypatch, auth_env
+):
+    user_id = uuid.uuid4()
+    anonymous_user_id = uuid.uuid4()
+
+    async def fake_complete_supabase_session(*, access_token, anonymous_user_id):
+        return SupabaseSessionBridgeResult(
+            user_id=user_id,
+            pending_anonymous_user_id=uuid.UUID(anonymous_user_id),
+            missing_required_terms=["service_terms", "privacy_policy"],
+        )
+
+    monkeypatch.setattr(
+        auth_router, "complete_supabase_session", fake_complete_supabase_session
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": "Bearer supabase-access-token"},
+            json={"anonymous_user_id": str(anonymous_user_id)},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "signup_complete": False,
+        "missing_required_terms": ["service_terms", "privacy_policy"],
+        "redirect_url": "http://localhost:3000/auth/terms",
+    }
+    cookie = response.headers["set-cookie"]
+    assert "jippin_session=" in cookie
+    token = cookie.split("jippin_session=", 1)[1].split(";", 1)[0]
+    claims = auth_router.read_session_claims(
+        type("Request", (), {"cookies": {"jippin_session": token}})()
+    )
+    assert claims.pending_anonymous_user_id == anonymous_user_id
 
 
 def test_sso_link_start_requires_login(auth_env):
