@@ -1,15 +1,21 @@
 /**
- * 비회원(anonymous user) ID 핸들링 헬퍼 (CMP-557, CMP-560).
+ * 비회원(anonymous user) ID 핸들링 헬퍼 (CMP-557, CMP-560, CMP-584 round-5).
  *
  * - 정책: 비회원 사전검토 흐름은 `localStorage.jippin_anonymous_user_id` 로 식별을
  *   유지하고, OAuth start / anonymous-users API 호출 시 동일 ID 를 백엔드와 동기화한다.
  * - 백엔드(`POST /auth/anonymous-users`)가 ID 의 유효성/재사용 여부(`reused`)를 결정하므로,
  *   클라이언트 측에서 무조건 새 UUID 를 만들지 않고 서버 응답을 정본으로 따른다.
+ * - **CMP-584 round-5 봉인:** 브라우저는 same-origin `/auth/anonymous-users` BFF
+ *   (`apps/web/app/auth/anonymous-users/route.ts`) 를 호출한다. 서버 사이드 fetch 만이
+ *   `NEXT_PUBLIC_API_BASE_URL=http://api:8000` 같은 Docker-internal hostname 을 안전하게
+ *   resolve 할 수 있어, 호스트 브라우저에서 OAuth 진입 prerequisite 가 사전에 실패하는
+ *   사고를 차단한다. `apiBaseUrl()` 를 클라이언트에서 직접 부르지 않는다.
  * - 모든 함수는 브라우저(window) 환경에서만 동작한다. SSR / Edge 에서 호출되면 즉시 throw.
  */
-import { apiBaseUrl } from '@/lib/api-base-url';
 
 export const ANONYMOUS_USER_ID_STORAGE_KEY = 'jippin_anonymous_user_id';
+
+const ANONYMOUS_USER_BFF_PATH = '/auth/anonymous-users';
 
 type AnonymousUserResponse = {
   anonymous_user_id: string;
@@ -42,10 +48,10 @@ function writeStoredAnonymousUserId(id: string): void {
 export async function getOrCreateAnonymousUserId(): Promise<string> {
   assertBrowser();
   const existing = readStoredAnonymousUserId();
-  const response = await fetch(`${apiBaseUrl()}/auth/anonymous-users`, {
+  const response = await fetch(ANONYMOUS_USER_BFF_PATH, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    credentials: 'include',
+    credentials: 'same-origin',
     body: JSON.stringify({ existing_anonymous_user_id: existing })
   });
   if (!response.ok) {
