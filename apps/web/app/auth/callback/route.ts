@@ -23,6 +23,7 @@ export const runtime = 'nodejs';
 export const COMMIT_PATH = '/auth/anon-merge-intents/commit';
 
 const CALLBACK_COOKIES = ['jippin_merge_intent', 'jippin_oauth_provider'] as const;
+const BACKEND_CALLBACK_TIMEOUT_MS = 750;
 const KNOWN_REASONS = new Set([
   'missing_code',
   'exchange_failed',
@@ -109,15 +110,24 @@ async function failureRedirectAfterExchange(
 }
 
 async function commitMergeIntent(session: Session, signedIntentCookie: string): Promise<boolean> {
-  const response = await fetch(new URL(COMMIT_PATH, apiBaseUrl()), {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${session.access_token}`,
-    },
-    body: JSON.stringify({ signed_intent_cookie_value: signedIntentCookie }),
-  });
-  return response.ok;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), BACKEND_CALLBACK_TIMEOUT_MS);
+  try {
+    const response = await fetch(new URL(COMMIT_PATH, apiBaseUrl()), {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ signed_intent_cookie_value: signedIntentCookie }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function persistKakaoSyncConsent(
@@ -126,7 +136,7 @@ async function persistKakaoSyncConsent(
 ): Promise<boolean> {
   if (!kakaoAuditEnabled()) return false;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 750);
+  const timeout = setTimeout(() => controller.abort(), BACKEND_CALLBACK_TIMEOUT_MS);
   try {
     const response = await fetch(`${apiBaseUrl()}/auth/terms/kakao-sync`, {
       method: 'POST',

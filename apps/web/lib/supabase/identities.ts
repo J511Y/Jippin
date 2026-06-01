@@ -59,8 +59,9 @@ export function hasNewlyLinkedIdentity(
   provider: SupabaseProvider | null,
   flowCreatedAt: number | null | undefined,
 ): boolean {
-  if (!provider || !Number.isFinite(flowCreatedAt)) return false;
-  const earliestAllowed = Number(flowCreatedAt) - NEW_IDENTITY_WINDOW_MS - CLOCK_SKEW_MS;
+  if (!provider) return false;
+  const referenceTime = Number.isFinite(flowCreatedAt) ? Number(flowCreatedAt) : Date.now();
+  const earliestAllowed = referenceTime - NEW_IDENTITY_WINDOW_MS - CLOCK_SKEW_MS;
   const latestAllowed = Date.now() + CLOCK_SKEW_MS;
 
   return (user.identities ?? []).some((identity) => {

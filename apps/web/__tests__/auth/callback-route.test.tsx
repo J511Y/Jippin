@@ -210,6 +210,7 @@ describe('/auth/callback route', () => {
       new URL('/auth/anon-merge-intents/commit', 'http://api.test'),
       expect.objectContaining({
         method: 'POST',
+        signal: expect.any(AbortSignal),
         body: JSON.stringify({ signed_intent_cookie_value: 'signed-intent' }),
       }),
     );
@@ -267,6 +268,30 @@ describe('/auth/callback route', () => {
     expectCallbackCookiesExpired(response);
   });
 
+  it('gates fresh Google identities when the flow context cookie is missing', async () => {
+    supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
+      data: {
+        session: mockSession(
+          'google',
+          '2025-01-01T00:00:00.000Z',
+          new Date().toISOString(),
+        ),
+      },
+      error: null,
+    });
+
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/callback?code=ok&next=/app/reports'),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/auth/terms?next=%2Fapp%2Freports',
+    );
+    expectCallbackCookiesExpired(response);
+  });
+
   it('does not re-gate existing Google users on every login', async () => {
     const freshContext = encodeURIComponent(`google|${Date.now()}`);
     supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
@@ -313,6 +338,50 @@ describe('/auth/callback route', () => {
     );
     expect(supabaseMocks.signOut).toHaveBeenCalledTimes(1);
     expectCallbackCookiesExpired(response);
+  });
+
+  it('treats a stalled merge commit endpoint as a merge failure', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-01T09:00:00.000Z'));
+    try {
+      const fetchMock = vi.fn((_url: URL | string, init?: RequestInit) => {
+        const signal = init?.signal;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener(
+            'abort',
+            () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            { once: true },
+          );
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const freshContext = encodeURIComponent(`google|${Date.now()}`);
+      supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
+        data: { session: mockSession('google') },
+        error: null,
+      });
+
+      const { GET } = await import('@/app/auth/callback/route');
+      const pending = GET(
+        new NextRequest('http://localhost/auth/callback?code=ok&next=/app/reports', {
+          headers: {
+            cookie: `jippin_merge_intent=signed-intent; jippin_oauth_provider=${freshContext}`,
+          },
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(751);
+      const response = await pending;
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get('location')).toBe(
+        'http://localhost/auth/failure?reason=merge_commit_failed&next=%2Fapp%2Freports&provider=google',
+      );
+      expect(supabaseMocks.signOut).toHaveBeenCalledTimes(1);
+      expectCallbackCookiesExpired(response);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects stale OAuth guard cookies before code exchange', async () => {
