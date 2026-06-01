@@ -1,5 +1,7 @@
 import Link from 'next/link';
 
+import { isSafeNext } from '@/lib/safe-redirect';
+
 import { LoginButtons } from './login-buttons';
 
 /**
@@ -8,6 +10,8 @@ import { LoginButtons } from './login-buttons';
  * - 정책: 자체 가입 / 아이디 찾기 / 비밀번호 찾기 UI 는 제공하지 않는다.
  *   소셜 OAuth provider 3종(Kakao / Naver / Google) 만 노출한다.
  * - `/login?next=/app/foo` 형태로 들어오면 `next` 경로를 OAuth start 의 `return_url` 로 전달한다.
+ *   `next` 는 `isSafeNext` 로 SSR 단계에서 한 차례 검증 — 외부 origin / schema-relative
+ *   페이로드는 client 까지 흘러가지 않는다. (CMP-582 / runbook §11 R11)
  */
 
 export const metadata = {
@@ -19,10 +23,10 @@ type LoginPageProps = {
 };
 
 function pickNext(value: string | string[] | undefined): string | null {
-  if (Array.isArray(value)) {
-    return value[0] ?? null;
-  }
-  return value ?? null;
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (candidate === undefined || candidate === null) return null;
+  // SSR 단계에서 SSOT 검증을 통과한 값만 client 로 내려보낸다.
+  return isSafeNext(candidate) ? candidate : null;
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
