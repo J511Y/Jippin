@@ -1,4 +1,4 @@
-import type { Session } from '@supabase/supabase-js';
+import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { apiBaseUrl } from '@/lib/api-base-url';
@@ -88,6 +88,21 @@ function failureRedirect(
   if (safeNext !== '/') target.searchParams.set('next', safeNext);
   if (context?.provider) target.searchParams.set('provider', toUiProviderId(context.provider));
   return expireCallbackCookies(redirectFromSeed(seed, target));
+}
+
+async function failureRedirectAfterExchange(
+  request: NextRequest,
+  reason: string | null | undefined,
+  supabase: SupabaseClient,
+  seed: NextResponse,
+  context?: { next?: string | null; provider?: SupabaseProvider | null },
+): Promise<NextResponse> {
+  try {
+    await supabase.auth.signOut();
+  } catch {
+    // Failure redirects must not carry a partially established Supabase session.
+  }
+  return failureRedirect(request, reason, seed, context);
 }
 
 async function commitMergeIntent(session: Session, signedIntentCookie: string): Promise<boolean> {
@@ -205,7 +220,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (isKakaoProvider(linkedProvider)) {
     const persisted = await persistKakaoSyncConsent(data.session, linkedProvider);
     if (!persisted) {
-      return failureRedirect(request, 'kakao_sync_unavailable', seed, {
+      return failureRedirectAfterExchange(request, 'kakao_sync_unavailable', supabase, seed, {
         next: safeNext,
         provider: linkedProvider,
       });
@@ -213,7 +228,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   if (mergeStatus === 'commit_failed') {
-    return failureRedirect(request, 'merge_commit_failed', seed, {
+    return failureRedirectAfterExchange(request, 'merge_commit_failed', supabase, seed, {
       next: safeNext,
       provider: linkedProvider,
     });

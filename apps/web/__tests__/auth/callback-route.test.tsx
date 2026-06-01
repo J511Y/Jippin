@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,6 +7,14 @@ const supabaseMocks = vi.hoisted(() => ({
   linkIdentity: vi.fn(),
   signInWithOAuth: vi.fn(),
   signOut: vi.fn(),
+}));
+
+const browserSupabaseMocks = vi.hoisted(() => ({
+  getSession: vi.fn(),
+}));
+
+const routerMocks = vi.hoisted(() => ({
+  replace: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -18,6 +26,18 @@ vi.mock('@/lib/supabase/server', () => ({
       signOut: supabaseMocks.signOut,
     },
   }),
+}));
+
+vi.mock('@/lib/supabase/browser', () => ({
+  createBrowserSupabaseClient: () => ({
+    auth: {
+      getSession: browserSupabaseMocks.getSession,
+    },
+  }),
+}));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => routerMocks,
 }));
 
 const previousEnv = { ...process.env };
@@ -158,6 +178,7 @@ describe('/auth/callback route', () => {
     expect(response.headers.get('location')).toBe(
       'http://localhost/auth/failure?reason=kakao_sync_unavailable&next=%2Fapp%2Freports&provider=kakao',
     );
+    expect(supabaseMocks.signOut).toHaveBeenCalledTimes(1);
     expectCallbackCookiesExpired(response);
   });
 
@@ -257,6 +278,7 @@ describe('/auth/callback route', () => {
     expect(response.headers.get('location')).toBe(
       'http://localhost/auth/failure?reason=merge_commit_failed&next=%2Fapp%2Freports&provider=google',
     );
+    expect(supabaseMocks.signOut).toHaveBeenCalledTimes(1);
     expectCallbackCookiesExpired(response);
   });
 
@@ -429,5 +451,44 @@ describe('/auth/failure page', () => {
     expect(screen.getByRole('heading', { name: '이미 가입된 계정이 있습니다' })).toBeVisible();
     expect(screen.getByRole('button', { name: '예, 옮기고 로그인' })).toBeVisible();
     expect(screen.getByRole('combobox')).toHaveValue('google');
+  });
+});
+
+describe('/auth/terms page', () => {
+  it('submits enabled terms acceptance and redirects to the safe next path', async () => {
+    process.env.NEXT_PUBLIC_AUTH_TERMS_ACCEPT_ENABLED = 'true';
+    browserSupabaseMocks.getSession.mockResolvedValueOnce({
+      data: { session: { access_token: 'supabase-access-token' } },
+      error: null,
+    });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    const { TermsGate } = await import('@/app/auth/terms/terms-gate');
+
+    render(<TermsGate nextPath="/app/reports" />);
+
+    fireEvent.click(screen.getByLabelText('서비스 이용약관에 동의합니다'));
+    fireEvent.click(screen.getByLabelText('개인정보 처리방침에 동의합니다'));
+    fireEvent.click(screen.getByRole('button', { name: '동의하고 /app/reports로 이동' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://api.test/auth/terms/accept',
+        expect.objectContaining({
+          method: 'POST',
+          credentials: 'include',
+          headers: expect.objectContaining({
+            authorization: 'Bearer supabase-access-token',
+          }),
+          body: JSON.stringify({
+            consents: [
+              { term_id: 'service_terms', agreed: true },
+              { term_id: 'privacy_policy', agreed: true },
+            ],
+          }),
+        }),
+      );
+    });
+    expect(routerMocks.replace).toHaveBeenCalledWith('/app/reports');
   });
 });
