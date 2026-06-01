@@ -123,6 +123,7 @@ services:
       ANON_SESSION_TTL_DAYS: "${ANON_SESSION_TTL_DAYS:-30}"
       FRONTEND_AUTH_SUCCESS_URL: "${FRONTEND_AUTH_SUCCESS_URL:-http://localhost:3000/auth/success}"
       FRONTEND_AUTH_FAILURE_URL: "${FRONTEND_AUTH_FAILURE_URL:-http://localhost:3000/auth/failure}"
+      FRONTEND_AUTH_TERMS_URL: "${FRONTEND_AUTH_TERMS_URL:-http://localhost:3000/auth/terms}"
     ports:
       - "8000:8000"
     depends_on:
