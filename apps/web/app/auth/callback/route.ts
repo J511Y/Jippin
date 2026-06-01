@@ -32,6 +32,7 @@ const KNOWN_REASONS = new Set([
   'oauth_guard_stale',
   'merge_commit_failed',
   'merge_unavailable',
+  'kakao_sync_unavailable',
 ]);
 
 function origin(request: NextRequest): string {
@@ -39,7 +40,8 @@ function origin(request: NextRequest): string {
 }
 
 function defaultNext(): string {
-  return resolveSafeNext(process.env.NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL, '/');
+  const configured = process.env.NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL;
+  return configured ? resolveSafeNext(configured, '/') : '/';
 }
 
 function sanitizeReason(raw: string | null | undefined): string {
@@ -103,30 +105,49 @@ async function commitMergeIntent(session: Session, signedIntentCookie: string): 
 async function persistKakaoSyncConsent(
   session: Session,
   linkedProvider: Extract<SupabaseProvider, 'kakao' | 'custom:kakao'>,
-): Promise<void> {
-  if (!kakaoAuditEnabled()) return;
+): Promise<boolean> {
+  if (!kakaoAuditEnabled()) return false;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 750);
-  await fetch(`${apiBaseUrl()}/auth/terms/kakao-sync`, {
-    method: 'POST',
-    signal: controller.signal,
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${session.access_token}`,
-    },
-    body: JSON.stringify({
-      supabase_user_id: session.user.id,
-      linked_provider: linkedProvider,
-      provider_access_token: session.provider_token ?? null,
-      provider_refresh_token: session.provider_refresh_token ?? null,
-    }),
-  }).finally(() => clearTimeout(timeout));
+  try {
+    const response = await fetch(`${apiBaseUrl()}/auth/terms/kakao-sync`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        supabase_user_id: session.user.id,
+        linked_provider: linkedProvider,
+        provider_access_token: session.provider_token ?? null,
+        provider_refresh_token: session.provider_refresh_token ?? null,
+      }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function termsRedirect(request: NextRequest, seed: NextResponse, safeNext: string): NextResponse {
   const target = new URL('/auth/terms', origin(request));
   target.searchParams.set('next', safeNext);
   return expireCallbackCookies(redirectFromSeed(seed, target));
+}
+
+function successRedirect(request: NextRequest, seed: NextResponse, safeNext: string): NextResponse {
+  const done = new URL('/auth/callback-done', origin(request));
+  done.searchParams.set('next', safeNext);
+  return expireCallbackCookies(redirectFromSeed(seed, done));
+}
+
+function isLikelyFirstSignup(session: Session): boolean {
+  const createdAt = Date.parse(session.user.created_at ?? '');
+  if (!Number.isFinite(createdAt)) return false;
+  return Math.abs(Date.now() - createdAt) <= 10 * 60 * 1000;
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -182,7 +203,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const linkedProvider = detectNewlyLinkedProvider(data.session.user, intendedProviderCookie);
   if (isKakaoProvider(linkedProvider)) {
-    await persistKakaoSyncConsent(data.session, linkedProvider).catch(() => undefined);
+    const persisted = await persistKakaoSyncConsent(data.session, linkedProvider);
+    if (!persisted) {
+      return failureRedirect(request, 'kakao_sync_unavailable', seed, {
+        next: safeNext,
+        provider: linkedProvider,
+      });
+    }
   }
 
   if (mergeStatus === 'commit_failed') {
@@ -192,12 +219,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     });
   }
 
-  if (requiresInternalTerms(linkedProvider)) {
+  if (requiresInternalTerms(linkedProvider) && isLikelyFirstSignup(data.session)) {
     return termsRedirect(request, seed, safeNext);
   }
 
-  const done = new URL('/auth/callback-done', origin(request));
-  done.searchParams.set('next', safeNext);
-
-  return expireCallbackCookies(redirectFromSeed(seed, done));
+  return successRedirect(request, seed, safeNext);
 }

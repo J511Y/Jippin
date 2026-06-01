@@ -57,7 +57,8 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      const intent = isAnonymousUser(user) ? 'link' : 'signin';
+      const hasSupabaseAnonymousSession = isAnonymousUser(user);
+      const intent = hasSupabaseAnonymousSession ? 'link' : 'signin';
 
       try {
         window.sessionStorage.setItem('jippin_oauth_in_progress', '1');
@@ -69,6 +70,7 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
       url.searchParams.set('provider', provider);
       url.searchParams.set('intent', intent);
       url.searchParams.set('next', resolveNext(nextPath));
+      // The BFF stores this in an HttpOnly pending cookie before OAuth redirect.
       url.searchParams.set('anonymous_user_id', anonymousUserId);
       window.location.assign(url.toString());
     } catch (error) {

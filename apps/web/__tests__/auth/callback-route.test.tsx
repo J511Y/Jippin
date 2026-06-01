@@ -34,13 +34,14 @@ function expectCallbackCookiesExpired(response: Response): void {
   expect(header).toContain('Path=/auth/callback');
 }
 
-function mockSession(provider = 'custom:kakao') {
+function mockSession(provider = 'custom:kakao', createdAt = new Date().toISOString()) {
   return {
     access_token: 'access-token',
     provider_token: null,
     provider_refresh_token: null,
     user: {
       id: 'user-1',
+      created_at: createdAt,
       identities: [{ provider, created_at: '2026-06-01T00:00:00.000Z' }],
     },
   };
@@ -113,6 +114,8 @@ describe('/auth/callback route', () => {
   });
 
   it('expires callback cookies after successful exchange', async () => {
+    process.env.NEXT_PUBLIC_AUTH_KAKAO_SYNC_AUDIT_ENABLED = 'true';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     const freshContext = encodeURIComponent(`custom:kakao|${Date.now()}`);
     supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
       data: { session: mockSession() },
@@ -131,6 +134,29 @@ describe('/auth/callback route', () => {
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe(
       'http://localhost/auth/callback-done?next=%2Fapp%2Freports',
+    );
+    expectCallbackCookiesExpired(response);
+  });
+
+  it('fails closed for Kakao callbacks until sync audit is enabled', async () => {
+    const freshContext = encodeURIComponent(`custom:kakao|${Date.now()}`);
+    supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { session: mockSession() },
+      error: null,
+    });
+
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/callback?code=ok&next=/app/reports', {
+        headers: {
+          cookie: `jippin_oauth_provider=${freshContext}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/auth/failure?reason=kakao_sync_unavailable&next=%2Fapp%2Freports&provider=kakao',
     );
     expectCallbackCookiesExpired(response);
   });
@@ -183,6 +209,29 @@ describe('/auth/callback route', () => {
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe(
       'http://localhost/auth/terms?next=%2Fapp%2Freports',
+    );
+    expectCallbackCookiesExpired(response);
+  });
+
+  it('does not re-gate existing Google users on every login', async () => {
+    const freshContext = encodeURIComponent(`google|${Date.now()}`);
+    supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { session: mockSession('google', '2025-01-01T00:00:00.000Z') },
+      error: null,
+    });
+
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/callback?code=ok&next=/app/reports', {
+        headers: {
+          cookie: `jippin_oauth_provider=${freshContext}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/auth/callback-done?next=%2Fapp%2Freports',
     );
     expectCallbackCookiesExpired(response);
   });

@@ -140,6 +140,12 @@ function redirectWithAccumulatedCookies(response: NextResponse, location: string
   return new NextResponse(null, { status: 302, headers: response.headers });
 }
 
+async function signOutAfterServerMergeIntent(
+  supabase: ReturnType<typeof createRouteHandlerClient>,
+): Promise<void> {
+  await supabase.auth.signOut();
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const url = request.nextUrl;
   const providerRaw = url.searchParams.get('provider');
@@ -176,7 +182,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       });
     }
     setCallbackCookie(response, MERGE_INTENT_COOKIE, signedToken);
-    await supabase.auth.signOut();
+    await signOutAfterServerMergeIntent(supabase);
   }
 
   const options = {

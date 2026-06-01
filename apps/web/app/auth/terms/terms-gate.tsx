@@ -20,6 +20,10 @@ function resolveNext(value: string | null): string {
   return value && isSafeNext(value) ? value : '/auth/success';
 }
 
+function termsAcceptEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_AUTH_TERMS_ACCEPT_ENABLED === 'true';
+}
+
 export function TermsGate({ nextPath }: TermsGateProps) {
   const router = useRouter();
   const [checked, setChecked] = useState<Record<string, boolean>>({});
@@ -27,9 +31,10 @@ export function TermsGate({ nextPath }: TermsGateProps) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const safeNext = useMemo(() => resolveNext(nextPath), [nextPath]);
   const allChecked = REQUIRED_TERMS.every((term) => checked[term.id]);
+  const canSubmitTerms = termsAcceptEnabled();
 
   async function submitTerms() {
-    if (!allChecked) return;
+    if (!allChecked || !canSubmitTerms) return;
     setIsSubmitting(true);
     setErrorMessage(null);
 
@@ -99,11 +104,16 @@ export function TermsGate({ nextPath }: TermsGateProps) {
       </div>
 
       {errorMessage ? <p className="text-sm text-red-600">{errorMessage}</p> : null}
+      {!canSubmitTerms ? (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          약관 동의 저장 API가 Supabase 세션을 검증하도록 준비된 뒤 계속할 수 있습니다.
+        </p>
+      ) : null}
 
       <button
         type="button"
         onClick={() => void submitTerms()}
-        disabled={!allChecked || isSubmitting}
+        disabled={!allChecked || isSubmitting || !canSubmitTerms}
         className="w-fit rounded-md bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
       >
         {isSubmitting ? '저장 중...' : '동의하고 계속'}

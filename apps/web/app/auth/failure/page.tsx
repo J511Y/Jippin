@@ -47,6 +47,10 @@ const REASON_COPY: Record<string, { title: string; body: string }> = {
     title: '이전 기능을 준비 중입니다',
     body: '기존 계정으로 비회원 검토 데이터를 옮기는 서버 기능이 아직 준비되지 않았습니다.',
   },
+  kakao_sync_unavailable: {
+    title: '카카오 약관 확인이 필요합니다',
+    body: '카카오 Sync 동의 저장 경로가 준비되지 않아 로그인을 완료할 수 없습니다. 잠시 후 다시 시도해 주세요.',
+  },
 };
 
 function clearOAuthGuard(): void {
