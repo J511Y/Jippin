@@ -1,6 +1,6 @@
 # ADR 0004 — Neon → Supabase 전환 (DB / Auth) + ADR-0003 부분 supersede
 
-- **상태**: **Proposed (2026-05-29)** — CEO 결정 + CTO 검토 + 사용자 콘솔 작업 대기.
+- **상태**: **Proposed (2026-05-29, rev2 2026-06-01)** — CEO 결정 + CTO 검토 + 사용자 콘솔 작업 대기. rev2 에서 보드 코드 리뷰 4건 반영 (refresh/session 정책 분리, anonymous upgrade Manual Linking 봉인, 약관 동의 게이트 순서 재설계, Kakao Sync 저장 경로 정정).
 - **제안자**: CTO (agent `4edca504-7a87-4c01-93b8-7524a223cd50`)
 - **승인 권자**: CEO (정책), CTO (기술), Security Lead (탈취 벡터 재평가), Backend Lead (모델·핸들러 영향)
 - **인계 출처**: CMP-573 본문 (Supabase 전환 정책 발의)
@@ -23,7 +23,7 @@
 | **자동 병합 (동일 이메일)** | **자동 병합 금지** — 단일 provider 탈취 벡터 (CEO 정책 / ADR-0003 §2.3) | **Supabase Identity Linking 허용** — 동일 검증된 이메일에 대해 두 번째 provider 가 동일 `auth.users.id` 로 묶임 | ADR-0003 §2.3 / AGENTS.md §4.7 #9 supersede — **CEO 결정 필요 (§7 미해결)** |
 | **OAuth provider** | `google` · `naver` · `kakao` 3종 ENUM 고정 (자체 콜백) | **Google / Kakao**: Supabase built-in provider. **Naver**: Supabase Custom OAuth/OIDC provider (PoC 필요) | ADR-0003 §2.2 (라우트 정본) supersede — 우리 측 `/auth/{provider}/start` · `/auth/callback/{provider}` 폐기 후보 |
 | **OAuth state store** | Redis `oauth_state:*` / `pending_signup:*` TTL ≤10분 | **Supabase 측이 PKCE state · 약관 동의 → 가입 완료 사이 상태를 관리** | ADR-0003 §2.2 supersede — 자체 Redis state store 폐기. Redis 자체는 채팅·세션 캐시로 잔존. |
-| **Refresh Token** | 자체 JWT `AUTH_JWT_REFRESH_TTL_SECONDS=604800` (7일) | **Supabase Auth refresh token** (Supabase Dashboard / Project Settings 의 JWT 수명 정본) | ADR-0003 §봉인표 + 보안 런북 POL-AUTH-002 재정렬 필요 |
+| **Access Token / Refresh + Session 수명** | 자체 JWT `AUTH_JWT_ACCESS_TTL_SECONDS` + `AUTH_JWT_REFRESH_TTL_SECONDS=604800` (7일) 단일 환경변수 봉인 | **Supabase Auth 가 두 축으로 분리 운영**. ① Access token TTL = `Authentication → Settings → JWT Expiry` (기본 1h). ② 우리 7일 정책에 대응하는 정본은 `Authentication → Sessions → Session lifetime` + `Inactivity timeout` + `Refresh token reuse interval` (refresh rotation/reuse detection 포함). **JWT Expiry 만으로 7일 정책을 표현할 수 없다.** | ADR-0003 §봉인표 + 보안 런북 POL-AUTH-002 재정렬 필요 |
 | **객체 스토리지** | Cloudflare R2 (zero-egress, 한국 PoP) | **R2 유지** — Supabase Storage 전환은 별도 ADR / 후속 이슈. presigned URL 전략 그대로. | ADR-0001 §6 유지 |
 | **AI / LLM** | SAM2 + OpenAI GPT-4.1-mini / GPT-4o, LangChain v0.3+ | **유지** — Supabase 는 AI 서버 호스팅 대상이 아니다. | ADR-0001 §7 유지 |
 | **앱 배포** | AWS Lightsail Seoul (ADR-0002 Proposed) | **유지** — Supabase 는 FastAPI / AI 서버 배포처가 아니다. Web / API 컨테이너는 Lightsail (or ADR-0002 후속) 위에서 계속 운영. | ADR-0001 §8 / ADR-0002 유지 |
@@ -64,7 +64,7 @@ CMP-573 에서 사용자(CEO 권한 행사) 가 **Neon Postgres + 자체 OAuth/J
 - CEO 브리프 §5 강한 제약 — 단일 인스턴스 + docker-compose. 본 ADR 은 이 제약을 깨지 않는다 (앱 컨테이너는 Lightsail 그대로).
 - AGENTS.md §4.4 시크릿 정책 — Supabase URL / anon key / service role key 는 `.env` / 운영 시크릿 매니저. `.env.example` 에는 변수명만.
 - AGENTS.md §4.6 결과 화면 법적 고지 — Supabase Auth UI 위젯을 쓰더라도 우리 측 결과 화면 컴포넌트는 우리 코드가 렌더하므로 영향 없음.
-- `docs/runbooks/security-policy.md` POL-AUTH-002 (refresh 토큰 7일) — Supabase 의 기본 refresh TTL 과 정합하도록 Project Settings 에서 정렬해야 함 (§4.4).
+- `docs/runbooks/security-policy.md` POL-AUTH-002 (refresh 토큰 7일) — Supabase 에서 동등한 수명 정책은 단일 “JWT Expiry” 가 아니라 **Session lifetime + Inactivity timeout + Refresh token reuse interval (rotation 포함)** 3종이다. 정렬 절차는 §4.4 에서 명문화.
 
 ---
 
@@ -139,7 +139,9 @@ CREATE TABLE public.terms_consents (
 
 ### 2.3 비회원 사전검토 흐름 (ADR-0003 §2.2 부분 supersede)
 
-**새 흐름 (Proposed).**
+**새 흐름 (Proposed, rev2).** 약관 동의 게이트는 `linkIdentity()` **이전** 으로 둔다. 사용자가 약관 거부·이탈해도 anonymous 세션만 유지되고 `auth.users` 변형은 일어나지 않는다 (ADR-0003 / AGENTS.md §4.7 #2: “미동의 시 익명 세션 유지” 보존).
+
+**Google / Naver — 우리 측 약관 동의가 먼저.**
 
 ```
 [브라우저]                                              [Supabase Auth]
@@ -148,21 +150,69 @@ CREATE TABLE public.terms_consents (
   │                                                  auth.users row 생성
   │                                                  (is_anonymous=true)
   │                                                  Supabase JWT 발급      ◀────
-  │  2) (전환 시점) 사용자가 Google/Kakao/Naver 클릭
-  │     supabase.auth.linkIdentity({ provider })           ────▶
+  │  2) (전환 시점) 사용자가 “Google/Naver 로 계속” 클릭
+  │     ⛔ 아직 OAuth 시작하지 않음.
+  │     우리 측 약관 동의 모달 노출 (브라우저 내, anonymous JWT 상태)
+  │       ├── 거부 / 이탈 → anonymous 세션 그대로 유지. linkIdentity 호출 안 함.
+  │       │                  auth.users / auth.identities 어디에도 row 변형 없음.
+  │       └── 동의 → 우리 서버에 동의 의도(intent) 전달:
+  │                  POST /api/auth/terms-accept-intent
+  │                    body: { user_id, term_id, version, source='internal_signup' }
+  │                    Authorization: Bearer <anonymous Supabase JWT>
+  │                  서버: anonymous JWT 검증 → public.terms_consent_intents
+  │                        (user_id, term_id, version, source, agreed_at, intent_only=true)
+  │  3) 동의가 서버에 기록된 직후에만 클라이언트가
+  │     supabase.auth.linkIdentity({ provider })             ────▶
   │                                                  provider OAuth 진행
-  │                                                  콜백 → auth.identities
+  │                                                  콜백 → auth.identities row 추가
   │                                                  auth.users.is_anonymous=false
-  │                                                  (동일 row 승격 — claim 자동)
-  │  3) Google/Naver: 우리 측 약관 동의 모달 노출
-  │     약관 동의 → POST /api/auth/terms-accept
-  │     서버: Supabase JWT 검증 → public.terms_consents insert
+  │                                                  (동일 row 승격 — claim 자동)        ◀────
+  │  4) 콜백 복귀 후 클라이언트가 다시 호출:
+  │     POST /api/auth/terms-accept-commit
+  │       body: { intent_ids[] }
+  │       Authorization: Bearer <permanent Supabase JWT>
+  │     서버: permanent JWT 검증 + auth.users.is_anonymous=false 확인
+  │            → intents row 를 public.terms_consents 로 승격 insert
   │            (source='internal_signup')
-  │     Kakao: Kakao Sync 약관 신뢰
-  │            서버 측 콜백에서 Supabase Auth Hook(또는 webhook) 으로
-  │            public.terms_consents insert (source='kakao_sync')
-  │  4) 익명 세션의 도면·리포트는 같은 auth.users.id 를 그대로 사용 → claim 자동.
+  │  5) 익명 세션의 도면·리포트는 같은 auth.users.id 를 그대로 사용 → claim 자동.
 ```
+
+> Intent → Commit 2-단계 분리의 이유: OAuth redirect 사이의 콜백 실패·이탈에도 “permanent 계정만 있고 동의 row 없음” 상태를 방지하기 위함이다. intent 단계에서 동의가 잡혀 있으면 콜백 실패 시 intent TTL (예: 30분) 만료로 정리되고, 콜백 성공 시 동일 동의가 정식 `terms_consents` 로 승격된다.
+
+**Kakao — Kakao Sync 약관 화면이 게이트.**
+
+```
+[브라우저]                                              [Supabase Auth + Kakao]
+  │  1) 익명 진입 (동일)
+  │  2) (전환 시점) 사용자가 “카카오로 계속” 클릭
+  │     supabase.auth.linkIdentity({ provider: 'kakao' })   ────▶
+  │                                                  Kakao 인증 화면 + Kakao Sync 약관
+  │                                                    ├── 거부 → Kakao 가 error 로 복귀.
+  │                                                    │           auth.identities row 미생성,
+  │                                                    │           anonymous 세션 유지.
+  │                                                    └── 동의 → 콜백 → auth.identities 추가
+  │                                                                auth.users.is_anonymous=false  ◀────
+  │  3) Supabase DB 측에서 Postgres trigger 가 auth.users AFTER UPDATE
+  │     (is_anonymous=true → false) 를 감지하면, 직전에 auth.identities 에
+  │     추가된 provider 가 'kakao' 인 경우 한정으로 public.terms_consents
+  │     (source='kakao_sync', term_id=정책 정본 id, version=정본 버전)
+  │     row 를 SECURITY DEFINER 함수로 insert.
+  │     — 또는 Database Webhook 으로 우리 FastAPI 의
+  │       POST /api/auth/kakao-sync-consent-ingest 를 호출하여 동일 작업 수행.
+```
+
+> Kakao Sync 의 약관 동의는 카카오 콘솔에 등록한 약관 메타데이터(노출 문구·버전)에 사용자가 동의했음을 카카오가 보증하는 흐름이다. 우리는 사용자 동작이 카카오 측에 기록되어 있음을 신뢰하고, DB 측 트리거 또는 Database Webhook 으로 우리 도메인에 동일한 의미의 row 를 후속 저장한다.
+
+**3개 흐름 공통 — 익명 세션 유지 보장.**
+
+| 시점 | 사용자 행동 | `auth.users.is_anonymous` | `auth.identities` | `public.terms_consents` |
+|---|---|---|---|---|
+| 진입 | 익명 시작 | true (신규 row) | (없음) | (없음) |
+| Google/Naver 약관 거부 | 모달 닫기 | true (보존) | (없음) | (없음) |
+| Google/Naver 약관 동의 후 OAuth 거부 / 이탈 | OAuth 화면 닫기 | true (보존) | (없음) | intent row 만 (TTL 만료) |
+| Google/Naver 정상 가입 | OAuth 완료 | false | provider row 1 추가 | source='internal_signup' commit |
+| Kakao Sync 거부 | 카카오 측에서 reject | true (보존) | (없음) | (없음) |
+| Kakao Sync 정상 가입 | 카카오 측 동의 완료 | false | kakao row 1 추가 | source='kakao_sync' (trigger/webhook) |
 
 **API 라우트 변화.**
 
@@ -172,8 +222,10 @@ CREATE TABLE public.terms_consents (
 | `GET /auth/callback/{provider}` | **폐기.** Supabase 가 콜백 호스팅. Supabase 콜백 → 우리 프론트 redirect URL 로 복귀. |
 | `POST /auth/refresh` | **폐기.** Supabase JS SDK 가 자동 refresh. |
 | `POST /auth/logout` | **폐기.** `supabase.auth.signOut()` 사용. Redis 블랙리스트 불필요. |
-| (신규) `POST /api/auth/terms-accept` | **신설.** Google/Naver 가입 직후 우리 측 약관 동의를 받아 `public.terms_consents` 에 기록. Supabase JWT 를 `Authorization: Bearer` 로 검증. |
-| (신규) Supabase Auth Hook (`before_user_created` or `after_user_created`) | **검토.** Kakao 콜백에서 Kakao Sync 약관 source 분리 저장을 자동화. 본 ADR §4.5 PoC 범위. |
+| (신규) `POST /api/auth/terms-accept-intent` | **신설.** Google/Naver `linkIdentity()` **이전** 에 anonymous JWT 컨텍스트에서 사용자의 약관 동의 의도를 `public.terms_consent_intents` (TTL ≈ 30분) 에 기록. Supabase JWT 를 `Authorization: Bearer` 로 검증. |
+| (신규) `POST /api/auth/terms-accept-commit` | **신설.** OAuth 콜백 복귀 후 permanent JWT 컨텍스트에서 intent row 를 `public.terms_consents (source='internal_signup')` 로 승격 insert. `auth.users.is_anonymous=false` 확정 후에만 동작. |
+| (신규) `auth.users` AFTER UPDATE Postgres trigger (`SECURITY DEFINER`) | **신설 (1순위).** `auth.users` 의 `is_anonymous` 가 `true → false` 로 전이될 때, 직전에 `auth.identities` 에 추가된 provider 가 `'kakao'` 이면 `public.terms_consents (source='kakao_sync')` 1행 insert. Supabase 가 노출하는 표준 메커니즘. `before_user_created` / `after_user_created` Auth Hook 은 **사용하지 않는다** — 전자는 `auth.users` row 가 commit 되기 전이라 FK 위반, 후자는 현재 Supabase Auth Hook 카탈로그에 존재하지 않음. |
+| (신규) `POST /api/auth/kakao-sync-consent-ingest` + Supabase Database Webhook | **대체 경로.** 트리거 채택이 운영상 부담스러우면 `auth.users` UPDATE 이벤트를 Database Webhook 으로 우리 FastAPI 에 전달. 서버에서 Supabase admin SDK 로 `auth.identities` 의 provider 가 `'kakao'` 임을 확인 후 `terms_consents` insert. PoC §4.5 범위. |
 
 **환경변수 변화 (정본은 `.env.example` PR 에서 봉인).**
 
@@ -224,6 +276,17 @@ FRONTEND_AUTH_FAILURE_URL=
 | **B — Manual only (ADR-0003 정책 보존)** | 자동 linking 안 함. 사용자가 우리 측 “계정 통합” 흐름을 명시 호출해야만 `supabase.auth.linkIdentity()` 가 실행되어 row 추가. | `Allow account linking` = **manual only**. | Supabase 채택 이득 일부 상쇄(가입 마찰 ↑). 다만 ADR-0003 탈취 벡터 분석을 보존. |
 
 > **CTO 권고**: 결정 보류. CEO 가 §7 의 미해결 결정에 답해야 본 ADR 이 Accepted 될 수 있다. 본 ADR 본문은 두 옵션 모두 구현 가능하도록 §2.5·§6 의 자식 이슈 형상을 유지한다.
+
+#### 2.4.1 Manual Linking 활성화 — Anonymous Upgrade 의 무조건 운영 조건 (옵션 A/B 무관)
+
+§2.4 의 옵션 A/B 는 “이미 가입된 영구 user 사이의 동일 이메일 자동 병합” 정책이다. 그러나 **anonymous → permanent 전환** (본 ADR §2.3 의 핵심 흐름) 은 별개의 Supabase 기능인 `supabase.auth.linkIdentity()` 를 사용하며, 이 API 는 Supabase Auth 의 **Manual Linking** 설정이 **enable** 되어 있어야만 동작한다.
+
+| Supabase 설정 | API | 본 ADR 의존도 |
+|---|---|---|
+| `Authentication → Settings → Allow account linking` (manual) | `supabase.auth.linkIdentity()` | **무조건 enable 필요** — anonymous upgrade 흐름 전체가 이 API 위에 있다. |
+| `Authentication → Settings → Allow account linking` (automatic) | 동일 이메일 자동 병합 (가입 시점 자동 처리) | §2.4 옵션 A 시 enable, 옵션 B 시 disable. |
+
+**봉인.** 옵션 A 선택 → manual + automatic 둘 다 enable. 옵션 B 선택 → manual 만 enable, automatic 은 disable. **옵션 B 라도 manual linking 자체를 끄면 §2.3 의 anonymous → permanent 흐름이 동작하지 않아 본 ADR 의 비회원 사전검토 정책 자체가 무너진다.** 사용자 콘솔 작업 (§7.2.5) 에서 두 토글을 분리 운영하도록 명시.
 
 ### 2.5 OAuth Provider 매핑
 
@@ -283,19 +346,37 @@ CREATE POLICY "users can read own uploads" ON public.uploads
 - 자체 JWT 발급 코드 제거 (ADR-0003 §2.2 의 access/refresh TTL 환경변수 폐기와 연동).
 - Refresh 는 SDK 측 자동 처리. 서버 측 블랙리스트 불필요.
 
-### 4.4 Refresh Token TTL — 보안 런북 정합
+### 4.4 Refresh / Session 수명 — 보안 런북 POL-AUTH-002 정합 (SSOT 분리 이동)
 
-Supabase Project Settings → JWT Expiry (default access token 1h, refresh token 인덱스는 Settings 의 “Refresh Token Reuse Detection” + 토큰 회전 정책) 를 `docs/runbooks/security-policy.md` POL-AUTH-002 (refresh 7일) 와 정합하도록 설정한다.
+Supabase Auth 에서 “토큰 수명” 은 **두 축으로 분리** 운영된다. 본 ADR 은 POL-AUTH-002 의 7일 정책을 단일 “JWT Expiry” 로 옮기지 않고, 의미가 같은 3종 설정으로 분리 봉인한다.
 
-- 본 ADR Accepted 시 보안 런북 POL-AUTH-002 의 “환경변수 정본” 줄은 `apps/api/.env.example::AUTH_JWT_REFRESH_TTL_SECONDS` → **`Supabase Dashboard → Authentication → Settings → JWT Expiry`** 로 정정 필요. `docs/명세서-모순.md` CFLT-006 의 “Resolved (7일/604800s)” 결론은 유지하되 SSOT 위치만 이동.
+| 정책 의미 | Supabase 정본 위치 | 본 ADR 정렬 값 (POL-AUTH-002 7일 정책 대응) |
+|---|---|---|
+| **Access token TTL** (단기 베어러 수명) | `Authentication → Settings → JWT Expiry` | Supabase 기본값(1h) 유지. 우리 7일 정책의 대상이 **아님**. |
+| **세션 최대 수명** (재로그인 강제까지의 절대 한계) | `Authentication → Sessions → Session lifetime` (a.k.a. `Time-box user sessions`) | **7일 (604800s)** — POL-AUTH-002 의 본래 의도. |
+| **세션 비활성 만료** (마지막 활동 후 자동 만료) | `Authentication → Sessions → Inactivity timeout` | **7일 이하** — Session lifetime 보다 짧거나 같게. 운영 협의로 결정 (예: 14일 정책 외 시 7일 그대로). |
+| **Refresh token 회전 / 재사용 탐지** | `Authentication → Sessions → Refresh token reuse interval` (rotation 포함) | reuse interval ≤ 10s (기본값) 유지 + reuse detection enable. 회전 보안 정본. |
 
-### 4.5 Auth Hooks PoC (Naver Custom OAuth + Kakao Sync source 분리)
+- 본 ADR Accepted 시 보안 런북 POL-AUTH-002 의 “환경변수 정본” 줄은 `apps/api/.env.example::AUTH_JWT_REFRESH_TTL_SECONDS` → **`Supabase Dashboard → Authentication → Sessions → Session lifetime` (+ `Inactivity timeout`, + `Refresh token reuse interval` 회전 정책)** 로 정정한다. **`JWT Expiry` 단독으로 옮기지 않는다 — 이는 access token TTL 만 의미하므로 7일 refresh/session 정책을 표현할 수 없다.**
+- `docs/명세서-모순.md` CFLT-006 의 “Resolved (7일/604800s)” 결론은 유지하되 SSOT 위치만 위 표대로 이동.
+- 보안 런북 후속 작업은 자식 이슈 §5.3 #9 가 처리. 본 ADR 자체는 위치 이동 사실만 봉인한다.
+
+### 4.5 PoC — Naver Custom OAuth + Kakao Sync 후속 저장 경로
 
 본 ADR Accepted 시 가장 먼저 풀어야 할 기술 리스크.
 
-- Naver Custom OAuth/OIDC 가 Supabase Dashboard 에서 활성화되는 케이스 검증.
-- Kakao 콜백 직후 `before_user_created` 또는 `after_user_created` Auth Hook 으로 `public.terms_consents (source='kakao_sync')` 자동 insert 가 트랜잭션 정합으로 가능한지 검증.
-- PoC 실패 시 §2.5 fallback 또는 본 ADR 의 Accepted 조건 재조정.
+**4.5.1 Naver Custom OAuth/OIDC PoC.** Supabase Dashboard 의 Custom OAuth provider 로 Naver 가 §2.5 PoC 성공 기준을 통과하는지 검증. 실패 시 §2.5 fallback.
+
+**4.5.2 Kakao Sync source 분리 저장 PoC.** **Auth Hook 가정 금지** — 현재 Supabase Auth Hook 카탈로그에는 `after_user_created` 가 존재하지 않으며, `before_user_created` 는 `auth.users` row commit 이전이라 `terms_consents.user_id` FK insert 가 불가능하다. 대신 다음 2개 경로 중 하나를 채택한다.
+
+| # | 경로 | 메커니즘 | 평가 축 |
+|---|---|---|---|
+| **1순위** | **Postgres trigger on `auth.users` AFTER UPDATE** | `SECURITY DEFINER` 함수로 `is_anonymous: true→false` 전이 + 직전 `auth.identities` provider='kakao' 조건일 때 `terms_consents` 1행 insert. Supabase 가 `auth` 스키마 트리거 작성을 허용 (RLS 우회는 `SECURITY DEFINER` + `search_path` 봉인). | 트랜잭션 정합 ✅, 외부 호출 비용 0, 운영 가시성은 DB 로그 의존. |
+| **2순위** | **Supabase Database Webhook → 우리 FastAPI** | `auth.users` UPDATE 이벤트를 Supabase Database Webhook 으로 우리 FastAPI `/api/auth/kakao-sync-consent-ingest` 에 push. 서버에서 Supabase admin SDK 로 provider 확인 + `terms_consents` insert. | 운영 가시성 ✅ (FastAPI 로그·메트릭), 실패 시 webhook 재시도 정책 의존, 트리거 대비 1-RTT 지연. |
+
+**PoC 성공 기준 (Kakao Sync).** 트리거(또는 webhook) 가 Kakao 정상 콜백 직후 1회만 fire 되고 동일 `(user_id, term_id, version, source='kakao_sync')` UNIQUE 제약을 위반하지 않는다. Naver / Google 콜백에서는 fire 되지 않거나 동일 가드로 silent skip.
+
+**PoC 실패 시 fallback.** §2.5 fallback (Naver 만 자체 OAuth) 적용 + Kakao Sync 동의 저장은 콜백 복귀 후 우리 클라이언트가 명시적으로 `POST /api/auth/kakao-sync-consent-commit` 호출 (Authorization: Bearer Supabase JWT) 하는 application post-auth sync 로 전환.
 
 ---
 
@@ -351,7 +432,7 @@ Supabase Project Settings → JWT Expiry (default access token 1h, refresh token
 | `docs/명세서-모순.md` CFLT-003 (ENUM vs VARCHAR) | Status | ENUM 봉인 폐기로 row 가 Resolved → Reframed (Supabase Auth 가 provider 식별 정본). | 자식 이슈 §5.3 #1 |
 | `docs/명세서-모순.md` CFLT-005 (localStorage 식별자) | Status | Supabase Anonymous Sign-In 의 JWT 가 localStorage 키를 대체. row 가 Resolved → Reframed. | 자식 이슈 §5.3 #1 |
 | `docs/명세서-모순.md` (신규 CFLT-007) | — | **자동 병합 금지 정책의 supersede 여부** 를 추적할 새 row 를 자식 이슈에서 추가. | 자식 이슈 §5.3 #1 |
-| `docs/runbooks/security-policy.md` POL-AUTH-002 | 환경변수 정본 위치 | `apps/api/.env.example::AUTH_JWT_REFRESH_TTL_SECONDS` → `Supabase Dashboard → Authentication → Settings → JWT Expiry`. | 자식 이슈 §5.3 #9 |
+| `docs/runbooks/security-policy.md` POL-AUTH-002 | 환경변수 정본 위치 | `apps/api/.env.example::AUTH_JWT_REFRESH_TTL_SECONDS` → `Supabase Dashboard → Authentication → Sessions → Session lifetime` + `Inactivity timeout` + `Refresh token reuse interval (rotation)`. **`JWT Expiry` 는 access token TTL 만 의미하므로 7일 정책의 SSOT 가 아니다.** | 자식 이슈 §5.3 #9 |
 | `.github/workflows/neon-pr-branch.yml`, `.github/workflows/ci.yml` (`migrate-check`), `.github/workflows/deploy.yml` (`release-migrate`) | Neon 전제 | Supabase Branching 또는 Supabase CLI 기반 워크플로우로 1:1 재작성. | 자식 이슈 §5.3 #2 |
 
 ---
@@ -383,8 +464,14 @@ Supabase Project Settings → JWT Expiry (default access token 1h, refresh token
 2. **`SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_JWT_SECRET` / `SUPABASE_PROJECT_REF` / Supabase Postgres `DATABASE_URL`** 발급 → 운영 시크릿 매니저 (or `.env`). **본 ADR / 자식 이슈 / PR 본문에는 변수명만 둔다.**
 3. **Authentication → Providers → Google / Kakao 활성화** — 각 사 콘솔에서 client id/secret 발급, Supabase callback URL (`https://<project-ref>.supabase.co/auth/v1/callback`) 등록.
 4. **Authentication → Providers → Naver (Custom OAuth)** — PoC (§4.5). 실패 시 fallback (§2.5).
-5. **Authentication → Settings → Identity Linking** — §7.1.1 결정 옵션 적용.
-6. **Authentication → Settings → JWT Expiry** — refresh 7일 (POL-AUTH-002) 정렬.
+5. **Authentication → Settings → Account Linking** — **두 토글을 분리 운영** (§2.4.1 봉인):
+   - **Manual linking = ON (무조건)** — §2.3 anonymous → permanent 흐름이 `supabase.auth.linkIdentity()` 에 의존하므로 옵션 A/B 와 무관하게 enable 필요.
+   - **Automatic linking** — §7.1.1 의 옵션 A 선택 시 ON, 옵션 B 선택 시 OFF.
+6. **Authentication → Settings + Sessions — 토큰 수명 정합** (§4.4 표대로):
+   - **JWT Expiry** = Supabase 기본값(1h) 유지 (= access token TTL). 7일 정책 적용 대상 아님.
+   - **Sessions → Session lifetime** = 7일 (604800s) — POL-AUTH-002 본래 의미.
+   - **Sessions → Inactivity timeout** = 7일 이하로 정렬.
+   - **Sessions → Refresh token reuse detection** = ON, reuse interval 기본값 유지.
 7. **GitHub Actions secrets / variables** 갱신 — `NEON_*` 시리즈를 `SUPABASE_*` 로 1:1 교체.
 
 > 위 항목 중 어느 하나라도 미정이면 본 ADR 은 Accepted 될 수 없다. 본 ADR 을 들고 구현을 시작하는 자식 이슈 (§5.3 #2~#9) 도 동일하게 Accepted 를 의존.
@@ -399,10 +486,14 @@ Supabase Project Settings → JWT Expiry (default access token 1h, refresh token
 | 인증 SSOT | `auth.users` | `public.users` 는 프로필 테이블 (FK only) |
 | 비회원 사전검토 | `supabase.auth.signInAnonymously()` + `is_anonymous` flag | `anonymous_users` 테이블 폐기 |
 | 자체 OAuth 콜백 | 폐기 | `supabase.auth.signInWithOAuth` / `linkIdentity` 가 대체 |
-| Identity linking | **옵션 A 또는 B — §7.1.1 결정 대기** | 본 ADR 채택 옵션이 정해지면 본 줄 갱신 |
+| Manual Linking | **무조건 ON (옵션 A/B 무관)** — anonymous → permanent 흐름 (§2.3 / §2.4.1) | `supabase.auth.linkIdentity()` 가 활성화되어야 함 |
+| Automatic Identity Linking | **옵션 A 또는 B — §7.1.1 결정 대기** | 본 ADR 채택 옵션이 정해지면 본 줄 갱신 (옵션 A → ON, 옵션 B → OFF) |
+| 약관 동의 게이트 순서 (Google/Naver) | `linkIdentity()` **이전** — intent → OAuth → commit (§2.3) | 약관 거부 시 `auth.users` 변형 없이 anonymous 세션 유지 |
+| 약관 동의 게이트 (Kakao) | Kakao Sync 약관 화면 자체가 게이트. 후속 저장은 `auth.users` AFTER UPDATE Postgres trigger 1순위, Database Webhook 2순위 (§2.3 / §4.5.2) | `before/after_user_created` Auth Hook 사용 금지 |
 | OAuth provider 콘솔 | Supabase Dashboard | 사용자 콘솔 작업 (§7.2.3·4) |
 | OAuth state store | Supabase | Redis `oauth_state:*` / `pending_signup:*` 폐기. Redis 자체는 채팅·세션 캐시로 잔존. |
-| Refresh Token TTL | Supabase Project Settings (POL-AUTH-002 정합 = 7일) | 환경변수 정본 폐기 |
+| Access Token TTL | Supabase `Authentication → Settings → JWT Expiry` (기본 1h) | 7일 정책 대상 아님 |
+| Session lifetime + Inactivity + Refresh reuse | Supabase `Authentication → Sessions` 3종 — POL-AUTH-002 정합 = 7일 | 환경변수 정본 폐기. SSOT 가 단일 “JWT Expiry” 가 아님을 §4.4 에서 봉인 |
 | 약관 동의 모델 | `public.terms_consents` 유지, `user_id` → `auth.users(id)` | source 분리 보존 |
 | 객체 스토리지 | Cloudflare R2 유지 | ADR-0001 §6 보존 |
 | AI / LLM | SAM2 + OpenAI + LangChain 유지 | ADR-0001 §7 보존 |
@@ -428,6 +519,7 @@ Supabase Project Settings → JWT Expiry (default access token 1h, refresh token
 |---|---|---|
 | 2026-05-29 | 사용자 (CEO 권한 행사) | CMP-573 본문에서 Neon → Supabase 전환 발의. |
 | 2026-05-29 | CTO (`4edca504-...`, CMP-573) | 본 ADR-0004 `Proposed` 초안 발행. ADR-0003 부분 supersede 범위 + 자동 병합 정책 옵션 A/B 회부 + Naver PoC 큐잉. |
+| 2026-06-01 | CTO (`4edca504-...`, CMP-573) | rev2 — 보드 코드 리뷰 4건 반영. (1) Refresh/Session SSOT 를 `JWT Expiry` 단독 → `Session lifetime + Inactivity timeout + Refresh token reuse interval` 3종으로 분리 (§0/§1.3/§4.4/§6/§7.2/§8). (2) Anonymous → permanent 흐름의 Manual Linking enable 운영 조건을 §2.4.1 신설로 봉인 (옵션 A/B 무관). (3) Google/Naver 약관 동의 게이트를 `linkIdentity()` **이전** 으로 이동, intent → OAuth → commit 2-단계로 재설계, 약관 거부 시 anonymous 세션 유지 보장 (§2.3). (4) Kakao Sync 후속 저장 경로를 `auth.users` AFTER UPDATE Postgres trigger 1순위 + Database Webhook 2순위로 정정 (§2.3 표/§4.5.2). `before_user_created`/`after_user_created` Auth Hook 가정 제거. |
 | _pending_ | CEO | §7.1 정책 결정. |
 | _pending_ | 사용자 | §7.2 콘솔 작업 + 시크릿 발급. |
 | _pending_ | CTO | 위 두 단계 완료 시 본 ADR 을 `Accepted` 로 승급. 자식 이슈 §5.3 #1~#9 일괄 발행. |
