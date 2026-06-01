@@ -104,8 +104,41 @@ jobs:
         shell: bash
         run: echo "EXPIRES_AT=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
 
-      - name: Create Neon Branch
+      - name: Pre-flight Neon capacity check
         if: steps.guard.outputs.skip == 'false'
+        id: capacity
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+          # Neon free-tier hard cap is 10 branches. Override via repo variable
+          # `NEON_BRANCH_CAP` when on a paid plan with a higher limit.
+          NEON_BRANCH_CAP: ${{ vars.NEON_BRANCH_CAP }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cap="${NEON_BRANCH_CAP:-10}"
+          # `jq` is preinstalled on ubuntu-latest runners.
+          branches_json=$(curl -fsS \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            -H "Accept: application/json" \
+            "https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}/branches")
+          count=$(echo "${branches_json}" | jq '.branches | length')
+          echo "branch_count=${count}" >> "$GITHUB_OUTPUT"
+          echo "branch_cap=${cap}" >> "$GITHUB_OUTPUT"
+          if [[ "${count}" -ge "${cap}" ]]; then
+            echo "::warning::Neon project at branch capacity (${count} of ${cap}). Skipping preview branch creation for this PR — preview migration validation paused until a slot frees up or the plan is upgraded."
+            echo "at_capacity=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Neon branch usage: ${count}/${cap}."
+            echo "at_capacity=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Neon Branch
+        # CMP-594: only call the create-branch action when the project is below
+        # its branch cap (verified via Neon API above). This means a failure
+        # here is a real misconfiguration (bad API key / project id / parent
+        # branch / Neon outage) and we want the job to fail loud, not silently.
+        if: steps.guard.outputs.skip == 'false' && steps.capacity.outputs.at_capacity == 'false'
         id: create_neon_branch
         uses: neondatabase/create-branch-action@v6
         with:
@@ -131,13 +164,13 @@ jobs:
           fi
 
       - name: Setup Python ${{ env.PYTHON_VERSION }}
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Setup uv ${{ env.UV_VERSION }}
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
@@ -147,7 +180,7 @@ jobs:
             apps/api/pyproject.toml
 
       - name: uv sync
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         shell: bash
         working-directory: apps/api
         run: |
@@ -158,7 +191,7 @@ jobs:
           fi
 
       - name: alembic upgrade head (preview)
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         working-directory: apps/api
         env:
           APP_ENV: test
@@ -166,7 +199,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Comment preview branch on PR
-        if: steps.guard.outputs.skip == 'false' && github.event.action != 'synchronize'
+        if: steps.guard.outputs.skip == 'false' && github.event.action != 'synchronize' && steps.create_neon_branch.outputs.db_url != ''
         uses: actions/github-script@v7
         env:
           PREVIEW_BRANCH: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}
