@@ -2,55 +2,73 @@
 
 import { useState } from 'react';
 
-import { apiBaseUrl } from '@/lib/api-base-url';
 import { getOrCreateAnonymousUserId } from '@/lib/anonymous-user';
-import { DEFAULT_NEXT, resolveSafeNext } from '@/lib/safe-redirect';
+import { isSafeNext } from '@/lib/safe-redirect';
+import { createBrowserSupabaseClient } from '@/lib/supabase/browser';
+import type { UiProvider } from '@/lib/supabase/providers';
+
+import { IdentityAlreadyExistsModal } from './identity-already-exists-modal';
 
 /**
  * 간편가입 OAuth 시작 버튼 (CMP-557, CMP-564).
  *
  * - 자체 가입/아이디 찾기/비밀번호 찾기 UI 는 정책상 존재하지 않는다.
- * - 흐름: 버튼 클릭 → `GET /auth/{provider}/start?return_url=<absolute>&anonymous_user_id=<id>` 로
- *   브라우저를 이동시킨다. 백엔드는 302 로 provider authorization URL 까지 곧장 보낸다.
- * - return_url 은 `/login?next=...` 로 들어온 경로를 절대 URL 로 변환해 그대로 전달한다.
- *   `next` 는 lib/safe-redirect 의 `isSafeNext` SSOT 를 거쳐 open-redirect (`//evil.com` 등) 를
- *   원천 차단한 뒤 origin 에 붙인다. (CMP-582 / runbook §11 R11)
+ * - 흐름: 버튼 클릭 → Supabase 현재 user 확인 → `/auth/oauth/start` BFF 로 이동.
+ * - Phase 1 동안 기존 anonymous-user dual-write 는 유지한다.
  */
 
 const PROVIDERS = [
   { id: 'kakao', label: '카카오로 시작하기' },
   { id: 'naver', label: '네이버로 시작하기' },
   { id: 'google', label: 'Google 로 시작하기' }
-] as const;
-
-type ProviderId = (typeof PROVIDERS)[number]['id'];
+] as const satisfies readonly { id: UiProvider; label: string }[];
 
 type LoginButtonsProps = {
   nextPath: string | null;
 };
 
-function resolveReturnUrl(nextPath: string | null): string {
-  const origin = window.location.origin;
-  // `nextPath` 가 isSafeNext 를 통과한 경우에만 동일 origin 의 absolute URL 로 끌어올린다.
-  // 실패하면 DEFAULT_NEXT 로 fallback — `//evil.com` 같은 schema-relative 값이 그대로
-  // `<origin>//evil.com` 으로 합쳐져 외부로 빠지는 사고를 차단한다.
-  const safeNext = resolveSafeNext(nextPath, DEFAULT_NEXT);
-  return `${origin}${safeNext}`;
+function resolveNext(nextPath: string | null): string {
+  return nextPath && isSafeNext(nextPath) ? nextPath : '/';
+}
+
+function isAnonymousUser(user: { is_anonymous?: boolean; app_metadata?: unknown } | null): boolean {
+  if (!user) return false;
+  if (user.is_anonymous === true) return true;
+  const metadata = user.app_metadata;
+  return (
+    typeof metadata === 'object' &&
+    metadata !== null &&
+    'provider' in metadata &&
+    metadata.provider === 'anonymous'
+  );
 }
 
 export function LoginButtons({ nextPath }: LoginButtonsProps) {
-  const [pendingProvider, setPendingProvider] = useState<ProviderId | null>(null);
+  const [pendingProvider, setPendingProvider] = useState<UiProvider | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  async function startOAuth(provider: ProviderId) {
+  async function startOAuth(provider: UiProvider) {
     setPendingProvider(provider);
     setErrorMessage(null);
 
     try {
       const anonymousUserId = await getOrCreateAnonymousUserId();
-      const returnUrl = resolveReturnUrl(nextPath);
-      const url = new URL(`${apiBaseUrl()}/auth/${provider}/start`);
-      url.searchParams.set('return_url', returnUrl);
+      const supabase = createBrowserSupabaseClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const intent = isAnonymousUser(user) ? 'link' : 'signin';
+
+      try {
+        window.sessionStorage.setItem('jippin_oauth_in_progress', '1');
+      } catch {
+        // OAuth can continue without the guard in storage-disabled browsers.
+      }
+
+      const url = new URL('/auth/oauth/start', window.location.origin);
+      url.searchParams.set('provider', provider);
+      url.searchParams.set('intent', intent);
+      url.searchParams.set('next', resolveNext(nextPath));
       url.searchParams.set('anonymous_user_id', anonymousUserId);
       window.location.assign(url.toString());
     } catch (error) {
@@ -78,6 +96,7 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
         ))}
       </ul>
       {errorMessage ? <p className="text-sm text-red-600">{errorMessage}</p> : null}
+      <IdentityAlreadyExistsModal open={false} nextPath={nextPath} />
     </>
   );
 }

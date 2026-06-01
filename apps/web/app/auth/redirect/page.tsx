@@ -29,9 +29,13 @@ type RedirectDecision =
   | { kind: 'invalid_target' }
   | { kind: 'navigate'; to: string };
 
+function browserOrigin(): string | undefined {
+  return typeof window === 'undefined' ? undefined : window.location.origin;
+}
+
 function decide(to: string | null, supabaseUrl: string | undefined): RedirectDecision {
   if (!supabaseUrl) return { kind: 'invalid_config' };
-  if (!isSafeOAuthHandoff(to, supabaseUrl)) return { kind: 'invalid_target' };
+  if (!isSafeOAuthHandoff(to, supabaseUrl, browserOrigin())) return { kind: 'invalid_target' };
   return { kind: 'navigate', to: to as string };
 }
 

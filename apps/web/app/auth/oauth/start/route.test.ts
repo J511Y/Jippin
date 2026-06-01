@@ -37,6 +37,12 @@ const PKCE_COOKIE_NAME = 'sb-example-auth-token-code-verifier';
 const PKCE_COOKIE_VALUE = 'pkce-verifier-12345';
 const AUTHZ_URL = 'https://example.supabase.co/auth/v1/authorize?provider=google&state=abc';
 
+function expectGuardedRedirect(response: Response): void {
+  const location = new URL(response.headers.get('Location') ?? '');
+  expect(`${location.origin}${location.pathname}`).toBe('http://localhost:3000/auth/redirect');
+  expect(location.searchParams.get('to')).toBe(AUTHZ_URL);
+}
+
 function makeRequest(pathAndQuery: string): NextRequest {
   // NextRequest 를 직접 인스턴스화하기 보다 GET handler 가 실제 사용하는 메서드만 stub.
   const url = new URL(`http://localhost:3000${pathAndQuery}`);
@@ -86,12 +92,13 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
 
     // Assert — 302 + Location 보존 + PKCE verifier cookie 가 응답에 부착.
     expect(response.status).toBe(302);
-    expect(response.headers.get('Location')).toBe(AUTHZ_URL);
+    expectGuardedRedirect(response);
 
     const allSetCookies = response.headers.getSetCookie?.() ?? response.headers.get('Set-Cookie')?.split(/,(?=\s*[^,;]+=)/g) ?? [];
     const setCookieJoined = allSetCookies.join('\n');
     expect(setCookieJoined).toMatch(new RegExp(`(?:^|\\n)${PKCE_COOKIE_NAME}=${PKCE_COOKIE_VALUE}`));
     expect(setCookieJoined).toMatch(/jippin_oauth_provider=google/);
+    expect(setCookieJoined).toMatch(/jippin_signin_intent=link/);
     // flow context cookie 는 callback path 로만 좁혀져 있어야 한다.
     expect(setCookieJoined).toMatch(/Path=\/auth\/callback/);
   });
@@ -119,9 +126,11 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     const response = await GET(request);
 
     expect(response.status).toBe(302);
+    expectGuardedRedirect(response);
     const allSetCookies = response.headers.getSetCookie?.() ?? response.headers.get('Set-Cookie')?.split(/,(?=\s*[^,;]+=)/g) ?? [];
     expect(allSetCookies.join('\n')).toContain(PKCE_COOKIE_NAME);
     expect(allSetCookies.join('\n')).toMatch(/jippin_oauth_provider=kakao/);
+    expect(allSetCookies.join('\n')).toMatch(/jippin_signin_intent=signin/);
   });
 
   it('signs out before signInWithOAuth on intent=link-merge (anonymous session discarded)', async () => {
@@ -138,12 +147,30 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     }));
 
     const { GET } = await import('./route');
-    const request = makeRequest('/auth/oauth/start?provider=naver&intent=link-merge');
+    const request = makeRequest('/auth/oauth/start?provider=naver&intent=link-merge&signed_token=signed');
     const response = await GET(request);
 
     expect(response.status).toBe(302);
+    expectGuardedRedirect(response);
     expect(signOut).toHaveBeenCalledOnce();
     expect(signInWithOAuth).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an OAuth URL outside the Supabase/app allow-list', async () => {
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        linkIdentity: vi.fn().mockResolvedValue({
+          data: { url: 'https://evil.example/auth/v1/authorize' },
+          error: null,
+        }),
+        signInWithOAuth: vi.fn(),
+        signOut: vi.fn(),
+      },
+    }));
+    const { GET } = await import('./route');
+    const response = await GET(makeRequest('/auth/oauth/start?provider=google&intent=link'));
+    expect(response.status).toBe(502);
+    expect(response.headers.get('Location')).toBeNull();
   });
 
   it('rejects unknown provider with 400', async () => {
