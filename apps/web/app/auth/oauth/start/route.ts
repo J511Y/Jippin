@@ -122,6 +122,11 @@ function setPendingAnonymousCookie(response: NextResponse, anonymousUserId: stri
   });
 }
 
+function attachPendingAnonymousCookie(response: NextResponse, anonymousUserId: string | null): void {
+  if (!anonymousUserId) return;
+  setPendingAnonymousCookie(response, anonymousUserId);
+}
+
 function expireOAuthStartCookies(response: NextResponse): void {
   expireCallbackCookie(response, FLOW_CONTEXT_COOKIE);
   expireCallbackCookie(response, MERGE_INTENT_COOKIE);
@@ -173,9 +178,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const anonymousUserId = anonymousUserIdFromRequest(request);
 
   setCallbackCookie(response, FLOW_CONTEXT_COOKIE, encodeOAuthFlowContext(provider));
-  if (anonymousUserId) {
-    setPendingAnonymousCookie(response, anonymousUserId);
-  }
+  attachPendingAnonymousCookie(response, anonymousUserId);
 
   if (intent === 'link-merge') {
     let signedToken: string;
