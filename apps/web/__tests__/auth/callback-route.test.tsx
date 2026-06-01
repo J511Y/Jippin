@@ -54,7 +54,11 @@ function expectCallbackCookiesExpired(response: Response): void {
   expect(header).toContain('Path=/auth/callback');
 }
 
-function mockSession(provider = 'custom:kakao', createdAt = new Date().toISOString()) {
+function mockSession(
+  provider = 'custom:kakao',
+  createdAt = new Date().toISOString(),
+  identityCreatedAt = createdAt,
+) {
   return {
     access_token: 'access-token',
     provider_token: null,
@@ -62,7 +66,7 @@ function mockSession(provider = 'custom:kakao', createdAt = new Date().toISOStri
     user: {
       id: 'user-1',
       created_at: createdAt,
-      identities: [{ provider, created_at: '2026-06-01T00:00:00.000Z' }],
+      identities: [{ provider, created_at: identityCreatedAt }],
     },
   };
 }
@@ -215,6 +219,35 @@ describe('/auth/callback route', () => {
     const freshContext = encodeURIComponent(`google|${Date.now()}`);
     supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
       data: { session: mockSession('google') },
+      error: null,
+    });
+
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/callback?code=ok&next=/app/reports', {
+        headers: {
+          cookie: `jippin_oauth_provider=${freshContext}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/auth/terms?next=%2Fapp%2Freports',
+    );
+    expectCallbackCookiesExpired(response);
+  });
+
+  it('gates anonymous Google upgrades using the newly linked identity timestamp', async () => {
+    const freshContext = encodeURIComponent(`google|${Date.now()}`);
+    supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
+      data: {
+        session: mockSession(
+          'google',
+          '2025-01-01T00:00:00.000Z',
+          new Date().toISOString(),
+        ),
+      },
       error: null,
     });
 

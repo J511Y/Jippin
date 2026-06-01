@@ -5,7 +5,10 @@ import { apiBaseUrl } from '@/lib/api-base-url';
 import { isSafeNext, resolveSafeNext } from '@/lib/safe-redirect';
 import { siteOriginFromRequest } from '@/lib/site-url';
 import { isOAuthFlowContextStale, parseOAuthFlowContext } from '@/lib/supabase/flow-context';
-import { detectNewlyLinkedProvider } from '@/lib/supabase/identities';
+import {
+  detectNewlyLinkedProvider,
+  hasNewlyLinkedIdentity,
+} from '@/lib/supabase/identities';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
 import {
   isKakaoProvider,
@@ -159,12 +162,6 @@ function successRedirect(request: NextRequest, seed: NextResponse, safeNext: str
   return expireCallbackCookies(redirectFromSeed(seed, done));
 }
 
-function isLikelyFirstSignup(session: Session): boolean {
-  const createdAt = Date.parse(session.user.created_at ?? '');
-  if (!Number.isFinite(createdAt)) return false;
-  return Math.abs(Date.now() - createdAt) <= 10 * 60 * 1000;
-}
-
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const url = request.nextUrl;
   const errorCode = url.searchParams.get('error');
@@ -234,7 +231,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     });
   }
 
-  if (requiresInternalTerms(linkedProvider) && isLikelyFirstSignup(data.session)) {
+  if (
+    requiresInternalTerms(linkedProvider) &&
+    hasNewlyLinkedIdentity(data.session.user, linkedProvider, flowContext?.createdAt)
+  ) {
     return termsRedirect(request, seed, safeNext);
   }
 
