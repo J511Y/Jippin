@@ -1,5 +1,6 @@
-import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { defineConfig } from 'vitest/config';
 
 /**
  * Vitest 설정 (CMP-580).
@@ -8,6 +9,7 @@ import path from 'node:path';
  * 실 Supabase / DB 의존 테스트는 별도 트랙 (E2E / Playwright) 으로 분리한다.
  */
 export default defineConfig({
+  plugins: [react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '.'),
@@ -16,6 +18,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    environmentMatchGlobs: [['**/*.test.tsx', 'jsdom']],
     include: ['**/*.test.ts', '**/*.test.tsx'],
     exclude: ['node_modules/**', '.next/**'],
     pool: 'forks',
