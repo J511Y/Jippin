@@ -41,6 +41,14 @@ project_id = "jippin-placeholder"
 [remotes.development]
 project_id = "jippin-development-placeholder"
 
+# staging persistent branch — §7.1.1 G3 / §7.1.3 A5 / §7.1.4 O3 PoC 의 대상 환경.
+# staging 은 Supabase-only branch (GitHub 측 트리거 없음) 이지만 CMP-576 가 PoC
+# 시나리오를 적용하려면 CLI 가 staging 의 BRANCH PROJECT ID 를 알아야 한다.
+# 사용자 작업 (CMP-574 머지 후 §3.2 A1.2 후속 PR): `SUPABASE_PROJECT_REF_STAGING`
+# (U5) 값을 본 절의 project_id 에 채운다.
+[remotes.staging]
+project_id = "jippin-staging-placeholder"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # [api] — PostgREST 자동 생성 REST API
 # ─────────────────────────────────────────────────────────────────────────────
@@ -54,14 +62,23 @@ project_id = "jippin-development-placeholder"
 # 레이션을 적용하면 anon key 보유자가 PostgREST/GraphQL 로 `public` 테이블을 직접
 # 조회할 수 있어 FastAPI 게이트웨이를 우회한다.
 #
+# **`schemas` 만으로는 `public` 을 가릴 수 없다.** Supabase CLI 정본
+# (https://supabase.com/docs/guides/local-development/cli/config#api-schemas) 은
+# `api.schemas` 가 PostgREST 의 db-schema 에 더해지는 allow-list 라고 명시하고,
+# Supabase 내부 동작은 `public` 과 `storage` 스키마를 항상 PostgREST 의 `db-schema`
+# 에 포함시킨다 (정본: https://supabase.com/docs/guides/api/securing-your-api).
+# 즉 `enabled = true` 가 되는 순간 `schemas` 가 `["graphql_public"]` 이어도 anon key
+# 로 `public.users` 등이 조회된다. 따라서 **유일한 차단점은 `[api].enabled = false`**
+# 이다. RLS 가 완성되기 전에는 `schemas` 만 수정해서 `enabled = true` 로 바꾸지 않는다.
+#
 # 본 토글을 true 로 바꾸는 PR (또는 `schemas` 에 `"public"` 을 추가하는 PR) 은
 # 다음 조건을 모두 만족해야 한다:
 #   1. CMP-575 트랙이 `public` 의 민감 테이블 전체에 `ALTER TABLE ... ENABLE ROW
 #      LEVEL SECURITY` + 운영 RLS policy 를 SQL 마이그레이션으로 봉인.
 #   2. `docs/runbooks/supabase-branching.md` §7.2 (PostgREST 노출 게이트) 가
 #      검증 결과 (정책 누락 0건) 를 PR 본문에 첨부.
-#   3. RLS 가 미완성된 상태로는 `schemas` 에 `"public"` 을 포함시키지 않는다.
-#      필요 시 임시로 `graphql_public` 만 노출하는 흐름은 허용.
+#   3. RLS 가 미완성된 상태로는 `[api].enabled = true` 로 바꾸지 않는다 (위 박스
+#      참고 — `schemas` 만 좁히는 우회는 무효).
 [api]
 enabled = false
 schemas = ["graphql_public"]
@@ -206,13 +223,35 @@ enable_confirmations = false
 # Built-in OAuth providers — CMP-576 트랙이 실제 client_id/secret 발급 후 활성화.
 # 본 PR 시점에는 모두 disabled. `env()` 미해석으로 `supabase link`, `supabase db diff`
 # 등 CLI 명령이 깨지지 않도록 client_id / secret 은 **빈 문자열**로 둔다 (Supabase
-# 공식 disabled-provider 예시와 동일). 활성화 시점에는 CMP-576 PR 이 본 값을
-# `env(...)` 로 바꾸고 매칭되는 placeholder env 파일(`apps/api/.env.example`,
-# `apps/web/.env.example`) 을 같은 PR 에서 갱신한다.
+# 공식 disabled-provider 예시와 동일).
+#
+# **`redirect_uri` 봉인 (provider 콘솔에 등록하는 OAuth Authorized redirect URI).**
+# 본 필드는 **Supabase Auth 서버의 OAuth callback URL** 을 가리킨다 — 즉
+# `https://<PROD_PROJECT_REF>.supabase.co/auth/v1/callback`. provider (Google/Kakao/
+# Naver) 콘솔에 등록할 redirect URI 와 **반드시 동일**해야 한다. **app 의 Next.js
+# `/auth/callback` 경로는 본 필드에 절대 넣지 않는다** — app callback 은
+# `[auth].site_url` + `[auth].additional_redirect_urls` (위) 책임이고, OAuth 흐름은
+#   provider → Supabase `/auth/v1/callback` (본 필드) → Supabase 가 세션 발급 →
+#   `redirectTo` 로 지정된 app `/auth/callback`
+# 순서다. 본 필드에 app URL 을 넣으면 provider 가 인가코드를 Next.js 로 직접 보내
+# Supabase Auth 가 code 교환을 못 하고 흐름이 깨진다 (정본:
+# https://supabase.com/docs/guides/auth/social-login).
+#
+# **env() wiring 정본.** 활성화 시점에는 CMP-576 PR 이 본 값을 `env(VAR)` 로 바꾼다.
+# `env()` 는 **Supabase CLI/integration 이 보는 환경변수만** 읽는다 — 구체적으로
+# (a) local 은 `supabase/.env` 또는 `supabase/.env.local` (gitignored — 본 PR 에서
+# `.gitignore` 로 봉인 예정), (b) Supabase GitHub integration 의 preview/production
+# 배포는 Supabase 콘솔의 Edge Functions Secrets / Vault 또는 `supabase secrets set
+# --project-ref <REF> VAR=...` 로 등록된 값. **`apps/api/.env.example`,
+# `apps/web/.env.example` 은 app runtime 용 placeholder 일 뿐 Supabase CLI 가 읽지
+# 않는다** — provider 활성화 PR 은 본 위치들에도 동시에 값을 등록해야 한다.
+# 자세한 절차는 `docs/runbooks/supabase-branching.md` §7.4 참고.
 [auth.external.google]
 enabled = false
 client_id = ""
 secret = ""
+# 활성화 시 값 예시 (placeholder — 실제 값은 §7.4 절차로 콘솔/`supabase/.env` 에 주입):
+#   redirect_uri = "https://<PROD_PROJECT_REF>.supabase.co/auth/v1/callback"
 redirect_uri = ""
 skip_nonce_check = false
 
@@ -220,10 +259,14 @@ skip_nonce_check = false
 enabled = false
 client_id = ""
 secret = ""
+# 활성화 시 값 예시 (placeholder):
+#   redirect_uri = "https://<PROD_PROJECT_REF>.supabase.co/auth/v1/callback"
 redirect_uri = ""
 
 # Naver — built-in provider 가 아니다. Custom OAuth/OIDC 로 PoC 후 활성화 (CMP-576).
 # 본 파일에는 정의하지 않는다 (CLI 가 unknown provider 로 거부할 수 있음).
+# Naver 도 활성화 시 redirect_uri 는 `https://<PROD_PROJECT_REF>.supabase.co/auth/v1/callback`
+# 를 그대로 사용한다 (provider 콘솔의 callback URL 등록 값과 동일).
 
 # ─────────────────────────────────────────────────────────────────────────────
 # [realtime] — 실시간 채널
