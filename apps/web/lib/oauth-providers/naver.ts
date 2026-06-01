@@ -20,7 +20,7 @@
  *  | `NAVER_OAUTH_AUTHORIZE_URL` | OAuth2 authorize endpoint (`https://nid.naver.com/oauth2.0/authorize`). |
  *  | `NAVER_OAUTH_TOKEN_URL` | OAuth2 token endpoint (`https://nid.naver.com/oauth2.0/token`). |
  *  | `NAVER_OAUTH_USERINFO_URL` | OAuth2 user-info endpoint (`https://openapi.naver.com/v1/nid/me`). |
- *  | `NAVER_OAUTH_SCOPE` | (옵션) Supabase 콘솔에 입력하는 scope. 기본은 `account` (runbook §4.3.1). |
+ *  | `NAVER_OAUTH_SCOPE` | (옵션) Supabase 콘솔에 입력하는 scope. 기본은 **빈 문자열** (Naver authorize 가 scope 파라미터 미사용 — runbook §4.3.1 round-4 봉인). 명시 scope 가 필요한 경우만 env override. |
  *
  * Scope 정책 (runbook §4.3.1 정합 — round-4 봉인):
  *  - **Naver 인증 사양은 authorize endpoint 의 `scope` 쿼리 파라미터를 사용하지 않는다.**

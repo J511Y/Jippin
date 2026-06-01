@@ -552,14 +552,14 @@ client.interceptors.request.use(async (config) => {
 
 - Authentication → Providers → Add custom OAuth provider → **`OAuth2 (Generic)`** 모드 선택 (OIDC 모드 절대 금지).
 - 입력 필드: `Client ID` (= `NAVER_OAUTH_CLIENT_ID`), `Client Secret` (= `NAVER_OAUTH_CLIENT_SECRET`), `Authorize URL` (= `NAVER_OAUTH_AUTHORIZE_URL`), `Token URL` (= `NAVER_OAUTH_TOKEN_URL`), `User-Info URL` (= `NAVER_OAUTH_USERINFO_URL`), `Scope` = **비워둔다 (default `''`, round-4 봉인)** — Naver authorize 는 scope 파라미터 미사용. env override `NAVER_OAUTH_SCOPE` 는 Naver 비즈니스 심사 통과 후 자체 검증된 토큰을 강제해야 할 때만 사용. 사용자 동의 항목은 Naver Developers 콘솔 UI 에서 별도 선언.
-- **`email_optional=true` 체크 (CMP-584 round-3 추가, 필수).** Phase 1 의 기본 scope 는 `account` 만 요구하므로 user-info 응답에 `response.email` 이 부재할 수 있다. Supabase Custom OAuth Provider 의 `email_optional` (또는 동등) 플래그를 **반드시 ON** 으로 등록해야 `auth.users` insert 가 email 부재로 실패하지 않는다. OFF 인 채 라이브 가면 Naver 로그인 시 `email_required` 류 에러 — 사용자가 가입 자체를 못 한다. 본 봉인은 Scope 정책 (위) 과 함께 1 set 로 결정한다. 향후 비즈니스 심사 통과 후 email scope 를 추가하면 이 플래그를 OFF 로 되돌릴지 별도 자식 이슈에서 결정.
+- **`email_optional=true` 체크 (CMP-584 round-3 추가, 필수).** Phase 1 정책상 Naver authorize 요청에 `scope` 파라미터를 보내지 않으므로 (round-4 봉인) user-info 응답에 `response.email` 이 부재할 수 있다. Supabase Custom OAuth Provider 의 `email_optional` (또는 동등) 플래그를 **반드시 ON** 으로 등록해야 `auth.users` insert 가 email 부재로 실패하지 않는다. OFF 인 채 라이브 가면 Naver 로그인 시 `email_required` 류 에러 — 사용자가 가입 자체를 못 한다. 본 봉인은 Scope 정책 (위) 과 함께 1 set 로 결정한다. 향후 비즈니스 심사 통과 후 Naver Developers 콘솔의 "동의 항목" 으로 email 을 추가하면 이 플래그를 OFF 로 되돌릴지 별도 자식 이슈에서 결정.
 - `provider identifier` 필드는 **반드시 `naver`** 로 (prefix 없이) 등록한다. Supabase 가 내부적으로 `custom:` prefix 를 prepend 하여 **SDK 가 보는 canonical provider id = `custom:naver`** 가 된다. 콘솔에 직접 `custom:naver` 를 입력하면 결과가 `custom:custom:naver` 로 이중 prepend 되어 SDK `signInWithOAuth({ provider: 'custom:naver' })` 호출 시 `provider_not_enabled`. §4.2.3 매핑 + §8 입력 항목 표가 SSOT.
 - redirect allow list 에 `/auth/callback` 추가 (§4.7.2).
 
 **사전 등록 가드 (signInWithOAuth 콜 전 운영 SSOT 확인):**
 
 - `supabase.auth.signInWithOAuth({ provider: 'custom:naver' })` 또는 `linkIdentity({ provider: 'custom:naver' })` 호출은 Supabase 콘솔에 Custom OAuth Provider 가 등록되어 있어야 한다.
-- **신규 환경 라이브 진입 전**: 운영자가 위 입력 필드 표 + `provider identifier=naver` + scope=`account` 가 모두 SSOT 와 일치하는지 §8 표를 보고 1회 수동 확인.
+- **신규 환경 라이브 진입 전**: 운영자가 위 입력 필드 표 + `provider identifier=naver` + **Scope 필드 비워둠 (Phase 1 정책, round-4 봉인)** + `email_optional=true` 가 모두 SSOT 와 일치하는지 §8 표를 보고 1회 수동 확인.
 - 콘솔 등록 누락 / mismatch 시 §4.2.4 에러 매트릭스의 `provider_not_enabled` 분기로 빠진다 → 사용자에게 "일시적 로그인 오류" toast + Sentry alert + 5분간 Naver 버튼 disabled.
 - 본 가드는 out-of-band SSOT (Supabase 콘솔) 이므로 코드 레벨에서 자동 검증 불가. naver.ts JSDoc 의 "사전 등록 가드" 단락이 코드 측 정본 주석이다.
 
