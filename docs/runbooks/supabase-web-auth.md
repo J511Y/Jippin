@@ -137,15 +137,34 @@ apps/web/lib/supabase/
 - 진입 페이지: 모든 `app/*` 라우트의 첫 paint 직전. App Router 의 Root `layout.tsx` 에서 mounting 되는 client provider 가 다음을 수행:
 
   ```
-  1) supabase.auth.getSession() → 세션 있음? then no-op
-  2) 세션 없음 → supabase.auth.signInAnonymously()
-  3) onAuthStateChange listener 등록 → React Query / UI 가 의존하는 SessionContext 업데이트
+  1) §4.1.1 OAuth-in-progress guard 확인 → guard 활성이면 anonymous bootstrap skip 후 listener 만 등록
+  2) supabase.auth.getSession() → 세션 있음? then no-op
+  3) 세션 없음 → supabase.auth.signInAnonymously()
+  4) onAuthStateChange listener 등록 → React Query / UI 가 의존하는 SessionContext 업데이트
   ```
 
 - **호출 보장.** 익명 sign-in 은 페이지 첫 진입 1회만 호출되어야 한다 (Strict mode, refresh, navigation 모두에서). 정합을 위해:
   - `getSession` 결과를 await 한 뒤에만 `signInAnonymously` 를 호출.
   - SSR 측 `server.ts` 에서도 동일하게 `getSession` 만 수행하고 익명 발급은 **클라이언트에서만** 한다 (Supabase 의 anonymous user 는 client SDK 가 anon key 로 발급하는 것이 표준).
   - SSR 단계에서 세션이 없는 사용자는 빈 user 컨텍스트로 렌더링되고, 클라이언트 hydration 직후 익명 세션이 생성된다.
+
+#### 4.1.1 `oauth_in_progress` guard — OAuth 왕복 중 bootstrap 중지
+
+> **문제.** §4.2.2 fallback ladder 의 "예, 옮기고 로그인" 분기는 `signOut() → signInWithOAuth()` 순으로 진행된다. signOut 직후 SessionProvider 의 anonymous-bootstrap (`getSession` 결과가 비어 있으니 `signInAnonymously` 호출) 이 즉시 fire 하면, OAuth redirect 가 시작되기 직전에 새 익명 세션이 만들어져 ladder step c (`signInWithOAuth`) 가 또 다른 anonymous-link 사이클을 트리거할 수 있다. 결과적으로 merge intent 가 가리키는 `from_anon_user_id` 와 callback 시점의 anonymous user id 가 어긋나 데이터 이전이 끊긴다.
+
+해결책 — **세션 변경에 둔감한 guard 플래그** 를 둔다:
+
+- **저장 위치.** `sessionStorage.jippin_oauth_in_progress` (탭 한정 + 새로고침 생존). `localStorage` 는 다른 탭으로 누설되므로 부적합. 쿠키는 사용하지 않는다 (서버 side 의사결정에 들어가지 않음).
+- **set 시점 — BFF.** `apps/web/app/auth/oauth/start/route.ts` 가 302 응답에 small inline HTML 또는 별도 redirect-via-page 를 통해 `sessionStorage.setItem('jippin_oauth_in_progress', '1')` 를 실행한 뒤 OAuth URL 로 navigate. 또는 BFF 가 302 직전에 `Location: /auth/redirect?to=<encoded-oauth-url>` 로 보내고, `/auth/redirect/page.tsx` 가 `useEffect` 에서 flag set 후 `window.location.assign(to)` 를 수행. **server-only 302 만으로는 sessionStorage 를 만질 수 없으므로 client-side 한 단계가 반드시 필요**하다.
+- **clear 시점.** (1) callback Route Handler 가 성공/실패와 무관하게 응답에 `Clear-Site-Data` 또는 별도 small page (`/auth/callback-done`) 에서 `sessionStorage.removeItem('jippin_oauth_in_progress')` 호출, (2) 안전망으로 SessionProvider mount 시 flag 의 timestamp 가 10분 초과면 강제 clear.
+- **bootstrap 측 확인.** SessionProvider 가 `getSession()` 호출 전에 `sessionStorage.getItem('jippin_oauth_in_progress') === '1'` 이면 anonymous bootstrap 을 **완전히 skip** 하고 onAuthStateChange listener 만 등록. callback 이후 첫 navigation 에서 flag 가 clear 되어 다음 bootstrap (보통은 새 실명 세션이 이미 있으므로 no-op) 이 fire.
+- **race-free 보장.** signOut 이 onAuthStateChange 를 통해 SessionProvider 의 callback 도 trigger 한다. 이 callback 안에서 다시 `signInAnonymously` 가 fire 하지 않도록, listener 콜백도 동일 guard 를 본다.
+
+쉽게 깰 수 있는 함정:
+
+- `localStorage` 로 저장하면 다른 탭의 SessionProvider 가 영영 anonymous bootstrap 을 못해 데드락. **반드시 `sessionStorage`** 사용.
+- 사용자가 OAuth 진행 중 탭을 닫고 새 탭에서 들어오는 경우 — guard 가 없으므로 새 탭은 정상적으로 익명 sign-in. 본래 탭의 merge intent 는 callback 도착 시점에 cookie 가 살아 있는 한 정상 commit.
+- guard 가 10분을 넘기면 stale 로 간주하고 강제 clear — 사용자가 OAuth provider 화면에서 멈춰 있는 동안 익명 흐름이 영구 차단되지 않도록 한다.
 
 - **fail-soft.** `signInAnonymously` 실패 시:
   - 비회원 사전검토 흐름 (`/app/pre-review`) 은 그대로 진입 허용하되, user-aware 기능 (도면 저장, 이력) 은 disabled 표기.
@@ -320,7 +339,7 @@ client.interceptors.request.use(async (config) => {
 | 엔드포인트 분류 | 예시 라우트 | 허용되는 token | 거부 응답 |
 |---|---|---|---|
 | **공개 / 사전검토** (anonymous 허용) | `GET /catalog/*`, `POST /pre-review/run`, `GET /pre-review/{id}` | anonymous OR non-anonymous Supabase access token | 401 (no token) |
-| **conversion-only — 사용자 영속 데이터** | `POST /consults`, `GET /consults/{id}`, `POST /leads`, `POST /reports`, `GET /users/me`, `POST /auth/terms/*` | **non-anonymous Supabase access token 만** | `403 AUTH_ANONYMOUS_NOT_ALLOWED` (구조: `{ "code": "AUTH_ANONYMOUS_NOT_ALLOWED", "message": "...", "next": "/login" }`) |
+| **conversion-only — 사용자 영속 데이터** | `POST /consults`, `GET /consults/{id}`, `POST /leads`, `POST /reports`, `GET /users/me`, `POST /auth/terms/*` | **non-anonymous Supabase access token 만** | `403` + 본문은 repo 표준 envelope (§4.4.1) |
 | **conversion intent** | `POST /auth/anon-merge-intents`, `POST /auth/anon-merge-intents/{id}/commit` | anonymous **또는** non-anonymous (각각 from/target 측에서 호출) | 잘못된 단계의 token 은 422. |
 
 검증 우선순위 (Backend/Auth 트랙 가이드 — web 트랙은 호출자 입장에서 신뢰):
@@ -329,9 +348,33 @@ client.interceptors.request.use(async (config) => {
 2. `is_anonymous` claim 추출. claim 이 없거나 `true` 이고 라우트가 conversion-only 분류면 즉시 403.
 3. (선택) backend 의 `users` 테이블에 해당 user id 가 존재하고 `is_active=true` 인지 cross-check. Supabase 콘솔에서 admin 이 user 를 비활성화한 케이스 방어.
 
-웹 측 호출자의 응답 처리:
+#### 4.4.1 응답 envelope — repo 표준 정합
 
-- 403 + `code=AUTH_ANONYMOUS_NOT_ALLOWED` 를 받으면 axios 인터셉터가 logout/login modal 로 전환 (자동 token 재시도 금지). 사용자가 비회원 상태에서 conversion-only 라우트를 직접 호출한 경우이므로 UI 단에서도 버튼을 disabled 로 두는 것이 정합이지만, 깊은 링크 / 캐시된 페이지를 통해 호출이 새는 경우의 안전망.
+> AGENTS.md §4.5 + `apps/api/src/errors.py::_envelope` + `apps/web/lib/api/error.ts::parseApiError` 가 SSOT. 본 트랙은 신규 envelope 을 만들지 않고 기존 표준을 그대로 사용한다.
+
+응답 본문 (status `403`):
+
+```json
+{
+  "error": {
+    "code": "AUTH_ANONYMOUS_NOT_ALLOWED",
+    "message": "이 작업은 로그인 후에 사용할 수 있습니다.",
+    "request_id": "01HXYZ...",
+    "timestamp": "2026-06-01T00:00:00Z"
+  }
+}
+```
+
+- `error.code` / `error.message` / `error.request_id` / `error.timestamp` 4개 키는 backend (`_envelope` helper) 가 모든 에러에 일관 부여하는 필드 (`apps/api/src/errors.py:39-47`).
+- 라우팅 힌트 (`next: "/login"`) 같은 부가 정보가 필요하면 backend 가 `body.detail = { next: "/login" }` 으로 옆에 둔다 (envelope 자체에는 손대지 않는다). 이는 `ZippinException(details=...)` 가 이미 처리하는 패턴 (`apps/api/src/errors.py:62-63`).
+
+웹 측 처리:
+
+- axios 인터셉터는 `parseApiError(err)` (`apps/web/lib/api/error.ts:60-95`) 를 호출하여 위 envelope 을 `ApiError { code, message, requestId, timestamp, status, cause }` 로 정규화. **`apiError.code === 'AUTH_ANONYMOUS_NOT_ALLOWED'` 분기로 logout/login modal 로 전환** (자동 token 재시도 금지). flat body (`{ code, message }`) 를 직접 읽는 일이 없도록 모든 호출자가 `parseApiError` 를 거친다.
+- 사용자가 비회원 상태에서 conversion-only 라우트를 직접 호출한 경우이므로 UI 단에서도 버튼을 disabled 로 두는 것이 정합이지만, 깊은 링크 / 캐시된 페이지를 통해 호출이 새는 경우의 안전망.
+- `request_id` 는 toast / Sentry / log 컨텍스트에 함께 노출해 backend 에서 사용자 문의 트래킹이 가능하도록 한다 (이미 `ApiError.requestId` 로 노출).
+
+> **금지.** 본 트랙에서 `{ code: ..., message: ..., next: ... }` 같은 flat body 를 새로 정의하지 않는다. 위 envelope 외 응답 형식을 본 PR 이 도입하면 repo 표준 (AGENTS.md §4.5) 위반.
 
 ### 4.5 약관 동의 / 추가 user metadata
 
@@ -487,8 +530,28 @@ const sanitizeReason = (raw: string | null): string =>
 
 // query string 을 일체 상속하지 않는 fresh failure URL. provider authorization code 가
 // `/auth/failure` 의 URL · access log · referer 에 절대 남지 않도록 한다 (review item 2).
+//
+// FAILURE_URL 형태별 동작 (review item 3):
+//   - 상대 경로 ('/auth/failure')      → new URL(...) 이 ORIGIN(request) 와 합성. ✓
+//   - 절대 URL ('https://...auth/failure') → new URL(absolute, base) 가 base 를 무시하고
+//                                            absolute 를 그대로 사용. ✓ (malformed path 안 됨)
+//   - schema-relative ('//evil.com/...')   → URL 생성자가 base 의 protocol 만 차용하므로
+//                                            cross-origin 으로 새 나간다. **반드시** env 입력
+//                                            단계에서 차단. 본 페이지에서는 한 번 더 origin
+//                                            검증 후 mismatched 면 DEFAULT_FAILURE_FALLBACK 으로
+//                                            교체 (아래 sanitizeFailureBase 참조).
+const DEFAULT_FAILURE_FALLBACK = '/auth/failure';
+const sanitizeFailureBase = (request: NextRequest): string => {
+  try {
+    const target = new URL(FAILURE_URL, ORIGIN(request));
+    return target.origin === ORIGIN(request) ? `${target.pathname}${target.search}` : DEFAULT_FAILURE_FALLBACK;
+  } catch {
+    return DEFAULT_FAILURE_FALLBACK;       // env 값이 invalid 면 안전한 기본값으로.
+  }
+};
 const failureRedirect = (request: NextRequest, reason: string | null) => {
-  const target = new URL(FAILURE_URL, ORIGIN(request));   // pathname + origin 만, query 비움.
+  const target = new URL(sanitizeFailureBase(request), ORIGIN(request));
+  target.search = '';                       // 어떤 경우에도 inbound query 상속 금지.
   target.searchParams.set('reason', sanitizeReason(reason));
   return NextResponse.redirect(target);
 };
@@ -649,6 +712,8 @@ export const config = { matcher: ['/app/:path*'] };
 | (신규) `lib/supabase/providers.ts` | (없음) | UI provider id (`google\|kakao\|naver`) → Supabase provider id 매핑 SSOT (§4.2.3). |
 | (신규) `lib/supabase/identities.ts` | (없음) | `detectNewlyLinkedProvider(user, intendedProviderCookie)` — `app_metadata.provider` 단독 누락 케이스 보강 (§4.5.2.1). |
 | (신규) `lib/safe-redirect.ts` | (없음) | `isSafeNext(next)` — callback `next` allow list 검증 (§4.7.2). |
+| (신규) `app/auth/redirect/page.tsx` | (없음) | OAuth 진입 단계 small client page — `sessionStorage.jippin_oauth_in_progress='1'` set 후 `window.location.assign(?to=<oauth_url>)` 로 진짜 OAuth URL 로 navigate (§4.1.1 guard set 시점). server-only 302 만으로는 sessionStorage 를 만질 수 없어 client-side 한 단계가 필수. |
+| (신규) `app/auth/callback-done/page.tsx` | (없음) | callback 직후 small client page — `sessionStorage.removeItem('jippin_oauth_in_progress')` 후 `next` 로 navigate (§4.1.1 guard clear 시점). |
 | `/auth/test` | "비회원 ID" 섹션의 `localStorage.jippin_anonymous_user_id` 표기 | **Phase 1: 양쪽 표시.** Supabase user `id` + `is_anonymous` + legacy `jippin_anonymous_user_id` 를 함께 노출하여 dual-write 가 정합한지 검증. **Phase 2 폐기.** |
 | `/auth/test` | `/auth/me` raw fetch | `supabase.auth.getUser()` 결과 + 백엔드 `/users/me` 응답 split 으로 교체. |
 | `/auth/test` | `POST /auth/logout` 호출 | `supabase.auth.signOut()` 로 교체. |
