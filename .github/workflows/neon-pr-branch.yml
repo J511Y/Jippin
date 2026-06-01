@@ -107,6 +107,10 @@ jobs:
       - name: Create Neon Branch
         if: steps.guard.outputs.skip == 'false'
         id: create_neon_branch
+        # CMP-594: free-tier branch limit (10) returns HTTP 422; degrade gracefully
+        # instead of failing the whole job so unrelated PR checks stay green. The
+        # alembic + PR-comment steps below skip when db_url is unset.
+        continue-on-error: true
         uses: neondatabase/create-branch-action@v6
         with:
           project_id: ${{ vars.NEON_PROJECT_ID }}
@@ -114,6 +118,12 @@ jobs:
           parent_branch: ${{ needs.setup.outputs.parent_branch }}
           api_key: ${{ secrets.NEON_API_KEY }}
           expires_at: ${{ env.EXPIRES_AT }}
+
+      - name: Warn if Neon branch creation failed
+        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outputs.db_url == ''
+        shell: bash
+        run: |
+          echo "::warning::Neon preview branch 생성이 실패했거나 db_url 이 비어 있습니다 (free-tier 한계 또는 일시 오류). preview migration / PR 코멘트 단계를 건너뜁니다."
 
       - uses: actions/checkout@v4
         if: steps.guard.outputs.skip == 'false'
@@ -131,13 +141,13 @@ jobs:
           fi
 
       - name: Setup Python ${{ env.PYTHON_VERSION }}
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Setup uv ${{ env.UV_VERSION }}
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
@@ -147,7 +157,7 @@ jobs:
             apps/api/pyproject.toml
 
       - name: uv sync
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         shell: bash
         working-directory: apps/api
         run: |
@@ -158,7 +168,7 @@ jobs:
           fi
 
       - name: alembic upgrade head (preview)
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         working-directory: apps/api
         env:
           APP_ENV: test
@@ -166,7 +176,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Comment preview branch on PR
-        if: steps.guard.outputs.skip == 'false' && github.event.action != 'synchronize'
+        if: steps.guard.outputs.skip == 'false' && github.event.action != 'synchronize' && steps.create_neon_branch.outputs.db_url != ''
         uses: actions/github-script@v7
         env:
           PREVIEW_BRANCH: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}
