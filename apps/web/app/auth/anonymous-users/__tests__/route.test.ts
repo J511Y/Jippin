@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { POST } from '../route';
 
-const ENV_KEY = 'NEXT_PUBLIC_API_BASE_URL';
+const PUBLIC_ENV_KEY = 'NEXT_PUBLIC_API_BASE_URL';
+const INTERNAL_ENV_KEY = 'API_INTERNAL_BASE_URL';
 
 function makeRequest(
   body: unknown,
@@ -24,19 +25,23 @@ describe('POST /auth/anonymous-users — same-origin BFF proxy (CMP-584 round-5)
   const fetchSpy = vi.fn();
 
   beforeEach(() => {
-    savedEnv[ENV_KEY] = process.env[ENV_KEY];
-    process.env[ENV_KEY] = 'http://api:8000';
+    savedEnv[PUBLIC_ENV_KEY] = process.env[PUBLIC_ENV_KEY];
+    savedEnv[INTERNAL_ENV_KEY] = process.env[INTERNAL_ENV_KEY];
+    process.env[PUBLIC_ENV_KEY] = '/api';
+    process.env[INTERNAL_ENV_KEY] = 'http://api:8000';
     fetchSpy.mockReset();
     vi.stubGlobal('fetch', fetchSpy);
   });
 
   afterEach(() => {
-    if (savedEnv[ENV_KEY] === undefined) delete process.env[ENV_KEY];
-    else process.env[ENV_KEY] = savedEnv[ENV_KEY];
+    if (savedEnv[PUBLIC_ENV_KEY] === undefined) delete process.env[PUBLIC_ENV_KEY];
+    else process.env[PUBLIC_ENV_KEY] = savedEnv[PUBLIC_ENV_KEY];
+    if (savedEnv[INTERNAL_ENV_KEY] === undefined) delete process.env[INTERNAL_ENV_KEY];
+    else process.env[INTERNAL_ENV_KEY] = savedEnv[INTERNAL_ENV_KEY];
     vi.unstubAllGlobals();
   });
 
-  it('proxies to apiBaseUrl()/auth/anonymous-users with the same body server-side', async () => {
+  it('proxies to serverApiBaseUrl()/auth/anonymous-users with the same body server-side', async () => {
     fetchSpy.mockResolvedValueOnce(
       new Response(
         JSON.stringify({

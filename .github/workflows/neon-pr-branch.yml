@@ -123,21 +123,28 @@ jobs:
             -H "Accept: application/json" \
             "https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}/branches")
           count=$(echo "${branches_json}" | jq '.branches | length')
+          current_branch="preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}"
+          existing=$(echo "${branches_json}" | jq --arg name "${current_branch}" '[.branches[] | select(.name == $name)] | length')
           echo "branch_count=${count}" >> "$GITHUB_OUTPUT"
           echo "branch_cap=${cap}" >> "$GITHUB_OUTPUT"
-          if [[ "${count}" -ge "${cap}" ]]; then
-            echo "::warning::Neon project at branch capacity (${count} of ${cap}). Skipping preview branch creation for this PR — preview migration validation paused until a slot frees up or the plan is upgraded."
+          echo "existing_preview_branch=${existing}" >> "$GITHUB_OUTPUT"
+          if [[ "${count}" -ge "${cap}" && "${existing}" -eq 0 ]]; then
+            echo "::warning::Neon project at branch capacity (${count} of ${cap}) and this PR has no existing preview branch. Skipping preview branch creation until a slot frees up or the plan is upgraded."
             echo "at_capacity=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::Neon branch usage: ${count}/${cap}."
+            if [[ "${count}" -ge "${cap}" && "${existing}" -gt 0 ]]; then
+              echo "::notice::Neon branch usage is at capacity (${count}/${cap}), but ${current_branch} already exists; create-branch-action can reuse it and return outputs for migration validation."
+            else
+              echo "::notice::Neon branch usage: ${count}/${cap}."
+            fi
             echo "at_capacity=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create Neon Branch
-        # CMP-594: only call the create-branch action when the project is below
-        # its branch cap (verified via Neon API above). This means a failure
-        # here is a real misconfiguration (bad API key / project id / parent
-        # branch / Neon outage) and we want the job to fail loud, not silently.
+        # CMP-594/CMP-572 follow-up: call create-branch-action when the project
+        # is below its branch cap, or when this PR's preview branch already
+        # exists. The action reuses an existing branch_name and returns db_url
+        # outputs, so synchronize events keep running Alembic at capacity.
         if: steps.guard.outputs.skip == 'false' && steps.capacity.outputs.at_capacity == 'false'
         id: create_neon_branch
         uses: neondatabase/create-branch-action@v6

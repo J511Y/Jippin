@@ -26,7 +26,7 @@ import {
   isUiProvider,
   toSupabaseProviderId,
   type SupabaseProvider,
-} from '@/lib/supabase/providers';
+} from '@/lib/oauth-providers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
