@@ -24,8 +24,10 @@ from .base import (
     utc_now,
 )
 from .auth import (  # noqa: E402
+    AUTH_IDENTITY_PROVIDER_VALUES,
     EXTERNAL_SSO_PROVIDER_VALUES,
     AnonymousUser,
+    AuthIdentity,
     ExternalSsoAccount,
     TermsConsent,
     User,
@@ -35,8 +37,10 @@ from .auth import (  # noqa: E402
 from .request_log import RequestLog  # noqa: E402
 
 __all__ = [
+    "AUTH_IDENTITY_PROVIDER_VALUES",
     "AnonymousUser",
     "AuditMixin",
+    "AuthIdentity",
     "Base",
     "CreatedAtMixin",
     "CreatedByMixin",

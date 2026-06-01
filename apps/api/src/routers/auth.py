@@ -38,14 +38,19 @@ from ..schemas.auth import (
 )
 from ..services.auth import (
     OAuthLoginResult,
+    SupabaseSessionBridgeResult,
     accept_required_terms,
-    complete_supabase_session,
     complete_oauth_login,
     create_or_reuse_anonymous_user,
     get_current_user_context,
     link_oauth_account,
     link_supabase_account,
     parse_existing_anonymous_user_id,
+)
+from ..services.supabase_session import (
+    parse_bearer_token,
+    resolve_jippin_user_for_supabase,
+    verify_supabase_access_token,
 )
 
 logger = get_logger("zippin.auth")
@@ -158,6 +163,43 @@ async def logout() -> JSONResponse:
     return response
 
 
+async def complete_supabase_session(
+    *,
+    access_token: str,
+    anonymous_user_id: str | None,
+    requested_provider: str | None = None,  # noqa: ARG001 - provider is verified by link writer.
+) -> SupabaseSessionBridgeResult:
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=10.0) as http_client:
+        claims = await verify_supabase_access_token(
+            access_token,
+            http_client=http_client,
+            settings=settings,
+        )
+
+    email_claim_raw = claims.get("email")
+    email_claim = (
+        email_claim_raw.strip().lower()
+        if isinstance(email_claim_raw, str) and email_claim_raw.strip()
+        else None
+    )
+    result = await resolve_jippin_user_for_supabase(
+        supabase_subject=str(claims["sub"]),
+        email_claim=email_claim,
+    )
+    context = await get_current_user_context(result.user_id)
+    pending_anonymous_user_id = (
+        parse_existing_anonymous_user_id(anonymous_user_id)
+        if context.missing_required_terms
+        else None
+    )
+    return SupabaseSessionBridgeResult(
+        user_id=result.user_id,
+        pending_anonymous_user_id=pending_anonymous_user_id,
+        missing_required_terms=context.missing_required_terms,
+    )
+
+
 @router.post(
     "/terms/kakao-sync",
     response_model=KakaoSyncAuditResponse,
@@ -218,17 +260,10 @@ async def bridge_supabase_session(
         default_factory=SupabaseSessionBridgeRequest
     ),
 ) -> JSONResponse:
-    authorization = request.headers.get("authorization", "")
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise ZippinException(
-            "Supabase bearer token is required.",
-            code="SUPABASE_SESSION_BEARER_REQUIRED",
-            http_status=401,
-        )
     settings = get_settings()
+    access_token = parse_bearer_token(request.headers.get("authorization"))
     result = await complete_supabase_session(
-        access_token=token,
+        access_token=access_token,
         anonymous_user_id=(
             str(payload.anonymous_user_id)
             if payload.anonymous_user_id is not None
@@ -251,6 +286,11 @@ async def bridge_supabase_session(
         result.user_id,
         settings,
         pending_anonymous_user_id=result.pending_anonymous_user_id,
+    )
+    logger.info(
+        "supabase_session_minted",
+        user_id=str(result.user_id),
+        request_id=getattr(request.state, "request_id", "-"),
     )
     return response
 

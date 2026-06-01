@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     auth_cookie_name: str = Field(default="jippin_session")
     auth_cookie_domain: str | None = Field(default=None)
     auth_cookie_secure: bool | None = Field(default=None)
+
+    supabase_jwt_issuer: str | None = Field(default=None)
+    supabase_jwks_url: str | None = Field(default=None)
     supabase_jwt_secret: str | None = Field(default=None)
     supabase_jwt_audience: str = Field(default="authenticated")
     kakao_sync_required_term_tags: list[str] = Field(
