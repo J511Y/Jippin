@@ -24,6 +24,11 @@ services:
     build:
       context: ../../apps/web
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-/api}"
+        API_INTERNAL_BASE_URL: "${API_INTERNAL_BASE_URL:-http://api:8000}"
+        NEXT_PUBLIC_SUPABASE_URL: "${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL must be set}"
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: "${NEXT_PUBLIC_SUPABASE_ANON_KEY:?NEXT_PUBLIC_SUPABASE_ANON_KEY must be set}"
     image: jippin-web:local
     container_name: jippin-web
     restart: unless-stopped
@@ -32,8 +37,14 @@ services:
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
       NEXT_TELEMETRY_DISABLED: "1"
-      # BFF → API 호출은 컨테이너 네트워크 이름으로 경유한다.
-      NEXT_PUBLIC_API_BASE_URL: "http://api:8000"
+      # Browser → API calls stay same-origin so jippin_session remains scoped
+      # to the web host; Next rewrites /api/* to API_INTERNAL_BASE_URL.
+      NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-/api}"
+      # Route Handlers / rewrites → API use the compose service name.
+      API_INTERNAL_BASE_URL: "${API_INTERNAL_BASE_URL:-http://api:8000}"
+      NEXT_PUBLIC_SUPABASE_URL: "${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL must be set}"
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: "${NEXT_PUBLIC_SUPABASE_ANON_KEY:?NEXT_PUBLIC_SUPABASE_ANON_KEY must be set}"
+      SUPABASE_FLOW_COOKIE_SECRET: "${SUPABASE_FLOW_COOKIE_SECRET:?SUPABASE_FLOW_COOKIE_SECRET must be set}"
     ports:
       - "3000:3000"
     depends_on:
@@ -111,10 +122,13 @@ services:
       AUTH_JWT_ALG: "${AUTH_JWT_ALG:-HS256}"
       AUTH_JWT_ACCESS_TTL_SECONDS: "${AUTH_JWT_ACCESS_TTL_SECONDS:-3600}"
       AUTH_JWT_REFRESH_TTL_SECONDS: "${AUTH_JWT_REFRESH_TTL_SECONDS:-604800}"
+      SUPABASE_JWT_SECRET: "${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET must be set}"
+      SUPABASE_JWT_AUDIENCE: "${SUPABASE_JWT_AUDIENCE:-authenticated}"
       ANON_SESSION_HEADER: "${ANON_SESSION_HEADER:-x-jippin-anon-id}"
       ANON_SESSION_TTL_DAYS: "${ANON_SESSION_TTL_DAYS:-30}"
       FRONTEND_AUTH_SUCCESS_URL: "${FRONTEND_AUTH_SUCCESS_URL:-http://localhost:3000/auth/success}"
       FRONTEND_AUTH_FAILURE_URL: "${FRONTEND_AUTH_FAILURE_URL:-http://localhost:3000/auth/failure}"
+      FRONTEND_AUTH_TERMS_URL: "${FRONTEND_AUTH_TERMS_URL:-http://localhost:3000/auth/terms}"
     ports:
       - "8000:8000"
     depends_on:

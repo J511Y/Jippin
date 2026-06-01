@@ -2,16 +2,15 @@
 
 import { useState } from 'react';
 
-import { apiBaseUrl } from '@/lib/api-base-url';
 import { getOrCreateAnonymousUserId } from '@/lib/anonymous-user';
 
 /**
  * 간편가입 OAuth 시작 버튼 (CMP-557, CMP-564).
  *
  * - 자체 가입/아이디 찾기/비밀번호 찾기 UI 는 정책상 존재하지 않는다.
- * - 흐름: 버튼 클릭 → `GET /auth/{provider}/start?return_url=<absolute>&anonymous_user_id=<id>` 로
- *   브라우저를 이동시킨다. 백엔드는 302 로 provider authorization URL 까지 곧장 보낸다.
- * - return_url 은 `/login?next=...` 로 들어온 경로를 절대 URL 로 변환해 그대로 전달한다.
+ * - 흐름: 버튼 클릭 → Web BFF `GET /auth/oauth/start?provider=<id>&intent=signin&next=<path>` 로
+ *   브라우저를 이동시킨다. BFF 는 Supabase PKCE cookie 를 보존한 뒤 provider authorization URL 로 302 한다.
+ * - `next` 는 상대 경로만 전달한다. 절대 URL / protocol-relative / backslash payload 는 폐기한다.
  */
 
 const PROVIDERS = [
@@ -26,12 +25,11 @@ type LoginButtonsProps = {
   nextPath: string | null;
 };
 
-function resolveReturnUrl(nextPath: string | null): string {
-  const origin = window.location.origin;
-  if (!nextPath || !nextPath.startsWith('/')) {
-    return `${origin}/`;
+function safeNextPath(nextPath: string | null): string | null {
+  if (!nextPath || !nextPath.startsWith('/') || nextPath.startsWith('//') || nextPath.includes('\\')) {
+    return null;
   }
-  return `${origin}${nextPath}`;
+  return nextPath;
 }
 
 export function LoginButtons({ nextPath }: LoginButtonsProps) {
@@ -43,11 +41,14 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
     setErrorMessage(null);
 
     try {
-      const anonymousUserId = await getOrCreateAnonymousUserId();
-      const returnUrl = resolveReturnUrl(nextPath);
-      const url = new URL(`${apiBaseUrl()}/auth/${provider}/start`);
-      url.searchParams.set('return_url', returnUrl);
-      url.searchParams.set('anonymous_user_id', anonymousUserId);
+      const url = new URL('/auth/oauth/start', window.location.origin);
+      url.searchParams.set('provider', provider);
+      url.searchParams.set('intent', 'signin');
+      url.searchParams.set('anonymous_user_id', await getOrCreateAnonymousUserId());
+      const next = safeNextPath(nextPath);
+      if (next) {
+        url.searchParams.set('next', next);
+      }
       window.location.assign(url.toString());
     } catch (error) {
       setErrorMessage(
