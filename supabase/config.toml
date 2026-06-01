@@ -47,8 +47,13 @@ shadow_port = 54320
 
 # 마이그레이션 정본 위치 — CMP-575 가 Alembic → SQL 변환 결과를 여기에 쌓는다.
 # 본 PR 시점에는 `supabase/migrations/` 디렉터리만 비워두고 `.gitkeep` 으로 보존.
+#
+# `schema_paths` 의 glob 은 본 `config.toml` 이 있는 디렉터리(`supabase/`) 기준 상대 경로다.
+# 따라서 `supabase/schemas/*.sql` 파일을 가리키려면 `./schemas/*.sql` 로 적는다.
+# Supabase 공식 declarative schema 예시:
+# https://supabase.com/docs/guides/local-development/declarative-database-schemas#declaring-your-schema
 [db.migrations]
-schema_paths = ["./supabase/schemas/*.sql"]
+schema_paths = ["./schemas/*.sql"]
 
 [db.pooler]
 enabled = false
@@ -86,8 +91,17 @@ file_size_limit = "50MiB"
 # ─────────────────────────────────────────────────────────────────────────────
 # [auth] — Supabase Auth (CMP-576 트랙이 활성화)
 # ─────────────────────────────────────────────────────────────────────────────
-# 본 PR 시점에는 enabled=true (콘솔 default) 로 두되, 모든 provider 는 disabled.
+# 본 PR 시점에는 enabled=true (콘솔 default) 로 두되, **모든 가입 표면을 닫는다**.
 # 실제 provider 활성화·anonymous 활성화는 CMP-576 Auth 트랙이 별도 PR 로 켠다.
+#
+# 정책 정본 (AGENTS.md §4.7):
+#   - 자체 password signup **영구 금지** → `[auth.email] enable_signup = false`.
+#   - 동일 이메일 + 다른 provider 자동 병합 금지 (§4.7 #9). Supabase 는 같은
+#     이메일 OAuth identity 를 default 로 자동 link 한다. 본 PR 은 manual/automatic
+#     linking 관련 토글을 모두 보수적인 값으로 두고, 실제 정책은 ADR-0004 (CMP-573,
+#     Pending) Accepted 후 CMP-576 PR 에서 켠다.
+#   - 콘솔 측 자동 linking 가드 절차는 `docs/runbooks/supabase-branching.md` §7.1
+#     (Identity linking 가드) 에 명시.
 [auth]
 enabled = true
 # 사용자 작업: 운영 도메인 확정 후 `site_url` 과 `additional_redirect_urls` 를 갱신.
@@ -96,13 +110,20 @@ additional_redirect_urls = ["http://127.0.0.1:3000"]
 jwt_expiry = 3600
 enable_refresh_token_rotation = true
 refresh_token_reuse_interval = 10
-enable_signup = true
-# CMP-576 가 실제 PoC 후 true 로 전환. 본 PR 시점은 보수적 false.
+# AGENTS.md §4.7 봉인: 자체 password signup 금지. anon key 클라이언트가 이메일/암호
+# 가입을 만들 수 없도록 scaffold 단계에서 false 로 둔다. 이 값을 true 로 바꾸려면
+# 새 ADR + CEO 결정이 필요하다.
+enable_signup = false
+# anonymous sign-in 은 CMP-576 PoC 후 활성화. 본 PR 시점은 false.
 enable_anonymous_sign_ins = false
+# Identity linking — ADR-0004 (CMP-573, Pending) Accepted 전에는 false.
+# 운영 적용 시 anonymous → OAuth upgrade 흐름에 manual linking 이 필요하다 (§4.7).
+# 자동 linking 동작은 콘솔 side 에서 비활성화한다 (런북 §7.1 의 콘솔 가드 참고).
 enable_manual_linking = false
 
 [auth.email]
-enable_signup = true
+# 자체 이메일/암호 가입 금지 봉인 (위 [auth] 주석 참고).
+enable_signup = false
 double_confirm_changes = true
 enable_confirmations = false
 
@@ -111,18 +132,22 @@ enable_signup = false
 enable_confirmations = false
 
 # Built-in OAuth providers — CMP-576 트랙이 실제 client_id/secret 발급 후 활성화.
-# 본 PR 시점에는 모두 disabled. 변수명만 정의해두어 사용자 콘솔 작업 시 헷갈리지 않게 한다.
+# 본 PR 시점에는 모두 disabled. `env()` 미해석으로 `supabase link`, `supabase db diff`
+# 등 CLI 명령이 깨지지 않도록 client_id / secret 은 **빈 문자열**로 둔다 (Supabase
+# 공식 disabled-provider 예시와 동일). 활성화 시점에는 CMP-576 PR 이 본 값을
+# `env(...)` 로 바꾸고 매칭되는 placeholder env 파일(`apps/api/.env.example`,
+# `apps/web/.env.example`) 을 같은 PR 에서 갱신한다.
 [auth.external.google]
 enabled = false
-client_id = "env(SUPABASE_AUTH_GOOGLE_CLIENT_ID)"
-secret = "env(SUPABASE_AUTH_GOOGLE_SECRET)"
+client_id = ""
+secret = ""
 redirect_uri = ""
 skip_nonce_check = false
 
 [auth.external.kakao]
 enabled = false
-client_id = "env(SUPABASE_AUTH_KAKAO_CLIENT_ID)"
-secret = "env(SUPABASE_AUTH_KAKAO_SECRET)"
+client_id = ""
+secret = ""
 redirect_uri = ""
 
 # Naver — built-in provider 가 아니다. Custom OAuth/OIDC 로 PoC 후 활성화 (CMP-576).

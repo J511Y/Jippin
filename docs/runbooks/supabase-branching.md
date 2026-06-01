@@ -87,14 +87,15 @@ supabase project (jippin)
 - [ ] **U4.** Supabase Console → Branching → **GitHub Integration** → `Connect repository` → `J511Y/Jippin` 선택. 옵션 설정:
   - Production branch: `main`
   - Persistent branch mapping: `dev` ↔ `development`
-  - Supabase directory: `supabase` (config.toml 의 직계 부모)
+  - **Working directory: `.`** — Supabase GitHub integration 의 working directory 는 **`supabase/` 폴더를 포함하는 부모 경로**다. 본 모노레포는 `supabase/` 가 repo root 에 있으므로 `.` 로 입력한다. (Supabase 공식 안내: https://supabase.com/docs/guides/deployment/branching/github-integration#set-the-working-directory)
   - **Automatic branching: "Supabase changes only"** (Settings → Branching 의 토글; 이 옵션은 `supabase/**` 변경이 있는 PR 에만 preview branch 를 만든다)
+  - **Identity linking 가드** (§7.1) — Supabase 는 default 로 같은 이메일 OAuth identity 를 자동 link 한다. AGENTS.md §4.7 #9 봉인을 지키려면 콘솔 측에서 추가 가드가 필요하다. 본 단계에서는 자동 linking 동작을 확인만 하고, 실제 disable 절차는 §7.1 가 정본화한다 (ADR-0004 Accepted 후 CMP-576 PR 이 켠다).
 - [ ] **U5.** GitHub Settings → Secrets and variables → Actions 에 다음 추가 (값은 1Password 에서 복붙):
   - Secret: `SUPABASE_ACCESS_TOKEN` (Personal Access Token; Supabase 콘솔 Account → Access Tokens)
   - Secret: `SUPABASE_DB_PASSWORD_PROD`
-  - Secret: `SUPABASE_DB_PASSWORD_DEV`
-  - Variable: `SUPABASE_PROJECT_REF_PROD` (production project ref)
-  - Variable: `SUPABASE_PROJECT_REF_DEV` (= prod ref; preview/dev 는 같은 project 안의 branch)
+  - Secret: `SUPABASE_DB_PASSWORD_DEV` (development persistent branch 용 DB password — production 과 별도)
+  - Variable: `SUPABASE_PROJECT_REF_PROD` (production project ref; `supabase projects list` 의 Reference ID)
+  - Variable: `SUPABASE_PROJECT_REF_DEV` (**development persistent branch 의 BRANCH PROJECT ID — production ref 와 별도 값**. `supabase --experimental branches list` 의 `BRANCH PROJECT ID` 컬럼 값을 입력한다. Supabase 공식: https://supabase.com/docs/guides/deployment/branching/configuration#remote-specific-configuration)
 - [ ] **U6.** GitHub Settings → Branches → `main` / `dev` 보호 규칙 확인. **본 PR 시점에는 required check 변경 없음** (`ci-status` 만 required). `Supabase / Migration check` 는 §6 단계 2 에서 추가.
 
 ### 3.2 에이전트(또는 사용자) 후속 작업 — CMP-574 PR 머지 후
@@ -189,6 +190,25 @@ Supabase integration 은 `main` push 시 production DB 에 migration 을 직접 
 
 세부 가드와 회복 절차는 CMP-575 가 정본화한다. 본 런북은 게이트만 명시.
 
+### 7.1 Identity linking 가드 (AGENTS.md §4.7 #9 봉인)
+
+Supabase Auth 는 default 로 **같은 이메일을 가진 서로 다른 OAuth identity 를 자동 link** 한다 (한 user 로 병합). 집핀 정책(`AGENTS.md §4.7` #9) 은 동일 이메일 + 다른 provider 자동 병합을 **영구 금지**한다 — 계정 탈취 벡터이기 때문이다. `supabase/config.toml` 의 `enable_manual_linking` 토글로는 자동 linking 을 끌 수 없으므로 다음 가드가 필요하다.
+
+본 PR (CMP-574, 단계 0) 시점에는 Supabase 콘솔이 연결되어 있지 않으므로 검증만 봉인하고, 실제 활성화는 ADR-0004 (CMP-573, Pending) Accepted 후 CMP-576 PR 이 한다.
+
+**활성화 전 게이트 (CMP-576 또는 사용자 콘솔 작업의 선결 조건):**
+
+| 게이트 | 결정/검증 | 책임 |
+|---|---|---|
+| G1. ADR-0004 (`docs/adr/0004-supabase-transition.md`) Accepted | CEO 결정 + ADR PR 머지 | CMP-573 |
+| G2. Supabase 콘솔 → Authentication → Providers → 각 OAuth provider 의 **"Skip nonce check"**, **"Allow new user signups"**, **"Linked Identities"** 옵션을 정책에 맞게 설정 — 콘솔 UI 가 자동 link 를 OFF 하는 토글을 제공할 때 그 토글을 OFF 로 설정. 토글이 없으면 G3 의 DB 트리거로 대체. | 사용자 (콘솔 작업) |
+| G3. DB 측 fallback — `auth.users` 에 동일 이메일 row 가 이미 있을 때 두 번째 OAuth signup 을 reject 또는 별도 row 로 분리하는 trigger 를 CMP-576 가 정본화한다. `supabase/migrations/` 에 SQL 로 들어간다. | CMP-576 |
+| G4. 위 가드 활성 상태에서 PoC — Google + Kakao 같은 이메일 가입 시 두 user row 가 분리되는지 확인. | CMP-576 |
+
+위 4개 게이트 중 1개라도 빠진 상태로 OAuth provider 를 `enabled = true` 로 켜는 PR 은 **머지 금지**다. 본 런북은 게이트 목록만 봉인하고, 실제 trigger SQL / PoC 절차는 CMP-576 런북에 위임한다.
+
+**Anonymous → OAuth upgrade (선택 경로):** 해당 흐름을 채택하면 `enable_manual_linking = true` 가 필요하다. 위 G1~G4 통과 후 CMP-576 PR 에서만 토글을 켠다.
+
 ---
 
 ## 8. 시크릿 회전 정책
@@ -233,6 +253,18 @@ git grep -nE "supabase\.co.*[A-Za-z0-9]{40,}.*password" supabase/ docs/
 # 4) 본 PR 의 placeholder 가 정확히 placeholder 다.
 git grep -n "jippin-placeholder" supabase/config.toml
 # → 정확히 1건 (project_id).
+
+# 5) 가입 표면 봉인 — `enable_signup` 가 [auth], [auth.email], [auth.sms] 모두 false.
+git grep -n "enable_signup" supabase/config.toml
+# → 정확히 3건, 모두 false.
+
+# 6) Identity linking 토글이 conservative — `enable_manual_linking = false`, anonymous false.
+git grep -nE "enable_manual_linking|enable_anonymous_sign_ins" supabase/config.toml
+# → 두 줄 모두 false.
+
+# 7) disabled OAuth provider 의 client_id/secret 이 빈 문자열 (env() 미해석 fallback).
+git grep -nE 'client_id = ""' supabase/config.toml
+# → google, kakao 2건.
 ```
 
 ---
