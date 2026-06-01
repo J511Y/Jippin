@@ -139,15 +139,16 @@ export type KakaoSyncAuditErrorCode = 'http_error' | 'endpoint_not_enabled' | 'i
 /**
  * `/auth/terms/kakao-sync` 호출 — backend 가 endpoint 를 ship 한 이후에만 활성화.
  *
- * **endpoint feature gate (round-12 항목 5).** 현재 backend repo (`apps/api`) 에는
- * `/auth/terms/kakao-sync` 라우트가 아직 구현되어 있지 않다 (이슈 비목표 — Backend/
- * Auth 트랙). web 어댑터가 무조건 호출하면 모든 Kakao OAuth 가 audit 실패 경로로
- * 빠지므로, 호출자는 backend 가 endpoint 를 ship 했음을 환경변수로 선언해야 한다.
+ * **endpoint feature gate (round-12 항목 5 / round-13 stub 도입).** backend
+ * `apps/api/src/routers/auth.py` 에 `POST /auth/terms/kakao-sync` **stub** 라우트가
+ * round-13 에서 ship 됐다 — schema 검증 + Bearer 헤더 존재 확인 후 202 + `stubbed:
+ * true` 반환. 실 `terms_consents(source='kakao_sync')` upsert + Kakao OpenAPI 검증
+ * 은 여전히 Backend/Auth 트랙 (별 이슈) 의 책임.
  *
  * `options.enabled` 가 false (기본값) 이면 fetch 자체를 시도하지 않고 즉시 throw —
- * 명시적 hard-fail 로 호출자가 "backend audit 미 ship" 상태임을 코드로 인지하게
- * 한다 (silent no-op 으로 success 페이지 진입하는 회귀 방지, round-11 항목 4 hard-
- * fail 정책과 정합). callsite (callback Route Handler) 는 다음과 같이 gating:
+ * stub 만 ship 된 상태에서도 callsite (callback Route Handler) 가 명시적으로 stub
+ * 인지 production audit 인지를 코드로 선언하게 강제한다 (silent no-op 으로 success
+ * 페이지 진입하는 회귀 방지, round-11 항목 4 hard-fail 정책과 정합). callsite (callback Route Handler) 는 다음과 같이 gating:
  *
  * ```ts
  * const auditEnabled = process.env.NEXT_PUBLIC_KAKAO_SYNC_AUDIT_ENABLED === 'true';

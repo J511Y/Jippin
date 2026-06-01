@@ -94,63 +94,70 @@ export function evaluateOAuthIntentGuard(
     };
   }
 
-  switch (session.kind) {
-    case 'anonymous':
-      if (intent === 'signin') {
-        return {
-          allowed: false,
-          reason: 'signin_blocked_anonymous_session',
-          detail:
-            '익명 세션 상태에서는 signInWithOAuth 직접 호출이 금지됩니다. ' +
-            'linkIdentity (intent="link") 또는 §4.2.2 fallback ladder (intent="link-merge") 로 진입해야 합니다.',
-        };
-      }
-      return { allowed: true, intent };
-
-    case 'authenticated':
-      if (intent === 'link-merge') {
-        return {
-          allowed: false,
-          reason: 'link_merge_requires_anonymous_session',
-          detail:
-            'link-merge 는 익명 세션의 fallback ladder 분기 전용입니다. 실명 세션에서는 사용할 수 없습니다.',
-        };
-      }
-      if (intent === 'link') {
-        return {
-          allowed: false,
-          reason: 'link_blocked_authenticated_session',
-          detail:
-            '이미 실명 user 로 로그인된 상태입니다. provider 추가 연결은 별도 UX (account-settings) 에서 진입해야 합니다.',
-        };
-      }
-      if (intent === 'signin') {
-        // 이미 인증된 세션에서 새 OAuth `signin` 흐름을 시작하면 (1) 기존 세션의
-        // claims 를 덮어쓰는 회귀, (2) 의도치 않은 provider switch, (3) account
-        // takeover (CSRF-induced auto-login) 위험이 생긴다. 실명 user 가 다른
-        // 계정으로 갈아타려면 명시적 signOut 후 재진입해야 한다.
-        return {
-          allowed: false,
-          reason: 'signin_blocked_authenticated_session',
-          detail:
-            '이미 로그인된 상태에서는 signin intent 로 새 OAuth 흐름을 시작할 수 없습니다. ' +
-            '명시적 signOut 후 다시 시도하거나, provider 추가는 account-settings UX 로 진입하세요.',
-        };
-      }
-      return { allowed: true, intent };
-
-    case 'none':
-    default:
-      if (intent === 'link' || intent === 'link-merge') {
-        return {
-          allowed: false,
-          reason: 'link_merge_requires_anonymous_session',
-          detail:
-            'link 계열 intent 는 익명 세션이 존재할 때만 허용됩니다. 미로그인 상태는 signin intent 만 허용.',
-        };
-      }
-      return { allowed: true, intent };
+  // Positive-list of allowed (session, intent) pairs — round-13 review. 어떤
+  // 분기도 fallthrough 로 `allowed: true` 가 되지 않도록, allow 경로를 명시적으로
+  // 열거하고 나머지는 모두 deny 한다 (defence in depth).
+  //
+  //   1. anonymous + link        → linkIdentity 호출 (단일 진입점).
+  //   2. anonymous + link-merge  → §4.2.2 fallback ladder (signOut→signInWithOAuth).
+  //   3. none + signin           → 미로그인 user 의 정상 OAuth 로그인.
+  //
+  // 그 외 모든 (session, intent) 조합은 deny.
+  if (session.kind === 'anonymous' && (intent === 'link' || intent === 'link-merge')) {
+    return { allowed: true, intent };
   }
+  if (session.kind === 'none' && intent === 'signin') {
+    return { allowed: true, intent };
+  }
+
+  // Deny path — 각 case 별로 구체적 사유 부여.
+  if (session.kind === 'anonymous') {
+    // 위 positive-list 에서 link/link-merge 가 이미 빠졌으므로 여기는 signin 만 도달.
+    return {
+      allowed: false,
+      reason: 'signin_blocked_anonymous_session',
+      detail:
+        '익명 세션 상태에서는 signInWithOAuth 직접 호출이 금지됩니다. ' +
+        'linkIdentity (intent="link") 또는 §4.2.2 fallback ladder (intent="link-merge") 로 진입해야 합니다.',
+    };
+  }
+  if (session.kind === 'authenticated') {
+    if (intent === 'signin') {
+      // 이미 인증된 세션에서 새 OAuth `signin` 흐름을 시작하면 (1) 기존 세션의
+      // claims 를 덮어쓰는 회귀, (2) 의도치 않은 provider switch, (3) account
+      // takeover (CSRF-induced auto-login) 위험이 생긴다. 실명 user 가 다른
+      // 계정으로 갈아타려면 명시적 signOut 후 재진입해야 한다.
+      return {
+        allowed: false,
+        reason: 'signin_blocked_authenticated_session',
+        detail:
+          '이미 로그인된 상태에서는 signin intent 로 새 OAuth 흐름을 시작할 수 없습니다. ' +
+          '명시적 signOut 후 다시 시도하거나, provider 추가는 account-settings UX 로 진입하세요.',
+      };
+    }
+    if (intent === 'link') {
+      return {
+        allowed: false,
+        reason: 'link_blocked_authenticated_session',
+        detail:
+          '이미 실명 user 로 로그인된 상태입니다. provider 추가 연결은 별도 UX (account-settings) 에서 진입해야 합니다.',
+      };
+    }
+    // intent === 'link-merge'
+    return {
+      allowed: false,
+      reason: 'link_merge_requires_anonymous_session',
+      detail:
+        'link-merge 는 익명 세션의 fallback ladder 분기 전용입니다. 실명 세션에서는 사용할 수 없습니다.',
+    };
+  }
+  // session.kind === 'none' + link/link-merge (signin 은 위 positive-list 에서 흡수).
+  return {
+    allowed: false,
+    reason: 'link_merge_requires_anonymous_session',
+    detail:
+      'link 계열 intent 는 익명 세션이 존재할 때만 허용됩니다. 미로그인 상태는 signin intent 만 허용.',
+  };
 }
 
 /**

@@ -452,3 +452,62 @@ async def test_accept_required_terms_upserts_rows_and_claims_anonymous(
     assert "(user_id, term_id, version, source" in combined_sql
     assert "ON CONFLICT (user_id, term_id, version) DO UPDATE" in combined_sql
     assert "UPDATE anonymous_users" in combined_sql
+
+
+def test_kakao_sync_audit_stub_accepts_payload_with_bearer_header(auth_env):
+    """CMP-581 round-13 — POST /auth/terms/kakao-sync stub returns 202 + stubbed flag."""
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/terms/kakao-sync",
+            headers={"Authorization": "Bearer fake-supabase-access-token"},
+            json={
+                "supabase_user_id": "supabase-uuid-1",
+                "linked_provider": "kakao",
+                "provider_access_token": "kakao-access-token",
+                "provider_refresh_token": None,
+            },
+        )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["stubbed"] is True
+    assert "Backend/Auth" in body["detail"]
+
+
+def test_kakao_sync_audit_stub_rejects_missing_bearer_header(auth_env):
+    """Bearer 헤더 부재 → 401. 실 JWT 검증 전 단계 fence."""
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/terms/kakao-sync",
+            json={
+                "supabase_user_id": "supabase-uuid-1",
+                "linked_provider": "kakao",
+                "provider_access_token": "kakao-access-token",
+                "provider_refresh_token": None,
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "invalid_authorization"
+
+
+def test_kakao_sync_audit_stub_rejects_non_kakao_provider(auth_env):
+    """schema fence — linked_provider 는 'kakao' literal 만 허용 (round-12 normalize 와 정합)."""
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/terms/kakao-sync",
+            headers={"Authorization": "Bearer fake-token"},
+            json={
+                "supabase_user_id": "u",
+                "linked_provider": "google",
+                "provider_access_token": None,
+                "provider_refresh_token": None,
+            },
+        )
+
+    # FastAPI Pydantic validation → 422 Unprocessable Entity.
+    assert response.status_code == 422
