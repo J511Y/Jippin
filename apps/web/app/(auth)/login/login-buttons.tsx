@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 
-import { apiBaseUrl } from '@/lib/api-base-url';
 import { getOrCreateAnonymousUserId } from '@/lib/anonymous-user';
 import { ALLOWED_PROVIDERS, type AllowedProvider } from '@/lib/oauth-providers';
 
@@ -11,9 +10,13 @@ import { ALLOWED_PROVIDERS, type AllowedProvider } from '@/lib/oauth-providers';
  *
  * - 자체 가입/아이디 찾기/비밀번호 찾기 UI 는 정책상 존재하지 않는다 (runbook §4.x).
  * - provider 화이트리스트 SSOT 는 `@/lib/oauth-providers` 의 `ALLOWED_PROVIDERS`.
- * - 흐름: 버튼 클릭 → `GET /auth/{provider}/start?return_url=<absolute>&anonymous_user_id=<id>` 로
- *   브라우저를 이동시킨다. 백엔드는 302 로 provider authorization URL 까지 곧장 보낸다.
- * - return_url 은 `/login?next=...` 로 들어온 경로를 절대 URL 로 변환해 그대로 전달한다.
+ * - **흐름 (round-5 봉인):** 버튼 클릭 → same-origin `/auth/oauth/start?provider=<id>&return_url=...&anonymous_user_id=...`
+ *   BFF (`apps/web/app/auth/oauth/start/route.ts`) 로 navigation. BFF 가 화이트리스트
+ *   가드 + `publicApiBaseUrl()` (`API_PUBLIC_BASE_URL` SSOT) 를 적용한 뒤 backend 로
+ *   302. 클라이언트 코드는 `NEXT_PUBLIC_API_BASE_URL` 를 직접 사용하지 않으므로
+ *   compose 의 `http://api:8000` 같은 server-only host 가 브라우저 코드에 bake 되어도
+ *   사용자 navigation 에 영향이 없다.
+ * - return_url 은 `/login?next=...` 로 들어온 경로를 절대 URL 로 변환해 그대로 BFF 에 전달한다.
  */
 
 const PROVIDER_LABELS: Record<AllowedProvider, string> = {
@@ -56,7 +59,8 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
     try {
       const anonymousUserId = await getOrCreateAnonymousUserId();
       const returnUrl = resolveReturnUrl(nextPath);
-      const url = new URL(`${apiBaseUrl()}/auth/${provider}/start`);
+      const url = new URL('/auth/oauth/start', window.location.origin);
+      url.searchParams.set('provider', provider);
       url.searchParams.set('return_url', returnUrl);
       url.searchParams.set('anonymous_user_id', anonymousUserId);
       window.location.assign(url.toString());
