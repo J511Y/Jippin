@@ -137,6 +137,24 @@ def _install_identity_lookup(
         fake_resolve,
     )
 
+    async def fake_current_user_context(user_id: uuid.UUID):
+        from src.services.auth import CurrentUserContext
+
+        return CurrentUserContext(
+            user_id=user_id,
+            email="user@example.com",
+            display_name=None,
+            profile_image_url=None,
+            role="user",
+            providers=["google"],
+            missing_required_terms=[],
+        )
+
+    monkeypatch.setattr(
+        "src.routers.auth.get_current_user_context",
+        fake_current_user_context,
+    )
+
 
 def test_supabase_session_missing_authorization_header_returns_401(
     supabase_env, monkeypatch
@@ -149,7 +167,7 @@ def test_supabase_session_missing_authorization_header_returns_401(
         response = client.post("/auth/supabase/session")
 
     assert response.status_code == 401
-    assert response.json()["error"]["code"] == "AUTH_INVALID_TOKEN"
+    assert response.json()["error"]["code"] == "SUPABASE_SESSION_BEARER_REQUIRED"
 
 
 def test_supabase_session_valid_token_mints_cookie(supabase_env, monkeypatch):
@@ -167,7 +185,8 @@ def test_supabase_session_valid_token_mints_cookie(supabase_env, monkeypatch):
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    assert response.status_code == 204
+    assert response.status_code == 200
+    assert response.json()["signup_complete"] is True
     set_cookie = response.headers["set-cookie"]
     assert "jippin_session=" in set_cookie
     assert "HttpOnly" in set_cookie

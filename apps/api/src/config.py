@@ -89,6 +89,7 @@ class Settings(BaseSettings):
 
     supabase_jwt_issuer: str | None = Field(default=None)
     supabase_jwks_url: str | None = Field(default=None)
+    supabase_jwt_secret: str | None = Field(default=None)
     supabase_jwt_audience: str = Field(default="authenticated")
     kakao_sync_required_term_tags: list[str] = Field(
         default_factory=lambda: ["service_terms", "privacy_policy"]

@@ -34,10 +34,18 @@ class SupabaseBridgeResult:
 
 def parse_bearer_token(authorization: str | None) -> str:
     if not authorization:
-        raise _invalid_token("Authorization header is required.")
+        raise ZippinException(
+            "Supabase bearer token is required.",
+            code="SUPABASE_SESSION_BEARER_REQUIRED",
+            http_status=401,
+        )
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
-        raise _invalid_token("Authorization header must use the Bearer scheme.")
+        raise ZippinException(
+            "Supabase bearer token is required.",
+            code="SUPABASE_SESSION_BEARER_REQUIRED",
+            http_status=401,
+        )
     return token.strip()
 
 
@@ -104,9 +112,12 @@ async def resolve_jippin_user_for_supabase(
 ) -> SupabaseBridgeResult:
     async with get_engine().connect() as conn:
         row = await conn.execute(
-            sa.select(AuthIdentity.user_id).where(
+            sa.select(AuthIdentity.user_id)
+            .join(User, User.id == AuthIdentity.user_id)
+            .where(
                 AuthIdentity.provider == SUPABASE_PROVIDER,
                 AuthIdentity.external_id == supabase_subject,
+                User.status == "active",
             )
         )
         user_id = row.scalar_one_or_none()
@@ -114,8 +125,13 @@ async def resolve_jippin_user_for_supabase(
             return SupabaseBridgeResult(user_id=user_id)
 
         if email_claim:
+            normalized_email = email_claim.strip().lower()
             email_row = await conn.execute(
-                sa.select(User.id).where(User.email == email_claim)
+                sa.select(User.id).where(
+                    User.email.is_not(None),
+                    User.status == "active",
+                    sa.func.lower(User.email) == normalized_email,
+                )
             )
             if email_row.scalar_one_or_none() is not None:
                 raise ZippinException(

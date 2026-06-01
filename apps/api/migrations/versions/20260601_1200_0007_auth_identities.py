@@ -45,7 +45,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "provider IN ('supabase')",
-            name=op.f("ck_auth_identities_provider_allowed"),
+            name=op.f("ck_auth_identities_auth_identities_provider_allowed"),
         ),
         sa.ForeignKeyConstraint(
             ["user_id"],
