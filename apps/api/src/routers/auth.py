@@ -27,6 +27,7 @@ from ..schemas.auth import (
     AuthMeResponse,
     AuthUserResponse,
     OAuthStartResponse,
+    SupabaseAccountLinkResponse,
     SupabaseSessionBridgeRequest,
     SupabaseSessionBridgeResponse,
     TermsAcceptRequest,
@@ -40,6 +41,7 @@ from ..services.auth import (
     create_or_reuse_anonymous_user,
     get_current_user_context,
     link_oauth_account,
+    link_supabase_account,
     parse_existing_anonymous_user_id,
 )
 
@@ -190,6 +192,24 @@ async def bridge_supabase_session(
         pending_anonymous_user_id=result.pending_anonymous_user_id,
     )
     return response
+
+
+@router.post("/supabase/link", response_model=SupabaseAccountLinkResponse)
+async def link_supabase_identity(request: Request) -> SupabaseAccountLinkResponse:
+    claims = read_session_claims(request)
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise ZippinException(
+            "Supabase bearer token is required.",
+            code="SUPABASE_SESSION_BEARER_REQUIRED",
+            http_status=401,
+        )
+    await link_supabase_account(
+        access_token=token,
+        linking_user_id=claims.user_id,
+    )
+    return SupabaseAccountLinkResponse()
 
 
 @router.post("/terms/accept", response_model=TermsAcceptResponse)

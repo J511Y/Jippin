@@ -53,6 +53,10 @@ class SupabaseSessionBridgeResponse(BaseModel):
     redirect_url: str | None = None
 
 
+class SupabaseAccountLinkResponse(BaseModel):
+    ok: bool = True
+
+
 class TermsConsentInput(BaseModel):
     term_id: str | int
     agreed: bool

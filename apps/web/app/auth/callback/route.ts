@@ -1,10 +1,13 @@
 import { type NextRequest, NextResponse } from 'next/server';
 
 import { apiBaseUrl } from '@/lib/api-base-url';
+import { verifyFlowCookie } from '@/lib/flow-cookie';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const FLOW_CONTEXT_COOKIE = 'jippin_oauth_provider';
 
 function safeRelativeRedirect(value: string | null): string {
   if (!value || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')) {
@@ -36,6 +39,23 @@ type BackendSessionBridgeResult = {
   redirect_url?: string | null;
 };
 
+type FlowIntent = 'link' | 'signin' | 'link-merge';
+
+function flowIntent(request: NextRequest): FlowIntent | null {
+  const raw = request.cookies.get(FLOW_CONTEXT_COOKIE)?.value;
+  if (!raw) {
+    return null;
+  }
+  const verified = verifyFlowCookie(raw);
+  if (!verified.ok) {
+    return null;
+  }
+  const intent = verified.payload.intent;
+  return intent === 'link' || intent === 'signin' || intent === 'link-merge'
+    ? intent
+    : null;
+}
+
 async function mintBackendSession(
   accessToken: string,
   anonymousUserId: string | null,
@@ -62,25 +82,53 @@ async function mintBackendSession(
   }
 }
 
+async function linkBackendAccount(accessToken: string, request: NextRequest): Promise<boolean> {
+  try {
+    const cookie = request.headers.get('cookie');
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+    };
+    if (cookie) {
+      headers.Cookie = cookie;
+    }
+    const link = await fetch(`${apiBaseUrl()}/auth/supabase/link`, {
+      method: 'POST',
+      headers,
+      cache: 'no-store',
+    });
+    return link.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = request.nextUrl.searchParams.get('code');
   const next = safeRelativeRedirect(request.nextUrl.searchParams.get('next'));
   const anonymousUserId = request.nextUrl.searchParams.get('anonymous_user_id');
+  const intent = flowIntent(request);
   const response = new NextResponse(null);
 
   if (code) {
     const supabase = createRouteHandlerClient({ request, response });
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-    const bridge = data.session?.access_token
-      ? await mintBackendSession(data.session.access_token, anonymousUserId, response)
-      : null;
+    const accessToken = data.session?.access_token;
+    if (!error && accessToken && intent === 'link') {
+      if (await linkBackendAccount(accessToken, request)) {
+        response.headers.set('Location', new URL(next, request.nextUrl.origin).toString());
+        return new NextResponse(null, { status: 302, headers: response.headers });
+      }
+    } else if (!error && accessToken) {
+      const bridge = await mintBackendSession(accessToken, anonymousUserId, response);
 
-    if (!error && bridge) {
-      const redirectTarget = bridge.signup_complete === false
-        ? (bridge.redirect_url ?? '/auth/terms')
-        : next;
-      response.headers.set('Location', new URL(redirectTarget, request.nextUrl.origin).toString());
-      return new NextResponse(null, { status: 302, headers: response.headers });
+      if (bridge) {
+        const redirectTarget = bridge.signup_complete === false
+          ? (bridge.redirect_url ?? '/auth/terms')
+          : next;
+        response.headers.set('Location', new URL(redirectTarget, request.nextUrl.origin).toString());
+        return new NextResponse(null, { status: 302, headers: response.headers });
+      }
     }
   }
 

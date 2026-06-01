@@ -224,14 +224,7 @@ async def complete_supabase_session(
 ) -> SupabaseSessionBridgeResult:
     settings = get_settings()
     claims = _decode_supabase_access_token(access_token, settings)
-    provider = _supabase_provider_from_claims(claims)
-    profile = ProviderProfile(
-        provider_subject=str(claims["sub"]),
-        email=_optional_str(claims.get("email")),
-        display_name=_supabase_display_name(claims),
-        profile_image_url=_supabase_avatar_url(claims),
-        agreed_terms_tags=tuple(_string_list(claims.get("agreed_terms_tags"))),
-    )
+    provider, profile = _supabase_provider_profile(claims)
     parsed_anonymous_user_id = parse_existing_anonymous_user_id(anonymous_user_id)
     login_result = await complete_oauth_login(
         provider=provider,
@@ -246,6 +239,21 @@ async def complete_supabase_session(
         user_id=login_result.user_id,
         pending_anonymous_user_id=pending_anonymous_user_id,
         missing_required_terms=context.missing_required_terms,
+    )
+
+
+async def link_supabase_account(
+    *,
+    access_token: str,
+    linking_user_id: uuid.UUID,
+) -> None:
+    settings = get_settings()
+    claims = _decode_supabase_access_token(access_token, settings)
+    provider, profile = _supabase_provider_profile(claims)
+    await link_oauth_account(
+        linking_user_id=linking_user_id,
+        provider=provider,
+        profile=profile,
     )
 
 
@@ -524,13 +532,69 @@ def _normalize_supabase_provider(value: object) -> OAuthProvider | None:
     return None
 
 
+def _supabase_provider_profile(
+    claims: dict[str, Any],
+) -> tuple[OAuthProvider, ProviderProfile]:
+    provider = _supabase_provider_from_claims(claims)
+    metadata = _supabase_user_metadata(claims)
+    return provider, ProviderProfile(
+        provider_subject=_supabase_provider_subject(claims, provider, metadata),
+        email=_optional_str(claims.get("email"))
+        or _optional_str(metadata.get("email")),
+        display_name=_supabase_display_name(metadata),
+        profile_image_url=_supabase_avatar_url(metadata),
+        agreed_terms_tags=tuple(
+            _string_list(metadata.get("agreed_terms_tags"))
+            or _string_list(claims.get("agreed_terms_tags"))
+        ),
+    )
+
+
+def _supabase_provider_subject(
+    claims: dict[str, Any],
+    provider: OAuthProvider,
+    metadata: dict[str, Any],
+) -> str:
+    provider_key = provider.value
+    for key in (
+        "provider_id",
+        f"{provider_key}_id",
+        f"{provider_key}_subject",
+        "sub",
+        "id",
+    ):
+        value = _optional_str(metadata.get(key))
+        if value:
+            return value
+
+    for identity in [
+        *_dict_list(claims.get("identities")),
+        *_dict_list(metadata.get("identities")),
+    ]:
+        identity_provider = _normalize_supabase_provider(
+            identity.get("provider") or identity.get("identity_provider")
+        )
+        if identity_provider != provider:
+            continue
+        identity_data = identity.get("identity_data")
+        if not isinstance(identity_data, dict):
+            identity_data = {}
+        for key in ("provider_id", "sub", "id"):
+            value = _optional_str(identity_data.get(key)) or _optional_str(
+                identity.get(key)
+            )
+            if value:
+                return value
+
+    return str(claims["sub"])
+
+
 def _supabase_user_metadata(claims: dict[str, Any]) -> dict[str, Any]:
     metadata = claims.get("user_metadata")
     return metadata if isinstance(metadata, dict) else {}
 
 
-def _supabase_display_name(claims: dict[str, Any]) -> str | None:
-    metadata = _supabase_user_metadata(claims)
+def _supabase_display_name(metadata: dict[str, Any]) -> str | None:
     for key in ("name", "full_name", "display_name"):
         value = _optional_str(metadata.get(key))
         if value:
@@ -538,8 +602,7 @@ def _supabase_display_name(claims: dict[str, Any]) -> str | None:
     return None
 
 
-def _supabase_avatar_url(claims: dict[str, Any]) -> str | None:
-    metadata = _supabase_user_metadata(claims)
+def _supabase_avatar_url(metadata: dict[str, Any]) -> str | None:
     for key in ("avatar_url", "picture", "profile_image_url"):
         value = _optional_str(metadata.get(key))
         if value:
@@ -555,6 +618,12 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+def _dict_list(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 async def _missing_required_terms(conn, user_id: uuid.UUID, settings) -> list[str]:
