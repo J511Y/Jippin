@@ -831,6 +831,8 @@ export async function GET(request: NextRequest) {
 
 > `ORIGIN(request)` 헬퍼와 `failureRedirect()` 가 **failure 경로에서 query string 을 절대 상속하지 않게** 한다. `request.url` 또는 `request.nextUrl.clone()` 을 그대로 사용하면 `?code=…&state=…` 가 다음 URL · access log · `Referer` 헤더로 새어 나간다 (review item 2).
 
+> **CMP-587 보강 — failure/no-code redirect 도 동일 response 객체 재사용.** 실제 `apps/web/app/auth/callback/route.ts` 구현에서 `exchangeCodeForSession(code)` 를 호출하기 전 `const response = NextResponse.next()` 를 만들고 `createRouteHandlerClient({ request, response })` 에 주입했다면, 실패 분기 역시 새 `NextResponse.redirect()` 를 반환하지 않는다. Supabase SDK 가 실패 중 stale verifier/session cookie 삭제를 `setAll()` 로 `response.cookies` 에 누적할 수 있으므로, 실패 목적지만 `response.headers.set('Location', failureUrl)` 로 설정한 뒤 `new NextResponse(null, { status: 302, headers: response.headers })` 를 반환한다. `code` 누락 분기는 setAll 이 없지만 같은 패턴을 써도 무해하며, 성공/실패가 모두 "최종 response headers 가 cookie owner" 라는 §4.2.1 invariant 를 공유한다.
+
 #### 4.7.2 `next` allow list — open redirect 방어
 
 `/auth/callback?next=...` 의 `next` 파라미터를 그대로 redirect 하면 open redirect 가 된다. `lib/safe-redirect.ts` 가 SSOT:
