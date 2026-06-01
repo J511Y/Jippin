@@ -59,6 +59,7 @@ def auth_env(monkeypatch):
         "FRONTEND_AUTH_TERMS_URL": "http://localhost:3000/auth/terms",
         "AUTH_JWT_SECRET": "test-session-secret",
         "AUTH_COOKIE_SECURE": "false",
+        "SUPABASE_JWT_SECRET": "test-supabase-secret",
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
@@ -240,6 +241,106 @@ def test_supabase_session_bridge_routes_incomplete_signup_to_terms(
         type("Request", (), {"cookies": {"jippin_session": token}})()
     )
     assert claims.pending_anonymous_user_id == anonymous_user_id
+
+
+def test_supabase_account_link_requires_existing_backend_session(auth_env):
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/link",
+            headers={"Authorization": "Bearer supabase-access-token"},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_UNAUTHENTICATED"
+
+
+def test_supabase_account_link_uses_current_session_user(monkeypatch, auth_env):
+    user_id = uuid.uuid4()
+    calls = []
+
+    async def fake_link_supabase_account(*, access_token, linking_user_id):
+        calls.append((access_token, linking_user_id))
+
+    monkeypatch.setattr(
+        auth_router, "link_supabase_account", fake_link_supabase_account
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        client.cookies.set("jippin_session", _session_cookie(user_id))
+        response = client.post(
+            "/auth/supabase/link",
+            headers={"Authorization": "Bearer supabase-access-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls == [("supabase-access-token", user_id)]
+
+
+@pytest.mark.asyncio
+async def test_complete_supabase_session_preserves_provider_subject_and_kakao_terms(
+    monkeypatch, auth_env
+):
+    user_id = uuid.uuid4()
+    captured = {}
+
+    def fake_decode(*args, **kwargs):
+        return {
+            "sub": "supabase-user-id",
+            "aud": "authenticated",
+            "email": "kakao@example.com",
+            "app_metadata": {"provider": "kakao"},
+            "user_metadata": {
+                "provider_id": "kakao-provider-subject",
+                "name": "Kakao User",
+                "avatar_url": "https://cdn.example/kakao.png",
+                "agreed_terms_tags": ["service_terms", "privacy_policy"],
+            },
+        }
+
+    async def fake_complete_oauth_login(*, provider, profile, anonymous_user_id):
+        captured["provider"] = provider
+        captured["profile"] = profile
+        captured["anonymous_user_id"] = anonymous_user_id
+        return auth_service.OAuthLoginResult(
+            user_id=user_id,
+            signup_completed=True,
+            claimed_anonymous_user_id=anonymous_user_id,
+        )
+
+    async def fake_get_current_user_context(seen_user_id):
+        assert seen_user_id == user_id
+        return CurrentUserContext(
+            user_id=user_id,
+            email="kakao@example.com",
+            display_name="Kakao User",
+            profile_image_url="https://cdn.example/kakao.png",
+            role="user",
+            providers=["kakao"],
+            missing_required_terms=[],
+        )
+
+    monkeypatch.setattr(auth_service.jwt, "decode", fake_decode)
+    monkeypatch.setattr(auth_service, "complete_oauth_login", fake_complete_oauth_login)
+    monkeypatch.setattr(
+        auth_service, "get_current_user_context", fake_get_current_user_context
+    )
+
+    result = await auth_service.complete_supabase_session(
+        access_token="supabase-access-token",
+        anonymous_user_id=str(uuid.uuid4()),
+    )
+
+    profile = captured["profile"]
+    assert result.missing_required_terms == []
+    assert captured["provider"] == OAuthProvider.KAKAO
+    assert profile.provider_subject == "kakao-provider-subject"
+    assert profile.email == "kakao@example.com"
+    assert profile.display_name == "Kakao User"
+    assert profile.profile_image_url == "https://cdn.example/kakao.png"
+    assert profile.agreed_terms_tags == ("service_terms", "privacy_policy")
 
 
 def test_sso_link_start_requires_login(auth_env):
