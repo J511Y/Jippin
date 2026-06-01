@@ -1142,7 +1142,7 @@ PR [#42](https://github.com/J511Y/Jippin/pull/42) 의 잔여 review thread (2026
 | ID | runbook 줄 | 영역 요지 | 처리 자식 이슈 |
 |---|---|---|---|
 | R1 (`PRRT_kwDOSp2wlM6F_CSA`) | §4.7.4 / line ~760 | callback 실패 분기에서 `jippin_merge_intent` / `jippin_oauth_provider` 쿠키 즉시 삭제 | CMP-579 |
-| R2 (`PRRT_kwDOSp2wlM6F_CSD`) | §4.2.1 / line ~99 | OAuth start 302 응답에 Supabase 가 set 한 PKCE cookie 가 brower 까지 전달되도록 Set-Cookie 위임 | CMP-580 |
+| R2 (`PRRT_kwDOSp2wlM6F_CSD`) | §4.2.1 / line ~99 | OAuth start 302 응답에 Supabase 가 set 한 PKCE cookie 가 brower 까지 전달되도록 Set-Cookie 위임 | CMP-580 — PR [#47](https://github.com/J511Y/Jippin/pull/47) `fd1c85dd` (`apps/web/app/auth/oauth/start/route.ts`) |
 | R3 (`PRRT_kwDOSp2wlM6F_Jq6`) | §4.5.2 / line ~576 | SSOT path 표 의 `id_token` 잔재 제거, 정본은 `provider_access_token` | CMP-581 — PR [#46](https://github.com/J511Y/Jippin/pull/46) `2a411974` (`apps/web/lib/kakao-sync-audit.ts`) |
 | R4 (`PRRT_kwDOSp2wlM6F_Jq9`) | §4.1 / line ~142 | anonymous sign-in abuse-control gate (Turnstile / intent confirm / IP rate-limit) | CMP-581 — PR [#46](https://github.com/J511Y/Jippin/pull/46) `2a411974` (`apps/web/lib/anonymous-gate.ts`) |
 | R5 (`PRRT_kwDOSp2wlM6F_Jq_`) | §4.2.1 / line ~380 | merge `signed_token` 을 web BFF 가 받아 `jippin_merge_intent` 쿠키에 set | CMP-579 |
@@ -1150,7 +1150,7 @@ PR [#42](https://github.com/J511Y/Jippin/pull/42) 의 잔여 review thread (2026
 | R7 (`PRRT_kwDOSp2wlM6F_JrC`) | §4.7.4 / line ~760 | callback 실패 분기에서 `sessionStorage.jippin_oauth_in_progress` 명시 정리 | CMP-579 |
 | R8 (`PRRT_kwDOSp2wlM6F_Ntr`) | §4.7.4 / line ~759 | `error=identity_already_exists` 분기 → §4.2.2 migration ladder 진입점 | CMP-579 |
 | R9 (`PRRT_kwDOSp2wlM6F_Ntv`) | §4.3 / line ~429 | SDK provider id default 가 콘솔 매핑 (`custom:kakao` 가능) 와 정합 | CMP-581 — PR [#46](https://github.com/J511Y/Jippin/pull/46) `2a411974` (`apps/web/lib/oauth-providers.ts`) |
-| R10 (`PRRT_kwDOSp2wlM6F_SzM`) | §4.2.1 / line ~308 | `@supabase/ssr` v0.5+ 표준 `getAll`/`setAll` 패턴 SSR cookie adapter | CMP-580 |
+| R10 (`PRRT_kwDOSp2wlM6F_SzM`) | §4.2.1 / line ~308 | `@supabase/ssr` v0.5+ 표준 `getAll`/`setAll` 패턴 SSR cookie adapter | CMP-580 — PR [#47](https://github.com/J511Y/Jippin/pull/47) `fd1c85dd` (`apps/web/lib/supabase/{server,proxy}.ts`) |
 | R11 (`PRRT_kwDOSp2wlM6F_SzP`) | §4.2.1 / line ~326 | `/login?next=...` 가 OAuth start → callback → next-navigation 까지 보존 | CMP-582 |
 | R12 (`PRRT_kwDOSp2wlM6F_SzR`) | §4.2.2 / line ~392 | merge commit endpoint 정본은 cookie-only path 단일 (`POST /auth/anon-merge-intents/commit`) | CMP-579 |
 | R13 (`PRRT_kwDOSp2wlM6F_SzS`) | §4.5.2 / line ~636 | Kakao consent sync `fetch()` 응답에서 `response.ok` 명시 검증 | CMP-581 — PR [#46](https://github.com/J511Y/Jippin/pull/46) `2a411974` (`apps/web/lib/kakao-sync-audit.ts`) |
