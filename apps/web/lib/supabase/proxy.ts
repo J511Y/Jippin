@@ -19,14 +19,19 @@
  */
 
 import { createServerClient, type CookieMethodsServer } from '@supabase/ssr';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import type { NextRequest, NextResponse } from 'next/server';
+import type { SupabaseClient, User } from '@supabase/supabase-js';
+import { NextResponse, type NextRequest } from 'next/server';
 
 import { supabaseAnonKey, supabaseUrl } from './env';
 
 interface ProxyClientArgs {
   request: NextRequest;
   response: NextResponse;
+}
+
+interface UpdateSessionResult {
+  response: NextResponse;
+  user: User | null;
 }
 
 export function createProxyClient({ request, response }: ProxyClientArgs): SupabaseClient {
@@ -45,4 +50,27 @@ export function createProxyClient({ request, response }: ProxyClientArgs): Supab
   };
 
   return createServerClient(supabaseUrl(), supabaseAnonKey(), { cookies });
+}
+
+export async function updateSession(request: NextRequest): Promise<UpdateSessionResult> {
+  const response = NextResponse.next({ request });
+  const supabase = createProxyClient({ request, response });
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  return { response, user };
+}
+
+export function copySupabaseResponse(source: NextResponse, target: NextResponse): void {
+  for (const cookie of source.cookies.getAll()) {
+    target.cookies.set(cookie);
+  }
+
+  for (const header of ['cache-control', 'expires', 'pragma']) {
+    const value = source.headers.get(header);
+    if (value) {
+      target.headers.set(header, value);
+    }
+  }
 }

@@ -21,6 +21,7 @@
 
 import { createServerClient, type CookieMethodsServer } from '@supabase/ssr';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { cookies } from 'next/headers';
 import type { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAnonKey, supabaseUrl } from './env';
@@ -57,4 +58,32 @@ export function createRouteHandlerClient({ request, response }: RouteHandlerClie
   };
 
   return createServerClient(supabaseUrl(), supabaseAnonKey(), { cookies });
+}
+
+/**
+ * Server Component / Server Action 용 Supabase client.
+ *
+ * Next.js `cookies()` 핸들은 Server Component 에서는 쓰기 시 예외를 던질 수 있다.
+ * 이 어댑터는 read-only 구현으로 낮추지 않고 `setAll()` 을 항상 제공하되, 쓰기 불가
+ * 컨텍스트에서만 예외를 삼킨다. Route Handler / Server Action 처럼 쓰기 가능한
+ * 컨텍스트에서는 `cookieStore.set()` 으로 PKCE/session cookie batch 를 반영한다.
+ */
+export async function createServerComponentClient(): Promise<SupabaseClient> {
+  const cookieStore = await cookies();
+  const cookieMethods: CookieMethodsServer = {
+    getAll() {
+      return cookieStore.getAll().map(({ name, value }) => ({ name, value }));
+    },
+    setAll(cookiesToSet) {
+      try {
+        for (const { name, value, options } of cookiesToSet) {
+          cookieStore.set(name, value, options);
+        }
+      } catch {
+        // Server Components cannot mutate response cookies; proxy / route handlers refresh them.
+      }
+    },
+  };
+
+  return createServerClient(supabaseUrl(), supabaseAnonKey(), { cookies: cookieMethods });
 }

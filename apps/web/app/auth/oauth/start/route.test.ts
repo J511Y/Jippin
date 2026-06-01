@@ -11,6 +11,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { NextRequest } from 'next/server';
 
+import { verifyFlowCookie } from '@/lib/flow-cookie';
+
 interface CookiesToSet {
   name: string;
   value: string;
@@ -32,6 +34,7 @@ vi.mock('@supabase/ssr', () => ({
 // env reader 는 모듈 평가 시 process.env 를 직접 읽으므로 import 전에 채워둔다.
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';
+process.env.SUPABASE_FLOW_COOKIE_SECRET = 'test-flow-cookie-secret';
 
 const PKCE_COOKIE_NAME = 'sb-example-auth-token-code-verifier';
 const PKCE_COOKIE_VALUE = 'pkce-verifier-12345';
@@ -50,6 +53,16 @@ function makeRequest(pathAndQuery: string): NextRequest {
     },
   } as unknown as NextRequest;
   return request;
+}
+
+function setCookieValues(response: Response): string[] {
+  return response.headers.getSetCookie?.() ?? response.headers.get('Set-Cookie')?.split(/,(?=\s*[^,;]+=)/g) ?? [];
+}
+
+function cookieValue(setCookies: string[], name: string): string | null {
+  const prefix = `${name}=`;
+  const cookie = setCookies.find((value) => value.startsWith(prefix));
+  return cookie ? cookie.slice(prefix.length).split(';')[0] ?? null : null;
 }
 
 describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => {
@@ -88,10 +101,18 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe(AUTHZ_URL);
 
-    const allSetCookies = response.headers.getSetCookie?.() ?? response.headers.get('Set-Cookie')?.split(/,(?=\s*[^,;]+=)/g) ?? [];
+    const allSetCookies = setCookieValues(response);
     const setCookieJoined = allSetCookies.join('\n');
     expect(setCookieJoined).toMatch(new RegExp(`(?:^|\\n)${PKCE_COOKIE_NAME}=${PKCE_COOKIE_VALUE}`));
-    expect(setCookieJoined).toMatch(/jippin_oauth_provider=google/);
+    const flowCookie = cookieValue(allSetCookies, 'jippin_oauth_provider');
+    expect(flowCookie).not.toBeNull();
+    const verified = verifyFlowCookie(decodeURIComponent(flowCookie ?? ''));
+    expect(verified).toEqual(
+      expect.objectContaining({
+        ok: true,
+        payload: expect.objectContaining({ provider: 'google', supabase_provider: 'google', intent: 'link' }),
+      }),
+    );
     // flow context cookie 는 callback path 로만 좁혀져 있어야 한다.
     expect(setCookieJoined).toMatch(/Path=\/auth\/callback/);
   });
@@ -119,9 +140,16 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     const response = await GET(request);
 
     expect(response.status).toBe(302);
-    const allSetCookies = response.headers.getSetCookie?.() ?? response.headers.get('Set-Cookie')?.split(/,(?=\s*[^,;]+=)/g) ?? [];
+    const allSetCookies = setCookieValues(response);
     expect(allSetCookies.join('\n')).toContain(PKCE_COOKIE_NAME);
-    expect(allSetCookies.join('\n')).toMatch(/jippin_oauth_provider=kakao/);
+    const flowCookie = cookieValue(allSetCookies, 'jippin_oauth_provider');
+    const verified = verifyFlowCookie(decodeURIComponent(flowCookie ?? ''));
+    expect(verified).toEqual(
+      expect.objectContaining({
+        ok: true,
+        payload: expect.objectContaining({ provider: 'kakao', supabase_provider: 'kakao', intent: 'signin' }),
+      }),
+    );
   });
 
   it('signs out before signInWithOAuth on intent=link-merge (anonymous session discarded)', async () => {
@@ -155,12 +183,21 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     expect(response.status).toBe(400);
   });
 
-  it('returns 502 when SDK fails to mint OAuth URL (no redirect, no Location leak)', async () => {
-    mocks.createServerClient.mockImplementation(() => ({
+  it('returns fresh 500 when SDK fails to mint OAuth URL and drops all Set-Cookie headers', async () => {
+    mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
       auth: {
-        linkIdentity: vi.fn().mockResolvedValue({
-          data: null,
-          error: { code: 'provider_not_enabled', message: 'Provider is not enabled' },
+        linkIdentity: vi.fn().mockImplementation(async () => {
+          init.cookies.setAll([
+            {
+              name: PKCE_COOKIE_NAME,
+              value: PKCE_COOKIE_VALUE,
+              options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 600 },
+            },
+          ]);
+          return {
+            data: null,
+            error: { code: 'provider_not_enabled', message: 'Provider is not enabled' },
+          };
         }),
         signInWithOAuth: vi.fn(),
         signOut: vi.fn(),
@@ -168,7 +205,23 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     }));
     const { GET } = await import('./route');
     const response = await GET(makeRequest('/auth/oauth/start?provider=google&intent=link'));
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(500);
     expect(response.headers.get('Location')).toBeNull();
+    expect(setCookieValues(response)).toHaveLength(0);
+  });
+
+  it('returns fresh 500 when SDK throws and drops flow cookies', async () => {
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        linkIdentity: vi.fn().mockRejectedValue(new Error('oauth provider unavailable')),
+        signInWithOAuth: vi.fn(),
+        signOut: vi.fn(),
+      },
+    }));
+    const { GET } = await import('./route');
+    const response = await GET(makeRequest('/auth/oauth/start?provider=google&intent=link'));
+    expect(response.status).toBe(500);
+    expect(response.headers.get('Location')).toBeNull();
+    expect(setCookieValues(response)).toHaveLength(0);
   });
 });

@@ -17,12 +17,12 @@
  *   - intent `link-merge` 는 익명 세션 폐기 + signInWithOAuth 까지 처리하되, backend
  *     `POST /auth/anon-merge-intents` 호출 및 `jippin_merge_intent` 쿠키 발급은
  *     CMP-579 (callback ladder · merge commit) 스코프에서 추가한다.
- *   - flow context cookie 는 plain provider id 로 시작. HMAC 서명/검증은 callback 의
- *     `detectNewlyLinkedProvider` 사용처 (CMP-579) 가 추가될 때 함께 봉인한다.
+ *   - flow context cookie 는 `SUPABASE_FLOW_COOKIE_SECRET` HMAC 서명 + nonce 로 봉인한다.
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { signFlowCookie } from '@/lib/flow-cookie';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
 import {
   isUiProvider,
@@ -53,6 +53,18 @@ function badRequest(reason: string): NextResponse {
   return NextResponse.json({ error: { code: 'invalid_request', message: reason } }, { status: 400 });
 }
 
+function oauthInitFailed(error?: { code?: string; message?: string } | null): NextResponse {
+  return NextResponse.json(
+    {
+      error: {
+        code: error?.code ?? 'oauth_init_failed',
+        message: error?.message ?? 'Failed to acquire OAuth authorization URL',
+      },
+    },
+    { status: 500 },
+  );
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const url = request.nextUrl;
   const uiProviderRaw = url.searchParams.get('provider');
@@ -71,10 +83,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const supabase = createRouteHandlerClient({ request, response });
 
   // ★ Step 2 — flow context cookie. callback (Kakao Sync 감지 §4.5.2.1) 1차 신호.
-  //    Path=/auth/callback 로 좁혀 다른 라우트에 누설 방지. HMAC 서명은 callback 검증 추가 시 (CMP-579) 봉인.
+  //    Path=/auth/callback 로 좁혀 다른 라우트에 누설 방지. 값은 HMAC + nonce 로 서명한다.
   response.cookies.set({
     name: FLOW_CONTEXT_COOKIE,
-    value: sbProvider,
+    value: signFlowCookie(
+      { provider: uiProviderRaw, supabase_provider: sbProvider, intent },
+      FLOW_CONTEXT_MAX_AGE_SECONDS,
+    ),
     httpOnly: true,
     secure: true,
     sameSite: 'lax',
@@ -85,37 +100,33 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // ★ Step 3 — intent dispatch (runbook §4.2.1 표). 익명 user id 보존 의무 — link 에서는
   //    절대 signInWithOAuth 를 호출하지 않는다.
   let urlResult: Awaited<ReturnType<typeof supabase.auth.signInWithOAuth>>;
-  if (intent === 'link') {
-    urlResult = await supabase.auth.linkIdentity({
-      provider: sbProvider,
-      options: { redirectTo: callbackUrl(request), skipBrowserRedirect: true },
-    });
-  } else {
-    if (intent === 'link-merge') {
-      // §4.2.2 ladder step c — 익명 세션 명시 폐기 후에만 signInWithOAuth.
-      // signOut 도 setAll 로 빈 cookie 를 response 에 부착.
-      // NOTE: CMP-579 가 backend POST /auth/anon-merge-intents 호출 + jippin_merge_intent
-      //       cookie 발급을 본 BFF 에 추가한다 (R5).
-      await supabase.auth.signOut();
+  try {
+    if (intent === 'link') {
+      urlResult = await supabase.auth.linkIdentity({
+        provider: sbProvider,
+        options: { redirectTo: callbackUrl(request), skipBrowserRedirect: true },
+      });
+    } else {
+      if (intent === 'link-merge') {
+        // §4.2.2 ladder step c — 익명 세션 명시 폐기 후에만 signInWithOAuth.
+        // signOut 도 setAll 로 빈 cookie 를 response 에 부착.
+        // NOTE: CMP-579 가 backend POST /auth/anon-merge-intents 호출 + jippin_merge_intent
+        //       cookie 발급을 본 BFF 에 추가한다 (R5).
+        await supabase.auth.signOut();
+      }
+      urlResult = await supabase.auth.signInWithOAuth({
+        provider: sbProvider,
+        options: { redirectTo: callbackUrl(request), skipBrowserRedirect: true },
+      });
     }
-    urlResult = await supabase.auth.signInWithOAuth({
-      provider: sbProvider,
-      options: { redirectTo: callbackUrl(request), skipBrowserRedirect: true },
-    });
+  } catch {
+    return oauthInitFailed();
   }
 
   if (urlResult.error || !urlResult.data?.url) {
-    // PKCE verifier cookie 는 이미 부착되었을 수 있으나 redirect 가 불가능하므로 4xx.
-    // failure UX 는 runbook §4.2.4 매트릭스 / CMP-579 가 callback 가 받지 못한 케이스를 사용자에게 안내.
-    return NextResponse.json(
-      {
-        error: {
-          code: urlResult.error?.code ?? 'oauth_init_failed',
-          message: urlResult.error?.message ?? 'Failed to acquire OAuth authorization URL',
-        },
-      },
-      { status: 502 },
-    );
+    // Fail-fast: fresh JSON response intentionally drops any accumulator Set-Cookie
+    // headers so PKCE / flow cookies cannot survive a missing authorization URL.
+    return oauthInitFailed(urlResult.error);
   }
 
   // ★ Step 4 — 새 NextResponse.redirect 를 만들지 말고, 누적된 response.headers 를 그대로
