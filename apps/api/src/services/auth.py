@@ -221,10 +221,14 @@ async def complete_supabase_session(
     *,
     access_token: str,
     anonymous_user_id: str | None,
+    requested_provider: str | None = None,
 ) -> SupabaseSessionBridgeResult:
     settings = get_settings()
     claims = _decode_supabase_access_token(access_token, settings)
-    provider, profile = _supabase_provider_profile(claims)
+    provider, profile = _supabase_provider_profile(
+        claims,
+        requested_provider=requested_provider,
+    )
     parsed_anonymous_user_id = parse_existing_anonymous_user_id(anonymous_user_id)
     login_result = await complete_oauth_login(
         provider=provider,
@@ -246,10 +250,14 @@ async def link_supabase_account(
     *,
     access_token: str,
     linking_user_id: uuid.UUID,
+    requested_provider: str | None = None,
 ) -> None:
     settings = get_settings()
     claims = _decode_supabase_access_token(access_token, settings)
-    provider, profile = _supabase_provider_profile(claims)
+    provider, profile = _supabase_provider_profile(
+        claims,
+        requested_provider=requested_provider,
+    )
     await link_oauth_account(
         linking_user_id=linking_user_id,
         provider=provider,
@@ -501,10 +509,21 @@ def _decode_supabase_access_token(access_token: str, settings) -> dict[str, Any]
 
 
 def _supabase_provider_from_claims(claims: dict[str, Any]) -> OAuthProvider:
+    candidates = _supabase_provider_candidates(claims)
+    if candidates:
+        return candidates[0]
+    raise ZippinException(
+        "Supabase access token does not contain a supported OAuth provider.",
+        code="SUPABASE_PROVIDER_UNSUPPORTED",
+        http_status=422,
+    )
+
+
+def _supabase_provider_candidates(claims: dict[str, Any]) -> list[OAuthProvider]:
     app_metadata = claims.get("app_metadata")
     if not isinstance(app_metadata, dict):
         app_metadata = {}
-    candidates = [
+    raw_candidates = [
         app_metadata.get("provider"),
         *(
             app_metadata.get("providers")
@@ -512,15 +531,21 @@ def _supabase_provider_from_claims(claims: dict[str, Any]) -> OAuthProvider:
             else []
         ),
     ]
-    for candidate in candidates:
+    providers: list[OAuthProvider] = []
+    for candidate in raw_candidates:
         normalized = _normalize_supabase_provider(candidate)
-        if normalized is not None:
-            return normalized
-    raise ZippinException(
-        "Supabase access token does not contain a supported OAuth provider.",
-        code="SUPABASE_PROVIDER_UNSUPPORTED",
-        http_status=422,
-    )
+        if normalized is not None and normalized not in providers:
+            providers.append(normalized)
+    for identity in [
+        *_dict_list(claims.get("identities")),
+        *_dict_list(_supabase_user_metadata(claims).get("identities")),
+    ]:
+        normalized = _normalize_supabase_provider(
+            identity.get("provider") or identity.get("identity_provider")
+        )
+        if normalized is not None and normalized not in providers:
+            providers.append(normalized)
+    return providers
 
 
 def _normalize_supabase_provider(value: object) -> OAuthProvider | None:
@@ -534,8 +559,12 @@ def _normalize_supabase_provider(value: object) -> OAuthProvider | None:
 
 def _supabase_provider_profile(
     claims: dict[str, Any],
+    *,
+    requested_provider: str | None = None,
 ) -> tuple[OAuthProvider, ProviderProfile]:
-    provider = _supabase_provider_from_claims(claims)
+    provider = _requested_supabase_provider(claims, requested_provider)
+    if provider is None:
+        provider = _supabase_provider_from_claims(claims)
     metadata = _supabase_user_metadata(claims)
     return provider, ProviderProfile(
         provider_subject=_supabase_provider_subject(claims, provider, metadata),
@@ -550,23 +579,34 @@ def _supabase_provider_profile(
     )
 
 
+def _requested_supabase_provider(
+    claims: dict[str, Any],
+    requested_provider: str | None,
+) -> OAuthProvider | None:
+    if requested_provider is None:
+        return None
+    provider = _normalize_supabase_provider(requested_provider)
+    if provider is None:
+        raise ZippinException(
+            "Requested Supabase provider is unsupported.",
+            code="SUPABASE_PROVIDER_UNSUPPORTED",
+            http_status=422,
+        )
+    candidates = _supabase_provider_candidates(claims)
+    if candidates and provider not in candidates:
+        raise ZippinException(
+            "Requested Supabase provider is not present in the access token.",
+            code="SUPABASE_PROVIDER_MISMATCH",
+            http_status=422,
+        )
+    return provider
+
+
 def _supabase_provider_subject(
     claims: dict[str, Any],
     provider: OAuthProvider,
     metadata: dict[str, Any],
 ) -> str:
-    provider_key = provider.value
-    for key in (
-        "provider_id",
-        f"{provider_key}_id",
-        f"{provider_key}_subject",
-        "sub",
-        "id",
-    ):
-        value = _optional_str(metadata.get(key))
-        if value:
-            return value
-
     for identity in [
         *_dict_list(claims.get("identities")),
         *_dict_list(metadata.get("identities")),
@@ -585,6 +625,18 @@ def _supabase_provider_subject(
             )
             if value:
                 return value
+
+    provider_key = provider.value
+    for key in (
+        "provider_id",
+        f"{provider_key}_id",
+        f"{provider_key}_subject",
+        "sub",
+        "id",
+    ):
+        value = _optional_str(metadata.get(key))
+        if value:
+            return value
 
     return str(claims["sub"])
 

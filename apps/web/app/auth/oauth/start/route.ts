@@ -42,6 +42,7 @@ function isIntent(value: string | null): value is Intent {
 
 const FLOW_CONTEXT_COOKIE = 'jippin_oauth_provider';
 const FLOW_CONTEXT_MAX_AGE_SECONDS = 600;
+const UUID_V4ISH_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function safeRelativeRedirect(value: string | null): string | null {
   if (!value || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')) {
@@ -49,6 +50,10 @@ function safeRelativeRedirect(value: string | null): string | null {
   }
 
   return value;
+}
+
+function safeAnonymousUserId(value: string | null): string | null {
+  return value && UUID_V4ISH_PATTERN.test(value) ? value : null;
 }
 
 function callbackUrl(request: NextRequest): string {
@@ -60,7 +65,7 @@ function callbackUrl(request: NextRequest): string {
   if (next) {
     callback.searchParams.set('next', next);
   }
-  const anonymousUserId = request.nextUrl.searchParams.get('anonymous_user_id');
+  const anonymousUserId = safeAnonymousUserId(request.nextUrl.searchParams.get('anonymous_user_id'));
   if (anonymousUserId) {
     callback.searchParams.set('anonymous_user_id', anonymousUserId);
   }

@@ -27,6 +27,7 @@ from ..schemas.auth import (
     AuthMeResponse,
     AuthUserResponse,
     OAuthStartResponse,
+    SupabaseAccountLinkRequest,
     SupabaseAccountLinkResponse,
     SupabaseSessionBridgeRequest,
     SupabaseSessionBridgeResponse,
@@ -173,7 +174,12 @@ async def bridge_supabase_session(
     settings = get_settings()
     result = await complete_supabase_session(
         access_token=token,
-        anonymous_user_id=payload.anonymous_user_id,
+        anonymous_user_id=(
+            str(payload.anonymous_user_id)
+            if payload.anonymous_user_id is not None
+            else None
+        ),
+        requested_provider=payload.requested_provider,
     )
     response_body = SupabaseSessionBridgeResponse(
         signup_complete=not result.missing_required_terms,
@@ -195,7 +201,10 @@ async def bridge_supabase_session(
 
 
 @router.post("/supabase/link", response_model=SupabaseAccountLinkResponse)
-async def link_supabase_identity(request: Request) -> SupabaseAccountLinkResponse:
+async def link_supabase_identity(
+    request: Request,
+    payload: SupabaseAccountLinkRequest,
+) -> SupabaseAccountLinkResponse:
     claims = read_session_claims(request)
     authorization = request.headers.get("authorization", "")
     scheme, _, token = authorization.partition(" ")
@@ -208,6 +217,7 @@ async def link_supabase_identity(request: Request) -> SupabaseAccountLinkRespons
     await link_supabase_account(
         access_token=token,
         linking_user_id=claims.user_id,
+        requested_provider=payload.requested_provider,
     )
     return SupabaseAccountLinkResponse()
 

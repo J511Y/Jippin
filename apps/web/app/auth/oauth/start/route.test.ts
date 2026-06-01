@@ -151,15 +151,42 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     }));
 
     const { GET } = await import('./route');
+    const anonymousUserId = '0f5f8f33-7f55-48e8-9bf1-1bda6e8db91d';
     const response = await GET(
-      makeRequest('/auth/oauth/start?provider=google&intent=link&anonymous_user_id=anon-123'),
+      makeRequest(`/auth/oauth/start?provider=google&intent=link&anonymous_user_id=${anonymousUserId}`),
     );
 
     expect(response.status).toBe(302);
     expect(linkIdentity).toHaveBeenCalledWith({
       provider: 'google',
       options: {
-        redirectTo: 'http://localhost:3000/auth/callback?anonymous_user_id=anon-123',
+        redirectTo: `http://localhost:3000/auth/callback?anonymous_user_id=${anonymousUserId}`,
+        skipBrowserRedirect: true,
+      },
+    });
+  });
+
+  it('drops non-UUID anonymous user ids before building redirectTo', async () => {
+    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'google' }, error: null });
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        linkIdentity,
+        signInWithOAuth: vi.fn(),
+        signOut: vi.fn(),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const longInvalidId = 'x'.repeat(4096);
+    const response = await GET(
+      makeRequest(`/auth/oauth/start?provider=google&intent=link&anonymous_user_id=${longInvalidId}`),
+    );
+
+    expect(response.status).toBe(302);
+    expect(linkIdentity).toHaveBeenCalledWith({
+      provider: 'google',
+      options: {
+        redirectTo: 'http://localhost:3000/auth/callback',
         skipBrowserRedirect: true,
       },
     });

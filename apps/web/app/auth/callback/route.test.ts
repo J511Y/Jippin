@@ -24,6 +24,7 @@ vi.mock('@supabase/ssr', () => ({
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';
 process.env.NEXT_PUBLIC_API_BASE_URL = 'http://api.localhost';
+process.env.API_INTERNAL_BASE_URL = 'http://api.localhost';
 process.env.SUPABASE_FLOW_COOKIE_SECRET = 'test-flow-cookie-secret';
 
 const SESSION_COOKIE_NAME = 'sb-example-auth-token';
@@ -107,7 +108,7 @@ describe('GET /auth/callback — session cookie preservation', () => {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ anonymous_user_id: null }),
+      body: JSON.stringify({ anonymous_user_id: null, requested_provider: null }),
       cache: 'no-store',
     });
   });
@@ -128,7 +129,10 @@ describe('GET /auth/callback — session cookie preservation', () => {
     expect(fetch).toHaveBeenCalledWith(
       'http://api.localhost/auth/supabase/session',
       expect.objectContaining({
-        body: JSON.stringify({ anonymous_user_id: 'legacy-anon-id' }),
+        body: JSON.stringify({
+          anonymous_user_id: 'legacy-anon-id',
+          requested_provider: null,
+        }),
       }),
     );
   });
@@ -201,10 +205,44 @@ describe('GET /auth/callback — session cookie preservation', () => {
       headers: {
         Authorization: 'Bearer supabase-access-token',
         Accept: 'application/json',
+        'Content-Type': 'application/json',
         Cookie: expect.stringContaining(`${BACKEND_SESSION_COOKIE_NAME}=current-backend-session`),
       },
+      body: JSON.stringify({ requested_provider: 'google' }),
       cache: 'no-store',
     });
+  });
+
+  it('passes the requested provider from the signed flow cookie into the session bridge', async () => {
+    const flowCookie = signFlowCookie(
+      { provider: 'naver', supabase_provider: 'custom:naver', intent: 'signin' },
+      600,
+    );
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        exchangeCodeForSession: vi.fn().mockResolvedValue({
+          data: { session: { access_token: 'supabase-access-token' } },
+          error: null,
+        }),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    await GET(
+      makeRequest('/auth/callback?code=abc', [
+        { name: 'jippin_oauth_provider', value: flowCookie },
+      ]),
+    );
+
+    expect(fetch).toHaveBeenCalledWith(
+      'http://api.localhost/auth/supabase/session',
+      expect.objectContaining({
+        body: JSON.stringify({
+          anonymous_user_id: null,
+          requested_provider: 'naver',
+        }),
+      }),
+    );
   });
 
   it('rejects backslash-prefixed next values to avoid post-auth open redirects', async () => {
