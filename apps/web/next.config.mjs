@@ -36,6 +36,15 @@ const nextConfig = {
         ]
       }
     ];
+  },
+  async rewrites() {
+    const apiBaseUrl = process.env.API_INTERNAL_BASE_URL ?? 'http://localhost:8000';
+    return [
+      {
+        source: '/api/:path*',
+        destination: `${apiBaseUrl.replace(/\/$/, '')}/:path*`
+      }
+    ];
   }
 };
 
