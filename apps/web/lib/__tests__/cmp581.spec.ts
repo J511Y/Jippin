@@ -983,6 +983,124 @@ describe('CMP-581 round-14 review fixes', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('item r16-2: sessionStorage.getItem throw (SecurityError) returns storage_unavailable', async () => {
+    // Reviewer round-16 — read 도 SecurityError / partitioned-storage 등에서
+    // throw 가능. setItem 만 catch 한 코드는 첫 read 에서 uncaught error.
+    const throwingStorage: Pick<Storage, 'getItem' | 'setItem'> = {
+      getItem: () => {
+        throw new DOMException('SecurityError', 'SecurityError');
+      },
+      setItem: () => {},
+    };
+    const decision = await evaluateAnonymousGate(
+      {
+        requireExplicitIntent: false,
+        requireChallengeToken: false,
+        minIntervalMs: 60_000,
+        maxAttemptsPerSession: 0,
+      },
+      { reason: 'explicit_intent', storage: throwingStorage, now: () => 1_000 },
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toBe('storage_unavailable');
+      expect(decision.detail).toContain('getItem');
+      expect(decision.detail).toContain('SecurityError');
+    }
+  });
+
+  it('item r16-2: getItem throw on attempt_count path also surfaces as storage_unavailable', async () => {
+    const throwingStorage: Pick<Storage, 'getItem' | 'setItem'> = {
+      getItem: () => {
+        throw new Error('storage access blocked');
+      },
+      setItem: () => {},
+    };
+    const decision = await evaluateAnonymousGate(
+      {
+        requireExplicitIntent: false,
+        requireChallengeToken: false,
+        minIntervalMs: 0,
+        maxAttemptsPerSession: 3, // attempt_count path 만 활성화
+      },
+      { reason: 'explicit_intent', storage: throwingStorage, now: () => 1_000 },
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toBe('storage_unavailable');
+      expect(decision.detail).toContain('attempt_count');
+    }
+  });
+
+  it('item r16-4: reason=challenge alone does NOT satisfy explicit_intent when challenge mode is not configured', async () => {
+    // Reviewer round-16 — requireExplicitIntent=true 일 때 reason='challenge' 가
+    // requireChallengeToken=false 인 상태에서도 통과하던 회귀. challenge mode 가
+    // 실 구성 (requireChallengeToken=true + verifier) 된 경우에만 G1 만족.
+    const decision = await evaluateAnonymousGate(
+      {
+        requireExplicitIntent: true,
+        requireChallengeToken: false, // challenge mode 가 구성되지 않음
+        minIntervalMs: 0,
+        maxAttemptsPerSession: 0,
+      },
+      { reason: 'challenge', storage: new MemoryStorage() },
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe('explicit_intent_required');
+  });
+
+  it('item r16-4: reason=challenge satisfies explicit_intent when challenge mode IS configured (with verifier)', async () => {
+    const decision = await evaluateAnonymousGate(
+      {
+        requireExplicitIntent: true,
+        requireChallengeToken: true,
+        verifyChallengeToken: async () => true,
+        minIntervalMs: 0,
+        maxAttemptsPerSession: 0,
+      },
+      { reason: 'challenge', challengeToken: 'verified-token', storage: new MemoryStorage() },
+    );
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('item r16-4: reason=challenge with requireChallengeToken=true but no verifier is blocked at the verifier-missing layer (not silently allowed)', async () => {
+    // Defence in depth — G1 의 challenge-mode-configured 검증은 verifier 함수
+    // 존재까지 요구하지만, G2 의 challenge_verifier_missing block 이 그 다음 단계
+    // 에서도 작동. 두 layer 모두 빠뜨리지 않도록.
+    const decision = await evaluateAnonymousGate(
+      {
+        requireExplicitIntent: true,
+        requireChallengeToken: true,
+        // verifyChallengeToken intentionally omitted.
+        minIntervalMs: 0,
+        maxAttemptsPerSession: 0,
+      },
+      { reason: 'challenge', challengeToken: 'tok', storage: new MemoryStorage() },
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      // G1 의 challenge-mode-configured 가 verifier 부재로 인해 false →
+      // reason='explicit_intent_required' 가 먼저 hit. 만약 G1 을 통과하면
+      // G2 가 challenge_verifier_missing 으로 catch — 둘 다 valid block.
+      expect(['explicit_intent_required', 'challenge_verifier_missing']).toContain(decision.reason);
+    }
+  });
+
+  it('item r16-1: kakao-sync-audit.ts docstring documents stub_response policy (forensic guard)', async () => {
+    // Round-15 에서 stub_response throw 를 ship 했으나 PR review thread 에서
+    // 자동 resolve 가 일어나지 않음. round-16 에서 정책을 module docstring 에
+    // explicit 단락으로 박제 — forensic test 가 변경/삭제를 즉시 catch.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '..', 'kakao-sync-audit.ts'),
+      'utf8',
+    );
+    expect(src).toContain("code='stub_response'");
+    expect(src).toContain('stub-response 회귀 차단');
+    expect(src).toContain('reconcile');
+  });
+
   it('item 3: fetch reject of non-Error value also wraps cleanly (no leaked raw value)', async () => {
     const fetchImpl = vi.fn().mockRejectedValue('cors-blocked');
     let caught: unknown;

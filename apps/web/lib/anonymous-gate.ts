@@ -125,9 +125,22 @@ export async function evaluateAnonymousGate(
   config: AnonymousGateConfig,
   request: AnonymousGateRequest,
 ): Promise<AnonymousGateDecision> {
-  // G1 — explicit intent.
-  if (config.requireExplicitIntent && request.reason !== 'explicit_intent' && request.reason !== 'challenge') {
-    return { allowed: false, reason: 'explicit_intent_required' };
+  // G1 — explicit intent (round-16 항목 4).
+  // 'explicit_intent' 사유는 항상 G1 을 만족시킨다. 'challenge' 사유는 challenge
+  // mode 가 *실제로 구성* 된 (requireChallengeToken=true + verifier 공급) 경우에만
+  // G1 을 만족시킨다 — 그렇지 않으면 G2 가 challenge 토큰을 검증하지 않고 skip
+  // 되므로 reason='challenge' 만으로 통과할 수 있는 회귀가 생긴다. verifier 가
+  // 없는 케이스는 G2 단계의 `challenge_verifier_missing` 으로 별도 차단.
+  if (config.requireExplicitIntent) {
+    const challengeModeConfigured =
+      config.requireChallengeToken === true && typeof config.verifyChallengeToken === 'function';
+    if (request.reason === 'explicit_intent') {
+      // OK — G1 만족.
+    } else if (request.reason === 'challenge' && challengeModeConfigured) {
+      // OK — G1 만족, 실 검증은 G2 가 책임.
+    } else {
+      return { allowed: false, reason: 'explicit_intent_required' };
+    }
   }
 
   // G2 — challenge token.
@@ -169,8 +182,28 @@ export async function evaluateAnonymousGate(
       return { allowed: false, reason: 'storage_unavailable' };
     }
     const now = (request.now ?? Date.now)();
+    // round-16 항목 2 — getItem 도 SecurityError (storage 접근 차단), QuotaExceededError,
+    // partitioned-storage 환경 등에서 throw 가능. setItem 만 catch 하면 첫 read 에서
+    // uncaught error 가 pre-review CTA click 을 터뜨림. read 도 동일하게 wrap.
+    const safeGetItem = (key: string): string | null | { __error: unknown } => {
+      try {
+        return storage.getItem(key);
+      } catch (err) {
+        return { __error: err };
+      }
+    };
     if (config.minIntervalMs > 0) {
-      const lastRaw = storage.getItem(LAST_ATTEMPT_KEY);
+      const lastResult = safeGetItem(LAST_ATTEMPT_KEY);
+      if (lastResult !== null && typeof lastResult === 'object' && '__error' in lastResult) {
+        return {
+          allowed: false,
+          reason: 'storage_unavailable',
+          detail:
+            'sessionStorage.getItem (last_attempt) 호출이 실패했습니다 (SecurityError / partitioned storage 가능성). ' +
+            (lastResult.__error instanceof Error ? lastResult.__error.message : String(lastResult.__error)),
+        };
+      }
+      const lastRaw = lastResult as string | null;
       // non-numeric (예: 사용자 수동 편집) 은 prior attempt 없음으로 간주 — NaN 을
       // 그대로 비교에 쓰지 않는다.
       const lastParsed = lastRaw === null ? NaN : Number(lastRaw);
@@ -184,7 +217,17 @@ export async function evaluateAnonymousGate(
       }
     }
     if (config.maxAttemptsPerSession > 0) {
-      const countRaw = storage.getItem(ATTEMPT_COUNT_KEY);
+      const countResult = safeGetItem(ATTEMPT_COUNT_KEY);
+      if (countResult !== null && typeof countResult === 'object' && '__error' in countResult) {
+        return {
+          allowed: false,
+          reason: 'storage_unavailable',
+          detail:
+            'sessionStorage.getItem (attempt_count) 호출이 실패했습니다. ' +
+            (countResult.__error instanceof Error ? countResult.__error.message : String(countResult.__error)),
+        };
+      }
+      const countRaw = countResult as string | null;
       // non-numeric / NaN 은 0 으로 reset — 'NaN' 문자열을 재저장하는 회귀 방지.
       const parsedCount = countRaw === null ? 0 : Number(countRaw);
       const count = Number.isFinite(parsedCount) && parsedCount >= 0 ? parsedCount : 0;

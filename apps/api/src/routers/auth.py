@@ -179,9 +179,11 @@ async def kakao_sync_audit_stub(
     """
     authorization = request.headers.get("authorization", "")
     if not authorization.lower().startswith("bearer "):
+        # 기존 API error contract (auth/session.py, services/auth.py) 와 정합:
+        # uppercase stable code `AUTH_UNAUTHENTICATED` 사용 (CMP-581 round-16 항목 3).
         raise ZippinException(
             "Authorization: Bearer <supabase access_token> 헤더가 필요합니다.",
-            code="invalid_authorization",
+            code="AUTH_UNAUTHENTICATED",
             http_status=401,
         )
     logger.info(

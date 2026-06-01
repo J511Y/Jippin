@@ -167,7 +167,16 @@ export type KakaoSyncAuditErrorCode =
  * `options.enabled` 가 false (기본값) 이면 fetch 자체를 시도하지 않고 즉시 throw —
  * stub 만 ship 된 상태에서도 callsite (callback Route Handler) 가 명시적으로 stub
  * 인지 production audit 인지를 코드로 선언하게 강제한다 (silent no-op 으로 success
- * 페이지 진입하는 회귀 방지, round-11 항목 4 hard-fail 정책과 정합). callsite (callback Route Handler) 는 다음과 같이 gating:
+ * 페이지 진입하는 회귀 방지, round-11 항목 4 hard-fail 정책과 정합).
+ *
+ * **stub-response 회귀 차단 (round-15 항목 2 / round-16 항목 1 재차).** 호출자가
+ * `enabled: true` 로 진입했더라도 backend 가 `202 { stubbed: true }` 를 반환하면
+ * 실 `terms_consents` persistence 가 아직 일어나지 않은 상태다. 본 helper 는 이
+ * 응답을 **success 로 처리하지 않으며** `KakaoSyncAuditError(code='stub_response',
+ * status=response.status)` 로 throw 한다. callsite 는 단일 catch 에서 `.code` 만으로
+ * reconcile / explicit fallback 페이지로 분기 — 약관 동의 SSOT 가 비는 회귀 차단.
+ * false-positive 방지: `stubbed: false` / `stubbed` 키 부재 / non-JSON body 응답은
+ * stub 신호 부재로 정상 success 처리. callsite (callback Route Handler) 는 다음과 같이 gating:
  *
  * ```ts
  * const auditEnabled = process.env.NEXT_PUBLIC_KAKAO_SYNC_AUDIT_ENABLED === 'true';

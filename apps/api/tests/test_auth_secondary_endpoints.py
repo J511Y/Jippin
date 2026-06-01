@@ -491,7 +491,8 @@ def test_kakao_sync_audit_stub_rejects_missing_bearer_header(auth_env):
         )
 
     assert response.status_code == 401
-    assert response.json()["error"]["code"] == "invalid_authorization"
+    # round-16 항목 3 — 기존 API contract 의 uppercase stable code 정합.
+    assert response.json()["error"]["code"] == "AUTH_UNAUTHENTICATED"
 
 
 def test_kakao_sync_audit_stub_rejects_non_kakao_provider(auth_env):
