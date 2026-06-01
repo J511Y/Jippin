@@ -241,10 +241,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     });
   }
 
-  if (
+  const shouldGateInternalTerms =
     requiresInternalTerms(linkedProvider) &&
-    hasNewlyLinkedIdentity(data.session.user, linkedProvider, flowContext?.createdAt)
-  ) {
+    hasNewlyLinkedIdentity(data.session.user, linkedProvider, flowContext?.createdAt);
+
+  if (shouldGateInternalTerms) {
     return termsRedirect(request, seed, safeNext);
   }
 
