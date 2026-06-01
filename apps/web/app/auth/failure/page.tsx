@@ -33,6 +33,10 @@ const REASON_COPY: Record<string, { title: string; body: string }> = {
     title: '로그인 URL을 만들지 못했습니다',
     body: '소셜 로그인 주소를 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.',
   },
+  oauth_guard_stale: {
+    title: '로그인 시간이 만료되었습니다',
+    body: '소셜 로그인 요청이 만료되었습니다. 로그인 화면에서 다시 시작해 주세요.',
+  },
 };
 
 function clearOAuthGuard(): void {

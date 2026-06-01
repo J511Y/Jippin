@@ -4,6 +4,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { apiBaseUrl } from '@/lib/api-base-url';
 import { isSafeNext, resolveSafeNext } from '@/lib/safe-redirect';
 import { siteOriginFromRequest } from '@/lib/site-url';
+import { isOAuthFlowContextStale } from '@/lib/supabase/flow-context';
 import { detectNewlyLinkedProvider } from '@/lib/supabase/identities';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
 import type { SupabaseProvider } from '@/lib/supabase/providers';
@@ -23,6 +24,7 @@ const KNOWN_REASONS = new Set([
   'temporarily_unavailable',
   'identity_already_exists',
   'oauth_init_failed',
+  'oauth_guard_stale',
 ]);
 
 function origin(request: NextRequest): string {
@@ -108,9 +110,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = url.searchParams.get('code');
   const nextRaw = url.searchParams.get('next');
   const safeNext = nextRaw && isSafeNext(nextRaw) ? nextRaw : defaultNext();
+  const intendedProviderCookie = request.cookies.get('jippin_oauth_provider')?.value ?? null;
 
   if (errorCode) return failureRedirect(request, errorCode);
   if (!code) return failureRedirect(request, 'missing_code');
+  if (isOAuthFlowContextStale(intendedProviderCookie)) {
+    return failureRedirect(request, 'oauth_guard_stale');
+  }
 
   const seed = new NextResponse(null);
   const supabase = createRouteHandlerClient({ request, response: seed });
@@ -132,7 +138,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
   }
 
-  const intendedProviderCookie = request.cookies.get('jippin_oauth_provider')?.value ?? null;
   const linkedProvider = detectNewlyLinkedProvider(data.session.user, intendedProviderCookie);
   if (linkedProvider === 'kakao' || linkedProvider === 'custom:kakao') {
     await persistKakaoSyncConsent(data.session, linkedProvider).catch(() => undefined);

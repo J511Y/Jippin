@@ -4,6 +4,7 @@ import { apiBaseUrl } from '@/lib/api-base-url';
 import { resolveSafeNext } from '@/lib/safe-redirect';
 import { siteOriginFromRequest } from '@/lib/site-url';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
+import { encodeOAuthFlowContext } from '@/lib/supabase/flow-context';
 import {
   isUiProvider,
   toSupabaseProviderId,
@@ -128,7 +129,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const response = new NextResponse(null);
   const supabase = createRouteHandlerClient({ request, response });
 
-  setCallbackCookie(response, FLOW_CONTEXT_COOKIE, provider);
+  setCallbackCookie(response, FLOW_CONTEXT_COOKIE, encodeOAuthFlowContext(provider));
 
   if (intent === 'link-merge') {
     const signedToken =

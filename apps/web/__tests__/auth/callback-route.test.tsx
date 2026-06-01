@@ -139,10 +139,11 @@ describe('/auth/callback route', () => {
     });
 
     const { COMMIT_PATH, GET } = await import('@/app/auth/callback/route');
+    const freshContext = encodeURIComponent(`google|${Date.now()}`);
     const response = await GET(
       new NextRequest('http://localhost/auth/callback?code=ok', {
         headers: {
-          cookie: 'jippin_merge_intent=signed-intent; jippin_oauth_provider=google',
+          cookie: `jippin_merge_intent=signed-intent; jippin_oauth_provider=${freshContext}`,
         },
       }),
     );
@@ -156,6 +157,25 @@ describe('/auth/callback route', () => {
         body: JSON.stringify({ signed_intent_cookie_value: 'signed-intent' }),
       }),
     );
+  });
+
+  it('rejects stale OAuth guard cookies before code exchange', async () => {
+    const staleContext = encodeURIComponent('google|1');
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/callback?code=ok', {
+        headers: {
+          cookie: `jippin_oauth_provider=${staleContext}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/auth/failure?reason=oauth_guard_stale',
+    );
+    expect(supabaseMocks.exchangeCodeForSession).not.toHaveBeenCalled();
+    expectCallbackCookiesExpired(response);
   });
 });
 
@@ -176,7 +196,7 @@ describe('/auth/oauth/start BFF', () => {
       'https://supabase.test/auth/v1/authorize?provider=google',
     );
     expect(response.headers.get('x-middleware-next')).toBeNull();
-    expect(cookieHeader(response)).toContain('jippin_oauth_provider=google');
+    expect(cookieHeader(response)).toMatch(/jippin_oauth_provider=google(%7C|\|)\d+/);
     expect(cookieHeader(response)).toContain('Path=/auth/callback');
     expect(cookieHeader(response)).toContain('Max-Age=300');
   });

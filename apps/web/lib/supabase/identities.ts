@@ -1,10 +1,12 @@
 import type { User, UserIdentity } from '@supabase/supabase-js';
 
 import { isSupabaseProvider, type SupabaseProvider } from './providers';
+import { parseOAuthFlowContext } from './flow-context';
 
 function parseIntendedProvider(value: string | null): SupabaseProvider | null {
-  if (!value) return null;
-  const candidate = value.split('|', 1)[0] ?? null;
+  const context = parseOAuthFlowContext(value);
+  if (context) return context.provider;
+  const candidate = value?.split('|', 1)[0] ?? null;
   return isSupabaseProvider(candidate) ? candidate : null;
 }
 
