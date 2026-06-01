@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 
+import { apiBaseUrl } from '@/lib/api-base-url';
 import { supabaseAnonKey, supabaseUrl } from '@/lib/supabase/env';
 
 /**
@@ -40,6 +41,7 @@ const PROTECTED_APP_PREFIXES = [
 ] as const;
 
 const TERMS_PENDING_COOKIE = 'jippin_terms_pending';
+const TERMS_STATUS_TIMEOUT_MS = 2_000;
 
 function isAnonymousAllowed(pathname: string): boolean {
   return ANONYMOUS_ALLOWED_APP_PREFIXES.some((prefix) => pathname.startsWith(prefix));
@@ -75,6 +77,31 @@ function redirectToTermsGate(request: NextRequest, nextPath: string): NextRespon
   return NextResponse.redirect(termsUrl);
 }
 
+async function hasMissingRequiredTerms(accessToken: string | undefined): Promise<boolean> {
+  if (!accessToken) return false;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TERMS_STATUS_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${apiBaseUrl()}/auth/me`, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+      },
+    });
+    if (!response.ok) return false;
+    const data = (await response.json()) as {
+      signup_complete?: boolean;
+      missing_required_terms?: string[];
+    };
+    return data.signup_complete === false || (data.missing_required_terms?.length ?? 0) > 0;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
@@ -83,7 +110,9 @@ export async function proxy(request: NextRequest) {
   }
 
   const nextPath = pathname + search;
-  const isTermsPending = request.cookies.has(TERMS_PENDING_COOKIE);
+  if (request.cookies.has(TERMS_PENDING_COOKIE)) {
+    return redirectToTermsGate(request, nextPath);
+  }
 
   const response = NextResponse.next();
   const supabase = createServerClient(supabaseUrl(), supabaseAnonKey(), {
@@ -105,12 +134,14 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (isTermsPending) {
-    return redirectToTermsGate(request, nextPath);
-  }
-
   const hasAuthenticatedUser = Boolean(user && !isAnonymousSupabaseUser(user));
   if (hasAuthenticatedUser) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (await hasMissingRequiredTerms(session?.access_token)) {
+      return redirectToTermsGate(request, nextPath);
+    }
     return response;
   }
 

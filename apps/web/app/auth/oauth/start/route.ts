@@ -20,6 +20,7 @@ const MERGE_INTENT_COOKIE = 'jippin_merge_intent';
 const PENDING_ANONYMOUS_COOKIE = 'jippin_pending_anonymous_user_id';
 const CALLBACK_COOKIE_MAX_AGE_SECONDS = 300;
 const PENDING_ANONYMOUS_MAX_AGE_SECONDS = 10 * 60;
+const MERGE_INTENT_ENQUEUE_TIMEOUT_MS = 5_000;
 const VALID_INTENTS = ['link', 'signin', 'link-merge'] as const;
 
 type Intent = (typeof VALID_INTENTS)[number];
@@ -66,15 +67,23 @@ async function enqueueMergeIntent(
   if (!anonymousUserId) {
     throw new Error('anonymous_user_id is required for merge intent enqueue');
   }
-  const response = await fetch(`${apiBaseUrl()}/auth/anon-merge-intents`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      anonymous_user_id: anonymousUserId,
-      provider,
-      next: resolveSafeNext(request.nextUrl.searchParams.get('next'), '/'),
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MERGE_INTENT_ENQUEUE_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl()}/auth/anon-merge-intents`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        anonymous_user_id: anonymousUserId,
+        provider,
+        next: resolveSafeNext(request.nextUrl.searchParams.get('next'), '/'),
+      }),
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     throw new Error(`merge intent enqueue failed (${response.status})`);

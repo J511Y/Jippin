@@ -13,8 +13,23 @@ const browserSupabaseMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
 }));
 
+const ssrSupabaseMocks = vi.hoisted(() => ({
+  getUser: vi.fn(),
+  getSession: vi.fn(),
+}));
+
 const routerMocks = vi.hoisted(() => ({
   replace: vi.fn(),
+}));
+
+vi.mock('@supabase/ssr', () => ({
+  createServerClient: () => ({
+    auth: {
+      getUser: ssrSupabaseMocks.getUser,
+      getSession: ssrSupabaseMocks.getSession,
+    },
+  }),
+  createBrowserClient: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -88,6 +103,8 @@ function mockSession(
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  ssrSupabaseMocks.getUser.mockResolvedValue({ data: { user: null } });
+  ssrSupabaseMocks.getSession.mockResolvedValue({ data: { session: null } });
   process.env = {
     ...previousEnv,
     NEXT_PUBLIC_API_BASE_URL: 'http://api.test',
@@ -483,6 +500,42 @@ describe('/auth/oauth/start BFF', () => {
     expect(supabaseMocks.signOut).toHaveBeenCalledTimes(1);
   });
 
+  it('treats a stalled merge intent enqueue endpoint as unavailable', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        const signal = init?.signal;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener(
+            'abort',
+            () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            { once: true },
+          );
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const { GET } = await import('@/app/auth/oauth/start/route');
+      const pending = GET(
+        new NextRequest(
+          'http://localhost/auth/oauth/start?provider=google&intent=link-merge&anonymous_user_id=anon-1&next=/app/reports',
+        ),
+      );
+
+      await vi.advanceTimersByTimeAsync(5001);
+      const response = await pending;
+
+      expect(response.status).toBe(302);
+      const location = new URL(response.headers.get('location') ?? '');
+      expect(location.pathname).toBe('/auth/failure');
+      expect(location.searchParams.get('reason')).toBe('merge_unavailable');
+      expect(supabaseMocks.signInWithOAuth).not.toHaveBeenCalled();
+      expectPendingAnonymousCookieExpired(response);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not sign out when merge intent enqueue fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }));
 
@@ -594,6 +647,45 @@ describe('proxy terms-pending guard', () => {
     expect(location.pathname).toBe('/auth/terms');
     expect(location.searchParams.get('next')).toBe('/app/reports?draft=1');
   });
+
+  it('revalidates persisted internal terms status for authenticated protected routes', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        signup_complete: false,
+        missing_required_terms: ['service_terms'],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    ssrSupabaseMocks.getUser.mockResolvedValueOnce({
+      data: {
+        user: {
+          id: 'user-1',
+          is_anonymous: false,
+          app_metadata: { provider: 'google' },
+        },
+      },
+    });
+    ssrSupabaseMocks.getSession.mockResolvedValueOnce({
+      data: { session: { access_token: 'supabase-access-token' } },
+    });
+    const { proxy } = await import('@/proxy');
+
+    const response = await proxy(new NextRequest('http://localhost/app/reports?draft=1'));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/auth/me',
+      expect.objectContaining({
+        method: 'GET',
+        signal: expect.any(AbortSignal),
+        headers: { authorization: 'Bearer supabase-access-token' },
+      }),
+    );
+    expect(response.status).toBe(307);
+    const location = new URL(response.headers.get('location') ?? '');
+    expect(location.pathname).toBe('/auth/terms');
+    expect(location.searchParams.get('next')).toBe('/app/reports?draft=1');
+  });
 });
 
 describe('/auth/terms page', () => {
@@ -616,7 +708,7 @@ describe('/auth/terms page', () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        'http://api.test/auth/terms/accept',
+        '/auth/terms/accept',
         expect.objectContaining({
           method: 'POST',
           credentials: 'include',
@@ -634,5 +726,48 @@ describe('/auth/terms page', () => {
     });
     expect(document.cookie).not.toContain('jippin_terms_pending');
     expect(routerMocks.replace).toHaveBeenCalledWith('/app/reports');
+  });
+});
+
+describe('/auth/terms/accept BFF', () => {
+  it('forwards the server-vouched pending anonymous id to the API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: async () => JSON.stringify({ signup_complete: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { POST } = await import('@/app/auth/terms/accept/route');
+    const response = await POST(
+      new NextRequest('http://localhost/auth/terms/accept', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer supabase-access-token',
+          cookie: 'jippin_pending_anonymous_user_id=anon-1',
+        },
+        body: JSON.stringify({
+          consents: [{ term_id: 'service_terms', agreed: true }],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/auth/terms/accept',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          authorization: 'Bearer supabase-access-token',
+        }),
+        body: JSON.stringify({
+          consents: [{ term_id: 'service_terms', agreed: true }],
+          pending_anonymous_user_id: 'anon-1',
+        }),
+      }),
+    );
+    expect(cookieHeader(response)).toContain('jippin_pending_anonymous_user_id=');
+    expect(cookieHeader(response)).toContain('jippin_terms_pending=');
   });
 });

@@ -52,6 +52,7 @@ class TermsConsentInput(BaseModel):
 
 class TermsAcceptRequest(BaseModel):
     consents: list[TermsConsentInput] = Field(default_factory=list)
+    pending_anonymous_user_id: uuid.UUID | None = None
 
 
 class TermsAcceptResponse(BaseModel):

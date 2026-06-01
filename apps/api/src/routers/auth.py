@@ -161,7 +161,9 @@ async def accept_terms(
         agreed_term_ids={
             str(consent.term_id) for consent in payload.consents if consent.agreed
         },
-        pending_anonymous_user_id=claims.pending_anonymous_user_id,
+        pending_anonymous_user_id=(
+            payload.pending_anonymous_user_id or claims.pending_anonymous_user_id
+        ),
     )
     response = TermsAcceptResponse(
         signup_complete=result.signup_complete,

@@ -3,7 +3,6 @@
 import { type FormEvent, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { apiBaseUrl } from '@/lib/api-base-url';
 import { isSafeNext } from '@/lib/safe-redirect';
 import { createBrowserSupabaseClient } from '@/lib/supabase/browser';
 
@@ -49,7 +48,7 @@ export function TermsGate({ nextPath }: TermsGateProps) {
         return;
       }
 
-      const response = await fetch(`${apiBaseUrl()}/auth/terms/accept`, {
+      const response = await fetch('/auth/terms/accept', {
         method: 'POST',
         credentials: 'include',
         headers: {

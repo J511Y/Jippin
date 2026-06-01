@@ -375,6 +375,45 @@ def test_terms_accept_completes_signup_and_claims_pending_anonymous_user(
     ]
 
 
+def test_terms_accept_uses_body_pending_anonymous_user_id(monkeypatch, auth_env):
+    user_id = uuid.uuid4()
+    anonymous_user_id = uuid.uuid4()
+    calls = []
+
+    async def fake_accept_terms(*, user_id, agreed_term_ids, pending_anonymous_user_id):
+        calls.append((user_id, agreed_term_ids, pending_anonymous_user_id))
+        return TermsAcceptResult(
+            signup_complete=True,
+            missing_required_terms=[],
+            claimed_anonymous_user=True,
+        )
+
+    monkeypatch.setattr(auth_router, "accept_required_terms", fake_accept_terms)
+
+    app = create_app()
+    with TestClient(app) as client:
+        client.cookies.set("jippin_session", _session_cookie(user_id))
+        response = client.post(
+            "/auth/terms/accept",
+            json={
+                "consents": [
+                    {"term_id": "service_terms", "agreed": True},
+                    {"term_id": "privacy_policy", "agreed": True},
+                ],
+                "pending_anonymous_user_id": str(anonymous_user_id),
+            },
+        )
+
+    assert response.status_code == 200
+    assert calls == [
+        (
+            user_id,
+            {"service_terms", "privacy_policy"},
+            anonymous_user_id,
+        )
+    ]
+
+
 class _FakeResult:
     def __init__(self, value=None, values=None):
         self.value = value
