@@ -1122,4 +1122,43 @@ export const config = { matcher: ['/app/:path*'] };
 - Supabase SDK major 버전 변경 (`@supabase/supabase-js` v3 등) 은 새 runbook 절 / ADR 로 처리.
 - §9 Phase 표의 진입/종료 조건은 본 runbook 의 SSOT. 다른 트랙의 progress 추적 문서가 Phase 정의를 바꾸려면 본 절을 먼저 갱신한다.
 
+---
+
+## 11. Open review handoff (Phase 1 자식 이슈)
+
+PR [#42](https://github.com/J511Y/Jippin/pull/42) 의 잔여 review thread (2026-06-01 기준 13건 non-outdated) 는 round-2 ~ round-9 누적 incremental 패치로 더는 닫히지 않는다. 본 runbook 은 Phase 0 (설계 봉인) 의 SSOT 로서 봉인되며, 잔여 review 항목은 Phase 1 자식 이슈로 분리해 **실 코드 구현 단계에서 봉인**한다.
+
+### 11.1 자식 이슈 매핑
+
+| 자식 이슈 | 영역 | 포함 thread | runbook anchor |
+|---|---|---|---|
+| **CMP-579** [Phase 1 (a)](/CMP/issues/CMP-579) | OAuth callback ladder & guard cleanup | R1, R5, R7, R8, R12 | §4.2 / §4.7 |
+| **CMP-580** [Phase 1 (b)](/CMP/issues/CMP-580) | SSR cookie adapter & PKCE preservation | R2, R10 | §4.2.1 BFF |
+| **CMP-581** [Phase 1 (c)](/CMP/issues/CMP-581) | Anonymous gate & Kakao Sync audit | R3, R4, R9, R13 | §4.1 / §4.4 / §4.5.2 / §8 |
+| **CMP-582** [Phase 1 (d)](/CMP/issues/CMP-582) | Open redirect hop & login next | R6, R11 | §4.6 / §4.2.1 |
+
+### 11.2 잔여 review thread → 자식 이슈 매핑
+
+| ID | runbook 줄 | 영역 요지 | 처리 자식 이슈 |
+|---|---|---|---|
+| R1 (`PRRT_kwDOSp2wlM6F_CSA`) | §4.7.4 / line ~760 | callback 실패 분기에서 `jippin_merge_intent` / `jippin_oauth_provider` 쿠키 즉시 삭제 | CMP-579 |
+| R2 (`PRRT_kwDOSp2wlM6F_CSD`) | §4.2.1 / line ~99 | OAuth start 302 응답에 Supabase 가 set 한 PKCE cookie 가 brower 까지 전달되도록 Set-Cookie 위임 | CMP-580 |
+| R3 (`PRRT_kwDOSp2wlM6F_Jq6`) | §4.5.2 / line ~576 | SSOT path 표 의 `id_token` 잔재 제거, 정본은 `provider_access_token` | CMP-581 |
+| R4 (`PRRT_kwDOSp2wlM6F_Jq9`) | §4.1 / line ~142 | anonymous sign-in abuse-control gate (Turnstile / intent confirm / IP rate-limit) | CMP-581 |
+| R5 (`PRRT_kwDOSp2wlM6F_Jq_`) | §4.2.1 / line ~380 | merge `signed_token` 을 web BFF 가 받아 `jippin_merge_intent` 쿠키에 set | CMP-579 |
+| R6 (`PRRT_kwDOSp2wlM6F_JrA`) | §4.6 / line ~1032 | `/auth/redirect?to=` open redirect 차단 (nonce 또는 origin allow-list) | CMP-582 |
+| R7 (`PRRT_kwDOSp2wlM6F_JrC`) | §4.7.4 / line ~760 | callback 실패 분기에서 `sessionStorage.jippin_oauth_in_progress` 명시 정리 | CMP-579 |
+| R8 (`PRRT_kwDOSp2wlM6F_Ntr`) | §4.7.4 / line ~759 | `error=identity_already_exists` 분기 → §4.2.2 migration ladder 진입점 | CMP-579 |
+| R9 (`PRRT_kwDOSp2wlM6F_Ntv`) | §4.3 / line ~429 | SDK provider id default 가 콘솔 매핑 (`custom:kakao` 가능) 와 정합 | CMP-581 |
+| R10 (`PRRT_kwDOSp2wlM6F_SzM`) | §4.2.1 / line ~308 | `@supabase/ssr` v0.5+ 표준 `getAll`/`setAll` 패턴 SSR cookie adapter | CMP-580 |
+| R11 (`PRRT_kwDOSp2wlM6F_SzP`) | §4.2.1 / line ~326 | `/login?next=...` 가 OAuth start → callback → next-navigation 까지 보존 | CMP-582 |
+| R12 (`PRRT_kwDOSp2wlM6F_SzR`) | §4.2.2 / line ~392 | merge commit endpoint 정본은 cookie-only path 단일 (`POST /auth/anon-merge-intents/commit`) | CMP-579 |
+| R13 (`PRRT_kwDOSp2wlM6F_SzS`) | §4.5.2 / line ~636 | Kakao consent sync `fetch()` 응답에서 `response.ok` 명시 검증 | CMP-581 |
+
+### 11.3 봉인 규칙
+
+- 본 runbook 의 §1–§10 본문은 Phase 0 SSOT 로서 **본 PR 머지 시점에 봉인**된다. PR #42 의 잔여 review thread 13건은 본 §11 표를 통해 Phase 1 자식 이슈로 위임되며, 본 PR 머지가 위 13건 thread 해결의 사전 조건은 아니다.
+- 각 자식 이슈는 해당 row 의 `runbook anchor` 절을 SSOT 로 참조하며, 코드 구현 시 anchor 절과 충돌하면 자식 이슈가 본 runbook 을 갱신하는 같은 커밋을 동반한다 (§10 변경 절차).
+- 자식 이슈 4개가 모두 `done` 으로 종료되면 Paperclip `issue_children_completed` wake 가 CMP-577 의 assignee 를 깨우고, 본 이슈는 최종 `done` 처리된다.
+
 — 끝 —
