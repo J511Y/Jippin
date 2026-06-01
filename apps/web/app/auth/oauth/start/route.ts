@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { apiBaseUrl } from '@/lib/api-base-url';
 import { resolveSafeNext } from '@/lib/safe-redirect';
+import { siteOriginFromRequest } from '@/lib/site-url';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
 import {
   isUiProvider,
@@ -14,7 +15,7 @@ export const runtime = 'nodejs';
 
 const FLOW_CONTEXT_COOKIE = 'jippin_oauth_provider';
 const MERGE_INTENT_COOKIE = 'jippin_merge_intent';
-const CALLBACK_COOKIE_MAX_AGE_SECONDS = 600;
+const CALLBACK_COOKIE_MAX_AGE_SECONDS = 300;
 const VALID_INTENTS = ['link', 'signin', 'link-merge'] as const;
 
 type Intent = (typeof VALID_INTENTS)[number];
@@ -34,7 +35,7 @@ function callbackUrl(request: NextRequest): string {
   const configured = process.env.NEXT_PUBLIC_FRONTEND_AUTH_CALLBACK_URL;
   const callback = configured
     ? new URL(configured)
-    : new URL('/auth/callback', request.nextUrl.origin);
+    : new URL('/auth/callback', siteOriginFromRequest(request));
   callback.searchParams.set(
     'next',
     resolveSafeNext(
@@ -75,6 +76,9 @@ async function enqueueMergeIntent(
 }
 
 function setCallbackCookie(response: NextResponse, name: string, value: string): void {
+  // New OAuth starts overwrite stale callback flow cookies with a 5-minute TTL.
+  // Supabase's PKCE state/code_verifier cookies are emitted by @supabase/ssr in the same response;
+  // this app does not re-sign them and relies on Supabase SSR's built-in PKCE verifier handling.
   response.cookies.set({
     name,
     value,
@@ -84,6 +88,23 @@ function setCallbackCookie(response: NextResponse, name: string, value: string):
     path: '/auth/callback',
     maxAge: CALLBACK_COOKIE_MAX_AGE_SECONDS,
   });
+}
+
+function expireCallbackCookie(response: NextResponse, name: string): void {
+  response.cookies.set(name, '', { path: '/auth/callback', maxAge: 0 });
+}
+
+function redirectToFailure(
+  request: NextRequest,
+  response: NextResponse,
+  reason: string,
+): NextResponse {
+  expireCallbackCookie(response, FLOW_CONTEXT_COOKIE);
+  expireCallbackCookie(response, MERGE_INTENT_COOKIE);
+  const failure = new URL('/auth/failure', siteOriginFromRequest(request));
+  failure.searchParams.set('reason', reason);
+  response.headers.set('Location', failure.toString());
+  return new NextResponse(null, { status: 302, headers: response.headers });
 }
 
 function redirectWithAccumulatedCookies(response: NextResponse, location: string): NextResponse {
@@ -130,15 +151,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         });
 
   if (result.error || !result.data?.url) {
-    return NextResponse.json(
-      {
-        error: {
-          code: result.error?.code ?? 'oauth_init_failed',
-          message: result.error?.message ?? 'Failed to start OAuth.',
-        },
-      },
-      { status: 502, headers: response.headers },
-    );
+    console.warn('[auth/oauth/start] oauth url generation failed', {
+      code: result.error?.code ?? 'oauth_init_failed',
+    });
+    return redirectToFailure(request, response, 'oauth_init_failed');
   }
 
   return redirectWithAccumulatedCookies(response, result.data.url);

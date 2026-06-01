@@ -52,6 +52,7 @@ beforeEach(() => {
   process.env = {
     ...previousEnv,
     NEXT_PUBLIC_API_BASE_URL: 'http://api.test',
+    NEXT_PUBLIC_SITE_URL: 'http://localhost',
     NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL: '/',
     NEXT_PUBLIC_FRONTEND_AUTH_FAILURE_URL: '/auth/failure',
     NEXT_PUBLIC_SUPABASE_URL: 'https://supabase.test',
@@ -179,6 +180,47 @@ describe('/auth/oauth/start BFF', () => {
     );
     expect(cookieHeader(response)).toContain('jippin_merge_intent=signed-token');
     expect(cookieHeader(response)).toContain('Path=/auth/callback');
+    expect(cookieHeader(response)).toContain('Max-Age=300');
+  });
+
+  it('redirects to failure and clears callback cookies when OAuth URL generation fails', async () => {
+    supabaseMocks.linkIdentity.mockResolvedValueOnce({
+      data: { url: null },
+      error: { code: 'provider_not_enabled', message: 'provider disabled' },
+    });
+
+    const { GET } = await import('@/app/auth/oauth/start/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/oauth/start?provider=google&intent=link'),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/auth/failure?reason=oauth_init_failed',
+    );
+    expectCallbackCookiesExpired(response);
+  });
+
+  it('uses NEXT_PUBLIC_SITE_URL for callback redirect origin when configured', async () => {
+    process.env.NEXT_PUBLIC_SITE_URL = 'https://www.jippin.example';
+    supabaseMocks.signInWithOAuth.mockResolvedValueOnce({
+      data: { url: 'https://supabase.test/auth/v1/authorize?provider=google' },
+      error: null,
+    });
+
+    const { GET } = await import('@/app/auth/oauth/start/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/oauth/start?provider=google&intent=signin&next=/app/reports'),
+    );
+
+    expect(response.status).toBe(302);
+    expect(supabaseMocks.signInWithOAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          redirectTo: 'https://www.jippin.example/auth/callback?next=%2Fapp%2Freports',
+        }),
+      }),
+    );
   });
 });
 

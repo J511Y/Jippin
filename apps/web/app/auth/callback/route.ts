@@ -2,7 +2,8 @@ import type { Session } from '@supabase/supabase-js';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { apiBaseUrl } from '@/lib/api-base-url';
-import { isSafeNext } from '@/lib/safe-redirect';
+import { isSafeNext, resolveSafeNext } from '@/lib/safe-redirect';
+import { siteOriginFromRequest } from '@/lib/site-url';
 import { detectNewlyLinkedProvider } from '@/lib/supabase/identities';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
 import type { SupabaseProvider } from '@/lib/supabase/providers';
@@ -21,14 +22,15 @@ const KNOWN_REASONS = new Set([
   'server_error',
   'temporarily_unavailable',
   'identity_already_exists',
+  'oauth_init_failed',
 ]);
 
 function origin(request: NextRequest): string {
-  return new URL('/', request.url).origin;
+  return siteOriginFromRequest(request);
 }
 
 function defaultNext(): string {
-  return process.env.NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL ?? '/';
+  return resolveSafeNext(process.env.NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL, '/');
 }
 
 function sanitizeReason(raw: string | null | undefined): string {

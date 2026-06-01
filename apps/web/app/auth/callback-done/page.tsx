@@ -3,9 +3,9 @@
 import { Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-import { isSafeNext } from '@/lib/safe-redirect';
+import { isSafeNext, resolveSafeNext } from '@/lib/safe-redirect';
 
-const DEFAULT_NEXT = process.env.NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL ?? '/';
+const DEFAULT_NEXT = resolveSafeNext(process.env.NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL, '/');
 const OAUTH_GUARD_KEY = 'jippin_oauth_in_progress';
 
 function clearOAuthGuard(): void {

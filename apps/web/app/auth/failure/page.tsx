@@ -29,6 +29,10 @@ const REASON_COPY: Record<string, { title: string; body: string }> = {
     title: '로그인을 시작할 수 없습니다',
     body: '소셜 로그인 처리 중 오류가 발생했습니다. 다시 시도해 주세요.',
   },
+  oauth_init_failed: {
+    title: '로그인 URL을 만들지 못했습니다',
+    body: '소셜 로그인 주소를 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  },
 };
 
 function clearOAuthGuard(): void {
