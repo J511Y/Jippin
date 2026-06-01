@@ -104,9 +104,13 @@ jobs:
         shell: bash
         run: echo "EXPIRES_AT=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
 
+      # CMP-594: Neon free-tier 의 branch 한계(10개) 에 도달하면 본 step 이 422 로 실패한다.
+      # 이는 환경 capacity 이슈이므로 PR 자체를 red 로 떨어뜨리지 않고 warning 으로 처리한다.
+      # 후속 alembic / comment step 은 outcome == 'success' 일 때만 실행.
       - name: Create Neon Branch
         if: steps.guard.outputs.skip == 'false'
         id: create_neon_branch
+        continue-on-error: true
         uses: neondatabase/create-branch-action@v6
         with:
           project_id: ${{ vars.NEON_PROJECT_ID }}
@@ -115,11 +119,17 @@ jobs:
           api_key: ${{ secrets.NEON_API_KEY }}
           expires_at: ${{ env.EXPIRES_AT }}
 
+      - name: Warn on Neon branch creation failure
+        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outcome != 'success'
+        shell: bash
+        run: |
+          echo "::warning title=Neon preview branch skipped::Neon preview branch 생성 실패 (outcome=${{ steps.create_neon_branch.outcome }}). 자주 원인: free-tier branch 한계 도달 또는 Neon API 일시 장애. PR 자체는 통과 처리되며 운영자가 Neon 콘솔에서 확인 필요. 자세한 내용은 CMP-594 참조."
+
       - uses: actions/checkout@v4
-        if: steps.guard.outputs.skip == 'false'
+        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outcome == 'success'
 
       - name: Detect Alembic
-        if: steps.guard.outputs.skip == 'false'
+        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outcome == 'success'
         id: detect
         shell: bash
         run: |
@@ -131,13 +141,13 @@ jobs:
           fi
 
       - name: Setup Python ${{ env.PYTHON_VERSION }}
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outcome == 'success' && steps.detect.outputs.has_alembic == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Setup uv ${{ env.UV_VERSION }}
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outcome == 'success' && steps.detect.outputs.has_alembic == 'true'
         uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
@@ -147,7 +157,7 @@ jobs:
             apps/api/pyproject.toml
 
       - name: uv sync
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outcome == 'success' && steps.detect.outputs.has_alembic == 'true'
         shell: bash
         working-directory: apps/api
         run: |
@@ -158,7 +168,7 @@ jobs:
           fi
 
       - name: alembic upgrade head (preview)
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outcome == 'success' && steps.detect.outputs.has_alembic == 'true'
         working-directory: apps/api
         env:
           APP_ENV: test
@@ -166,7 +176,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Comment preview branch on PR
-        if: steps.guard.outputs.skip == 'false' && github.event.action != 'synchronize'
+        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outcome == 'success' && github.event.action != 'synchronize'
         uses: actions/github-script@v7
         env:
           PREVIEW_BRANCH: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}
@@ -192,6 +202,28 @@ jobs:
               repo: context.repo.repo,
               issue_number: context.issue.number,
               body: lines.join('\n'),
+            });
+
+      - name: Comment Neon capacity warning on PR
+        if: steps.guard.outputs.skip == 'false' && steps.create_neon_branch.outcome != 'success' && github.event.action != 'synchronize'
+        uses: actions/github-script@v7
+        env:
+          CREATE_OUTCOME: ${{ steps.create_neon_branch.outcome }}
+        with:
+          script: |
+            const body = [
+              '⚠️ **Neon preview branch 생성을 건너뜀.**',
+              '',
+              `- create_neon_branch outcome: \`${process.env.CREATE_OUTCOME}\``,
+              '- 자주 원인: Neon free-tier 의 10-branch 한계 도달, 또는 Neon API 일시 장애.',
+              '- 본 PR 의 CI 는 통과 처리 — preview DB 가 없으므로 PR 단위 migration 검증 (`alembic upgrade head`) 은 수행되지 않음.',
+              '- 운영자 액션: Neon 콘솔에서 capacity 확인 후 (1) 플랜 업그레이드 또는 (2) orphan preview branch 정리. 자세한 내용은 CMP-594 참조.',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
             });
 
   delete_neon_branch:
