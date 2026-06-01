@@ -532,15 +532,29 @@ client.interceptors.request.use(async (config) => {
 **Web 트랙 봉인 (CMP-584 산출물):**
 
 - `apps/web/lib/oauth-providers/naver.ts` — Naver Custom OAuth2 어댑터. `NAVER_PROTOCOL = 'oauth2' as const`. `NAVER_DEFAULT_ENDPOINTS` 가 authorize / token / user-info URL 3개를 명시.
-- **변수명만 SSOT, 실값 금지** (AGENTS.md §4.4 / ADR-0003 시크릿 봉인 정합): `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `NAVER_AUTHORIZE_URL`, `NAVER_TOKEN_URL`, `NAVER_USERINFO_URL`. 실값은 Supabase 콘솔 입력 또는 `.env.local`, **코드 / 문서 / 이슈 / PR 본문에 절대 기재 금지**.
+- **변수명만 SSOT, 실값 금지** (AGENTS.md §4.4 / ADR-0003 시크릿 봉인 정합): `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `NAVER_AUTHORIZE_URL`, `NAVER_TOKEN_URL`, `NAVER_USERINFO_URL`, (옵션) `NAVER_SCOPE`. 실값은 Supabase 콘솔 입력 또는 `.env.local`, **코드 / 문서 / 이슈 / PR 본문에 절대 기재 금지**.
 - `assertNaverIsOAuth2()` — endpoint 가 `.well-known/openid-configuration` 패턴을 포함하면 throw. vitest unit test 가 default endpoints + 의도된 override + 잘못된 OIDC discovery URL 시나리오 모두 검증 (`naver.test.ts`).
+- **`NAVER_DEFAULT_SCOPE = 'account'`** — Phase 1 기본 scope. `resolveNaverScope()` 가 `NAVER_SCOPE` env 가 있으면 그 값을, 없으면 default 를 반환. Supabase 콘솔 scope 필드 입력값과 정합.
+
+**Scope 정책 (Phase 1):**
+
+- 기본 scope 는 **`account`** (식별 전용 최소 권한). Naver 인증 화면이 최소 항목만 묻고, 가입 거부율을 낮춘다.
+- `email` scope 는 **Naver 비즈니스 앱 심사 통과 후에만** 추가 가능. Phase 1 에서는 요구하지 않으며, user-info 응답의 `response.email` 이 `undefined` 일 수 있다는 전제로 callback / backend sync 가 동작해야 한다 (§4.5.1 internal_signup 약관 화면이 email 을 user 입력으로 받는 분기 정합).
+- 향후 email scope 가 필요해지면 별도 자식 이슈에서 (1) Naver 비즈니스 심사 통과, (2) Supabase 콘솔 scope 필드 갱신, (3) `NAVER_SCOPE` env 갱신, (4) callback 분기 정리를 한 set 로 처리한다. raw scope 문자열을 코드에 hardcode 하는 PR 은 reject.
 
 **Supabase 콘솔 봉인 (§8 보강 — 운영자 SSOT):**
 
 - Authentication → Providers → Add custom OAuth provider → **`OAuth2 (Generic)`** 모드 선택 (OIDC 모드 절대 금지).
-- 입력 필드: `Client ID` (= `NAVER_CLIENT_ID`), `Client Secret` (= `NAVER_CLIENT_SECRET`), `Authorize URL` (= `NAVER_AUTHORIZE_URL`), `Token URL` (= `NAVER_TOKEN_URL`), `User-Info URL` (= `NAVER_USERINFO_URL`).
+- 입력 필드: `Client ID` (= `NAVER_CLIENT_ID`), `Client Secret` (= `NAVER_CLIENT_SECRET`), `Authorize URL` (= `NAVER_AUTHORIZE_URL`), `Token URL` (= `NAVER_TOKEN_URL`), `User-Info URL` (= `NAVER_USERINFO_URL`), `Scope` (= `NAVER_DEFAULT_SCOPE` = `account`).
 - `provider identifier` 필드는 **반드시 `naver`** 로 등록 (§4.2.3 매핑 + §8 입력 항목 표 정합). 다른 식별자로 등록하면 SDK `signInWithOAuth({ provider: 'custom:naver' })` 호출 시 `provider not enabled`.
 - redirect allow list 에 `/auth/callback` 추가 (§4.7.2).
+
+**사전 등록 가드 (signInWithOAuth 콜 전 운영 SSOT 확인):**
+
+- `supabase.auth.signInWithOAuth({ provider: 'custom:naver' })` 또는 `linkIdentity({ provider: 'custom:naver' })` 호출은 Supabase 콘솔에 Custom OAuth Provider 가 등록되어 있어야 한다.
+- **신규 환경 라이브 진입 전**: 운영자가 위 입력 필드 표 + `provider identifier=naver` + scope=`account` 가 모두 SSOT 와 일치하는지 §8 표를 보고 1회 수동 확인.
+- 콘솔 등록 누락 / mismatch 시 §4.2.4 에러 매트릭스의 `provider_not_enabled` 분기로 빠진다 → 사용자에게 "일시적 로그인 오류" toast + Sentry alert + 5분간 Naver 버튼 disabled.
+- 본 가드는 out-of-band SSOT (Supabase 콘솔) 이므로 코드 레벨에서 자동 검증 불가. naver.ts JSDoc 의 "사전 등록 가드" 단락이 코드 측 정본 주석이다.
 
 **OIDC 와의 차이 (잘못 등록 시 증상):**
 

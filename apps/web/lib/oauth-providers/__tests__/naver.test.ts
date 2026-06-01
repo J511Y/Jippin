@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   NAVER_DEFAULT_ENDPOINTS,
+  NAVER_DEFAULT_SCOPE,
   NAVER_ENV_KEYS,
   NAVER_PROTOCOL,
   assertNaverIsOAuth2,
   isOidcDiscoveryUrl,
-  resolveNaverEndpoints
+  resolveNaverEndpoints,
+  resolveNaverScope
 } from '../index';
 
 describe('Naver Custom OAuth2 adapter — OAuth2 (not OIDC)', () => {
@@ -36,8 +38,23 @@ describe('Naver Custom OAuth2 adapter — OAuth2 (not OIDC)', () => {
       clientSecret: 'NAVER_CLIENT_SECRET',
       authorizeUrl: 'NAVER_AUTHORIZE_URL',
       tokenUrl: 'NAVER_TOKEN_URL',
-      userInfoUrl: 'NAVER_USERINFO_URL'
+      userInfoUrl: 'NAVER_USERINFO_URL',
+      scope: 'NAVER_SCOPE'
     });
+  });
+
+  it('Phase 1 default scope is "account" (minimum-permission identification-only)', () => {
+    expect(NAVER_DEFAULT_SCOPE).toBe('account');
+  });
+
+  it('resolveNaverScope falls back to the default when NAVER_SCOPE is unset', () => {
+    expect(resolveNaverScope({})).toBe('account');
+  });
+
+  it('resolveNaverScope honors NAVER_SCOPE env override (post biz-app approval)', () => {
+    expect(resolveNaverScope({ NAVER_SCOPE: 'account,email' })).toBe(
+      'account,email'
+    );
   });
 
   it('resolveNaverEndpoints falls back to defaults when env is empty', () => {

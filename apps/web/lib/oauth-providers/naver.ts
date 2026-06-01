@@ -20,6 +20,26 @@
  *  | `NAVER_AUTHORIZE_URL` | OAuth2 authorize endpoint (`https://nid.naver.com/oauth2.0/authorize`). |
  *  | `NAVER_TOKEN_URL` | OAuth2 token endpoint (`https://nid.naver.com/oauth2.0/token`). |
  *  | `NAVER_USERINFO_URL` | OAuth2 user-info endpoint (`https://openapi.naver.com/v1/nid/me`). |
+ *  | `NAVER_SCOPE` | (옵션) Supabase 콘솔에 입력하는 scope. 기본은 `account` (runbook §4.3.1). |
+ *
+ * Scope 정책 (runbook §4.3.1 정합):
+ *  - 기본 scope 는 `account` — 식별만 필요하므로 최소 권한. Naver 인증 화면이 가장 적게 묻는다.
+ *  - `email` scope 는 Naver 비즈니스 앱 심사 통과 후에만 추가 가능하므로 Phase 1 에서는
+ *    요구하지 않는다. 그러므로 user-info 응답의 `response.email` 은 `undefined` 일 수 있다는
+ *    가정으로 callback / backend sync 가 동작해야 한다 (runbook §4.5.1 정합).
+ *  - 변수만 노출하고 실 scope 토큰 문자열은 Supabase 콘솔 입력 또는 `NAVER_SCOPE` env 로만
+ *    주입한다. 본 모듈은 default 값을 export 하여 단위 테스트로 정합만 검증.
+ *
+ * **사전 등록 가드 (Phase 1 (e) — review item 5 정합).**
+ * `supabase.auth.signInWithOAuth({ provider: 'custom:naver' })` 호출 전에:
+ *  1. Supabase 콘솔 → Authentication → Providers 에 Naver Custom OAuth Provider 가
+ *     `OAuth2 (Generic)` 모드로 등록되어 있어야 한다 (runbook §4.3.1 / §8).
+ *  2. 콘솔 identifier 가 정확히 `naver` 여야 한다 (§4.2.3 매핑 표). 변형 (예: `naver-prod`,
+ *     `naver_kr`) 으로 등록하면 SDK 호출 시 `provider_not_enabled` 에러.
+ *  3. 콘솔 등록 누락 / mismatch 시 §4.2.4 에러 매트릭스의 `provider_not_enabled` 분기로 빠져
+ *     사용자에게 "일시적 로그인 오류" toast + Sentry alert + provider 버튼 disabled.
+ * 본 어댑터는 코드 레벨에서 콘솔 등록 여부를 검증할 수 없다 (Supabase 콘솔 = out-of-band SSOT).
+ * 그러므로 신규 환경 라이브 진입 전에는 §8 입력 항목 표를 운영자가 1회 수동 확인해야 한다.
  *
  * OIDC 와의 차이 (실수 방지용 주석):
  *  - Naver 는 `id_token` (OIDC) 을 발급하지 않는다 — Supabase 콘솔에서 "OIDC discovery URL"
@@ -47,8 +67,17 @@ export const NAVER_ENV_KEYS = {
   clientSecret: 'NAVER_CLIENT_SECRET',
   authorizeUrl: 'NAVER_AUTHORIZE_URL',
   tokenUrl: 'NAVER_TOKEN_URL',
-  userInfoUrl: 'NAVER_USERINFO_URL'
+  userInfoUrl: 'NAVER_USERINFO_URL',
+  scope: 'NAVER_SCOPE'
 } as const;
+
+/**
+ * Phase 1 기본 scope — `account`.
+ *
+ * Naver 비즈니스 앱 심사 전에는 email scope 를 사용할 수 없으므로 식별 전용 최소 권한.
+ * runbook §4.3.1 / §4.5.1 정합. Supabase 콘솔 Custom OAuth Provider 의 scope 필드 입력값.
+ */
+export const NAVER_DEFAULT_SCOPE = 'account' as const;
 
 export function resolveNaverEndpoints(
   env: Readonly<Record<string, string | undefined>> = process.env
@@ -60,6 +89,12 @@ export function resolveNaverEndpoints(
     userInfoUrl:
       env[NAVER_ENV_KEYS.userInfoUrl] ?? NAVER_DEFAULT_ENDPOINTS.userInfoUrl
   };
+}
+
+export function resolveNaverScope(
+  env: Readonly<Record<string, string | undefined>> = process.env
+): string {
+  return env[NAVER_ENV_KEYS.scope] ?? NAVER_DEFAULT_SCOPE;
 }
 
 export function isOidcDiscoveryUrl(value: string): boolean {

@@ -30,8 +30,10 @@ export function assertAllowedProvider(value: unknown): AllowedProvider {
 export {
   NAVER_PROTOCOL,
   NAVER_DEFAULT_ENDPOINTS,
+  NAVER_DEFAULT_SCOPE,
   NAVER_ENV_KEYS,
   resolveNaverEndpoints,
+  resolveNaverScope,
   assertNaverIsOAuth2,
   isOidcDiscoveryUrl,
   type NaverOAuth2Endpoints
