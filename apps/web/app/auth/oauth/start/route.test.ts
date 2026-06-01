@@ -250,45 +250,20 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     );
   });
 
-  it('signs out before signInWithOAuth on intent=link-merge (anonymous session discarded)', async () => {
-    const signOut = vi.fn().mockImplementation(async () => {
-      // signOut 도 cookie 비우기를 setAll 로 호출 — 어댑터가 이를 흡수하는지 확인.
-      return { error: null };
-    });
-    const signInWithOAuth = vi.fn().mockResolvedValue({
-      data: { url: AUTHZ_URL, provider: 'naver' },
-      error: null,
-    });
-    mocks.createServerClient.mockImplementation(() => ({
-      auth: { linkIdentity: vi.fn(), signInWithOAuth, signOut },
-    }));
-
-    const { GET } = await import('./route');
-    const request = makeRequest('/auth/oauth/start?provider=naver&intent=link-merge');
-    const response = await GET(request);
-
-    expect(response.status).toBe(302);
-    expect(signOut).toHaveBeenCalledOnce();
-    expect(signInWithOAuth).toHaveBeenCalledOnce();
-  });
-
-  it('does not start OAuth when link-merge signOut fails', async () => {
-    const signOut = vi.fn().mockResolvedValue({
-      error: { code: 'signout_failed', message: 'Could not discard current session' },
-    });
-    const signInWithOAuth = vi.fn();
-    mocks.createServerClient.mockImplementation(() => ({
-      auth: { linkIdentity: vi.fn(), signInWithOAuth, signOut },
-    }));
-
+  it('fails closed for intent=link-merge until merge intent state exists', async () => {
     const { GET } = await import('./route');
     const response = await GET(makeRequest('/auth/oauth/start?provider=naver&intent=link-merge'));
 
-    expect(response.status).toBe(500);
-    expect(signOut).toHaveBeenCalledOnce();
-    expect(signInWithOAuth).not.toHaveBeenCalled();
+    expect(response.status).toBe(501);
+    expect(mocks.createServerClient).not.toHaveBeenCalled();
     expect(response.headers.get('Location')).toBeNull();
     expect(setCookieValues(response)).toHaveLength(0);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'oauth_intent_unsupported',
+        message: 'OAuth merge intent state is not implemented yet',
+      },
+    });
   });
 
   it('rejects unknown provider with 400', async () => {

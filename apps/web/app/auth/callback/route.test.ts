@@ -279,6 +279,39 @@ describe('GET /auth/callback — session cookie preservation', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('drops Supabase cookies when backend account linking fails after exchange', async () => {
+    const flowCookie = signFlowCookie(
+      { provider: 'google', supabase_provider: 'google', intent: 'link' },
+      600,
+    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 409 })));
+    mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
+      auth: {
+        exchangeCodeForSession: vi.fn().mockImplementation(async () => {
+          init.cookies.setAll([
+            {
+              name: SESSION_COOKIE_NAME,
+              value: SESSION_COOKIE_VALUE,
+              options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 3600 },
+            },
+          ]);
+          return { data: { session: { access_token: 'supabase-access-token' } }, error: null };
+        }),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(
+      makeRequest('/auth/callback?code=abc&intent=link&next=/account/security', [
+        { name: 'jippin_oauth_provider', value: flowCookie },
+      ]),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('Location')).toBe('http://localhost:3000/login?error=oauth_callback_failed');
+    expect(setCookieValues(response).join('\n')).not.toContain(SESSION_COOKIE_NAME);
+  });
+
   it('passes the requested provider from the signed flow cookie into the session bridge', async () => {
     const flowCookie = signFlowCookie(
       { provider: 'naver', supabase_provider: 'custom:naver', intent: 'signin' },
@@ -359,7 +392,9 @@ describe('GET /auth/callback — session cookie preservation', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('http://localhost:3000/login?error=oauth_callback_failed');
-    expect(setCookieValues(response).join('\n')).not.toContain(BACKEND_SESSION_COOKIE_NAME);
+    const cookies = setCookieValues(response).join('\n');
+    expect(cookies).not.toContain(BACKEND_SESSION_COOKIE_NAME);
+    expect(cookies).not.toContain(SESSION_COOKIE_NAME);
   });
 
   it('preserves exchangeCodeForSession cleanup cookies on callback failure redirects', async () => {

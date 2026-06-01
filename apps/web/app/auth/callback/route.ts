@@ -41,6 +41,15 @@ function copyBackendSessionCookies(source: Response, target: NextResponse): void
   }
 }
 
+function failureRedirect(request: NextRequest, headers?: Headers): NextResponse {
+  const nextHeaders = headers ? new Headers(headers) : new Headers();
+  nextHeaders.set(
+    'Location',
+    new URL('/login?error=oauth_callback_failed', request.nextUrl.origin).toString(),
+  );
+  return new NextResponse(null, { status: 302, headers: nextHeaders });
+}
+
 type BackendSessionBridgeResult = {
   signup_complete?: boolean;
   missing_required_terms?: string[];
@@ -159,6 +168,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         response.headers.set('Location', new URL(next, request.nextUrl.origin).toString());
         return new NextResponse(null, { status: 302, headers: response.headers });
       }
+      return failureRedirect(request);
     } else if (!error && accessToken) {
       const bridge = await mintBackendSession(
         accessToken,
@@ -174,12 +184,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         response.headers.set('Location', redirectTarget);
         return new NextResponse(null, { status: 302, headers: response.headers });
       }
+      return failureRedirect(request);
     }
   }
 
-  response.headers.set(
-    'Location',
-    new URL('/login?error=oauth_callback_failed', request.nextUrl.origin).toString(),
-  );
-  return new NextResponse(null, { status: 302, headers: response.headers });
+  return failureRedirect(request, response.headers);
 }
