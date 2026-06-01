@@ -253,9 +253,14 @@ enable_confirmations = false
 # (a) local 은 **project root `.env`** (즉 본 `config.toml` 의 parent 의 parent,
 # repo root `.env`. `supabase/.env` 가 아님 — Supabase 공식:
 # https://supabase.com/docs/guides/local-development/managing-config#using-secrets-inside-configtoml),
-# (b) Supabase GitHub integration 의 preview/production 배포는 Supabase 콘솔의
-# Edge Functions Secrets / Vault 또는 `supabase secrets set --project-ref <REF>
-# VAR=...` 로 등록된 값. **`apps/api/.env.example`, `apps/web/.env.example` 은 app
+# (b) Supabase GitHub integration 의 preview/production 배포는 `supabase secrets
+#     set --project-ref <REF> KEY=value` (개별) 또는 `supabase secrets set
+#     --project-ref <REF> --env-file <encrypted.env>` (encrypted dotenv) 로 등록된
+#     branch config env secrets 만 정본. Project Settings → Vault (Postgres
+#     `vault.secrets` store) 는 `env()` 해석 channel 이 아님 (wake R17 #1) —
+#     Vault 등록 시 `auth.external.* = env(...)` provider 값이 unresolved 로 fail.
+#     Edge Functions Secrets 도 본 `config.toml env()` 와 별개 채널이므로 본 SSOT 에서 제외.
+# `apps/api/.env.example`, `apps/web/.env.example` 은 app
 # runtime 용 placeholder 일 뿐 Supabase CLI 가 읽지 않는다** — provider 활성화 PR 은
 # repo root `.env.example` (또는 `supabase/.env.example`) 에 변수명을 추가해야 한다.
 # 자세한 절차는 `docs/runbooks/supabase-branching.md` §7.4 W1~W4 / W-A~W-D 참고.
