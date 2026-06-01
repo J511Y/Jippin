@@ -58,6 +58,12 @@
 export type UiProvider = 'google' | 'kakao' | 'naver';
 export type SupabaseProvider = 'google' | 'kakao' | `custom:${string}`;
 
+const UI_PROVIDERS: ReadonlySet<UiProvider> = new Set(['google', 'kakao', 'naver']);
+
+export function isUiProvider(value: string | null | undefined): value is UiProvider {
+  return typeof value === 'string' && UI_PROVIDERS.has(value as UiProvider);
+}
+
 // Next.js 는 `process.env.NEXT_PUBLIC_*` 를 **정적 참조** 일 때만 client bundle 에
 // build-time inline 한다 (`process.env[변수명]` 같은 computed-property 접근은
 // inline 되지 않아 브라우저에서 항상 undefined). 따라서 본 모듈은 env var 를

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { apiBaseUrl } from '@/lib/api-base-url';
+import { serverApiBaseUrl } from '@/lib/api-base-url';
 
 /**
  * 비회원(anonymous user) 식별자 BFF 프록시 (CMP-584 round-5 봉인).
@@ -11,9 +11,10 @@ import { apiBaseUrl } from '@/lib/api-base-url';
  * 로 실패한다. 결과적으로 `getOrCreateAnonymousUserId()` 가 사전에 실패해 OAuth BFF 도
  * 진입하지 못한다 — CMP-584 round-5 review item 3.
  *
- * 본 라우트는 same-origin (`/auth/anonymous-users`) 으로 받아 server-side 에서 `apiBaseUrl()`
- * (= `NEXT_PUBLIC_API_BASE_URL`) 로 백엔드에 프록시한다. server-side fetch 는 컨테이너
- * 네트워크 안에서 동작하므로 `http://api:8000` 로 무문제 도달 가능.
+ * 본 라우트는 same-origin (`/auth/anonymous-users`) 으로 받아 server-side 에서
+ * `serverApiBaseUrl()` 로 백엔드에 프록시한다. compose 에서는 브라우저 공개 base(`/api`)가
+ * 아닌 `API_INTERNAL_BASE_URL=http://api:8000` 를 사용해야 Node fetch 가 절대 URL 로
+ * 백엔드에 도달한다.
  *
  * 봉인 / 비목표:
  *  - 본 라우트는 단일 백엔드 endpoint (`POST /auth/anonymous-users`) 전용. 다른 API path
@@ -24,7 +25,7 @@ import { apiBaseUrl } from '@/lib/api-base-url';
  */
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const body = await request.text();
-  const targetUrl = `${apiBaseUrl()}/auth/anonymous-users`;
+  const targetUrl = `${serverApiBaseUrl()}/auth/anonymous-users`;
 
   const forwardedHeaders: HeadersInit = {
     'content-type': request.headers.get('content-type') ?? 'application/json'
