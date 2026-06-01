@@ -98,11 +98,12 @@ supabase project (jippin)
   - Variable: `SUPABASE_PROJECT_REF_PROD` (production project ref; `supabase projects list` 의 Reference ID)
   - Variable: `SUPABASE_PROJECT_REF_DEV` (**development persistent branch 의 BRANCH PROJECT ID — production ref 와 별도 값**. `supabase --experimental branches list` 의 `BRANCH PROJECT ID` 컬럼 값을 입력한다. Supabase 공식: https://supabase.com/docs/guides/deployment/branching/configuration#remote-specific-configuration)
 - [ ] **U6.** GitHub Settings → Branches → `main` / `dev` 보호 규칙 확인. **본 PR 시점에는 required check 변경 없음** (`ci-status` 만 required). Supabase preview check 는 §6 단계 2 에서 wrapper (§6.3) 로 추가.
+- [ ] **U7.** Supabase Console → Project → Branching → **"Deploy to production" (또는 동등) 토글 ON 확인**. 본 토글이 OFF 면 `main` push 시 Supabase integration 이 production branch 의 migration 을 적용하지 않아 Neon `release-migrate` 제거 (단계 3) 후 production migration 경로가 끊긴다. **단계 1 토글 ON 직전에 본 항목을 통과해야 한다**. UI 명칭은 Supabase 가 변경할 수 있으므로 §8 공식 링크 (Branching → GitHub Integration) 와 staging branch 에서 dummy migration PR 머지 결과로 검증한다.
 
 ### 3.2 에이전트(또는 사용자) 후속 작업 — CMP-574 PR 머지 후
 
 - [ ] **A1.** 사용자가 `SUPABASE_PROJECT_REF_PROD` 값을 별도 PR(또는 `chore/CMP-574-project-ref` 후속 브랜치)로 `supabase/config.toml` 의 `project_id` 에 채운다. **이 값은 비밀이 아니므로 커밋 가능.** 단 본 PR 에서는 placeholder.
-- [ ] **A1.1** 같은 PR 에서 `[remotes.development].project_id` 를 `SUPABASE_PROJECT_REF_DEV` (development persistent branch 의 BRANCH PROJECT ID, U5 참고) 값으로 채운다. 본 절이 빠지면 `supabase --remote development db diff/push` 가 production 으로 잘못 흐른다. staging persistent branch 를 도입할 때 `[remotes.staging]` 도 같은 패턴으로 추가.
+- [ ] **A1.1** 같은 PR 에서 `[remotes.development].project_id` 를 `SUPABASE_PROJECT_REF_DEV` (development persistent branch 의 BRANCH PROJECT ID, U5 참고) 값으로 채운다. 본 절이 빠지면 development branch 를 대상으로 한 CLI 명령이 production 으로 잘못 흐른다. CLI 명령 시퀀스는 다음 둘 중 하나를 쓴다 (Supabase CLI 는 `--remote <name>` 플래그를 지원하지 않는다 — 정본: https://supabase.com/docs/reference/cli/introduction):<br/>① 새 셸: `supabase link --project-ref <DEV_BRANCH_PROJECT_REF>` 후 `supabase db diff` / `supabase db push` 호출.<br/>② 또는 `supabase db push --db-url "postgres://...@<dev_branch_host>/postgres"` (DB connection string 직접 지정).<br/>staging persistent branch 를 도입할 때 `[remotes.staging]` 도 같은 패턴으로 추가.
 - [ ] **A2.** CMP-575 (DB 트랙) 가 Alembic → SQL migration 변환 결과를 `supabase/migrations/` 에 채운다.
 - [ ] **A3.** CMP-576 (Auth 트랙) 이 `supabase/config.toml` 의 `[auth.external.*]` 를 켜고 **같은 PR 에서 `[auth].enable_signup` 글로벌 gate 를 `true` 로 함께 바꾼다** (글로벌 gate 가 false 면 OAuth signup 도 막힘). `[auth.email].enable_signup` 은 영구 false 유지. CMP-577 트랙이 `[auth].enable_anonymous_sign_ins=true` 로 전환하며 §7.1.3 PoC 절차 (A5) 를 함께 수행.
 - [ ] **A4.** §6 단계 1~3 에 따라 Neon workflow 를 단계적으로 제거하고 Supabase integration 으로 대체한다. 단계 2 PR 은 §6.3 wrapper workflow (`.github/workflows/supabase-status.yml`) 를 추가하고 §6.3.1 의 컨텍스트 식별 절차로 polling 대상을 박는다.
@@ -235,11 +236,13 @@ CEO 결정 (CMP-572, 2026-06-01): **MVP 는 Manual identity linking 우선, Auto
 
 Supabase Auth 는 default 로 같은 verified email 을 가진 서로 다른 OAuth identity 를 한 user 로 자동 link 한다 (`auth.identities` 의 email 매칭). 이 동작은 `supabase/config.toml` 토글로 끌 수 없다. 따라서 다음 2-layer 가드가 필요하다.
 
+> **봉인.** AGENTS.md §4.7 #9 은 같은 verified email 이 카카오·구글·네이버에서 각각 가입되면 **별개 user 로 둔다**고 명시한다 (duplicate email row 자체는 허용). 따라서 본 가드의 목표는 `auth.users` row 의 중복을 막는 것이 아니라, **Supabase 의 automatic identity attach** (같은 이메일을 가진 기존 user 에 새 OAuth identity 를 자동 연결하는 동작) 를 막는 것이다.
+
 | 게이트 | 결정/검증 | 책임 | 본 PR 적용 |
 |---|---|---|---|
-| G1. Supabase 콘솔 → Authentication → Sign In/Up → **"Allow Same Email for Multiple Providers"** (혹은 동등 토글이 이름이 바뀐 옵션) 를 **ON** 으로 설정. ON 이면 같은 이메일을 다른 provider 가 가입해도 별개 user 로 둔다. 토글 위치는 Supabase 가 UI 를 변경할 수 있으므로 §8 의 공식 링크 확인. | 사용자 (콘솔 작업) — CMP-576 PR 머지 직전 | 본 PR 머지 후 |
-| G2. **DB 트리거 fallback** — 콘솔 토글이 사라지거나 우회되어도 `auth.users` row 에 같은 verified email 이 두 번 생기면 두 번째 signup 을 reject 하는 BEFORE INSERT 트리거를 CMP-576 가 정본화. `supabase/migrations/<timestamp>_block_auto_email_linking.sql` 로 커밋. | CMP-576 (DB 트리거 SQL) | CMP-576 PR |
-| G3. PoC — Google + Kakao 같은 verified email 로 두 번 가입했을 때 두 user row 가 분리되는지 staging branch 에서 확인. 결과를 CMP-576 PR 본문에 캡처/로그 첨부. | CMP-576 (PoC) | CMP-576 PR |
+| G1. **콘솔 토글 — 라벨 의존 금지.** Supabase 콘솔에는 자동 identity attach 동작을 통제하는 옵션이 있다고 알려져 있으나 UI 라벨(`Allow Same Email for Multiple Providers` 등) 이 버전에 따라 다르고 ON/OFF 의미가 모호하다. **본 게이트는 콘솔 라벨이 아니라 PoC 결과로 검증한다** (G3) — CMP-576 가 staging branch 에서 옵션을 토글하면서 시나리오가 통과하는 콘솔 설정 조합을 기록·봉인한다. 본 PR 은 라벨 ON/OFF 를 처방하지 않는다. | CMP-576 — PoC 후 콘솔 설정 봉인 | 본 PR 머지 후 |
+| G2. **DB 트리거 fallback — automatic identity attach 차단.** `auth.identities` BEFORE INSERT 트리거로 "기존 user 에 다른 provider identity 가 자동으로 붙는" 경로만 reject 하고, **새 user 행을 만들어 attach 하는 경로는 허용** 한다. duplicate email user row 자체는 막지 않는다 (§4.7 #9 정합). 실제 SQL/조건절은 CMP-576 가 정본화: `supabase/migrations/<timestamp>_block_auto_email_attach.sql`. | CMP-576 (DB 트리거 SQL) | CMP-576 PR |
+| G3. **PoC — 시나리오로 검증.** staging branch 에서 다음 시나리오를 실행하고 결과를 CMP-576 PR 본문에 첨부: (a) Google 가입 → 같은 email 로 Kakao 가입 시 두 user 가 분리되는가, (b) Google 재로그인이 기존 user 로 그대로 가는가, (c) 한 user 의 manual `linkIdentity()` 흐름이 영향받지 않는가. 통과한 콘솔 설정 조합을 G1 의 봉인 값으로 본 런북에 commit-back. | CMP-576 (PoC + 콘솔 봉인) | CMP-576 PR |
 
 G1~G3 중 1개라도 빠진 상태에서 `[auth.external.*] enabled = true` 로 켜는 PR 은 **머지 금지** — Web/Auth required check (단계 2) 에서 명시적으로 막는다 (CMP-577/CMP-576 후속).
 
@@ -262,17 +265,28 @@ G1~G3 중 1개라도 빠진 상태에서 `[auth.external.*] enabled = true` 로 
 
 #### 7.1.3 Anonymous → OAuth upgrade 절차
 
-집핀 비회원 사전검토는 Supabase anonymous user (`is_anonymous=true`) 로 식별된다 (AGENTS.md §4.7, ADR-0003 supersede 예정 정책). 사용자가 결제·요청 시점에 OAuth 로 전환하면 anonymous user 의 데이터를 잃지 않도록 manual linking 으로 identity 를 추가한다.
+> **Phase gate (봉인).** 본 절차는 **ADR-0004 Supabase 전환 ADR 가 Accepted 되고 데이터 마이그레이션이 끝난 뒤** (Phase 2 이후) 의 정본 흐름이다. Phase 0 (본 PR — 스캐폴드) 과 Phase 1 (Supabase DB/Auth 활성화는 됐지만 legacy 흐름이 살아있는 동안) 에는 **ADR-0003 의 `anonymous_users.id` (UUID v4, localStorage `jippin_anonymous_user_id`) + `converted_user_id` claim 경로가 계속 정본**이다. `signInAnonymously()` 를 Phase 0/1 에 도입하면 두 식별자 체계가 충돌한다 — 본 절은 즉시 대체 지시로 읽지 말 것.
+
+**Phase 정의 (본 절 한정 — 전사 phase 정의는 ADR-0004 가 정본).**
+
+| Phase | 상태 | anonymous 식별자 정본 |
+|---|---|---|
+| Phase 0 | 본 PR (CMP-574, 스캐폴드) | `anonymous_users.id` (ADR-0003). Supabase anonymous 미사용. |
+| Phase 1 | Supabase DB 활성화 후 ~ 데이터 마이그레이션 전 | `anonymous_users.id` 유지. **Supabase anonymous 와 dual-write/dual-read 또는 read-only 검증 만**. 사용자 흐름은 legacy. |
+| Phase 2 | 데이터 마이그레이션 + ADR-0004 가 본 절을 Accepted 로 봉인 | 본 §7.1.3 A1~A5 흐름이 정본. legacy `anonymous_users` 는 ADR-0004 가 정한 sunset 절차에 따라 제거. |
+
+**Phase 2 흐름 (참고용 — 활성화 게이트는 위 phase gate).**
 
 | 단계 | 동작 | 책임 |
 |---|---|---|
-| A1. anonymous sign-in (`supabase.auth.signInAnonymously()`) 으로 user row 생성, 비회원 사전검토 데이터를 본 user 에 귀속. | CMP-577 |
-| A2. 사용자가 "로그인/가입" 누르면 OAuth provider 로 redirect — 단 anonymous session 을 유지한 채 `linkIdentity({ provider })` 호출. 새 user 가 만들어지면 안 된다 (`enable_manual_linking = true` 가 전제). | CMP-577 |
-| A3. callback 에서 linked identity 가 성공적으로 추가됐는지, anonymous user 의 `is_anonymous` flag 가 false 로 전환됐는지 검증. 실패 시 anonymous session 유지 + 사용자 에러 표시. | CMP-577 |
-| A4. **자동 병합 충돌 케이스** — anonymous user 의 OAuth identity 가 이미 다른 permanent user 의 verified email 과 같으면 §7.1.1 의 G1 가드에 의해 자동 link 가 일어나지 않는다. 본 케이스는 "기존 계정으로 로그인" 안내 UI 로 처리. 두 계정 병합은 별도 "계정 통합" 명시 흐름. | CMP-577 |
-| A5. PoC — staging branch 에서 anonymous → Google upgrade, anonymous → Kakao upgrade, 동일 email 충돌 케이스 3가지 시나리오 검증 로그를 CMP-577 PR 본문에 첨부. | CMP-577 |
+| A1. anonymous sign-in (`supabase.auth.signInAnonymously()`) 으로 user row 생성, 비회원 사전검토 데이터를 본 user 에 귀속. **Phase 2 진입 전까지 호출 금지** — Phase 0/1 는 ADR-0003 `anonymous_users.id` 가 정본. | CMP-577 (Phase 2) |
+| A2. 사용자가 "로그인/가입" 누르면 OAuth provider 로 redirect — 단 anonymous session 을 유지한 채 `linkIdentity({ provider })` 호출. 새 user 가 만들어지면 안 된다 (`enable_manual_linking = true` 가 전제). | CMP-577 (Phase 2) |
+| A3. callback 에서 linked identity 가 성공적으로 추가됐는지, anonymous user 의 `is_anonymous` flag 가 false 로 전환됐는지 검증. 실패 시 anonymous session 유지 + 사용자 에러 표시. | CMP-577 (Phase 2) |
+| A4. **자동 병합 충돌 케이스** — anonymous user 의 OAuth identity 가 이미 다른 permanent user 의 verified email 과 같으면 §7.1.1 의 G1/G2 가드에 의해 자동 attach 가 일어나지 않는다. 본 케이스는 "기존 계정으로 로그인" 안내 UI 로 처리. 두 계정 병합은 별도 "계정 통합" 명시 흐름. | CMP-577 (Phase 2) |
+| A5. PoC — staging branch 에서 anonymous → Google upgrade, anonymous → Kakao upgrade, 동일 email 충돌 케이스 3가지 시나리오 검증 로그를 CMP-577 PR 본문에 첨부. | CMP-577 (Phase 2) |
+| A6. **legacy → Supabase migration gate.** Phase 1 종료 시점에 `anonymous_users` row → Supabase anonymous user row 1:1 migration (또는 `converted_user_id` 기반 직접 user 이관) 을 ADR-0004 의 마이그레이션 트랙이 정본화. 본 게이트를 통과하기 전까지 A1 을 사용자 흐름에 노출하지 않는다. | DB 트랙 (ADR-0004 후속) |
 
-위 5단계 중 A1~A4 가 코드에 들어오는 PR (CMP-577) 머지 전까지 `enable_anonymous_sign_ins = true` 로 켜지 않는다. 본 PR 시점에는 `enable_anonymous_sign_ins = false` 유지.
+본 PR 시점에는 `enable_anonymous_sign_ins = false` 유지. Phase 2 진입 PR (CMP-577 또는 ADR-0004 supersede PR) 이 위 dual-write/migration gate (A6) 통과를 본문에 입증한 뒤에만 true 로 바꾼다.
 
 ---
 
@@ -292,9 +306,17 @@ G1~G3 중 1개라도 빠진 상태에서 `[auth.external.*] enabled = true` 로 
 
 ```powershell
 # 본 레포 트리에서 Supabase 평문 비밀번호/키 패턴이 없는지 확인. 결과는 반드시 0건.
-git grep -nE "supabase\.co.*password|sbp_[A-Za-z0-9]{40,}" -- ":(exclude)*/node_modules/*" ":(exclude)*/.venv/*"
-git grep -nE "eyJhbGciOi[A-Za-z0-9._-]{40,}" -- ":(exclude)*/node_modules/*" ":(exclude)*/.venv/*"  # JWT-like
+# 1) 레거시 service-role / personal access token (sbp_*) + 신형 elevated secret (sb_secret_*).
+git grep -nE "sbp_[A-Za-z0-9]{40,}|sb_secret_[A-Za-z0-9]{20,}" -- ":(exclude)*/node_modules/*" ":(exclude)*/.venv/*"
+# 2) JWT-like (anon/service-role JWT 형식 — eyJhbGciOi... 로 시작).
+git grep -nE "eyJhbGciOi[A-Za-z0-9._-]{40,}" -- ":(exclude)*/node_modules/*" ":(exclude)*/.venv/*"
+# 3) Supabase Postgres connection string — pooler/direct 모두 포함.
+git grep -nE "postgres(ql)?://[^[:space:]\"]*@[^[:space:]\"]*\.supabase\.(co|com|net)[^[:space:]\"]*" -- ":(exclude)*/node_modules/*" ":(exclude)*/.venv/*"
+# 4) supabase.co URL 안에 password-like 토큰이 박혀 있는지.
+git grep -nE "supabase\.co[^[:space:]\"]*password" -- ":(exclude)*/node_modules/*" ":(exclude)*/.venv/*"
 ```
+
+**gitleaks 보강**: 본 PR 시점의 `tools/secret-scan` / `gitleaks` 룰셋에 위 4종 패턴이 모두 들어있는지는 단계 1 (CMP-573 머지 PR 또는 CMP-574 후속) 이 검증·갱신한다. 누락 시 PR 본문에 보강 커밋 링크를 첨부한다.
 
 ---
 
@@ -310,10 +332,12 @@ git ls-files supabase/
 git diff origin/dev...HEAD -- .github/workflows/neon-pr-branch.yml .github/workflows/ci.yml .github/workflows/deploy.yml docs/runbooks/neon-branches.md
 # → 위 명령의 출력은 빈 줄이어야 한다 (단계 0 의 봉인 — Neon 무변경).
 
-# 3) 평문 시크릿이 들어가지 않았다.
-git grep -nE "sbp_[A-Za-z0-9]{40,}" supabase/ docs/
-git grep -nE "supabase\.co.*[A-Za-z0-9]{40,}.*password" supabase/ docs/
-# → 두 명령 모두 결과 0건.
+# 3) 평문 시크릿이 들어가지 않았다 (§8 의 확장 패턴 4종).
+git grep -nE "sbp_[A-Za-z0-9]{40,}|sb_secret_[A-Za-z0-9]{20,}" supabase/ docs/
+git grep -nE "eyJhbGciOi[A-Za-z0-9._-]{40,}" supabase/ docs/
+git grep -nE "postgres(ql)?://[^[:space:]\"]*@[^[:space:]\"]*\.supabase\.(co|com|net)[^[:space:]\"]*" supabase/ docs/
+git grep -nE "supabase\.co[^[:space:]\"]*password" supabase/ docs/
+# → 네 명령 모두 결과 0건.
 
 # 4) 본 PR 의 placeholder 가 정확히 placeholder 다.
 git grep -n "placeholder" supabase/config.toml
