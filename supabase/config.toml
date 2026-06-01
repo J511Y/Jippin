@@ -44,11 +44,27 @@ project_id = "jippin-development-placeholder"
 # ─────────────────────────────────────────────────────────────────────────────
 # [api] — PostgREST 자동 생성 REST API
 # ─────────────────────────────────────────────────────────────────────────────
-# 집핀은 FastAPI(apps/api) 가 1차 API 게이트웨이이며, PostgREST 는 보조 (관리·디버그)
-# 용도로만 노출한다. 외부 노출 여부는 후속 ADR 에서 결정.
+# 집핀은 FastAPI(apps/api) 가 1차 API 게이트웨이이며, PostgREST 는 RLS 정책이
+# 완성되기 전까지 외부에 노출하지 않는다.
+#
+# **PostgREST 노출 봉인 (MUST).** 본 PR 시점에는 `enabled = false` 다. CMP-575 가
+# 현 Alembic 테이블(users, request_logs, anonymous_users, consultations 등)을
+# Supabase 마이그레이션으로 변환할 때 `public` 스키마의 모든 테이블에 RLS 가 비어 있고
+# `ENABLE ROW LEVEL SECURITY` 도 걸려 있지 않다. `[api]` 가 켜진 상태로 본 마이그
+# 레이션을 적용하면 anon key 보유자가 PostgREST/GraphQL 로 `public` 테이블을 직접
+# 조회할 수 있어 FastAPI 게이트웨이를 우회한다.
+#
+# 본 토글을 true 로 바꾸는 PR (또는 `schemas` 에 `"public"` 을 추가하는 PR) 은
+# 다음 조건을 모두 만족해야 한다:
+#   1. CMP-575 트랙이 `public` 의 민감 테이블 전체에 `ALTER TABLE ... ENABLE ROW
+#      LEVEL SECURITY` + 운영 RLS policy 를 SQL 마이그레이션으로 봉인.
+#   2. `docs/runbooks/supabase-branching.md` §7.2 (PostgREST 노출 게이트) 가
+#      검증 결과 (정책 누락 0건) 를 PR 본문에 첨부.
+#   3. RLS 가 미완성된 상태로는 `schemas` 에 `"public"` 을 포함시키지 않는다.
+#      필요 시 임시로 `graphql_public` 만 노출하는 흐름은 허용.
 [api]
-enabled = true
-schemas = ["public", "graphql_public"]
+enabled = false
+schemas = ["graphql_public"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
 
@@ -156,8 +172,10 @@ enable_anonymous_sign_ins = false
 # Manual identity linking — CEO 결정 (CMP-572) 봉인: MVP 는 manual linking 우선.
 # 본 토글이 true 여야 anonymous → OAuth upgrade 와 사용자 명시적 "계정 통합" 흐름이
 # 동작한다. **자동 linking 은 본 토글로 통제되지 않는다** — 자동 linking 금지 가드는
-# §7.1.1 (콘솔 OFF + DB 트리거) 가 책임진다.
-# Email-based automatic linking is OFF by policy (ADR-0003 영속화 + CEO CMP-572). Use `supabase.auth.linkIdentity()` only. 켜는 정책 변경은 별도 이슈에서만.
+# §7.1.1 (콘솔 가드 + DB 트리거) 가 책임진다. 콘솔 가드의 ON/OFF 방향은 라벨에
+# 의존하지 않고 §7.1.1 G3 PoC (Google + Kakao 같은 verified email → 두 user 분리)
+# 결과를 SSOT 로 봉인한다 — 라벨이 ON 이든 OFF 든 PoC 가 통과한 설정이 정답.
+# Email-based automatic identity linking is disabled by policy (ADR-0003 영속화 + CEO CMP-572). Use `supabase.auth.linkIdentity()` only. 정책 변경은 별도 이슈/ADR 에서만.
 enable_manual_linking = true
 
 [auth.email]
