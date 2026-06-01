@@ -189,7 +189,7 @@ async def kakao_sync_audit_stub(
             code="AUTH_UNAUTHENTICATED",
             http_status=401,
         )
-    bearer_value = authorization[len("Bearer "):].strip()
+    bearer_value = authorization[len("Bearer ") :].strip()
     if not bearer_value:
         raise ZippinException(
             "Authorization Bearer token 이 비어 있습니다.",
