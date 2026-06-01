@@ -4,6 +4,7 @@ import { useState } from 'react';
 
 import { apiBaseUrl } from '@/lib/api-base-url';
 import { getOrCreateAnonymousUserId } from '@/lib/anonymous-user';
+import { DEFAULT_NEXT, resolveSafeNext } from '@/lib/safe-redirect';
 
 /**
  * 간편가입 OAuth 시작 버튼 (CMP-557, CMP-564).
@@ -12,6 +13,8 @@ import { getOrCreateAnonymousUserId } from '@/lib/anonymous-user';
  * - 흐름: 버튼 클릭 → `GET /auth/{provider}/start?return_url=<absolute>&anonymous_user_id=<id>` 로
  *   브라우저를 이동시킨다. 백엔드는 302 로 provider authorization URL 까지 곧장 보낸다.
  * - return_url 은 `/login?next=...` 로 들어온 경로를 절대 URL 로 변환해 그대로 전달한다.
+ *   `next` 는 lib/safe-redirect 의 `isSafeNext` SSOT 를 거쳐 open-redirect (`//evil.com` 등) 를
+ *   원천 차단한 뒤 origin 에 붙인다. (CMP-582 / runbook §11 R11)
  */
 
 const PROVIDERS = [
@@ -28,10 +31,11 @@ type LoginButtonsProps = {
 
 function resolveReturnUrl(nextPath: string | null): string {
   const origin = window.location.origin;
-  if (!nextPath || !nextPath.startsWith('/')) {
-    return `${origin}/`;
-  }
-  return `${origin}${nextPath}`;
+  // `nextPath` 가 isSafeNext 를 통과한 경우에만 동일 origin 의 absolute URL 로 끌어올린다.
+  // 실패하면 DEFAULT_NEXT 로 fallback — `//evil.com` 같은 schema-relative 값이 그대로
+  // `<origin>//evil.com` 으로 합쳐져 외부로 빠지는 사고를 차단한다.
+  const safeNext = resolveSafeNext(nextPath, DEFAULT_NEXT);
+  return `${origin}${safeNext}`;
 }
 
 export function LoginButtons({ nextPath }: LoginButtonsProps) {
