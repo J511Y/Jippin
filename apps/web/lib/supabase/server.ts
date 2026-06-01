@@ -8,7 +8,7 @@
  *
  *   (1) Route Handler — 단일 NextResponse accumulator 패턴 (runbook §4.2.1):
  *
- *       const response = NextResponse.next();
+ *       const response = new NextResponse(null);
  *       const supabase = createRouteHandlerClient({ request, response });
  *       // ... supabase.auth.* 호출이 SDK 의 setAll 을 거쳐 response 에 Set-Cookie 누적.
  *       return new NextResponse(null, { status: 302, headers: response.headers });

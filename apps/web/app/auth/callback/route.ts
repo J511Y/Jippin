@@ -6,7 +6,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function safeRelativeRedirect(value: string | null): string {
-  if (!value || !value.startsWith('/') || value.startsWith('//')) {
+  if (!value || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')) {
     return '/';
   }
 
@@ -16,7 +16,7 @@ function safeRelativeRedirect(value: string | null): string {
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = request.nextUrl.searchParams.get('code');
   const next = safeRelativeRedirect(request.nextUrl.searchParams.get('next'));
-  const response = NextResponse.next();
+  const response = new NextResponse(null);
 
   if (code) {
     const supabase = createRouteHandlerClient({ request, response });

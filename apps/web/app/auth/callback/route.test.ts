@@ -73,6 +73,32 @@ describe('GET /auth/callback — session cookie preservation', () => {
     );
   });
 
+  it('rejects backslash-prefixed next values to avoid post-auth open redirects', async () => {
+    mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
+      auth: {
+        exchangeCodeForSession: vi.fn().mockImplementation(async () => {
+          init.cookies.setAll([
+            {
+              name: SESSION_COOKIE_NAME,
+              value: SESSION_COOKIE_VALUE,
+              options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 3600 },
+            },
+          ]);
+          return { data: { session: {} }, error: null };
+        }),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(makeRequest('/auth/callback?code=abc&next=/\\evil.com'));
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('Location')).toBe('http://localhost:3000/');
+    expect(setCookieValues(response).join('\n')).toMatch(
+      new RegExp(`(?:^|\\n)${SESSION_COOKIE_NAME}=${SESSION_COOKIE_VALUE}`),
+    );
+  });
+
   it('preserves exchangeCodeForSession cleanup cookies on callback failure redirects', async () => {
     mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
       auth: {

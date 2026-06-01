@@ -117,6 +117,52 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     expect(setCookieJoined).toMatch(/Path=\/auth\/callback/);
   });
 
+  it('preserves a safe next path on the Supabase callback redirectTo URL', async () => {
+    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'google' }, error: null });
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        linkIdentity,
+        signInWithOAuth: vi.fn(),
+        signOut: vi.fn(),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(makeRequest('/auth/oauth/start?provider=google&intent=link&next=/app/consult?draft=1'));
+
+    expect(response.status).toBe(302);
+    expect(linkIdentity).toHaveBeenCalledWith({
+      provider: 'google',
+      options: {
+        redirectTo: 'http://localhost:3000/auth/callback?next=%2Fapp%2Fconsult%3Fdraft%3D1',
+        skipBrowserRedirect: true,
+      },
+    });
+  });
+
+  it('drops unsafe backslash next paths before building redirectTo', async () => {
+    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'google' }, error: null });
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        linkIdentity,
+        signInWithOAuth: vi.fn(),
+        signOut: vi.fn(),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(makeRequest('/auth/oauth/start?provider=google&intent=link&next=/\\evil.com'));
+
+    expect(response.status).toBe(302);
+    expect(linkIdentity).toHaveBeenCalledWith({
+      provider: 'google',
+      options: {
+        redirectTo: 'http://localhost:3000/auth/callback',
+        skipBrowserRedirect: true,
+      },
+    });
+  });
+
   it('uses signInWithOAuth (not linkIdentity) for intent=signin and still preserves PKCE cookie', async () => {
     mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => {
       const linkIdentity = vi.fn();
@@ -172,6 +218,25 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     expect(response.status).toBe(302);
     expect(signOut).toHaveBeenCalledOnce();
     expect(signInWithOAuth).toHaveBeenCalledOnce();
+  });
+
+  it('does not start OAuth when link-merge signOut fails', async () => {
+    const signOut = vi.fn().mockResolvedValue({
+      error: { code: 'signout_failed', message: 'Could not discard current session' },
+    });
+    const signInWithOAuth = vi.fn();
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: { linkIdentity: vi.fn(), signInWithOAuth, signOut },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(makeRequest('/auth/oauth/start?provider=naver&intent=link-merge'));
+
+    expect(response.status).toBe(500);
+    expect(signOut).toHaveBeenCalledOnce();
+    expect(signInWithOAuth).not.toHaveBeenCalled();
+    expect(response.headers.get('Location')).toBeNull();
+    expect(setCookieValues(response)).toHaveLength(0);
   });
 
   it('rejects unknown provider with 400', async () => {

@@ -43,10 +43,24 @@ function isIntent(value: string | null): value is Intent {
 const FLOW_CONTEXT_COOKIE = 'jippin_oauth_provider';
 const FLOW_CONTEXT_MAX_AGE_SECONDS = 600;
 
+function safeRelativeRedirect(value: string | null): string | null {
+  if (!value || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')) {
+    return null;
+  }
+
+  return value;
+}
+
 function callbackUrl(request: NextRequest): string {
   const configured = process.env.NEXT_PUBLIC_FRONTEND_AUTH_CALLBACK_URL;
-  if (configured) return configured;
-  return new URL('/auth/callback', request.nextUrl.origin).toString();
+  const callback = configured
+    ? new URL(configured, request.nextUrl.origin)
+    : new URL('/auth/callback', request.nextUrl.origin);
+  const next = safeRelativeRedirect(request.nextUrl.searchParams.get('next'));
+  if (next) {
+    callback.searchParams.set('next', next);
+  }
+  return callback.toString();
 }
 
 function badRequest(reason: string): NextResponse {
@@ -77,9 +91,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const sbProvider: SupabaseProvider = toSupabaseProviderId(uiProviderRaw);
 
   // ★ Step 1 — 응답 객체 먼저 생성. SDK 의 setAll 콜백이 본 객체에 누적한다.
-  //    NextResponse.next() 는 mutable header 컨테이너로 충분하며, 마지막에 status/Location 을
-  //    덮어쓴다.
-  const response = NextResponse.next();
+  //    Route Handler 에서는 middleware-only `NextResponse.next()` 를 쓰지 않는다.
+  const response = new NextResponse(null);
   const supabase = createRouteHandlerClient({ request, response });
 
   // ★ Step 2 — flow context cookie. callback (Kakao Sync 감지 §4.5.2.1) 1차 신호.
@@ -112,7 +125,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         // signOut 도 setAll 로 빈 cookie 를 response 에 부착.
         // NOTE: CMP-579 가 backend POST /auth/anon-merge-intents 호출 + jippin_merge_intent
         //       cookie 발급을 본 BFF 에 추가한다 (R5).
-        await supabase.auth.signOut();
+        const signOutResult = await supabase.auth.signOut();
+        if (signOutResult.error) {
+          return oauthInitFailed({
+            code: signOutResult.error.code ?? 'oauth_signout_failed',
+            message: signOutResult.error.message ?? 'Failed to discard current session before OAuth merge',
+          });
+        }
       }
       urlResult = await supabase.auth.signInWithOAuth({
         provider: sbProvider,
