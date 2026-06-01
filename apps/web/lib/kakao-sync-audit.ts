@@ -60,6 +60,18 @@
  * 'merge_enqueue', outcome: 'failure' })` 으로 게이트해, signOut 이 실패 경로로
  * 새어 나가지 않도록 강제한다.
  *
+ * **Hard-fail 정책 봉인 (round-11 항목 4).** 본 helper 의 4xx/5xx → throw 는
+ * **soft fail 이 아닌 hard fail** 이며 OAuth 전환 흐름 자체를 중단해야 한다 —
+ * `console.error` 한 줄로 흘려보내거나 try/catch 로 삼키고 success 페이지로
+ * 진입시키는 패턴은 금지. 정당화: (i) `terms_consents(source='kakao_sync')` 는
+ * 약관 동의 SSOT 이므로 누락 시 법적 obligation 위반, (ii) backend audit 실패는
+ * 보통 Kakao access token revoke / 약관 비동의 / Kakao 비즈니스 앱 승인 미완 등
+ * 사용자/관리자 액션이 필요한 상태 신호이므로 silent 통과는 회귀 진입로, (iii)
+ * Sentry breadcrumb + reconcile 잡으로 운영이 추적 가능해야 한다. callback Route
+ * Handler 는 본 throw 를 catch 하여 (a) `terms_consents` rollback + (b) 익명 세션
+ * 유지 (`evaluateAnonymousDiscardDecision`) + (c) failure 페이지 redirect
+ * (`NEXT_PUBLIC_FRONTEND_AUTH_FAILURE_URL`) 의 3단계로 진입한다.
+ *
  * Phase 1 dual-write 동안 본 헬퍼는 callback Route Handler 가 `exchangeCodeForSession`
  * 직후 한 번만 호출한다. provider 가 Kakao 가 아닐 때는 호출 자체를 하지 않는다 —
  * 본 모듈은 그 판정 책임을 가지지 않는다 (호출자가 `isKakaoProvider` 로 판정 후 호출).

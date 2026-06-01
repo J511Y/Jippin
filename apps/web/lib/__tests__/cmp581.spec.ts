@@ -397,6 +397,102 @@ describe('CMP-581 anonymous-discard ordering (round-11 item 9 / signOut seal)', 
   });
 });
 
+describe('CMP-581 anonymous-discard CSRF gate (round-11 item 16)', () => {
+  it('required policy + matching tokens allows discard on success', () => {
+    const decision = evaluateAnonymousDiscardDecision({
+      stage: 'callback_finalize',
+      outcome: 'success',
+      csrf: {
+        policy: 'required',
+        providedToken: 'nonce-abc-123',
+        expectedToken: 'nonce-abc-123',
+      },
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('required policy + missing providedToken blocks as csrf_token_missing', () => {
+    const decision = evaluateAnonymousDiscardDecision({
+      stage: 'callback_finalize',
+      outcome: 'success',
+      csrf: {
+        policy: 'required',
+        providedToken: null,
+        expectedToken: 'nonce-abc-123',
+      },
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe('csrf_token_missing');
+  });
+
+  it('required policy + empty expectedToken blocks as csrf_token_missing', () => {
+    const decision = evaluateAnonymousDiscardDecision({
+      stage: 'callback_finalize',
+      outcome: 'success',
+      csrf: {
+        policy: 'required',
+        providedToken: 'nonce-abc-123',
+        expectedToken: '',
+      },
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe('csrf_token_missing');
+  });
+
+  it('required policy + mismatched tokens blocks as csrf_token_mismatch (forge attempt)', () => {
+    const decision = evaluateAnonymousDiscardDecision({
+      stage: 'callback_finalize',
+      outcome: 'success',
+      csrf: {
+        policy: 'required',
+        providedToken: 'attacker-supplied',
+        expectedToken: 'session-stored',
+      },
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toBe('csrf_token_mismatch');
+      // The detail must surface the forge-attempt framing so operators see
+      // the security intent in Sentry breadcrumbs.
+      expect(decision.detail).toContain('위조');
+    }
+  });
+
+  it('CSRF check runs before outcome — mismatch blocks even on success outcome', () => {
+    // Without CSRF: success → allow. With CSRF mismatch: blocked despite success.
+    const allowed = evaluateAnonymousDiscardDecision({
+      stage: 'callback_finalize',
+      outcome: 'success',
+    });
+    expect(allowed.allowed).toBe(true);
+
+    const blocked = evaluateAnonymousDiscardDecision({
+      stage: 'callback_finalize',
+      outcome: 'success',
+      csrf: { policy: 'required', providedToken: 'a', expectedToken: 'b' },
+    });
+    expect(blocked.allowed).toBe(false);
+    if (!blocked.allowed) expect(blocked.reason).toBe('csrf_token_mismatch');
+  });
+
+  it('session_cookie_only policy skips CSRF and falls back to outcome judgment', () => {
+    const success = evaluateAnonymousDiscardDecision({
+      stage: 'callback_finalize',
+      outcome: 'success',
+      csrf: { policy: 'session_cookie_only' },
+    });
+    expect(success.allowed).toBe(true);
+
+    const failure = evaluateAnonymousDiscardDecision({
+      stage: 'callback_finalize',
+      outcome: 'failure',
+      csrf: { policy: 'session_cookie_only' },
+    });
+    expect(failure.allowed).toBe(false);
+    if (!failure.allowed) expect(failure.reason).toBe('discard_blocked_failure_outcome');
+  });
+});
+
 describe('CMP-581 oauth-providers (R9)', () => {
   it('defaults to native kakao when env var is unset', () => {
     expect(resolveKakaoProviderId(undefined)).toBe('kakao');

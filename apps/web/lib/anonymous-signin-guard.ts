@@ -180,23 +180,50 @@ export function shouldIssueAnonymousSignIn(args: {
  * 강제한다. 실제 SDK signOut 호출은 본 모듈이 아닌 호출자가 책임진다 — 본 helper
  * 는 결정만 반환한다.
  *
+ * **sign-out CSRF 봉인 (round-11 항목 16 / 보드 코멘트 `ab06d3b5`).** 익명 세션
+ * 폐기는 본질적으로 파괴적인 동작이며, 공격자가 타인의 익명 세션을 강제 폐기하는
+ * CSRF (sign-out 위조) 공격을 차단해야 한다. 본 helper 는 두 정책을 지원한다:
+ *
+ *   - `policy: 'required'` — 호출자가 안전 저장소(서명된 cookie / Supabase session
+ *     storage / SSR 발급 토큰) 에서 expectedToken 을 읽어오고, 요청에서 받은
+ *     providedToken 과 동등 비교한다. mismatch / 누락 시 즉시 block (CSRF 차단).
+ *   - `policy: 'session_cookie_only'` — 호출자가 별도 메커니즘 (Supabase SSR
+ *     cookie 존재 + same-origin 강제 + Sec-Fetch-Site 검증 등) 으로 forge 가능성을
+ *     배제했다고 선언. 본 helper 는 CSRF 검증을 건너뛰고 outcome 만 판정.
+ *
+ * 호출자가 `csrf` 를 생략하면 fallback 은 `session_cookie_only` — 보수적으로 가려면
+ * 호출자가 명시적으로 `policy: 'required'` 를 지정해야 한다. callback Route Handler
+ * 와 client fallback ladder 가 PKCE state cookie / Supabase auth cookie 를 SSR 단계
+ * 에서 검증하는 흐름과 정합. 토큰 비교는 단순 `!==` (짧은 nonce 기준; 필요 시
+ * 호출자가 timingSafeEqual 로 사전 비교 후 본 helper 에 outcome 만 전달).
+ *
  * 호출 예:
  *
  * ```ts
  * const decision = evaluateAnonymousDiscardDecision({
  *   stage: 'link_identity',
  *   outcome: linkError ? 'failure' : 'success',
+ *   csrf: { policy: 'required', providedToken: req.body.csrfToken, expectedToken: sessionStore.csrfToken },
  * });
  * if (!decision.allowed) {
- *   // 실패 → 익명 세션 유지하고 UI 에러 핸들러에 전달.
  *   return renderRetryUx(decision.detail);
  * }
- * await supabase.auth.signOut(); // success 경로에서만 도달.
+ * await supabase.auth.signOut(); // CSRF 통과 + success 경로에서만 도달.
  * ```
  */
 export type AnonymousMergeStage = 'link_identity' | 'merge_enqueue' | 'callback_finalize';
 
 export type AnonymousMergeOutcome = 'pending' | 'failure' | 'success';
+
+export type AnonymousDiscardCsrfPolicy = 'required' | 'session_cookie_only';
+
+export type AnonymousDiscardCsrfInput =
+  | {
+      policy: 'required';
+      providedToken: string | null | undefined;
+      expectedToken: string | null | undefined;
+    }
+  | { policy: 'session_cookie_only' };
 
 export type AnonymousDiscardDecision =
   | { allowed: true; stage: AnonymousMergeStage }
@@ -205,12 +232,45 @@ export type AnonymousDiscardDecision =
 export type AnonymousDiscardBlockReason =
   | 'discard_blocked_pending_outcome'
   | 'discard_blocked_failure_outcome'
+  | 'csrf_token_missing'
+  | 'csrf_token_mismatch'
   | 'unknown_outcome';
 
 export function evaluateAnonymousDiscardDecision(args: {
   stage: AnonymousMergeStage;
   outcome: AnonymousMergeOutcome | string;
+  csrf?: AnonymousDiscardCsrfInput;
 }): AnonymousDiscardDecision {
+  // CSRF 게이트가 먼저 — 토큰 검증 실패는 outcome 과 무관하게 즉시 차단.
+  if (args.csrf?.policy === 'required') {
+    const { providedToken, expectedToken } = args.csrf;
+    if (
+      providedToken === null ||
+      providedToken === undefined ||
+      providedToken === '' ||
+      expectedToken === null ||
+      expectedToken === undefined ||
+      expectedToken === ''
+    ) {
+      return {
+        allowed: false,
+        reason: 'csrf_token_missing',
+        detail:
+          'CSRF 정책이 required 인 sign-out 호출에 providedToken 또는 expectedToken 이 ' +
+          '비어 있습니다. 호출자가 안전 저장소에서 토큰을 주입했는지 확인하세요.',
+      };
+    }
+    if (providedToken !== expectedToken) {
+      return {
+        allowed: false,
+        reason: 'csrf_token_mismatch',
+        detail:
+          'CSRF 토큰이 일치하지 않습니다. 다른 origin / 다른 세션에서의 sign-out 위조 ' +
+          '시도일 수 있으므로 즉시 차단합니다.',
+      };
+    }
+  }
+
   switch (args.outcome) {
     case 'success':
       return { allowed: true, stage: args.stage };

@@ -34,6 +34,25 @@
  * 직접 수행하지 않는다 — Supabase 콘솔의 Custom OIDC discovery URL / JWKS URL
  * 설정 (§4.2.3) 이 SSOT 다. 본 매핑 export 는 단지 콘솔 등록 id 와 SDK 호출 id 를
  * 정합시키는 라벨이며, id_token 검증 책임 경계와는 무관함을 명시한다.
+ *
+ * **콘솔/SDK/env 명명 1:1 매트릭스 (round-11 항목 3).** SDK 호출 시 사용하는
+ * provider id 와 Supabase 콘솔의 provider 등록 id 는 **정확히 일치** 해야 한다 —
+ * 어긋나면 `provider_not_enabled` 로 OAuth 흐름이 시작 단계에서 거부된다. 본
+ * 모듈의 SDK id ↔ Supabase 콘솔 ↔ env var 매트릭스:
+ *
+ *   | UI provider | env var (NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID) | Supabase 콘솔 등록 | SDK 호출 id |
+ *   | google      | (해당없음)                                       | Google (native)     | `'google'`        |
+ *   | kakao       | (미지정) 또는 `'kakao'`                          | Kakao (native)      | `'kakao'`         |
+ *   | kakao       | `'custom:kakao'`                                 | Custom OIDC (id=`kakao`) | `'custom:kakao'` |
+ *   | naver       | (해당없음)                                       | Custom OIDC (id=`naver`) | `'custom:naver'` |
+ *
+ * Kakao 시크릿 (Client ID / Client Secret = Kakao 측 REST API key / client secret)
+ * 은 **Supabase 콘솔이 단독 보유**. web 어댑터는 직접 사용하지 않으며 backend 가
+ * Kakao OpenAPI (예: `/v2/user/me`, `/v2/user/scopes`) 를 직접 호출해야 하는
+ * 경우만 `apps/api/.env.example` 의 `KAKAO_REST_API_KEY` / `KAKAO_CLIENT_SECRET`
+ * 변수로 노출한다 — 본 변수명은 Supabase 콘솔 'Client ID' / 'Client Secret' 라벨과
+ * 1:1 대응 (§8 콘솔 트랙이 SSOT). 명명이 어긋나면 콘솔 변경 시 코드 한 곳에서
+ * 끝나야 할 갱신이 다중 파일로 흩어지므로 본 룰이 명시 봉인.
  */
 
 export type UiProvider = 'google' | 'kakao' | 'naver';
