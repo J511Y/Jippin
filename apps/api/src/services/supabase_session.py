@@ -102,6 +102,12 @@ async def verify_supabase_access_token(
 
     if not claims.get("sub"):
         raise _invalid_token("Supabase access token is missing the subject claim.")
+    if _is_anonymous_supabase_claims(claims):
+        raise ZippinException(
+            "Supabase anonymous access tokens cannot mint backend sessions.",
+            code="AUTH_ANONYMOUS_TOKEN_NOT_ALLOWED",
+            http_status=401,
+        )
     return claims
 
 
@@ -127,11 +133,13 @@ async def resolve_jippin_user_for_supabase(
         if email_claim:
             normalized_email = email_claim.strip().lower()
             email_row = await conn.execute(
-                sa.select(User.id).where(
+                sa.select(User.id)
+                .where(
                     User.email.is_not(None),
                     User.status == "active",
                     sa.func.lower(User.email) == normalized_email,
                 )
+                .limit(1)
             )
             if email_row.scalar_one_or_none() is not None:
                 raise ZippinException(
@@ -145,6 +153,10 @@ async def resolve_jippin_user_for_supabase(
         code="AUTH_SIGNUP_REQUIRED",
         http_status=401,
     )
+
+
+def _is_anonymous_supabase_claims(claims: dict[str, object]) -> bool:
+    return claims.get("is_anonymous") is True
 
 
 def _invalid_token(message: str) -> ZippinException:

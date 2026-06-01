@@ -250,6 +250,32 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     );
   });
 
+  it('uses the env-aware Kakao provider id on the live OAuth start path', async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID = 'custom:kakao';
+    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'custom:kakao' }, error: null });
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        linkIdentity,
+        signInWithOAuth: vi.fn(),
+        signOut: vi.fn(),
+      },
+    }));
+
+    vi.resetModules();
+    const { GET } = await import('./route');
+    const response = await GET(makeRequest('/auth/oauth/start?provider=kakao&intent=link'));
+
+    expect(response.status).toBe(302);
+    expect(linkIdentity).toHaveBeenCalledWith({
+      provider: 'custom:kakao',
+      options: {
+        redirectTo: 'http://localhost:3000/auth/callback?intent=link',
+        skipBrowserRedirect: true,
+      },
+    });
+    delete process.env.NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID;
+  });
+
   it('fails closed for intent=link-merge until merge intent state exists', async () => {
     const { GET } = await import('./route');
     const response = await GET(makeRequest('/auth/oauth/start?provider=naver&intent=link-merge'));
