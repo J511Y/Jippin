@@ -34,6 +34,10 @@ services:
       NEXT_TELEMETRY_DISABLED: "1"
       # BFF → API 호출은 컨테이너 네트워크 이름으로 경유한다.
       NEXT_PUBLIC_API_BASE_URL: "http://api:8000"
+      # Supabase OAuth handoff origin allow-list SSOT (CMP-577 / CMP-582).
+      # 부재 시 /auth/redirect 가 `invalid_config` 으로 멈춘다 — host .env 의
+      # NEXT_PUBLIC_SUPABASE_URL 가 빈 값이면 OAuth 흐름 자체가 차단된다.
+      NEXT_PUBLIC_SUPABASE_URL: "${NEXT_PUBLIC_SUPABASE_URL:-}"
     ports:
       - "3000:3000"
     depends_on:
