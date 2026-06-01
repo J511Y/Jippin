@@ -265,7 +265,10 @@ def test_supabase_session_accepts_converted_token_with_anonymous_metadata(
         jwk["kid"],
         extra_claims={
             "is_anonymous": False,
-            "app_metadata": {"provider": "anonymous", "providers": ["anonymous", "google"]},
+            "app_metadata": {
+                "provider": "anonymous",
+                "providers": ["anonymous", "google"],
+            },
         },
     )
 
