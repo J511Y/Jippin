@@ -4,7 +4,7 @@
   "private": true,
   "description": "집핀 Presentation tier (Next.js 16.2 LTS App Router). ADR-0001 §2 / CMP-529.",
   "engines": {
-    "node": ">=22.0.0 <23",
+    "node": ">=22.6.0 <23",
     "pnpm": ">=9.0.0 <10"
   },
   "packageManager": "pnpm@9.12.0",
