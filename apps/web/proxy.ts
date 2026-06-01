@@ -78,7 +78,7 @@ function redirectToTermsGate(request: NextRequest, nextPath: string): NextRespon
 }
 
 async function hasMissingRequiredTerms(accessToken: string | undefined): Promise<boolean> {
-  if (!accessToken) return false;
+  if (!accessToken) return true;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TERMS_STATUS_TIMEOUT_MS);
   try {
@@ -89,14 +89,14 @@ async function hasMissingRequiredTerms(accessToken: string | undefined): Promise
         authorization: `Bearer ${accessToken}`,
       },
     });
-    if (!response.ok) return false;
+    if (!response.ok) return true;
     const data = (await response.json()) as {
       signup_complete?: boolean;
       missing_required_terms?: string[];
     };
     return data.signup_complete === false || (data.missing_required_terms?.length ?? 0) > 0;
   } catch {
-    return false;
+    return true;
   } finally {
     clearTimeout(timeout);
   }

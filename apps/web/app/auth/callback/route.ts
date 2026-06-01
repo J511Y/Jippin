@@ -23,6 +23,7 @@ export const runtime = 'nodejs';
 export const COMMIT_PATH = '/auth/anon-merge-intents/commit';
 
 const CALLBACK_COOKIES = ['jippin_merge_intent', 'jippin_oauth_provider'] as const;
+const PENDING_ANONYMOUS_COOKIE = 'jippin_pending_anonymous_user_id';
 const TERMS_PENDING_HINT_COOKIE = 'jippin_terms_pending';
 const TERMS_PENDING_HINT_MAX_AGE_SECONDS = 10 * 60;
 const BACKEND_CALLBACK_TIMEOUT_MS = 5_000;
@@ -76,6 +77,11 @@ export function expireCallbackCookies(response: NextResponse): NextResponse {
   return response;
 }
 
+function expirePendingAnonymousCookie(response: NextResponse): NextResponse {
+  response.cookies.set(PENDING_ANONYMOUS_COOKIE, '', { path: '/auth', maxAge: 0 });
+  return response;
+}
+
 function redirectFromSeed(seed: NextResponse, target: URL): NextResponse {
   seed.headers.set('Location', target.toString());
   return new NextResponse(null, { status: 302, headers: seed.headers });
@@ -93,7 +99,7 @@ function failureRedirect(
   const safeNext = resolveSafeNext(context?.next ?? request.nextUrl.searchParams.get('next'), '/');
   if (safeNext !== '/') target.searchParams.set('next', safeNext);
   if (context?.provider) target.searchParams.set('provider', toUiProviderId(context.provider));
-  return expireCallbackCookies(redirectFromSeed(seed, target));
+  return expirePendingAnonymousCookie(expireCallbackCookies(redirectFromSeed(seed, target)));
 }
 
 async function failureRedirectAfterExchange(
@@ -232,7 +238,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
   }
 
-  const linkedProvider = detectNewlyLinkedProvider(data.session.user, intendedProviderCookie);
+  const linkedProvider = detectNewlyLinkedProvider(
+    data.session.user,
+    intendedProviderCookie,
+    flowContext?.createdAt,
+  );
   if (isKakaoProvider(linkedProvider)) {
     const persisted = await persistKakaoSyncConsent(data.session, linkedProvider);
     if (!persisted) {

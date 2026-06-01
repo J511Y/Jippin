@@ -43,15 +43,17 @@ function pickLastLinkedIdentity(identities: readonly UserIdentity[]): UserIdenti
 export function detectNewlyLinkedProvider(
   user: User,
   intendedProviderCookie: string | null,
+  flowCreatedAt?: number | null,
 ): SupabaseProvider | null {
   const intended = parseIntendedProvider(intendedProviderCookie);
-  const observedRaw = pickLastLinkedIdentity(user.identities ?? [])?.provider ?? null;
-  const observed = isSupabaseProvider(observedRaw) ? observedRaw : null;
+  if (intended && hasNewlyLinkedIdentity(user, intended, flowCreatedAt)) {
+    return intended;
+  }
 
-  // The httpOnly flow context is created by our OAuth start BFF for this exact
-  // browser round-trip. Prefer it over Supabase identity timestamps so Kakao
-  // consent audit is not dropped for multi-provider accounts.
-  return intended ?? observed;
+  const identities = user.identities ?? [];
+  const observedRaw = pickLastLinkedIdentity(identities)?.provider ?? null;
+  const observed = isSupabaseProvider(observedRaw) ? observedRaw : null;
+  return hasNewlyLinkedIdentity(user, observed, flowCreatedAt) ? observed : null;
 }
 
 export function hasNewlyLinkedIdentity(

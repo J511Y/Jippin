@@ -156,14 +156,21 @@ async def accept_terms(
     request: Request,
 ) -> TermsAcceptResponse:
     claims = read_session_claims(request)
+    pending_anonymous_user_id = claims.pending_anonymous_user_id
+    if payload.pending_anonymous_user_id is not None:
+        if pending_anonymous_user_id != payload.pending_anonymous_user_id:
+            raise ZippinException(
+                "Pending anonymous user does not match the authenticated session.",
+                code="PENDING_ANONYMOUS_MISMATCH",
+                http_status=403,
+            )
+        pending_anonymous_user_id = payload.pending_anonymous_user_id
     result = await accept_required_terms(
         user_id=claims.user_id,
         agreed_term_ids={
             str(consent.term_id) for consent in payload.consents if consent.agreed
         },
-        pending_anonymous_user_id=(
-            payload.pending_anonymous_user_id or claims.pending_anonymous_user_id
-        ),
+        pending_anonymous_user_id=pending_anonymous_user_id,
     )
     response = TermsAcceptResponse(
         signup_complete=result.signup_complete,

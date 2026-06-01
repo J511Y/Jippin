@@ -392,7 +392,10 @@ def test_terms_accept_uses_body_pending_anonymous_user_id(monkeypatch, auth_env)
 
     app = create_app()
     with TestClient(app) as client:
-        client.cookies.set("jippin_session", _session_cookie(user_id))
+        client.cookies.set(
+            "jippin_session",
+            _session_cookie(user_id, pending_anon=anonymous_user_id),
+        )
         response = client.post(
             "/auth/terms/accept",
             json={
@@ -412,6 +415,32 @@ def test_terms_accept_uses_body_pending_anonymous_user_id(monkeypatch, auth_env)
             anonymous_user_id,
         )
     ]
+
+
+def test_terms_accept_rejects_body_pending_anonymous_mismatch(monkeypatch, auth_env):
+    user_id = uuid.uuid4()
+
+    async def fake_accept_terms(*, user_id, agreed_term_ids, pending_anonymous_user_id):
+        raise AssertionError("accept_required_terms must not be called")
+
+    monkeypatch.setattr(auth_router, "accept_required_terms", fake_accept_terms)
+
+    app = create_app()
+    with TestClient(app) as client:
+        client.cookies.set("jippin_session", _session_cookie(user_id))
+        response = client.post(
+            "/auth/terms/accept",
+            json={
+                "consents": [
+                    {"term_id": "service_terms", "agreed": True},
+                    {"term_id": "privacy_policy", "agreed": True},
+                ],
+                "pending_anonymous_user_id": str(uuid.uuid4()),
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "PENDING_ANONYMOUS_MISMATCH"
 
 
 class _FakeResult:

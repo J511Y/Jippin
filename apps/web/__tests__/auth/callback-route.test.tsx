@@ -148,6 +148,7 @@ describe('/auth/callback route', () => {
       'http://localhost/auth/failure?reason=missing_code',
     );
     expectCallbackCookiesExpired(response);
+    expectPendingAnonymousCookieExpired(response);
   });
 
   it('expires callback cookies when code exchange fails', async () => {
@@ -215,6 +216,32 @@ describe('/auth/callback route', () => {
     );
     expect(supabaseMocks.signOut).toHaveBeenCalledTimes(1);
     expectCallbackCookiesExpired(response);
+    expectPendingAnonymousCookieExpired(response);
+  });
+
+  it('treats flow context provider as a hint and uses the fresh returned identity', async () => {
+    const tamperedContext = encodeURIComponent(`google|${Date.now()}`);
+    supabaseMocks.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { session: mockSession('custom:kakao') },
+      error: null,
+    });
+
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(
+      new NextRequest('http://localhost/auth/callback?code=ok&next=/app/reports', {
+        headers: {
+          cookie: `jippin_oauth_provider=${tamperedContext}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      'http://localhost/auth/failure?reason=kakao_sync_unavailable&next=%2Fapp%2Freports&provider=kakao',
+    );
+    expect(supabaseMocks.signOut).toHaveBeenCalledTimes(1);
+    expectCallbackCookiesExpired(response);
+    expectPendingAnonymousCookieExpired(response);
   });
 
   it('uses the cookie-only merge commit endpoint constant', async () => {
@@ -681,6 +708,30 @@ describe('proxy terms-pending guard', () => {
         headers: { authorization: 'Bearer supabase-access-token' },
       }),
     );
+    expect(response.status).toBe(307);
+    const location = new URL(response.headers.get('location') ?? '');
+    expect(location.pathname).toBe('/auth/terms');
+    expect(location.searchParams.get('next')).toBe('/app/reports?draft=1');
+  });
+
+  it('fails closed when persisted internal terms status cannot be verified', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401 }));
+    ssrSupabaseMocks.getUser.mockResolvedValueOnce({
+      data: {
+        user: {
+          id: 'user-1',
+          is_anonymous: false,
+          app_metadata: { provider: 'google' },
+        },
+      },
+    });
+    ssrSupabaseMocks.getSession.mockResolvedValueOnce({
+      data: { session: { access_token: 'supabase-access-token' } },
+    });
+    const { proxy } = await import('@/proxy');
+
+    const response = await proxy(new NextRequest('http://localhost/app/reports?draft=1'));
+
     expect(response.status).toBe(307);
     const location = new URL(response.headers.get('location') ?? '');
     expect(location.pathname).toBe('/auth/terms');
