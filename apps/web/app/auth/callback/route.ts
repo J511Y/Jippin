@@ -23,8 +23,8 @@ export const runtime = 'nodejs';
 export const COMMIT_PATH = '/auth/anon-merge-intents/commit';
 
 const CALLBACK_COOKIES = ['jippin_merge_intent', 'jippin_oauth_provider'] as const;
-const TERMS_PENDING_COOKIE = 'jippin_terms_pending';
-const TERMS_PENDING_MAX_AGE_SECONDS = 10 * 60;
+const TERMS_PENDING_HINT_COOKIE = 'jippin_terms_pending';
+const TERMS_PENDING_HINT_MAX_AGE_SECONDS = 10 * 60;
 const BACKEND_CALLBACK_TIMEOUT_MS = 5_000;
 const KNOWN_REASONS = new Set([
   'missing_code',
@@ -166,11 +166,11 @@ function termsRedirect(request: NextRequest, seed: NextResponse, safeNext: strin
   const target = new URL('/auth/terms', origin(request));
   target.searchParams.set('next', safeNext);
   seed.cookies.set({
-    name: TERMS_PENDING_COOKIE,
+    name: TERMS_PENDING_HINT_COOKIE,
     value: '1',
     sameSite: 'lax',
     path: '/',
-    maxAge: TERMS_PENDING_MAX_AGE_SECONDS,
+    maxAge: TERMS_PENDING_HINT_MAX_AGE_SECONDS,
   });
   return expireCallbackCookies(redirectFromSeed(seed, target));
 }

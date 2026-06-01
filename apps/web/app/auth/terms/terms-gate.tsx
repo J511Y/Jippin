@@ -27,6 +27,15 @@ function clearTermsPendingCookie(): void {
   document.cookie = 'jippin_terms_pending=; Max-Age=0; Path=/; SameSite=Lax';
 }
 
+function termsAcceptPayload() {
+  return {
+    consents: REQUIRED_TERMS.map((term) => ({
+      term_id: term.id,
+      agreed: true,
+    })),
+  };
+}
+
 export function TermsGate({ nextPath }: TermsGateProps) {
   const router = useRouter();
   const [checked, setChecked] = useState<Record<string, boolean>>({});
@@ -55,12 +64,7 @@ export function TermsGate({ nextPath }: TermsGateProps) {
           'content-type': 'application/json',
           authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({
-          consents: REQUIRED_TERMS.map((term) => ({
-            term_id: term.id,
-            agreed: true,
-          })),
-        }),
+        body: JSON.stringify(termsAcceptPayload()),
       });
 
       if (!response.ok) {
