@@ -39,6 +39,8 @@ const PROTECTED_APP_PREFIXES = [
   '/app/reports'
 ] as const;
 
+const TERMS_PENDING_COOKIE = 'jippin_terms_pending';
+
 function isAnonymousAllowed(pathname: string): boolean {
   return ANONYMOUS_ALLOWED_APP_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
@@ -70,6 +72,14 @@ export async function proxy(request: NextRequest) {
 
   if (!isProtected(pathname)) {
     return NextResponse.next();
+  }
+
+  if (request.cookies.has(TERMS_PENDING_COOKIE)) {
+    const termsUrl = request.nextUrl.clone();
+    termsUrl.pathname = '/auth/terms';
+    termsUrl.search = '';
+    termsUrl.searchParams.set('next', pathname + search);
+    return NextResponse.redirect(termsUrl);
   }
 
   const response = NextResponse.next();

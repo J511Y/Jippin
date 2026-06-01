@@ -106,6 +106,10 @@ function expireCallbackCookie(response: NextResponse, name: string): void {
   response.cookies.set(name, '', { path: '/auth/callback', maxAge: 0 });
 }
 
+function expirePendingAnonymousCookie(response: NextResponse): void {
+  response.cookies.set(PENDING_ANONYMOUS_COOKIE, '', { path: '/auth', maxAge: 0 });
+}
+
 function setPendingAnonymousCookie(response: NextResponse, anonymousUserId: string): void {
   response.cookies.set({
     name: PENDING_ANONYMOUS_COOKIE,
@@ -126,6 +130,7 @@ function redirectToFailure(
 ): NextResponse {
   expireCallbackCookie(response, FLOW_CONTEXT_COOKIE);
   expireCallbackCookie(response, MERGE_INTENT_COOKIE);
+  expirePendingAnonymousCookie(response);
   const failure = new URL('/auth/failure', siteOriginFromRequest(request));
   failure.searchParams.set('reason', reason);
   if (context?.provider) failure.searchParams.set('provider', context.provider);

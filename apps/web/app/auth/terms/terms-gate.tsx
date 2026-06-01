@@ -24,6 +24,10 @@ function termsAcceptEnabled(): boolean {
   return process.env.NEXT_PUBLIC_AUTH_TERMS_ACCEPT_ENABLED === 'true';
 }
 
+function clearTermsPendingCookie(): void {
+  document.cookie = 'jippin_terms_pending=; Max-Age=0; Path=/; SameSite=Lax';
+}
+
 export function TermsGate({ nextPath }: TermsGateProps) {
   const router = useRouter();
   const [checked, setChecked] = useState<Record<string, boolean>>({});
@@ -65,6 +69,7 @@ export function TermsGate({ nextPath }: TermsGateProps) {
         return;
       }
 
+      clearTermsPendingCookie();
       router.replace(safeNext);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '약관 동의 저장에 실패했습니다.');

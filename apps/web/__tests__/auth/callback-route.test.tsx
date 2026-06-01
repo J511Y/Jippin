@@ -54,6 +54,20 @@ function expectCallbackCookiesExpired(response: Response): void {
   expect(header).toContain('Path=/auth/callback');
 }
 
+function expectTermsPendingCookieSet(response: Response): void {
+  const header = cookieHeader(response);
+  expect(header).toContain('jippin_terms_pending=1');
+  expect(header).toContain('Path=/');
+  expect(header).toContain('Max-Age=600');
+}
+
+function expectPendingAnonymousCookieExpired(response: Response): void {
+  const header = cookieHeader(response);
+  expect(header).toContain('jippin_pending_anonymous_user_id=');
+  expect(header).toContain('Path=/auth');
+  expect(header).toContain('Max-Age=0');
+}
+
 function mockSession(
   provider = 'custom:kakao',
   createdAt = new Date().toISOString(),
@@ -236,6 +250,7 @@ describe('/auth/callback route', () => {
     expect(response.headers.get('location')).toBe(
       'http://localhost/auth/terms?next=%2Fapp%2Freports',
     );
+    expectTermsPendingCookieSet(response);
     expectCallbackCookiesExpired(response);
   });
 
@@ -265,6 +280,7 @@ describe('/auth/callback route', () => {
     expect(response.headers.get('location')).toBe(
       'http://localhost/auth/terms?next=%2Fapp%2Freports',
     );
+    expectTermsPendingCookieSet(response);
     expectCallbackCookiesExpired(response);
   });
 
@@ -289,6 +305,7 @@ describe('/auth/callback route', () => {
     expect(response.headers.get('location')).toBe(
       'http://localhost/auth/terms?next=%2Fapp%2Freports',
     );
+    expectTermsPendingCookieSet(response);
     expectCallbackCookiesExpired(response);
   });
 
@@ -370,7 +387,7 @@ describe('/auth/callback route', () => {
         }),
       );
 
-      await vi.advanceTimersByTimeAsync(751);
+      await vi.advanceTimersByTimeAsync(5001);
       const response = await pending;
 
       expect(response.status).toBe(302);
@@ -484,6 +501,7 @@ describe('/auth/oauth/start BFF', () => {
     expect(location.searchParams.get('next')).toBe('/app/reports');
     expect(supabaseMocks.signOut).not.toHaveBeenCalled();
     expect(cookieHeader(response)).not.toContain('leaked');
+    expectPendingAnonymousCookieExpired(response);
   });
 
   it('redirects to failure and clears callback cookies when OAuth URL generation fails', async () => {
@@ -494,7 +512,9 @@ describe('/auth/oauth/start BFF', () => {
 
     const { GET } = await import('@/app/auth/oauth/start/route');
     const response = await GET(
-      new NextRequest('http://localhost/auth/oauth/start?provider=google&intent=link'),
+      new NextRequest(
+        'http://localhost/auth/oauth/start?provider=google&intent=link&anonymous_user_id=anon-1',
+      ),
     );
 
     expect(response.status).toBe(302);
@@ -502,6 +522,7 @@ describe('/auth/oauth/start BFF', () => {
       'http://localhost/auth/failure?reason=oauth_init_failed&provider=google',
     );
     expectCallbackCookiesExpired(response);
+    expectPendingAnonymousCookieExpired(response);
   });
 
   it('uses NEXT_PUBLIC_SITE_URL for callback redirect origin when configured', async () => {
@@ -556,6 +577,25 @@ describe('/auth/failure page', () => {
   });
 });
 
+describe('proxy terms-pending guard', () => {
+  it('redirects protected routes back to the internal terms gate', async () => {
+    const { proxy } = await import('@/proxy');
+
+    const response = await proxy(
+      new NextRequest('http://localhost/app/reports?draft=1', {
+        headers: {
+          cookie: 'jippin_terms_pending=1',
+        },
+      }),
+    );
+
+    expect(response.status).toBe(307);
+    const location = new URL(response.headers.get('location') ?? '');
+    expect(location.pathname).toBe('/auth/terms');
+    expect(location.searchParams.get('next')).toBe('/app/reports?draft=1');
+  });
+});
+
 describe('/auth/terms page', () => {
   it('submits enabled terms acceptance and redirects to the safe next path', async () => {
     process.env.NEXT_PUBLIC_AUTH_TERMS_ACCEPT_ENABLED = 'true';
@@ -566,6 +606,7 @@ describe('/auth/terms page', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
     const { TermsGate } = await import('@/app/auth/terms/terms-gate');
+    document.cookie = 'jippin_terms_pending=1; Path=/';
 
     render(<TermsGate nextPath="/app/reports" />);
 
@@ -591,6 +632,7 @@ describe('/auth/terms page', () => {
         }),
       );
     });
+    expect(document.cookie).not.toContain('jippin_terms_pending');
     expect(routerMocks.replace).toHaveBeenCalledWith('/app/reports');
   });
 });
