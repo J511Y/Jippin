@@ -7,7 +7,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Header, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from ..auth.providers import PROVIDER_MODULES, OAuthProvider
@@ -38,6 +38,11 @@ from ..services.auth import (
     get_current_user_context,
     link_oauth_account,
     parse_existing_anonymous_user_id,
+)
+from ..services.supabase_session import (
+    parse_bearer_token,
+    resolve_jippin_user_for_supabase,
+    verify_supabase_access_token,
 )
 
 logger = get_logger("zippin.auth")
@@ -147,6 +152,40 @@ async def get_me(request: Request) -> AuthMeResponse:
 async def logout() -> JSONResponse:
     response = JSONResponse(AuthLogoutResponse().model_dump())
     clear_session_cookie(response)
+    return response
+
+
+@router.post("/supabase/session", status_code=204)
+async def mint_supabase_session(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> Response:
+    access_token = parse_bearer_token(authorization)
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=10.0) as http_client:
+        claims = await verify_supabase_access_token(
+            access_token,
+            http_client=http_client,
+            settings=settings,
+        )
+
+    email_claim_raw = claims.get("email")
+    email_claim = (
+        email_claim_raw.strip().lower()
+        if isinstance(email_claim_raw, str) and email_claim_raw.strip()
+        else None
+    )
+    bridge = await resolve_jippin_user_for_supabase(
+        supabase_subject=str(claims["sub"]),
+        email_claim=email_claim,
+    )
+    response = Response(status_code=204)
+    set_session_cookie(response, bridge.user_id, settings)
+    logger.info(
+        "supabase_session_minted",
+        user_id=str(bridge.user_id),
+        request_id=getattr(request.state, "request_id", "-"),
+    )
     return response
 
 
