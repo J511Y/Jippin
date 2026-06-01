@@ -253,6 +253,33 @@ def test_supabase_session_rejects_anonymous_supabase_token(supabase_env, monkeyp
     assert response.json()["error"]["code"] == "AUTH_ANONYMOUS_TOKEN_NOT_ALLOWED"
 
 
+def test_supabase_session_accepts_converted_token_with_anonymous_metadata(
+    supabase_env, monkeypatch
+):
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    user_id = uuid.uuid4()
+    _install_identity_lookup(monkeypatch, user_id=user_id)
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={
+            "is_anonymous": False,
+            "app_metadata": {"provider": "anonymous", "providers": ["anonymous", "google"]},
+        },
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["signup_complete"] is True
+
+
 def test_supabase_session_expired_token_returns_401(supabase_env, monkeypatch):
     pem, jwk = _rsa_keypair()
     _install_jwks(monkeypatch, {"keys": [jwk]})

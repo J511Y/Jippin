@@ -156,16 +156,7 @@ async def resolve_jippin_user_for_supabase(
 
 
 def _is_anonymous_supabase_claims(claims: dict[str, object]) -> bool:
-    if claims.get("is_anonymous") is True:
-        return True
-    app_metadata = claims.get("app_metadata")
-    if not isinstance(app_metadata, dict):
-        return False
-    provider = app_metadata.get("provider")
-    providers = app_metadata.get("providers")
-    return provider == "anonymous" or (
-        isinstance(providers, list) and "anonymous" in providers
-    )
+    return claims.get("is_anonymous") is True
 
 
 def _invalid_token(message: str) -> ZippinException:
