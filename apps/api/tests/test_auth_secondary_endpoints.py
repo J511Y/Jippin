@@ -495,6 +495,25 @@ def test_kakao_sync_audit_stub_rejects_missing_bearer_header(auth_env):
     assert response.json()["error"]["code"] == "AUTH_UNAUTHENTICATED"
 
 
+def test_kakao_sync_audit_stub_rejects_empty_bearer_value(auth_env):
+    """round-17 항목 2 — `Bearer ` prefix 만 보고 빈 token 을 허용하면 안 됨."""
+    app = create_app()
+    with TestClient(app) as client:
+        for header_value in ("Bearer ", "Bearer   ", "bearer "):
+            response = client.post(
+                "/auth/terms/kakao-sync",
+                headers={"Authorization": header_value},
+                json={
+                    "supabase_user_id": "u",
+                    "linked_provider": "kakao",
+                    "provider_access_token": None,
+                    "provider_refresh_token": None,
+                },
+            )
+            assert response.status_code == 401, header_value
+            assert response.json()["error"]["code"] == "AUTH_UNAUTHENTICATED"
+
+
 def test_kakao_sync_audit_stub_rejects_non_kakao_provider(auth_env):
     """schema fence — linked_provider 는 'kakao' literal 만 허용 (round-12 normalize 와 정합)."""
     app = create_app()

@@ -178,11 +178,21 @@ async def kakao_sync_audit_stub(
     가 stub 상태를 인지하고 success page 로 진입할지 별도 판단할 수 있게 한다.
     """
     authorization = request.headers.get("authorization", "")
+    # 기존 API error contract (auth/session.py, services/auth.py) 와 정합:
+    # uppercase stable code `AUTH_UNAUTHENTICATED` 사용 (CMP-581 round-16 항목 3).
+    # round-17 항목 2 — `Bearer ` prefix 만 보고 통과시키면 빈 token 도 허용되어
+    # 실제 인증이 없는 상태로 stub 가 200 을 반환하는 회귀. prefix + non-empty
+    # value 둘 다 검증해야 한다.
     if not authorization.lower().startswith("bearer "):
-        # 기존 API error contract (auth/session.py, services/auth.py) 와 정합:
-        # uppercase stable code `AUTH_UNAUTHENTICATED` 사용 (CMP-581 round-16 항목 3).
         raise ZippinException(
             "Authorization: Bearer <supabase access_token> 헤더가 필요합니다.",
+            code="AUTH_UNAUTHENTICATED",
+            http_status=401,
+        )
+    bearer_value = authorization[len("Bearer "):].strip()
+    if not bearer_value:
+        raise ZippinException(
+            "Authorization Bearer token 이 비어 있습니다.",
             code="AUTH_UNAUTHENTICATED",
             http_status=401,
         )

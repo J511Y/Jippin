@@ -320,16 +320,30 @@ describe('CMP-581 anonymous-signin-guard (round-11 items 2/6/7)', () => {
     if (decision.allowed) expect(decision.intent).toBe('link');
   });
 
-  it('allows link-merge only inside the anonymous fallback ladder', () => {
+  it('allows link-merge only inside the anonymous fallback ladder + with linkIdentity-attempted evidence', () => {
+    // round-17 항목 3 — link-merge 는 normal linkIdentity 실패 evidence 가 함께
+    // 제출되어야만 통과 (manual-link-first 우회 차단).
     const merge = evaluateOAuthIntentGuard(
       { kind: 'anonymous', userId: 'anon-1' },
       'link-merge',
+      {
+        linkMergePrerequisite: {
+          linkIdentityAttempted: true,
+          linkIdentityFailureReason: 'identity_already_exists',
+        },
+      },
     );
     expect(merge.allowed).toBe(true);
 
     const fromAuthed = evaluateOAuthIntentGuard(
       { kind: 'authenticated', userId: 'u-1', isAnonymous: false },
       'link-merge',
+      {
+        linkMergePrerequisite: {
+          linkIdentityAttempted: true,
+          linkIdentityFailureReason: 'identity_already_exists',
+        },
+      },
     );
     expect(fromAuthed.allowed).toBe(false);
     if (!fromAuthed.allowed) {
@@ -934,7 +948,8 @@ describe('CMP-581 round-14 review fixes', () => {
   it('item r15-2: 2xx with stubbed:false (or no stubbed key) is treated as success (no false positive)', async () => {
     // Backend 가 production 진입 후 `stubbed: false` 또는 stubbed 키 미포함을
     // 반환할 때 helper 가 정상 success 로 통과해야 한다 — round-15 fence 가
-    // 모든 2xx 를 throw 시키지 않음을 검증.
+    // 모든 2xx 를 throw 시키지 않음을 검증. round-17 에서 return type 이
+    // { persisted: true } 로 변경되어 그 값까지 검증.
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ accepted: true, stubbed: false }), {
         status: 200,
@@ -956,12 +971,12 @@ describe('CMP-581 round-14 review fixes', () => {
           fetchImpl: fetchImpl as unknown as typeof fetch,
         },
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ persisted: true });
   });
 
   it('item r15-2: 2xx with non-JSON body still succeeds (graceful)', async () => {
     // production 백엔드가 empty body / plain text 를 반환해도 stub 신호 부재로
-    // 정상 success.
+    // 정상 success — round-17 의 { persisted: true } 반환.
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response('', { status: 200 }),
     );
@@ -980,7 +995,7 @@ describe('CMP-581 round-14 review fixes', () => {
           fetchImpl: fetchImpl as unknown as typeof fetch,
         },
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ persisted: true });
   });
 
   it('item r16-2: sessionStorage.getItem throw (SecurityError) returns storage_unavailable', async () => {
@@ -1084,6 +1099,81 @@ describe('CMP-581 round-14 review fixes', () => {
       // G2 가 challenge_verifier_missing 으로 catch — 둘 다 valid block.
       expect(['explicit_intent_required', 'challenge_verifier_missing']).toContain(decision.reason);
     }
+  });
+
+  it('item r17-3: anonymous + link-merge is blocked without linkIdentity-attempted evidence (manual-link-first)', () => {
+    // Reviewer round-17 — link-merge 가 normal linkIdentity 실패 없이 통과하면
+    // manual-link-first 우회. evidence 가 없으면 block.
+    const decision = evaluateOAuthIntentGuard(
+      { kind: 'anonymous', userId: 'anon-1' },
+      'link-merge',
+      // context omitted intentionally
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toBe('link_merge_requires_link_attempt');
+      expect(decision.detail).toContain('linkIdentity');
+    }
+  });
+
+  it('item r17-3: link-merge with linkIdentityAttempted=true but missing failure reason is also blocked', () => {
+    const decision = evaluateOAuthIntentGuard(
+      { kind: 'anonymous', userId: 'anon-1' },
+      'link-merge',
+      {
+        linkMergePrerequisite: {
+          linkIdentityAttempted: true,
+          linkIdentityFailureReason: '',
+        },
+      },
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe('link_merge_requires_link_attempt');
+  });
+
+  it('item r17-3: link-merge with both evidence fields passes', () => {
+    const decision = evaluateOAuthIntentGuard(
+      { kind: 'anonymous', userId: 'anon-1' },
+      'link-merge',
+      {
+        linkMergePrerequisite: {
+          linkIdentityAttempted: true,
+          linkIdentityFailureReason: 'identity_already_exists',
+        },
+      },
+    );
+    expect(decision.allowed).toBe(true);
+    if (decision.allowed) expect(decision.intent).toBe('link-merge');
+  });
+
+  it('item r17-1: persistKakaoSyncConsent success returns { persisted: true } (type-level fence)', async () => {
+    // Reviewer round-17 — return type 을 Promise<{persisted:true}> 로 변경하여
+    // callsite 가 success 경로에서 `result.persisted === true` 를 명시 확인.
+    // stub 응답은 throw 되므로 본 success path 에 도달 불가.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ accepted: true, stubbed: false }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const result = await persistKakaoSyncConsent(
+      {
+        supabaseUserId: 'u',
+        linkedProvider: 'kakao',
+        supabaseAccessToken: 'jwt',
+        providerAccessToken: 'tok',
+        providerRefreshToken: null,
+      },
+      {
+        apiBaseUrl: 'http://api.test',
+        enabled: true,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+    );
+    expect(result).toEqual({ persisted: true });
+    // Compile-time fence — result.persisted must be `true` literal.
+    const _typeCheck: true = result.persisted;
+    expect(_typeCheck).toBe(true);
   });
 
   it('item r16-1: kakao-sync-audit.ts docstring documents stub_response policy (forensic guard)', async () => {

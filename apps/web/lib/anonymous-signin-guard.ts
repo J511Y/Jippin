@@ -55,7 +55,35 @@ export type OAuthGuardBlockReason =
   | 'signin_blocked_authenticated_session'
   | 'link_blocked_authenticated_session'
   | 'link_merge_requires_anonymous_session'
+  | 'link_merge_requires_link_attempt'
   | 'unknown_intent';
+
+/**
+ * round-17 항목 3 — anonymous + `link-merge` intent 의 prerequisite evidence.
+ *
+ * `link-merge` 는 §4.2.2 fallback ladder 의 destructive 분기 (signOut →
+ * signInWithOAuth) 다. manual-link-first 규칙 (`linkIdentity` 만 사용) 을 우회해
+ * 곧바로 fallback ladder 로 진입하면 익명 user 가 OAuth provider 의 verified
+ * email 과 자동 병합되는 회귀가 가능. 따라서 callsite 는 본 evidence 를 명시적으로
+ * 제출해야 한다:
+ *
+ *   - `linkIdentityAttempted: true` — linkIdentity 호출이 시도되었음
+ *   - `linkIdentityFailureReason` — Supabase 가 반환한 실패 사유 (예:
+ *     'identity_already_exists', 'provider_disabled', SDK error code 등) — Sentry
+ *     forensics + 사용자 안내용
+ *
+ * evidence 가 없으면 guard 는 `link_merge_requires_link_attempt` 로 block 하여
+ * UI 가 normal linkIdentity 부터 시도하도록 강제한다.
+ */
+export interface LinkMergePrerequisite {
+  linkIdentityAttempted: true;
+  linkIdentityFailureReason: string;
+}
+
+export interface OAuthGuardContext {
+  /** anonymous + link-merge intent 의 prerequisite evidence (round-17 항목 3). */
+  linkMergePrerequisite?: LinkMergePrerequisite;
+}
 
 const KNOWN_INTENTS: ReadonlySet<OAuthIntent> = new Set(['signin', 'link', 'link-merge']);
 
@@ -97,6 +125,7 @@ function isSigninAllowedForSession(session: SessionShape): session is { kind: 'n
 export function evaluateOAuthIntentGuard(
   session: SessionShape,
   intent: OAuthIntent | string,
+  context?: OAuthGuardContext,
 ): OAuthGuardDecision {
   if (!isOAuthIntent(intent)) {
     return {
@@ -106,19 +135,44 @@ export function evaluateOAuthIntentGuard(
     };
   }
 
-  // Positive-list of allowed (session, intent) pairs — round-13/14. 어떤 분기도
-  // fallthrough 로 `allowed: true` 가 되지 않도록, allow 경로 3건 만 명시적으로
-  // 열거하고 나머지는 모두 deny 한다 (defence in depth).
+  // Positive-list of allowed (session, intent) pairs — round-13/14/17. 어떤 분기도
+  // fallthrough 로 `allowed: true` 가 되지 않도록, allow 경로를 명시적으로 열거하고
+  // 나머지는 모두 deny 한다 (defence in depth).
   //
-  //   1. anonymous + link        → linkIdentity 호출 (단일 진입점).
-  //   2. anonymous + link-merge  → §4.2.2 fallback ladder (signOut→signInWithOAuth).
+  //   1. anonymous + link        → linkIdentity 호출 (단일 진입점). 별 evidence 불필요.
+  //   2. anonymous + link-merge  → §4.2.2 fallback ladder. **round-17 항목 3** —
+  //      `context.linkMergePrerequisite.linkIdentityAttempted === true` evidence 가
+  //      반드시 제출되어야 한다. 그렇지 않으면 manual-link-first 규칙을 우회해 곧바로
+  //      destructive signOut→signInWithOAuth 로 진입하는 회귀가 가능.
   //   3. none + signin           → 미로그인 user 의 정상 OAuth 로그인. 본 분기는
   //      `isSigninAllowedForSession` 단일 type guard 에 위임 — authenticated /
   //      anonymous 에서는 이 함수가 false 를 반환하므로 signin allow 가 구조적으로
   //      불가능하다 (round-14 항목 1 — authenticated+signin 회귀 차단).
   //
   // 그 외 모든 (session, intent) 조합은 deny.
-  if (session.kind === 'anonymous' && (intent === 'link' || intent === 'link-merge')) {
+  if (session.kind === 'anonymous' && intent === 'link') {
+    return { allowed: true, intent };
+  }
+  if (session.kind === 'anonymous' && intent === 'link-merge') {
+    const evidence = context?.linkMergePrerequisite;
+    if (!evidence || evidence.linkIdentityAttempted !== true) {
+      return {
+        allowed: false,
+        reason: 'link_merge_requires_link_attempt',
+        detail:
+          'link-merge 는 normal linkIdentity 시도가 실패한 경우에만 진입할 수 있습니다. ' +
+          'context.linkMergePrerequisite.linkIdentityAttempted=true 와 ' +
+          'linkIdentityFailureReason 을 함께 제출하세요. (manual-link-first 규칙)',
+      };
+    }
+    if (typeof evidence.linkIdentityFailureReason !== 'string' || evidence.linkIdentityFailureReason.length === 0) {
+      return {
+        allowed: false,
+        reason: 'link_merge_requires_link_attempt',
+        detail:
+          'link-merge 진입에는 linkIdentityFailureReason 도 함께 제출되어야 합니다 (Sentry forensics + 사용자 안내).',
+      };
+    }
     return { allowed: true, intent };
   }
   if (intent === 'signin' && isSigninAllowedForSession(session)) {

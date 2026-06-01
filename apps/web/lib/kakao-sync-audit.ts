@@ -192,10 +192,22 @@ export type KakaoSyncAuditErrorCode =
  * enqueue) 로 진입해야 한다. 본 헬퍼는 silent success 회귀를 방지하기 위해 응답
  * 본문을 절대 `response.ok === false` 인 채로 통과시키지 않는다 (R13).
  */
+/**
+ * Successful persistence 의 type-level fence (round-17 항목 1 재차 강화).
+ *
+ * `Promise<void>` 대신 `Promise<KakaoSyncAuditPersisted>` 로 반환하여, callsite 가
+ * 성공 경로에서 `result.persisted === true` 를 명시적으로 확인할 수 있게 한다.
+ * stub 응답은 throw 되어 이 type 으로 도달하지 못한다 — type-level + runtime-level
+ * 이중 fence.
+ */
+export interface KakaoSyncAuditPersisted {
+  readonly persisted: true;
+}
+
 export async function persistKakaoSyncConsent(
   input: KakaoSyncAuditInput,
   options: KakaoSyncAuditOptions,
-): Promise<void> {
+): Promise<KakaoSyncAuditPersisted> {
   if (options.enabled !== true) {
     throw new KakaoSyncAuditError(
       'Kakao Sync audit endpoint 가 아직 활성화되지 않았습니다 ' +
@@ -293,4 +305,10 @@ export async function persistKakaoSyncConsent(
       'stub_response',
     );
   }
+
+  // type-level fence — 성공 경로에서만 본 객체가 반환된다. stub_response 는 위에서
+  // 이미 throw 되었고, !response.ok / network_error / endpoint_not_enabled /
+  // invalid_input 도 모두 throw 경로. 호출자는 `result.persisted === true` 로 실
+  // persistence 만 success 처리할 수 있다 (silent stub success 회귀 방지).
+  return { persisted: true };
 }
