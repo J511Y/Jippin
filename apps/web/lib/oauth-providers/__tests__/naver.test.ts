@@ -43,17 +43,17 @@ describe('Naver Custom OAuth2 adapter — OAuth2 (not OIDC)', () => {
     });
   });
 
-  it('Phase 1 default scope is "account" (minimum-permission identification-only)', () => {
-    expect(NAVER_DEFAULT_SCOPE).toBe('account');
+  it('Phase 1 default scope is empty string (Naver authorize does not accept scope param)', () => {
+    expect(NAVER_DEFAULT_SCOPE).toBe('');
   });
 
-  it('resolveNaverScope falls back to the default when NAVER_OAUTH_SCOPE is unset', () => {
-    expect(resolveNaverScope({})).toBe('account');
+  it('resolveNaverScope falls back to the empty default when NAVER_OAUTH_SCOPE is unset', () => {
+    expect(resolveNaverScope({})).toBe('');
   });
 
   it('resolveNaverScope honors NAVER_OAUTH_SCOPE env override (post biz-app approval)', () => {
-    expect(resolveNaverScope({ NAVER_OAUTH_SCOPE: 'account,email' })).toBe(
-      'account,email'
+    expect(resolveNaverScope({ NAVER_OAUTH_SCOPE: 'name,email' })).toBe(
+      'name,email'
     );
   });
 

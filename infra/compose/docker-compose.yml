@@ -32,8 +32,14 @@ services:
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
       NEXT_TELEMETRY_DISABLED: "1"
-      # BFF → API 호출은 컨테이너 네트워크 이름으로 경유한다.
+      # BFF → API 의 server-to-server 호출은 컨테이너 네트워크 이름으로 경유한다.
       NEXT_PUBLIC_API_BASE_URL: "http://api:8000"
+      # OAuth 진입 BFF (`/auth/oauth/start`) 가 302 `Location` 으로 사용자 브라우저를
+      # 보내는 경로는 browser-reachable 한 URL 이어야 한다 — CMP-584 round-3/4 봉인.
+      # 호스트 머신에서 `docker compose up` 으로 띄울 때 브라우저는 `localhost:8000` 으로
+      # api 서비스에 도달 가능 (ports: 8000:8000). compose 외 환경에서는 이 값을 외부
+      # 도달 가능한 public URL (예: https://api.jippin.com) 으로 치환.
+      API_PUBLIC_BASE_URL: "http://localhost:8000"
     ports:
       - "3000:3000"
     depends_on:

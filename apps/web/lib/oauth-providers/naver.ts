@@ -22,13 +22,21 @@
  *  | `NAVER_OAUTH_USERINFO_URL` | OAuth2 user-info endpoint (`https://openapi.naver.com/v1/nid/me`). |
  *  | `NAVER_OAUTH_SCOPE` | (옵션) Supabase 콘솔에 입력하는 scope. 기본은 `account` (runbook §4.3.1). |
  *
- * Scope 정책 (runbook §4.3.1 정합):
- *  - 기본 scope 는 `account` — 식별만 필요하므로 최소 권한. Naver 인증 화면이 가장 적게 묻는다.
- *  - `email` scope 는 Naver 비즈니스 앱 심사 통과 후에만 추가 가능하므로 Phase 1 에서는
- *    요구하지 않는다. 그러므로 user-info 응답의 `response.email` 은 `undefined` 일 수 있다는
- *    가정으로 callback / backend sync 가 동작해야 한다 (runbook §4.5.1 정합).
- *  - 변수만 노출하고 실 scope 토큰 문자열은 Supabase 콘솔 입력 또는 `NAVER_OAUTH_SCOPE` env 로만
- *    주입한다. 본 모듈은 default 값을 export 하여 단위 테스트로 정합만 검증.
+ * Scope 정책 (runbook §4.3.1 정합 — round-4 봉인):
+ *  - **Naver 인증 사양은 authorize endpoint 의 `scope` 쿼리 파라미터를 사용하지 않는다.**
+ *    공식 Naver OAuth 2.0 가이드는 `client_id` / `response_type` / `redirect_uri` / `state` 만
+ *    명시하며, 사용자에게 보여줄 권한 범위는 Naver Developers 콘솔의 "동의 항목" UI 로
+ *    선언한다. Supabase Custom OAuth Provider 의 `Scope` 필드도 옵션이며, Naver 가 무시
+ *    하거나 알 수 없는 값으로 거부할 수 있다.
+ *  - 따라서 **`NAVER_DEFAULT_SCOPE = ''`** (빈 문자열) — Phase 1 은 scope 를 보내지 않는다.
+ *    `email` 등 명시적 scope 가 정말 필요한 경우 별도 자식 이슈에서 (1) Naver 비즈니스 심사
+ *    + 동의 항목 등록 → (2) `NAVER_OAUTH_SCOPE` env 로 검증된 값 주입 → (3) callback / backend
+ *    sync 분기 갱신을 한 set 로 처리한다.
+ *  - `email` 항목 (Naver 비즈니스 심사 통과 후) 을 콘솔 "동의 항목" 으로 추가하면 user-info
+ *    에 `response.email` 이 포함되지만, 본 모듈은 그 변화를 강제하지 않으며 callback / backend
+ *    sync 는 `response.email` 부재 가능을 가정으로 동작해야 한다 (runbook §4.5.1 정합).
+ *  - 변수만 노출하고 실 scope 토큰 문자열은 Supabase 콘솔 또는 `NAVER_OAUTH_SCOPE` env 로만
+ *    주입. 본 모듈은 default 값을 export 하여 단위 테스트로 정합만 검증.
  *
  * **사전 등록 가드 (Phase 1 (e) — review item 5 정합).**
  * `supabase.auth.signInWithOAuth({ provider: 'custom:naver' })` 호출 전에:
@@ -72,12 +80,18 @@ export const NAVER_ENV_KEYS = {
 } as const;
 
 /**
- * Phase 1 기본 scope — `account`.
+ * Phase 1 기본 scope — **빈 문자열** (round-4 봉인).
  *
- * Naver 비즈니스 앱 심사 전에는 email scope 를 사용할 수 없으므로 식별 전용 최소 권한.
- * runbook §4.3.1 / §4.5.1 정합. Supabase 콘솔 Custom OAuth Provider 의 scope 필드 입력값.
+ * Naver authorize endpoint 는 `scope` 쿼리 파라미터를 정식 사양에 두지 않는다. 사용자에게
+ * 보여줄 권한 범위는 Naver Developers 콘솔의 "동의 항목" UI 로 선언하며, OAuth 요청에는
+ * `client_id` / `response_type` / `redirect_uri` / `state` 만 명시한다. 따라서 Phase 1 은
+ * Supabase 콘솔 scope 필드를 비워두는 것을 정본으로 한다 — `account` 같은 미문서화 토큰을
+ * 보내면 Naver 가 invalid_request 로 거부할 수 있다.
+ *
+ * `NAVER_OAUTH_SCOPE` env 가 있으면 본 default 를 override 한다 — 비즈니스 심사 통과 후
+ * 특정 동의 항목을 강제하고 싶을 때만 사용. runbook §4.3.1 Scope 정책 정합.
  */
-export const NAVER_DEFAULT_SCOPE = 'account' as const;
+export const NAVER_DEFAULT_SCOPE = '' as const;
 
 export function resolveNaverEndpoints(
   env: Readonly<Record<string, string | undefined>> = process.env
