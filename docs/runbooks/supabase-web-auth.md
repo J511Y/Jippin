@@ -195,6 +195,18 @@ export function ensureAnonymousSession(supabase: SupabaseClient): Promise<Sessio
 - `onAuthStateChange` listener 안에서도 자체적으로 anonymous sign-in 을 호출하지 말고 본 헬퍼만 호출.
 - 1초 debounce 는 `inFlight` 해제 후 잘못된 mount 가 즉시 또 fire 하는 corner case 를 막는다. paint cycle 안 race 흡수 + 사용자가 retry 버튼을 누르는 명시적 요청은 1초 후 통과.
 
+##### singleton ↔ OAuth guard ↔ callback hop — 일관 설명 (review item 6 강화)
+
+세 메커니즘이 협력하여 "익명 user 가 임의 시점에 중복 발급되거나, OAuth 왕복 중 추가 익명 세션이 끼어들지 않는다" 를 보장한다:
+
+| 메커니즘 | 위치 | 책임 | 다른 메커니즘과의 관계 |
+|---|---|---|---|
+| singleton promise | §4.1.0 `lib/supabase/anonymous-bootstrap.ts` | 동시 호출 race 흡수 (tick scope). | 본 헬퍼의 (3) 단계에서 `jippin_oauth_in_progress` flag 활성이면 익명 발급 skip. |
+| `sessionStorage.jippin_oauth_in_progress` guard | §4.1.1 `/auth/redirect` set + `/auth/callback-done` clear | OAuth 왕복 windows (수십초~수분) 동안 익명 bootstrap 정지. | singleton 이 매 호출 시 이 flag 를 1차 검사. callback-done page (§4.7.4 (d)) 가 clear. |
+| callback hop chain | §4.7.4 (b) `/auth/oauth/start → provider → /auth/callback → /auth/callback-done → safeNext` | 각 hop 이 다음 hop 으로 안전하게 인계 (cookie / next / guard). | callback-done 가 guard clear 직후 router.replace 로 navigate — singleton 이 다음 mount 에서 정상 bootstrap. |
+
+요약: singleton 이 **공간적** race (동시 호출) 를 흡수하고, guard 가 **시간적** race (OAuth 왕복 동안) 를 흡수하며, callback hop chain 이 두 메커니즘의 set/clear 시점을 정합으로 묶는다. 셋 중 하나가 빠지면 중복 익명 user / 끊어진 ownership 이 발생한다.
+
 
 #### 4.1.1 `oauth_in_progress` guard — OAuth 왕복 중 bootstrap 중지
 
@@ -418,12 +430,31 @@ export function toSupabaseProviderId(ui: UiProvider): SupabaseProvider {
 ```
 
 - 본 매핑을 거치지 않은 raw UI 식별자가 SDK 에 도달하면 `signInWithOAuth({ provider: 'naver' })` 가 Supabase 측에서 invalid provider 로 실패한다.
-- Custom Provider 등록 시 콘솔에서 부여하는 identifier 가 `naver` 가 아닌 다른 값으로 결정되면, 본 매핑 함수만 한 줄 갱신하고 UI 는 손대지 않는다.
-- 라이브 검증 단계에서 카카오 native 지원 여부가 확정되면 `MAP.kakao` 도 한 줄로 교체한다.
+- **콘솔 identifier 일치 봉인 (review item 4 new).** `MAP.naver = 'custom:naver'` 의 `naver` 부분은 **Supabase 콘솔의 Custom OIDC Provider 등록 시 identifier 필드값과 정확히 일치** 해야 한다. 콘솔에서 `naver-prod` / `naver_kr` 같은 변형으로 등록하면 SDK 가 `signInWithOAuth({ provider: 'custom:naver' })` 를 호출했을 때 "provider not enabled" 에러가 난다. §8 입력 항목 표가 콘솔 등록 identifier 의 SSOT — 콘솔 세팅 트랙은 이 표의 값으로만 등록한다.
+- Custom Provider 등록 시 콘솔에서 부여하는 identifier 가 `naver` 가 아닌 다른 값으로 결정되면 (불가피한 사유) 본 매핑 함수와 §8 입력 항목 표를 **같은 PR 에서** 한 줄씩 갱신하고 UI 는 손대지 않는다.
+- 라이브 검증 단계에서 카카오 native 지원 여부가 확정되면 `MAP.kakao` 도 한 줄로 교체. Custom 으로 갈 경우 (`custom:kakao`) 도 콘솔 identifier 일치 봉인 적용.
 
-#### 4.2.4 일반 에러 처리
+#### 4.2.4 일반 에러 처리 + `linkIdentity` 실패 UX 매트릭스 (review item 7 new)
 
-- `redirectTo` 가 Supabase 콘솔의 redirect allow list 에 없으면 SDK 가 즉시 에러. UI 는 "관리자에게 문의" toast 노출 + Sentry/log 캡처.
+`linkIdentity()` / `signInWithOAuth()` 호출이 실패할 때, error.code / status 별 UX 분기는 다음과 같다. `identity_already_exists` 한 케이스만 §4.2.2 fallback ladder 로 가고 나머지는 본 매트릭스가 SSOT.
+
+| 분기 | 트리거 | UX | log/Sentry | merge intent cookie 처리 |
+|---|---|---|---|---|
+| `identity_already_exists` (또는 동등 — provider identity 가 이미 다른 user 에 연결) | linkIdentity | §4.2.2 fallback ladder 진입 (modal → "예/아니오"). | breadcrumb (warn). | ladder step b 에서 발급, callback 에서 1회용 expire. |
+| `provider_oauth_cancelled` (사용자가 provider 화면에서 취소) | callback `?error=access_denied` | 익명 세션 유지, modal 닫음. `/auth/failure?reason=access_denied` → 한 줄 안내. | breadcrumb (info). | callback failureRedirect 에서 일괄 expire. |
+| `provider_oauth_scope_denied` (필수 scope 거부) | callback `?error=access_denied` + scope 누락 | "필수 권한 동의가 없으면 진행할 수 없습니다. 다시 시도해 주세요" toast + retry CTA. | breadcrumb (warn). | callback failureRedirect 에서 일괄 expire. |
+| `invalid_request` / `provider_not_enabled` / colsole identifier 불일치 (§4.2.3) | linkIdentity / signInWithOAuth 즉시 실패 | "일시적인 로그인 오류가 발생했습니다. 관리자에게 문의해 주세요" toast + Sentry. UI 가 provider 버튼을 잠시 disabled. | error (Sentry alert). | 발급 전 단계이므로 N/A. |
+| `redirect_uri_mismatch` (콘솔 redirect allow list 누락) | linkIdentity / signInWithOAuth 즉시 실패 | 위와 동일. 콘솔 세팅 트랙에 즉시 보고. | error (Sentry alert + slack). | N/A. |
+| 네트워크 / timeout / 일시 5xx | SDK 호출 / callback fetch | "잠시 후 다시 시도해 주세요" toast + 재시도 버튼. | breadcrumb (warn). | callback 진입했다면 expire, BFF 진입 전이면 N/A. |
+| 기타 미분류 | 어디서든 | "로그인 중 문제가 발생했습니다" generic toast + Sentry full payload. | error (Sentry alert). | callback 도달 시 expire. |
+
+- 모든 분기에서 raw `signInWithOAuth` 를 익명 세션에서 직접 호출하는 코드 경로는 추가되지 않는다 (§0.0 CMP-572 / §4.2.1).
+- toast UX 카피는 §5.2 카피 표에 후속 추가 (UX 트랙).
+- error.code 매핑은 `lib/supabase/oauth-errors.ts` (가칭) 단일 모듈에서 SDK 에러를 위 분기로 정규화 — 호출자가 raw error 객체를 분기 조건으로 쓰지 않는다.
+
+기존 일반 에러 케이스 (보존):
+
+- `redirectTo` 가 Supabase 콘솔의 redirect allow list 에 없으면 SDK 가 즉시 에러. 위 매트릭스의 `redirect_uri_mismatch` 분기로 처리.
 - provider OAuth error (사용자 취소, scope 거부) 는 callback 에서 처리하여 `FAILURE_URL` 로 302 (§4.7).
 
 ### 4.3 FastAPI 호출 adapter
@@ -470,14 +501,15 @@ client.interceptors.request.use(async (config) => {
 | 엔드포인트 분류 | 예시 라우트 | 허용되는 인증 입력 | 거부 응답 |
 |---|---|---|---|
 | **공개 / 사전검토** (anonymous 허용) | `GET /catalog/*`, `POST /pre-review/run`, `GET /pre-review/{id}` | anonymous Supabase access token **OR** non-anonymous Supabase access token **OR** Phase 1 한정 `x-jippin-anon-id: <legacy uuid>` (Supabase 도달 실패 fallback — §4.1 fail-soft (A)). 셋 다 없으면 익명 핸들 발급 후 응답. | 401 만 비정상적 케이스 (legacy header 도 invalid format). |
-| **conversion-only — 사용자 영속 데이터** | `POST /consults`, `GET /consults/{id}`, `POST /leads`, `POST /reports`, `GET /users/me`, `POST /auth/terms/*` | **non-anonymous Supabase access token 만**. legacy `x-jippin-anon-id` 헤더는 **절대 허용하지 않는다** — 영구 데이터를 만들 수 없으므로. | `403` + 본문은 repo 표준 envelope (§4.4.1) |
+| **terms submission — chicken-and-egg 면제 (item 3 new)** | `POST /auth/terms/accept`, `GET /auth/terms/pending` (약관 본문 조회 등 동의 화면 표시용) | **non-anonymous Supabase access token**. `terms_accepted_at` 검사 (검증 우선순위 #3) 에서 **면제**. anonymous 는 거부 (403 `AUTH_ANONYMOUS_NOT_ALLOWED`). | 401 / 403 `AUTH_ANONYMOUS_NOT_ALLOWED` |
+| **conversion-only — 사용자 영속 데이터** | `POST /consults`, `GET /consults/{id}`, `POST /leads`, `POST /reports`, `GET /users/me` | **non-anonymous Supabase access token + `terms_accepted_at IS NOT NULL`**. legacy `x-jippin-anon-id` 헤더는 **절대 허용하지 않는다** — 영구 데이터를 만들 수 없으므로. | `403` + 본문은 repo 표준 envelope (§4.4.1) — `AUTH_ANONYMOUS_NOT_ALLOWED` (anonymous) / `AUTH_TERMS_NOT_ACCEPTED` (terms 미동의) |
 | **conversion intent** | `POST /auth/anon-merge-intents`, `POST /auth/anon-merge-intents/commit` | anonymous **또는** non-anonymous (각각 from/target 측에서 호출) | 잘못된 단계의 token 은 422. |
 
 검증 우선순위 (Backend/Auth 트랙 가이드 — web 트랙은 호출자 입장에서 신뢰):
 
 1. JWT 서명 / `aud` / 만료 검증.
 2. `is_anonymous` claim 추출. claim 이 없거나 `true` 이고 라우트가 conversion-only 분류면 즉시 403 `AUTH_ANONYMOUS_NOT_ALLOWED`.
-3. **`terms_accepted_at` 검사 (review item 3).** non-anonymous Supabase user 라도 backend `users.terms_accepted_at IS NULL` (Google · Naver 의 내부 약관 화면 미동의 / Kakao Sync 콜백 audit 실패로 `terms_consents` 비어 있음) 이면 conversion-only 라우트에 403 `AUTH_TERMS_NOT_ACCEPTED` 반환 (envelope 동일, code 만 변경). OAuth callback 직후 → terms 동의 → conversion 활성화의 게이트 순서 강제. UI 는 conversion-only 버튼을 약관 미동의 user 에게 보이지 않게 disabled (§5.2 카피 표) + axios 인터셉터가 본 코드 수신 시 약관 동의 페이지 (`/auth/terms` 등) 로 navigate.
+3. **`terms_accepted_at` 검사 (review item 3 + 강화).** non-anonymous Supabase user 라도 backend `users.terms_accepted_at IS NULL` (Google · Naver 의 내부 약관 화면 미동의 / Kakao Sync 콜백 audit 실패로 `terms_consents` 비어 있음) 이면 **conversion-only 분류** 라우트에 403 `AUTH_TERMS_NOT_ACCEPTED` 반환 (envelope 동일, code 만 변경). **단 terms submission 분류 (`POST /auth/terms/accept`, `GET /auth/terms/pending`) 는 본 검사에서 면제** — 면제하지 않으면 약관 동의가 불가능해지는 chicken-and-egg 가 된다. OAuth callback 직후 → terms 동의 → conversion 활성화의 게이트 순서 강제. UI 는 conversion-only 버튼을 약관 미동의 user 에게 보이지 않게 disabled (§5.2 카피 표) + axios 인터셉터가 본 코드 수신 시 약관 동의 페이지 (`/auth/terms` 등) 로 navigate.
 4. (선택) backend 의 `users` 테이블에 해당 user id 가 존재하고 `is_active=true` 인지 cross-check. Supabase 콘솔에서 admin 이 user 를 비활성화한 케이스 방어.
 
 #### 4.4.1 응답 envelope — repo 표준 정합
@@ -840,8 +872,19 @@ export default function CallbackDone() {
 
     // 2) next 재검증 — callback 가 이미 safeNext 만 넘기지만, 클라이언트가 직접 받은 query 이므로
     //    공격자가 page URL 을 직접 만들어 침입할 가능성 차단. 동일 SSOT (`isSafeNext`) 재사용.
+    //    invalid 면 DEFAULT_NEXT 로 fallback 하되 Sentry breadcrumb 로 기록 — 정상 흐름이라면
+    //    절대 도달하지 않는 분기이므로 alert 으로 운영 가시화 (review item 5 강화).
     const nextRaw = sp.get('next');
-    const safe = nextRaw && isSafeNext(nextRaw) ? nextRaw : DEFAULT_NEXT;
+    const isSafe = nextRaw && isSafeNext(nextRaw);
+    if (nextRaw && !isSafe) {
+      try {
+        Sentry.captureMessage('[callback-done] invalid next param fallback', {
+          level: 'warning',
+          extra: { nextRaw },
+        });
+      } catch { /* Sentry 미초기화 시 swallow */ }
+    }
+    const safe = isSafe ? nextRaw! : DEFAULT_NEXT;
 
     // 3) merge 실패 UX — toast 큐 enqueue. 본 hop 자체는 navigate 만 하고 toast 는 다음 페이지에서.
     if (sp.get('merge') === 'failed') {
