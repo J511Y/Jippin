@@ -1,19 +1,26 @@
-import { fileURLToPath } from 'node:url';
-
 import react from '@vitejs/plugin-react';
+import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
+/**
+ * Vitest 설정 (CMP-580).
+ *
+ * Next.js App Router Route Handler 단위 테스트만 대상 — 본 PR 범위는 R2/R10 어댑터 검증.
+ * 실 Supabase / DB 의존 테스트는 별도 트랙 (E2E / Playwright) 으로 분리한다.
+ */
 export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@': fileURLToPath(new URL('.', import.meta.url))
-    }
+      '@': path.resolve(__dirname, '.'),
+      '@contracts': path.resolve(__dirname, '../../packages/contracts/ts'),
+    },
   },
   test: {
-    environment: 'jsdom',
-    globals: true,
-    include: ['**/__tests__/**/*.test.{ts,tsx}', '**/*.test.{ts,tsx}'],
-    exclude: ['**/node_modules/**', '**/.next/**']
-  }
+    environment: 'node',
+    environmentMatchGlobs: [['**/*.test.tsx', 'jsdom']],
+    include: ['**/*.test.ts', '**/*.test.tsx'],
+    exclude: ['node_modules/**', '.next/**'],
+    pool: 'forks',
+  },
 });

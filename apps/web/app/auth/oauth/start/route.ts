@@ -1,66 +1,169 @@
-import { NextResponse, type NextRequest } from 'next/server';
-
-import { publicApiBaseUrl } from '@/lib/api-base-url';
-import { isAllowedProvider } from '@/lib/oauth-providers';
-
 /**
- * OAuth 진입 BFF (CMP-584 Phase 1 (e) — provider 화이트리스트 봉인).
+ * OAuth 진입 BFF — `/auth/oauth/start` (runbook §4.2.1 / CMP-580).
  *
- * 본 라우트는 runbook §4.2.1 의 OAuth 진입 BFF 의 Phase 1 봉인본이다. Phase 1 에서는
- * 화이트리스트 가드 + 백엔드 OAuth start 로의 same-origin 302 만 owner 로 가진다.
- * Supabase SDK 직접 호출 / PKCE verifier cookie / intent dispatch 는 후속 자식 이슈에서
- * §4.2.1 SSOT 패턴으로 확장한다.
+ * 본 Route Handler 가 단일 NextResponse 객체에 다음을 누적해 302 로 반환한다:
  *
- * 봉인:
- *  - `provider` 파라미터가 `ALLOWED_PROVIDERS` 밖이면 400 (`provider_not_allowed`).
- *  - email / password / magic link / OTP / passwordless 등 비-OAuth 인증 경로는 본 BFF
- *    의 진입점이 아니다. 별도 라우트로도 노출하지 않는다.
- *  - `provider` 파라미터가 화이트리스트 안일 때만 **browser-reachable** 백엔드 URL 로 302.
- *    `publicApiBaseUrl()` 가 Docker 내부 hostname (`api:`, `app:`, `web:`) 을 거부하므로
- *    compose 의 `NEXT_PUBLIC_API_BASE_URL=http://api:8000` 같은 server-to-server 전용 값을
- *    그대로 302 `Location` 에 흘리는 사고가 차단된다 (CMP-584 round-3 봉인).
+ *   - Supabase SDK 가 `signInWithOAuth` / `linkIdentity` 호출 시 setAll 콜백으로 발급하는
+ *     PKCE verifier cookie (`sb-<ref>-auth-token-code-verifier` 등).  ← R2 핵심.
+ *   - flow context cookie (`jippin_oauth_provider`, Path=/auth/callback) — callback 의
+ *     Kakao Sync 감지 (§4.5.2.1) 가 의도된 provider 를 식별하는 1차 신호.
+ *
+ * 모든 Set-Cookie 가 동일 `response` 객체에 부착되어야 PKCE / flow context 가 함께
+ * 브라우저까지 전달된다 — 새 NextResponse.redirect 를 만들면 verifier 가 손실되어
+ * callback 이 `auth/missing-code-verifier` 로 실패한다.
+ *
+ * 본 PR (CMP-580) 봉인 범위:
+ *   - intent `link` / `signin` 완전 구현.
+ *   - intent `link-merge` 는 merge intent 상태가 구현될 때까지 fail-closed 처리한다.
+ *   - flow context cookie 는 `SUPABASE_FLOW_COOKIE_SECRET` HMAC 서명 + nonce 로 봉인한다.
  */
 
-const ALLOWED_FORWARD_PARAMS = new Set(['return_url', 'anonymous_user_id', 'intent']);
+import { NextResponse, type NextRequest } from 'next/server';
 
-export function GET(request: NextRequest): NextResponse {
+import { signFlowCookie } from '@/lib/flow-cookie';
+import { createRouteHandlerClient } from '@/lib/supabase/server';
+import {
+  isUiProvider,
+  toSupabaseProviderId,
+  type SupabaseProvider,
+} from '@/lib/supabase/providers';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+const VALID_INTENTS = ['link', 'signin', 'link-merge'] as const;
+type Intent = (typeof VALID_INTENTS)[number];
+
+function isIntent(value: string | null): value is Intent {
+  return value !== null && (VALID_INTENTS as readonly string[]).includes(value);
+}
+
+const FLOW_CONTEXT_COOKIE = 'jippin_oauth_provider';
+const FLOW_CONTEXT_MAX_AGE_SECONDS = 600;
+const UUID_V4ISH_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function safeRelativeRedirect(value: string | null): string | null {
+  if (!value || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')) {
+    return null;
+  }
+
+  return value;
+}
+
+function safeAnonymousUserId(value: string | null): string | null {
+  return value && UUID_V4ISH_PATTERN.test(value) ? value : null;
+}
+
+function callbackUrl(request: NextRequest, intent: Intent): string {
+  const configured = process.env.NEXT_PUBLIC_FRONTEND_AUTH_CALLBACK_URL;
+  const callback = configured
+    ? new URL(configured, request.nextUrl.origin)
+    : new URL('/auth/callback', request.nextUrl.origin);
+  callback.searchParams.set('intent', intent);
+  const next = safeRelativeRedirect(request.nextUrl.searchParams.get('next'));
+  if (next) {
+    callback.searchParams.set('next', next);
+  }
+  const anonymousUserId = safeAnonymousUserId(request.nextUrl.searchParams.get('anonymous_user_id'));
+  if (anonymousUserId) {
+    callback.searchParams.set('anonymous_user_id', anonymousUserId);
+  }
+  return callback.toString();
+}
+
+function badRequest(reason: string): NextResponse {
+  return NextResponse.json({ error: { code: 'invalid_request', message: reason } }, { status: 400 });
+}
+
+function oauthInitFailed(error?: { code?: string; message?: string } | null): NextResponse {
+  return NextResponse.json(
+    {
+      error: {
+        code: error?.code ?? 'oauth_init_failed',
+        message: error?.message ?? 'Failed to acquire OAuth authorization URL',
+      },
+    },
+    { status: 500 },
+  );
+}
+
+function oauthIntentUnsupported(reason: string): NextResponse {
+  return NextResponse.json(
+    {
+      error: {
+        code: 'oauth_intent_unsupported',
+        message: reason,
+      },
+    },
+    { status: 501 },
+  );
+}
+
+export async function GET(request: NextRequest): Promise<NextResponse> {
   const url = request.nextUrl;
-  const provider = url.searchParams.get('provider');
+  const uiProviderRaw = url.searchParams.get('provider');
+  const intentRaw = url.searchParams.get('intent');
 
-  if (!isAllowedProvider(provider)) {
-    return NextResponse.json(
-      {
-        error: {
-          code: 'PROVIDER_NOT_ALLOWED',
-          message: '허용되지 않은 OAuth provider 입니다.'
-        }
-      },
-      { status: 400 }
-    );
+  if (!isUiProvider(uiProviderRaw)) {
+    return badRequest('provider must be one of google | kakao | naver');
+  }
+  if (!isIntent(intentRaw)) {
+    return badRequest('intent must be one of link | signin | link-merge');
+  }
+  const intent: Intent = intentRaw;
+  const sbProvider: SupabaseProvider = toSupabaseProviderId(uiProviderRaw);
+
+  if (intent === 'link-merge') {
+    return oauthIntentUnsupported('OAuth merge intent state is not implemented yet');
   }
 
-  let baseUrl: string;
+  // ★ Step 1 — 응답 객체 먼저 생성. SDK 의 setAll 콜백이 본 객체에 누적한다.
+  //    Route Handler 에서는 middleware-only `NextResponse.next()` 를 쓰지 않는다.
+  const response = new NextResponse(null);
+  const supabase = createRouteHandlerClient({ request, response });
+
+  // ★ Step 2 — flow context cookie. callback (Kakao Sync 감지 §4.5.2.1) 1차 신호.
+  //    Path=/auth/callback 로 좁혀 다른 라우트에 누설 방지. 값은 HMAC + nonce 로 서명한다.
+  response.cookies.set({
+    name: FLOW_CONTEXT_COOKIE,
+    value: signFlowCookie(
+      { provider: uiProviderRaw, supabase_provider: sbProvider, intent },
+      FLOW_CONTEXT_MAX_AGE_SECONDS,
+    ),
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: '/auth/callback',
+    maxAge: FLOW_CONTEXT_MAX_AGE_SECONDS,
+  });
+
+  // ★ Step 3 — intent dispatch (runbook §4.2.1 표). 익명 user id 보존 의무 — link 에서는
+  //    절대 signInWithOAuth 를 호출하지 않는다.
+  let urlResult: Awaited<ReturnType<typeof supabase.auth.signInWithOAuth>>;
   try {
-    baseUrl = publicApiBaseUrl();
+    if (intent === 'link') {
+      urlResult = await supabase.auth.linkIdentity({
+        provider: sbProvider,
+        options: { redirectTo: callbackUrl(request, intent), skipBrowserRedirect: true },
+      });
+    } else {
+      urlResult = await supabase.auth.signInWithOAuth({
+        provider: sbProvider,
+        options: { redirectTo: callbackUrl(request, intent), skipBrowserRedirect: true },
+      });
+    }
   } catch {
-    return NextResponse.json(
-      {
-        error: {
-          code: 'OAUTH_BASE_URL_MISCONFIGURED',
-          message:
-            'OAuth redirect base URL 이 brower-reachable 하지 않습니다. 운영자에게 문의해 주세요.'
-        }
-      },
-      { status: 500 }
-    );
+    return oauthInitFailed();
   }
 
-  const target = new URL(`${baseUrl}/auth/${provider}/start`);
-  for (const [key, value] of url.searchParams.entries()) {
-    if (key === 'provider') continue;
-    if (!ALLOWED_FORWARD_PARAMS.has(key)) continue;
-    target.searchParams.append(key, value);
+  if (urlResult.error || !urlResult.data?.url) {
+    // Fail-fast: fresh JSON response intentionally drops any accumulator Set-Cookie
+    // headers so PKCE / flow cookies cannot survive a missing authorization URL.
+    return oauthInitFailed(urlResult.error);
   }
 
-  return NextResponse.redirect(target, { status: 302 });
+  // ★ Step 4 — 새 NextResponse.redirect 를 만들지 말고, 누적된 response.headers 를 그대로
+  //    재사용하여 302 로 변환. Set-Cookie 헤더 (PKCE verifier + flow context) 가 모두 보존된다.
+  response.headers.set('Location', urlResult.data.url);
+  return new NextResponse(null, { status: 302, headers: response.headers });
 }

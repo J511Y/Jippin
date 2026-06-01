@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LoginButtons } from '../login-buttons';
@@ -6,6 +6,10 @@ import { LoginButtons } from '../login-buttons';
 vi.mock('@/lib/anonymous-user', () => ({
   getOrCreateAnonymousUserId: vi.fn(async () => '00000000-0000-0000-0000-000000000000')
 }));
+
+afterEach(() => {
+  cleanup();
+});
 
 describe('LoginButtons — provider whitelist UI seal', () => {
   it('renders exactly 3 OAuth provider buttons (Kakao / Naver / Google)', () => {
@@ -88,9 +92,8 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
       expect(url.origin).toBe('http://localhost:3000');
       expect(url.pathname).toBe('/auth/oauth/start');
       expect(url.searchParams.get('provider')).toBe(provider);
-      expect(url.searchParams.get('return_url')).toBe(
-        'http://localhost:3000/dashboard'
-      );
+      expect(url.searchParams.get('intent')).toBe('signin');
+      expect(url.searchParams.get('next')).toBe('/dashboard');
       expect(url.searchParams.get('anonymous_user_id')).toBe(
         '00000000-0000-0000-0000-000000000000'
       );
