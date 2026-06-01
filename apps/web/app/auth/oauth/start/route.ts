@@ -56,11 +56,12 @@ function safeAnonymousUserId(value: string | null): string | null {
   return value && UUID_V4ISH_PATTERN.test(value) ? value : null;
 }
 
-function callbackUrl(request: NextRequest): string {
+function callbackUrl(request: NextRequest, intent: Intent): string {
   const configured = process.env.NEXT_PUBLIC_FRONTEND_AUTH_CALLBACK_URL;
   const callback = configured
     ? new URL(configured, request.nextUrl.origin)
     : new URL('/auth/callback', request.nextUrl.origin);
+  callback.searchParams.set('intent', intent);
   const next = safeRelativeRedirect(request.nextUrl.searchParams.get('next'));
   if (next) {
     callback.searchParams.set('next', next);
@@ -129,7 +130,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (intent === 'link') {
       urlResult = await supabase.auth.linkIdentity({
         provider: sbProvider,
-        options: { redirectTo: callbackUrl(request), skipBrowserRedirect: true },
+        options: { redirectTo: callbackUrl(request, intent), skipBrowserRedirect: true },
       });
     } else {
       if (intent === 'link-merge') {
@@ -147,7 +148,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       }
       urlResult = await supabase.auth.signInWithOAuth({
         provider: sbProvider,
-        options: { redirectTo: callbackUrl(request), skipBrowserRedirect: true },
+        options: { redirectTo: callbackUrl(request, intent), skipBrowserRedirect: true },
       });
     }
   } catch {

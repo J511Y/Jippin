@@ -431,6 +431,67 @@ async def test_complete_supabase_session_uses_requested_provider_to_disambiguate
     assert captured["profile"].provider_subject == "naver-provider-subject"
 
 
+@pytest.mark.asyncio
+async def test_complete_supabase_session_claims_anonymous_for_returning_user(
+    monkeypatch, auth_env
+):
+    user_id = uuid.uuid4()
+    anonymous_user_id = uuid.uuid4()
+    claim_calls = []
+
+    def fake_decode(*args, **kwargs):
+        return {
+            "sub": "supabase-user-id",
+            "aud": "authenticated",
+            "email": "returning@example.com",
+            "app_metadata": {"provider": "google"},
+            "user_metadata": {
+                "provider_id": "google-provider-subject",
+                "name": "Returning User",
+            },
+        }
+
+    async def fake_complete_oauth_login(*, provider, profile, anonymous_user_id):
+        return auth_service.OAuthLoginResult(
+            user_id=user_id,
+            signup_completed=False,
+            claimed_anonymous_user_id=None,
+        )
+
+    async def fake_get_current_user_context(seen_user_id):
+        return CurrentUserContext(
+            user_id=seen_user_id,
+            email="returning@example.com",
+            display_name="Returning User",
+            profile_image_url=None,
+            role="user",
+            providers=["google"],
+            missing_required_terms=[],
+        )
+
+    async def fake_claim_anonymous_user(*, user_id, anonymous_user_id):
+        claim_calls.append((user_id, anonymous_user_id))
+
+    monkeypatch.setattr(auth_service.jwt, "decode", fake_decode)
+    monkeypatch.setattr(auth_service, "complete_oauth_login", fake_complete_oauth_login)
+    monkeypatch.setattr(
+        auth_service, "get_current_user_context", fake_get_current_user_context
+    )
+    monkeypatch.setattr(
+        auth_service, "_claim_anonymous_user", fake_claim_anonymous_user
+    )
+
+    result = await auth_service.complete_supabase_session(
+        access_token="supabase-access-token",
+        anonymous_user_id=str(anonymous_user_id),
+        requested_provider="google",
+    )
+
+    assert result.pending_anonymous_user_id is None
+    assert result.missing_required_terms == []
+    assert claim_calls == [(user_id, anonymous_user_id)]
+
+
 def test_sso_link_start_requires_login(auth_env):
     app = create_app()
     with TestClient(app) as client:

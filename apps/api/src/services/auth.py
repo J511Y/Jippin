@@ -236,14 +236,43 @@ async def complete_supabase_session(
         anonymous_user_id=parsed_anonymous_user_id,
     )
     context = await get_current_user_context(login_result.user_id)
-    pending_anonymous_user_id = (
-        parsed_anonymous_user_id if context.missing_required_terms else None
-    )
+    # Terms-gated users carry the anonymous id in the session until acceptance.
+    # Returning users with no missing terms must claim immediately, because
+    # complete_oauth_login only claims during first-time completed signup.
+    pending_anonymous_user_id: uuid.UUID | None = None
+    if context.missing_required_terms:
+        pending_anonymous_user_id = parsed_anonymous_user_id
+    elif (
+        parsed_anonymous_user_id is not None
+        and login_result.claimed_anonymous_user_id is None
+    ):
+        await _claim_anonymous_user(
+            user_id=login_result.user_id,
+            anonymous_user_id=parsed_anonymous_user_id,
+        )
     return SupabaseSessionBridgeResult(
         user_id=login_result.user_id,
         pending_anonymous_user_id=pending_anonymous_user_id,
         missing_required_terms=context.missing_required_terms,
     )
+
+
+async def _claim_anonymous_user(
+    *, user_id: uuid.UUID, anonymous_user_id: uuid.UUID
+) -> None:
+    async with get_engine().begin() as conn:
+        await conn.execute(
+            sa.update(AnonymousUser)
+            .where(
+                AnonymousUser.id == anonymous_user_id,
+                AnonymousUser.converted_user_id.is_(None),
+            )
+            .values(
+                converted_user_id=user_id,
+                converted_at=sa.func.now(),
+                updated_at=sa.func.now(),
+            )
+        )
 
 
 async def link_supabase_account(

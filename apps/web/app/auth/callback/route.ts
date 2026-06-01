@@ -67,6 +67,11 @@ function flowContext(request: NextRequest): FlowContext | null {
     : null;
 }
 
+function callbackIntent(request: NextRequest): FlowIntent | null {
+  const intent = request.nextUrl.searchParams.get('intent') ?? undefined;
+  return isFlowIntent(intent) ? intent : null;
+}
+
 async function mintBackendSession(
   accessToken: string,
   anonymousUserId: string | null,
@@ -129,14 +134,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const next = safeRelativeRedirect(request.nextUrl.searchParams.get('next'));
   const anonymousUserId = request.nextUrl.searchParams.get('anonymous_user_id');
   const context = flowContext(request);
+  const intent = callbackIntent(request);
   const response = new NextResponse(null);
 
   if (code) {
     const supabase = createRouteHandlerClient({ request, response });
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
     const accessToken = data.session?.access_token;
-    if (!error && accessToken && context?.intent === 'link') {
-      if (await linkBackendAccount(accessToken, context.provider, request)) {
+    const isLinkCallback = intent === 'link' || context?.intent === 'link';
+    if (!error && accessToken && isLinkCallback) {
+      if (
+        intent === 'link'
+        && context?.intent === 'link'
+        && await linkBackendAccount(accessToken, context.provider, request)
+      ) {
         response.headers.set('Location', new URL(next, request.nextUrl.origin).toString());
         return new NextResponse(null, { status: 302, headers: response.headers });
       }

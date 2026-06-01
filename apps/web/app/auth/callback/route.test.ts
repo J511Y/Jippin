@@ -191,7 +191,7 @@ describe('GET /auth/callback — session cookie preservation', () => {
 
     const { GET } = await import('./route');
     const response = await GET(
-      makeRequest('/auth/callback?code=abc&next=/account/security', [
+      makeRequest('/auth/callback?code=abc&intent=link&next=/account/security', [
         { name: 'jippin_oauth_provider', value: flowCookie },
         { name: BACKEND_SESSION_COOKIE_NAME, value: 'current-backend-session' },
       ]),
@@ -211,6 +211,33 @@ describe('GET /auth/callback — session cookie preservation', () => {
       body: JSON.stringify({ requested_provider: 'google' }),
       cache: 'no-store',
     });
+  });
+
+  it('fails closed for link callbacks when the signed flow context is missing', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('{}', {
+        status: 200,
+        headers: {
+          'Set-Cookie': `${BACKEND_SESSION_COOKIE_NAME}=${BACKEND_SESSION_COOKIE_VALUE}; Path=/; HttpOnly; SameSite=Lax`,
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        exchangeCodeForSession: vi.fn().mockResolvedValue({
+          data: { session: { access_token: 'supabase-access-token' } },
+          error: null,
+        }),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(makeRequest('/auth/callback?code=abc&intent=link&next=/account/security'));
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('Location')).toBe('http://localhost:3000/login?error=oauth_callback_failed');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('passes the requested provider from the signed flow cookie into the session bridge', async () => {

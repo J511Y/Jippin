@@ -134,7 +134,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     expect(linkIdentity).toHaveBeenCalledWith({
       provider: 'google',
       options: {
-        redirectTo: 'http://localhost:3000/auth/callback?next=%2Fapp%2Fconsult%3Fdraft%3D1',
+        redirectTo: 'http://localhost:3000/auth/callback?intent=link&next=%2Fapp%2Fconsult%3Fdraft%3D1',
         skipBrowserRedirect: true,
       },
     });
@@ -160,7 +160,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     expect(linkIdentity).toHaveBeenCalledWith({
       provider: 'google',
       options: {
-        redirectTo: `http://localhost:3000/auth/callback?anonymous_user_id=${anonymousUserId}`,
+        redirectTo: `http://localhost:3000/auth/callback?intent=link&anonymous_user_id=${anonymousUserId}`,
         skipBrowserRedirect: true,
       },
     });
@@ -186,7 +186,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     expect(linkIdentity).toHaveBeenCalledWith({
       provider: 'google',
       options: {
-        redirectTo: 'http://localhost:3000/auth/callback',
+        redirectTo: 'http://localhost:3000/auth/callback?intent=link',
         skipBrowserRedirect: true,
       },
     });
@@ -209,7 +209,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     expect(linkIdentity).toHaveBeenCalledWith({
       provider: 'google',
       options: {
-        redirectTo: 'http://localhost:3000/auth/callback',
+        redirectTo: 'http://localhost:3000/auth/callback?intent=link',
         skipBrowserRedirect: true,
       },
     });
