@@ -648,7 +648,14 @@ def _supabase_provider_subject(
         identity_data = identity.get("identity_data")
         if not isinstance(identity_data, dict):
             identity_data = {}
-        for key in ("provider_id", "sub", "id"):
+        provider_key = provider.value
+        for key in (
+            f"{provider_key}_id",
+            f"{provider_key}_subject",
+            "provider_id",
+            "sub",
+            "id",
+        ):
             value = _optional_str(identity_data.get(key)) or _optional_str(
                 identity.get(key)
             )
@@ -657,9 +664,9 @@ def _supabase_provider_subject(
 
     provider_key = provider.value
     for key in (
-        "provider_id",
         f"{provider_key}_id",
         f"{provider_key}_subject",
+        "provider_id",
         "sub",
         "id",
     ):

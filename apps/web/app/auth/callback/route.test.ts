@@ -169,8 +169,47 @@ describe('GET /auth/callback — session cookie preservation', () => {
     const response = await GET(makeRequest('/auth/callback?code=abc&next=/app/reports/1'));
 
     expect(response.status).toBe(302);
-    expect(response.headers.get('Location')).toBe('http://localhost:3000/auth/terms');
+    expect(response.headers.get('Location')).toBe(
+      'http://localhost:3000/auth/terms?next=%2Fapp%2Freports%2F1',
+    );
     expect(setCookieValues(response).join('\n')).toContain(BACKEND_SESSION_COOKIE_NAME);
+  });
+
+  it('falls back to the implemented terms route when the backend omits redirect_url', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            signup_complete: false,
+            missing_required_terms: ['service_terms'],
+            redirect_url: null,
+          }),
+          {
+            status: 200,
+            headers: {
+              'Set-Cookie': `${BACKEND_SESSION_COOKIE_NAME}=${BACKEND_SESSION_COOKIE_VALUE}; Path=/; HttpOnly; SameSite=Lax`,
+            },
+          },
+        ),
+      ),
+    );
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        exchangeCodeForSession: vi.fn().mockResolvedValue({
+          data: { session: { access_token: 'supabase-access-token' } },
+          error: null,
+        }),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(makeRequest('/auth/callback?code=abc&next=/app/reports/1'));
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('Location')).toBe(
+      'http://localhost:3000/auth/terms?next=%2Fapp%2Freports%2F1',
+    );
   });
 
   it('routes link callbacks through backend account linking with the current session cookie', async () => {

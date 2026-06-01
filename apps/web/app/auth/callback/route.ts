@@ -17,6 +17,14 @@ function safeRelativeRedirect(value: string | null): string {
   return value;
 }
 
+function termsRedirectUrl(redirectUrl: string | null | undefined, next: string, origin: string): string {
+  const url = new URL(redirectUrl ?? '/auth/terms', origin);
+  if (next !== '/') {
+    url.searchParams.set('next', next);
+  }
+  return url.toString();
+}
+
 function setCookieValues(headers: Headers): string[] {
   const withGetSetCookie = headers as Headers & { getSetCookie?: () => string[] };
   const values = withGetSetCookie.getSetCookie?.();
@@ -161,9 +169,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
       if (bridge) {
         const redirectTarget = bridge.signup_complete === false
-          ? (bridge.redirect_url ?? '/auth/terms')
-          : next;
-        response.headers.set('Location', new URL(redirectTarget, request.nextUrl.origin).toString());
+          ? termsRedirectUrl(bridge.redirect_url, next, request.nextUrl.origin)
+          : new URL(next, request.nextUrl.origin).toString();
+        response.headers.set('Location', redirectTarget);
         return new NextResponse(null, { status: 302, headers: response.headers });
       }
     }
