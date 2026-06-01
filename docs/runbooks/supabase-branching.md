@@ -21,6 +21,7 @@
 | Preview branch 정리 | PR closed → Supabase integration 이 자동 삭제. 14일 이상 머지/닫힘 없는 PR 은 콘솔 정책으로 만료 (§5). |
 | 기존 Neon workflow 처리 | **단계 0~3 의 단계적 deprecation**. 본 PR(단계 0)은 Neon workflow 를 **유지·격리**만 한다. |
 | GitHub required check | 전환 완료 시점에 **`ci-status`** (CMP-574 변경 없음) + **`Supabase / Migration check` (integration 제공)** 2개를 필수로 둔다. 본 PR 에서는 변경 없음. |
+| Identity linking 정책 (CEO 결정 CMP-572) | **Automatic linking 영구 금지** (§7.1.1 콘솔 토글 + DB 트리거 가드 봉인). **Manual linking 우선** — `enable_manual_linking = true` 봉인 (§7.1.2). Anonymous → OAuth upgrade 는 manual linking 흐름으로만 (§7.1.3). |
 | 시크릿 추가 (사용자 작업) | `SUPABASE_ACCESS_TOKEN` (org/personal), `SUPABASE_PROJECT_REF_PROD`, `SUPABASE_PROJECT_REF_DEV`, `SUPABASE_DB_PASSWORD_*` — §3.2 참조. |
 
 본 런북은 **사용자가 콘솔 작업을 수행하면 그 뒤 곧바로 따라할 수 있는 체크리스트** 를 §3 에 둔다.
@@ -89,7 +90,7 @@ supabase project (jippin)
   - Persistent branch mapping: `dev` ↔ `development`
   - **Working directory: `.`** — Supabase GitHub integration 의 working directory 는 **`supabase/` 폴더를 포함하는 부모 경로**다. 본 모노레포는 `supabase/` 가 repo root 에 있으므로 `.` 로 입력한다. (Supabase 공식 안내: https://supabase.com/docs/guides/deployment/branching/github-integration#set-the-working-directory)
   - **Automatic branching: "Supabase changes only"** (Settings → Branching 의 토글; 이 옵션은 `supabase/**` 변경이 있는 PR 에만 preview branch 를 만든다)
-  - **Identity linking 가드** (§7.1) — Supabase 는 default 로 같은 이메일 OAuth identity 를 자동 link 한다. AGENTS.md §4.7 #9 봉인을 지키려면 콘솔 측에서 추가 가드가 필요하다. 본 단계에서는 자동 linking 동작을 확인만 하고, 실제 disable 절차는 §7.1 가 정본화한다 (ADR-0004 Accepted 후 CMP-576 PR 이 켠다).
+  - **Automatic linking 가드 사전 확인** (§7.1.1) — Supabase 는 default 로 같은 verified email OAuth identity 를 자동 link 한다. CEO 결정 (CMP-572) 봉인은 **automatic linking 영구 금지**이므로, 본 단계에서 콘솔의 "Allow Same Email for Multiple Providers" 토글 위치를 확인 (실제 ON 작업은 CMP-576 머지 직전 §7.1.1 G1 게이트가 한다). 본 PR 은 토글을 켜지 않는다 — 콘솔 가드 작업 시점은 CMP-576 트랙.
 - [ ] **U5.** GitHub Settings → Secrets and variables → Actions 에 다음 추가 (값은 1Password 에서 복붙):
   - Secret: `SUPABASE_ACCESS_TOKEN` (Personal Access Token; Supabase 콘솔 Account → Access Tokens)
   - Secret: `SUPABASE_DB_PASSWORD_PROD`
@@ -190,24 +191,61 @@ Supabase integration 은 `main` push 시 production DB 에 migration 을 직접 
 
 세부 가드와 회복 절차는 CMP-575 가 정본화한다. 본 런북은 게이트만 명시.
 
-### 7.1 Identity linking 가드 (AGENTS.md §4.7 #9 봉인)
+### 7.1 Identity linking 가드 (CEO 결정 CMP-572 봉인)
 
-Supabase Auth 는 default 로 **같은 이메일을 가진 서로 다른 OAuth identity 를 자동 link** 한다 (한 user 로 병합). 집핀 정책(`AGENTS.md §4.7` #9) 은 동일 이메일 + 다른 provider 자동 병합을 **영구 금지**한다 — 계정 탈취 벡터이기 때문이다. `supabase/config.toml` 의 `enable_manual_linking` 토글로는 자동 linking 을 끌 수 없으므로 다음 가드가 필요하다.
+CEO 결정 (CMP-572, 2026-06-01): **MVP 는 Manual identity linking 우선, Automatic identity linking 금지.** ADR-0003 의 자동 병합 금지 원칙은 유지된다.
 
-본 PR (CMP-574, 단계 0) 시점에는 Supabase 콘솔이 연결되어 있지 않으므로 검증만 봉인하고, 실제 활성화는 ADR-0004 (CMP-573, Pending) Accepted 후 CMP-576 PR 이 한다.
+집핀의 linking 정책은 두 흐름으로 분리한다.
 
-**활성화 전 게이트 (CMP-576 또는 사용자 콘솔 작업의 선결 조건):**
+| 정책 | 동작 | config.toml 봉인 값 | 가드 책임 |
+|---|---|---|---|
+| **Automatic linking** (Supabase default) | 같은 verified email 의 OAuth identity 를 한 user 로 자동 병합 | `config.toml` 토글 없음 — **§7.1.1 가드로 봉인** | 콘솔 + DB 트리거 |
+| **Manual linking** (CEO 정책) | 사용자가 명시적으로 "계정 통합" 또는 "anonymous → OAuth upgrade" 를 요청한 경우 한 user 에 identity 추가 | `enable_manual_linking = true` (§7.1.2 사유) | 어플리케이션 흐름 + 감사 로그 |
 
-| 게이트 | 결정/검증 | 책임 |
+두 정책은 토글 하나로 통제되지 않는다. **§7.1.1 의 자동 linking 가드를 통과하지 않은 상태로는 OAuth provider 를 `enabled = true` 로 켤 수 없다** (PR 머지 금지).
+
+#### 7.1.1 Automatic linking 가드 (MUST — 영구 봉인)
+
+Supabase Auth 는 default 로 같은 verified email 을 가진 서로 다른 OAuth identity 를 한 user 로 자동 link 한다 (`auth.identities` 의 email 매칭). 이 동작은 `supabase/config.toml` 토글로 끌 수 없다. 따라서 다음 2-layer 가드가 필요하다.
+
+| 게이트 | 결정/검증 | 책임 | 본 PR 적용 |
+|---|---|---|---|
+| G1. Supabase 콘솔 → Authentication → Sign In/Up → **"Allow Same Email for Multiple Providers"** (혹은 동등 토글이 이름이 바뀐 옵션) 를 **ON** 으로 설정. ON 이면 같은 이메일을 다른 provider 가 가입해도 별개 user 로 둔다. 토글 위치는 Supabase 가 UI 를 변경할 수 있으므로 §8 의 공식 링크 확인. | 사용자 (콘솔 작업) — CMP-576 PR 머지 직전 | 본 PR 머지 후 |
+| G2. **DB 트리거 fallback** — 콘솔 토글이 사라지거나 우회되어도 `auth.users` row 에 같은 verified email 이 두 번 생기면 두 번째 signup 을 reject 하는 BEFORE INSERT 트리거를 CMP-576 가 정본화. `supabase/migrations/<timestamp>_block_auto_email_linking.sql` 로 커밋. | CMP-576 (DB 트리거 SQL) | CMP-576 PR |
+| G3. PoC — Google + Kakao 같은 verified email 로 두 번 가입했을 때 두 user row 가 분리되는지 staging branch 에서 확인. 결과를 CMP-576 PR 본문에 캡처/로그 첨부. | CMP-576 (PoC) | CMP-576 PR |
+
+G1~G3 중 1개라도 빠진 상태에서 `[auth.external.*] enabled = true` 로 켜는 PR 은 **머지 금지** — Web/Auth required check (단계 2) 에서 명시적으로 막는다 (CMP-577/CMP-576 후속).
+
+#### 7.1.2 Manual linking 활성화 (CEO 결정 봉인)
+
+`supabase/config.toml` 의 `enable_manual_linking = true` 가 봉인 값이다. 사유:
+
+- 본 토글이 false 이면 Supabase 의 `auth.linkIdentity()` API 가 작동하지 않아 anonymous → OAuth upgrade (§7.1.3) 가 막힌다.
+- 본 토글은 **자동 linking 동작과 독립**이다. true 로 둬도 §7.1.1 의 자동 linking 가드와 충돌하지 않는다 (자동 linking 은 Supabase 내부 매칭, manual linking 은 명시적 API 호출).
+
+운영 가드:
+
+| 가드 | 내용 | 책임 |
 |---|---|---|
-| G1. ADR-0004 (`docs/adr/0004-supabase-transition.md`) Accepted | CEO 결정 + ADR PR 머지 | CMP-573 |
-| G2. Supabase 콘솔 → Authentication → Providers → 각 OAuth provider 의 **"Skip nonce check"**, **"Allow new user signups"**, **"Linked Identities"** 옵션을 정책에 맞게 설정 — 콘솔 UI 가 자동 link 를 OFF 하는 토글을 제공할 때 그 토글을 OFF 로 설정. 토글이 없으면 G3 의 DB 트리거로 대체. | 사용자 (콘솔 작업) |
-| G3. DB 측 fallback — `auth.users` 에 동일 이메일 row 가 이미 있을 때 두 번째 OAuth signup 을 reject 또는 별도 row 로 분리하는 trigger 를 CMP-576 가 정본화한다. `supabase/migrations/` 에 SQL 로 들어간다. | CMP-576 |
-| G4. 위 가드 활성 상태에서 PoC — Google + Kakao 같은 이메일 가입 시 두 user row 가 분리되는지 확인. | CMP-576 |
+| M1. `linkIdentity()` 호출은 **현재 세션 user 의 명시적 동의 UI** 뒤에서만 한다. 자동 호출 금지. | CMP-577 (Web) |
+| M2. linking 성공 시 `audit_log` 또는 동등한 감사 테이블에 `kind=auth.identity_linked, actor=user_id, payload=provider+identity_id` 를 남긴다. | CMP-576/CMP-575 |
+| M3. linking 취소 (`unlinkIdentity()`) 도 동일하게 감사 로그를 남기고 비활성 흐름을 차단할 수 있게 한다. | CMP-577 |
 
-위 4개 게이트 중 1개라도 빠진 상태로 OAuth provider 를 `enabled = true` 로 켜는 PR 은 **머지 금지**다. 본 런북은 게이트 목록만 봉인하고, 실제 trigger SQL / PoC 절차는 CMP-576 런북에 위임한다.
+본 PR (CMP-574, 단계 0) 은 토글만 봉인하고, 위 M1~M3 의 실제 코드/감사 SQL 은 CMP-576/CMP-577 트랙이 정본화한다.
 
-**Anonymous → OAuth upgrade (선택 경로):** 해당 흐름을 채택하면 `enable_manual_linking = true` 가 필요하다. 위 G1~G4 통과 후 CMP-576 PR 에서만 토글을 켠다.
+#### 7.1.3 Anonymous → OAuth upgrade 절차
+
+집핀 비회원 사전검토는 Supabase anonymous user (`is_anonymous=true`) 로 식별된다 (AGENTS.md §4.7, ADR-0003 supersede 예정 정책). 사용자가 결제·요청 시점에 OAuth 로 전환하면 anonymous user 의 데이터를 잃지 않도록 manual linking 으로 identity 를 추가한다.
+
+| 단계 | 동작 | 책임 |
+|---|---|---|
+| A1. anonymous sign-in (`supabase.auth.signInAnonymously()`) 으로 user row 생성, 비회원 사전검토 데이터를 본 user 에 귀속. | CMP-577 |
+| A2. 사용자가 "로그인/가입" 누르면 OAuth provider 로 redirect — 단 anonymous session 을 유지한 채 `linkIdentity({ provider })` 호출. 새 user 가 만들어지면 안 된다 (`enable_manual_linking = true` 가 전제). | CMP-577 |
+| A3. callback 에서 linked identity 가 성공적으로 추가됐는지, anonymous user 의 `is_anonymous` flag 가 false 로 전환됐는지 검증. 실패 시 anonymous session 유지 + 사용자 에러 표시. | CMP-577 |
+| A4. **자동 병합 충돌 케이스** — anonymous user 의 OAuth identity 가 이미 다른 permanent user 의 verified email 과 같으면 §7.1.1 의 G1 가드에 의해 자동 link 가 일어나지 않는다. 본 케이스는 "기존 계정으로 로그인" 안내 UI 로 처리. 두 계정 병합은 별도 "계정 통합" 명시 흐름. | CMP-577 |
+| A5. PoC — staging branch 에서 anonymous → Google upgrade, anonymous → Kakao upgrade, 동일 email 충돌 케이스 3가지 시나리오 검증 로그를 CMP-577 PR 본문에 첨부. | CMP-577 |
+
+위 5단계 중 A1~A4 가 코드에 들어오는 PR (CMP-577) 머지 전까지 `enable_anonymous_sign_ins = true` 로 켜지 않는다. 본 PR 시점에는 `enable_anonymous_sign_ins = false` 유지.
 
 ---
 
@@ -258,9 +296,12 @@ git grep -n "jippin-placeholder" supabase/config.toml
 git grep -n "enable_signup" supabase/config.toml
 # → 정확히 3건, 모두 false.
 
-# 6) Identity linking 토글이 conservative — `enable_manual_linking = false`, anonymous false.
+# 6) Identity linking 봉인 (CEO 결정 CMP-572):
+#     - `enable_manual_linking = true` (MVP manual linking 우선 — §7.1.2)
+#     - `enable_anonymous_sign_ins = false` (CMP-577 PoC 후 활성화 — §7.1.3 A5)
+#    Automatic linking 가드 (§7.1.1 G1/G2/G3) 는 본 토글로 통제되지 않는다 — 콘솔 + DB 트리거.
 git grep -nE "enable_manual_linking|enable_anonymous_sign_ins" supabase/config.toml
-# → 두 줄 모두 false.
+# → enable_manual_linking=true, enable_anonymous_sign_ins=false.
 
 # 7) disabled OAuth provider 의 client_id/secret 이 빈 문자열 (env() 미해석 fallback).
 git grep -nE 'client_id = ""' supabase/config.toml

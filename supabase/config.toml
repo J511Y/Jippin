@@ -89,19 +89,22 @@ enabled = false
 file_size_limit = "50MiB"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [auth] — Supabase Auth (CMP-576 트랙이 활성화)
+# [auth] — Supabase Auth (CMP-576 트랙이 provider 활성화)
 # ─────────────────────────────────────────────────────────────────────────────
 # 본 PR 시점에는 enabled=true (콘솔 default) 로 두되, **모든 가입 표면을 닫는다**.
-# 실제 provider 활성화·anonymous 활성화는 CMP-576 Auth 트랙이 별도 PR 로 켠다.
+# Provider 활성화·anonymous 활성화는 CMP-576 Auth 트랙이 별도 PR 로 켠다.
 #
-# 정책 정본 (AGENTS.md §4.7):
+# 정책 정본 (CEO 결정 CMP-572, AGENTS.md §4.7, ADR-0003 자동 병합 금지):
 #   - 자체 password signup **영구 금지** → `[auth.email] enable_signup = false`.
-#   - 동일 이메일 + 다른 provider 자동 병합 금지 (§4.7 #9). Supabase 는 같은
-#     이메일 OAuth identity 를 default 로 자동 link 한다. 본 PR 은 manual/automatic
-#     linking 관련 토글을 모두 보수적인 값으로 두고, 실제 정책은 ADR-0004 (CMP-573,
-#     Pending) Accepted 후 CMP-576 PR 에서 켠다.
-#   - 콘솔 측 자동 linking 가드 절차는 `docs/runbooks/supabase-branching.md` §7.1
-#     (Identity linking 가드) 에 명시.
+#   - **Automatic identity linking 영구 금지.** 같은 verified email 의 OAuth identity
+#     를 한 user 로 자동 병합하지 않는다 (계정 탈취 벡터). Supabase 는 default 로
+#     자동 link 하므로 `supabase/config.toml` 의 토글로는 끌 수 없다 — 콘솔 가드 +
+#     DB 트리거 fallback 으로 봉인한다. 절차는 `docs/runbooks/supabase-branching.md`
+#     §7.1.1 (Automatic linking 가드, MUST) 가 정본.
+#   - **Manual identity linking 우선 (MVP).** anonymous → OAuth upgrade 와 사용자가
+#     명시적으로 요청한 "계정 통합" 흐름은 manual linking 으로 처리한다.
+#     `enable_manual_linking = true` 로 둔다. 절차는 §7.1.2 (Manual linking 활성화)
+#     와 §7.1.3 (Anonymous upgrade) 가 정본.
 [auth]
 enabled = true
 # 사용자 작업: 운영 도메인 확정 후 `site_url` 과 `additional_redirect_urls` 를 갱신.
@@ -115,11 +118,14 @@ refresh_token_reuse_interval = 10
 # 새 ADR + CEO 결정이 필요하다.
 enable_signup = false
 # anonymous sign-in 은 CMP-576 PoC 후 활성화. 본 PR 시점은 false.
+# CMP-576 이 켤 때 manual linking 과 같은 PR 로 묶어 §7.1.3 의 PoC 게이트(G3~G4)
+# 를 통과시킨다.
 enable_anonymous_sign_ins = false
-# Identity linking — ADR-0004 (CMP-573, Pending) Accepted 전에는 false.
-# 운영 적용 시 anonymous → OAuth upgrade 흐름에 manual linking 이 필요하다 (§4.7).
-# 자동 linking 동작은 콘솔 side 에서 비활성화한다 (런북 §7.1 의 콘솔 가드 참고).
-enable_manual_linking = false
+# Manual identity linking — CEO 결정 (CMP-572) 봉인: MVP 는 manual linking 우선.
+# 본 토글이 true 여야 anonymous → OAuth upgrade 와 사용자 명시적 "계정 통합" 흐름이
+# 동작한다. **자동 linking 은 본 토글로 통제되지 않는다** — 자동 linking 금지 가드는
+# §7.1.1 (콘솔 OFF + DB 트리거) 가 책임진다.
+enable_manual_linking = true
 
 [auth.email]
 # 자체 이메일/암호 가입 금지 봉인 (위 [auth] 주석 참고).
