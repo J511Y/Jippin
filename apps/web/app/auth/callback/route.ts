@@ -28,5 +28,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
   }
 
-  return NextResponse.redirect(new URL('/login?error=oauth_callback_failed', request.nextUrl.origin));
+  response.headers.set(
+    'Location',
+    new URL('/login?error=oauth_callback_failed', request.nextUrl.origin).toString(),
+  );
+  return new NextResponse(null, { status: 302, headers: response.headers });
 }
