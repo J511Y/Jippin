@@ -18,6 +18,8 @@ external_sso_provider_enum = postgresql.ENUM(
     create_type=True,
 )
 
+AUTH_IDENTITY_PROVIDER_VALUES = ("supabase",)
+
 
 class User(TimestampMixin, Base):
     """OAuth-only user account; role authorization is separate from lifecycle status."""
@@ -139,6 +141,37 @@ class TermsConsent(TimestampMixin, Base):
         postgresql.TIMESTAMP(timezone=True),
         nullable=False,
         server_default=sa.func.now(),
+    )
+
+
+class AuthIdentity(TimestampMixin, Base):
+    """Third-party authenticator subject → jippin user mapping.
+
+    Populated by the Supabase OAuth link ladder (CMP-579 / CMP-583); read by
+    POST /auth/supabase/session to mint a jippin session cookie.
+    """
+
+    __tablename__ = "auth_identities"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "provider IN ('supabase')",
+            name="auth_identities_provider_allowed",
+        ),
+        sa.UniqueConstraint("provider", "external_id"),
+        sa.UniqueConstraint("provider", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        sa.BigInteger,
+        sa.Identity(),
+        primary_key=True,
+    )
+    provider: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    external_id: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
     )
 
 
