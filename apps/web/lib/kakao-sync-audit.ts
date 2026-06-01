@@ -50,6 +50,16 @@
  * 경우의 재시도 정책은 backend 의 audit 라우트 retry policy 가 SSOT (Phase 1
  * 에서는 callback 단발성 호출, 실패 시 Sentry breadcrumb + reconcile 잡 enqueue).
  *
+ * **익명 세션 폐기 순서 봉인 (round-11 항목 9).** 본 helper 의 throw 는 동시에
+ * `linkIdentity` / merge enqueue 흐름의 실패를 의미하므로 호출자는 **익명 세션을
+ * 먼저 폐기하지 말아야 한다** — `supabase.auth.signOut()` 호출은 audit 성공 +
+ * Supabase 가 새 세션 발급을 완료한 이후에만 도달해야 한다. 실패 경로에서 익명
+ * 세션을 먼저 폐기하면 사용자가 익명 상태로 복귀할 수 없어 작성 중이던 도면/
+ * 리포트 ownership 이 단절되고 데이터 손실이 발생한다. 호출자는
+ * `anonymous-signin-guard.ts` 의 `evaluateAnonymousDiscardDecision({ stage:
+ * 'merge_enqueue', outcome: 'failure' })` 으로 게이트해, signOut 이 실패 경로로
+ * 새어 나가지 않도록 강제한다.
+ *
  * Phase 1 dual-write 동안 본 헬퍼는 callback Route Handler 가 `exchangeCodeForSession`
  * 직후 한 번만 호출한다. provider 가 Kakao 가 아닐 때는 호출 자체를 하지 않는다 —
  * 본 모듈은 그 판정 책임을 가지지 않는다 (호출자가 `isKakaoProvider` 로 판정 후 호출).

@@ -20,6 +20,7 @@ import {
   evaluateOAuthIntentGuard,
   shouldIssueAnonymousSignIn,
   isOAuthIntent,
+  evaluateAnonymousDiscardDecision,
 } from '@/lib/anonymous-signin-guard';
 
 const BASE_GATE: AnonymousGateConfig = {
@@ -341,6 +342,58 @@ describe('CMP-581 anonymous-signin-guard (round-11 items 2/6/7)', () => {
   it('server-side anonymous sign-in only fires when no session exists (item 6)', () => {
     expect(shouldIssueAnonymousSignIn({ existingSessionUserId: null })).toBe(true);
     expect(shouldIssueAnonymousSignIn({ existingSessionUserId: 'u-1' })).toBe(false);
+  });
+});
+
+describe('CMP-581 anonymous-discard ordering (round-11 item 9 / signOut seal)', () => {
+  it('blocks discard when link_identity fails — keep anonymous session for retry', () => {
+    const decision = evaluateAnonymousDiscardDecision({
+      stage: 'link_identity',
+      outcome: 'failure',
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toBe('discard_blocked_failure_outcome');
+      // The detail must mention the data-loss risk so a callsite reviewing
+      // logs / Sentry breadcrumbs sees *why* the discard was refused.
+      expect(decision.detail).toContain('데이터 손실');
+    }
+  });
+
+  it('blocks discard when merge_enqueue fails — Kakao audit failure path', () => {
+    const decision = evaluateAnonymousDiscardDecision({
+      stage: 'merge_enqueue',
+      outcome: 'failure',
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe('discard_blocked_failure_outcome');
+  });
+
+  it('blocks discard while the outcome is still pending', () => {
+    const decision = evaluateAnonymousDiscardDecision({
+      stage: 'callback_finalize',
+      outcome: 'pending',
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe('discard_blocked_pending_outcome');
+  });
+
+  it('allows discard only on success — Supabase has issued the new session', () => {
+    const decision = evaluateAnonymousDiscardDecision({
+      stage: 'callback_finalize',
+      outcome: 'success',
+    });
+    expect(decision.allowed).toBe(true);
+    if (decision.allowed) expect(decision.stage).toBe('callback_finalize');
+  });
+
+  it('rejects unknown outcomes (defence in depth for callback param parsing)', () => {
+    const decision = evaluateAnonymousDiscardDecision({
+      stage: 'link_identity',
+      outcome: 'rolled_back',
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe('unknown_outcome');
   });
 });
 

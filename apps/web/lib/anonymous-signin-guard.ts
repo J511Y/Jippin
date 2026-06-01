@@ -161,3 +161,81 @@ export function shouldIssueAnonymousSignIn(args: {
 }): boolean {
   return args.existingSessionUserId === null;
 }
+
+/**
+ * Anonymous 세션 폐기 (`signOut`) 호출 순서 봉인 (round-11 항목 9 / CMP-577 3차 리뷰
+ * 보드 코멘트 `66899187`).
+ *
+ * **봉인 룰.** `linkIdentity()` 또는 backend merge enqueue 가 *실패* 한 경로에서
+ * `supabase.auth.signOut()` 을 먼저 호출하면, 익명 세션이 사라진 상태로 실패 처리가
+ * 진행되어 사용자가 익명 상태로 돌아갈 수 없고 (재시도 불가), 작성하던 도면/리포트
+ * ownership 이 단절되어 **데이터 손실** 위험이 생긴다. 따라서:
+ *
+ *   - 실패 (`failure`): 익명 세션 **유지**. 사용자에게 재시도 UX 노출.
+ *   - 진행 중 (`pending`): 익명 세션 유지 (아직 결과 미확정).
+ *   - 성공 (`success`): 익명 세션 폐기 허용 (Supabase 가 link/merge 로 새 세션 발급 후).
+ *
+ * 본 helper 는 `signOut` 호출 직전의 단일 게이트. callback Route Handler 와 client
+ * fallback ladder 양쪽에서 호출해, 실패 경로에서 signOut 이 새어 나가지 못하도록
+ * 강제한다. 실제 SDK signOut 호출은 본 모듈이 아닌 호출자가 책임진다 — 본 helper
+ * 는 결정만 반환한다.
+ *
+ * 호출 예:
+ *
+ * ```ts
+ * const decision = evaluateAnonymousDiscardDecision({
+ *   stage: 'link_identity',
+ *   outcome: linkError ? 'failure' : 'success',
+ * });
+ * if (!decision.allowed) {
+ *   // 실패 → 익명 세션 유지하고 UI 에러 핸들러에 전달.
+ *   return renderRetryUx(decision.detail);
+ * }
+ * await supabase.auth.signOut(); // success 경로에서만 도달.
+ * ```
+ */
+export type AnonymousMergeStage = 'link_identity' | 'merge_enqueue' | 'callback_finalize';
+
+export type AnonymousMergeOutcome = 'pending' | 'failure' | 'success';
+
+export type AnonymousDiscardDecision =
+  | { allowed: true; stage: AnonymousMergeStage }
+  | { allowed: false; reason: AnonymousDiscardBlockReason; detail: string };
+
+export type AnonymousDiscardBlockReason =
+  | 'discard_blocked_pending_outcome'
+  | 'discard_blocked_failure_outcome'
+  | 'unknown_outcome';
+
+export function evaluateAnonymousDiscardDecision(args: {
+  stage: AnonymousMergeStage;
+  outcome: AnonymousMergeOutcome | string;
+}): AnonymousDiscardDecision {
+  switch (args.outcome) {
+    case 'success':
+      return { allowed: true, stage: args.stage };
+    case 'pending':
+      return {
+        allowed: false,
+        reason: 'discard_blocked_pending_outcome',
+        detail:
+          `${args.stage} 단계가 아직 결과를 확정하지 않았습니다. ` +
+          `익명 세션은 성공 콜백 이후에만 폐기할 수 있습니다.`,
+      };
+    case 'failure':
+      return {
+        allowed: false,
+        reason: 'discard_blocked_failure_outcome',
+        detail:
+          `${args.stage} 단계가 실패했습니다. 익명 세션을 먼저 폐기하면 ` +
+          `사용자가 익명 상태로 복귀할 수 없어 데이터 손실 위험이 있습니다. ` +
+          `실패 상태를 UI/에러 핸들러로 전달하고 익명 세션은 유지하세요.`,
+      };
+    default:
+      return {
+        allowed: false,
+        reason: 'unknown_outcome',
+        detail: `outcome="${String(args.outcome)}" 는 허용되지 않습니다.`,
+      };
+  }
+}
