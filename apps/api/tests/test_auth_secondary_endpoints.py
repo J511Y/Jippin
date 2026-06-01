@@ -15,7 +15,11 @@ from src.errors import ZippinException
 from src.main import create_app
 from src.routers import auth as auth_router
 from src.services import auth as auth_service
-from src.services.auth import CurrentUserContext, SupabaseSessionBridgeResult, TermsAcceptResult
+from src.services.auth import (
+    CurrentUserContext,
+    SupabaseSessionBridgeResult,
+    TermsAcceptResult,
+)
 
 
 class _FakeStateStore:
