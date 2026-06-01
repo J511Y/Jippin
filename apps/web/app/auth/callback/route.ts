@@ -1,20 +1,17 @@
-import type { Session, SupabaseClient } from '@supabase/supabase-js';
+import type { Session } from '@supabase/supabase-js';
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { apiBaseUrl } from '@/lib/api-base-url';
+import { serverApiBaseUrl } from '@/lib/api-base-url';
+import { verifyFlowCookie } from '@/lib/flow-cookie';
 import { isSafeNext, resolveSafeNext } from '@/lib/safe-redirect';
 import { siteOriginFromRequest } from '@/lib/site-url';
-import { isOAuthFlowContextStale, parseOAuthFlowContext } from '@/lib/supabase/flow-context';
-import {
-  detectNewlyLinkedProvider,
-  hasNewlyLinkedIdentity,
-} from '@/lib/supabase/identities';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
 import {
-  isKakaoProvider,
-  requiresInternalTerms,
+  isSupabaseProvider,
+  isUiProvider,
   toUiProviderId,
   type SupabaseProvider,
+  type UiProvider,
 } from '@/lib/supabase/providers';
 
 export const dynamic = 'force-dynamic';
@@ -22,11 +19,13 @@ export const runtime = 'nodejs';
 
 export const COMMIT_PATH = '/auth/anon-merge-intents/commit';
 
-const CALLBACK_COOKIES = ['jippin_merge_intent', 'jippin_oauth_provider'] as const;
+const FLOW_CONTEXT_COOKIE = 'jippin_oauth_provider';
+const MERGE_INTENT_COOKIE = 'jippin_merge_intent';
 const PENDING_ANONYMOUS_COOKIE = 'jippin_pending_anonymous_user_id';
 const TERMS_PENDING_HINT_COOKIE = 'jippin_terms_pending';
 const TERMS_PENDING_HINT_MAX_AGE_SECONDS = 10 * 60;
 const BACKEND_CALLBACK_TIMEOUT_MS = 5_000;
+const VALID_INTENTS = ['link', 'signin', 'link-merge'] as const;
 const KNOWN_REASONS = new Set([
   'missing_code',
   'exchange_failed',
@@ -41,6 +40,23 @@ const KNOWN_REASONS = new Set([
   'merge_unavailable',
   'kakao_sync_unavailable',
 ]);
+
+type FlowIntent = (typeof VALID_INTENTS)[number];
+type FlowContext = {
+  intent: FlowIntent;
+  provider: UiProvider;
+  supabaseProvider: SupabaseProvider;
+  createdAt: number | null;
+};
+type FlowContextResult =
+  | { ok: true; context: FlowContext | null }
+  | { ok: false; provider: SupabaseProvider | null };
+
+type BackendSessionBridgeResult = {
+  signup_complete?: boolean;
+  missing_required_terms?: string[];
+  redirect_url?: string | null;
+};
 
 function origin(request: NextRequest): string {
   return siteOriginFromRequest(request);
@@ -66,20 +82,42 @@ function sanitizeFailureBase(request: NextRequest): string {
   }
 }
 
-function kakaoAuditEnabled(): boolean {
-  return process.env.NEXT_PUBLIC_AUTH_KAKAO_SYNC_AUDIT_ENABLED === 'true';
+function isFlowIntent(value: string | null | undefined): value is FlowIntent {
+  return typeof value === 'string' && (VALID_INTENTS as readonly string[]).includes(value);
+}
+
+function setCookieValues(headers: Headers): string[] {
+  const withGetSetCookie = headers as Headers & { getSetCookie?: () => string[] };
+  const values = withGetSetCookie.getSetCookie?.();
+  if (values?.length) return values;
+  const value = headers.get('set-cookie');
+  return value ? value.split(/,(?=\s*[^,;]+=)/g) : [];
+}
+
+function copyBackendSessionCookies(source: Response, target: NextResponse): void {
+  for (const cookie of setCookieValues(source.headers)) {
+    target.headers.append('Set-Cookie', cookie);
+  }
 }
 
 export function expireCallbackCookies(response: NextResponse): NextResponse {
-  for (const name of CALLBACK_COOKIES) {
-    response.cookies.set(name, '', { path: '/auth/callback', maxAge: 0 });
-  }
+  appendCookie(response, `${MERGE_INTENT_COOKIE}=; Path=/auth/callback; Max-Age=0`);
+  appendCookie(response, `${FLOW_CONTEXT_COOKIE}=; Path=/auth/callback; Max-Age=0`);
   return response;
 }
 
 function expirePendingAnonymousCookie(response: NextResponse): NextResponse {
-  response.cookies.set(PENDING_ANONYMOUS_COOKIE, '', { path: '/auth', maxAge: 0 });
+  appendCookie(response, `${PENDING_ANONYMOUS_COOKIE}=; Path=/auth; Max-Age=0`);
   return response;
+}
+
+function expireTermsPendingCookie(response: NextResponse): NextResponse {
+  appendCookie(response, `${TERMS_PENDING_HINT_COOKIE}=; Path=/; Max-Age=0`);
+  return response;
+}
+
+function appendCookie(response: NextResponse, cookie: string): void {
+  response.headers.append('Set-Cookie', cookie);
 }
 
 function redirectFromSeed(seed: NextResponse, target: URL): NextResponse {
@@ -99,92 +137,149 @@ function failureRedirect(
   const safeNext = resolveSafeNext(context?.next ?? request.nextUrl.searchParams.get('next'), '/');
   if (safeNext !== '/') target.searchParams.set('next', safeNext);
   if (context?.provider) target.searchParams.set('provider', toUiProviderId(context.provider));
-  return expirePendingAnonymousCookie(expireCallbackCookies(redirectFromSeed(seed, target)));
+  return expireTermsPendingCookie(
+    expirePendingAnonymousCookie(expireCallbackCookies(redirectFromSeed(seed, target))),
+  );
 }
 
 async function failureRedirectAfterExchange(
   request: NextRequest,
   reason: string | null | undefined,
-  supabase: SupabaseClient,
-  seed: NextResponse,
+  supabase: ReturnType<typeof createRouteHandlerClient>,
   context?: { next?: string | null; provider?: SupabaseProvider | null },
 ): Promise<NextResponse> {
   try {
     await supabase.auth.signOut();
   } catch {
-    // Failure redirects must not carry a partially established Supabase session.
+    // Do not expose a half-authenticated browser state on post-exchange failures.
   }
-  return failureRedirect(request, reason, seed, context);
+  return failureRedirect(request, reason, new NextResponse(null), context);
+}
+
+function flowContext(request: NextRequest): FlowContextResult {
+  const raw = request.cookies.get(FLOW_CONTEXT_COOKIE)?.value;
+  if (!raw) return { ok: true, context: null };
+
+  const verified = verifyFlowCookie(raw);
+  if (!verified.ok) return { ok: false, provider: null };
+
+  const intent = verified.payload.intent;
+  const provider = verified.payload.provider;
+  const supabaseProvider = verified.payload.supabase_provider;
+  if (!isFlowIntent(intent) || !isUiProvider(provider) || !isSupabaseProvider(supabaseProvider)) {
+    return { ok: false, provider: null };
+  }
+
+  const iat = Number.parseInt(verified.payload.iat ?? '', 10);
+  return {
+    ok: true,
+    context: {
+      intent,
+      provider,
+      supabaseProvider,
+      createdAt: Number.isFinite(iat) ? iat * 1000 : null,
+    },
+  };
+}
+
+function callbackIntent(request: NextRequest, context: FlowContext | null): FlowIntent | null {
+  const intent = request.nextUrl.searchParams.get('intent');
+  if (isFlowIntent(intent)) return intent;
+  return context?.intent ?? null;
+}
+
+async function boundedFetch(input: string | URL, init: RequestInit): Promise<Response | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), BACKEND_CALLBACK_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function mintBackendSession(
+  session: Session,
+  anonymousUserId: string | null,
+  requestedProvider: UiProvider | null,
+  response: NextResponse,
+): Promise<BackendSessionBridgeResult | null> {
+  const bridge = await boundedFetch(`${serverApiBaseUrl()}/auth/supabase/session`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      anonymous_user_id: anonymousUserId,
+      requested_provider: requestedProvider,
+    }),
+    cache: 'no-store',
+  });
+  if (!bridge?.ok) return null;
+  copyBackendSessionCookies(bridge, response);
+  return (await bridge.json()) as BackendSessionBridgeResult;
+}
+
+async function linkBackendAccount(
+  session: Session,
+  requestedProvider: UiProvider,
+  request: NextRequest,
+): Promise<boolean> {
+  const cookie = request.headers.get('cookie');
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${session.access_token}`,
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+  if (cookie) headers.Cookie = cookie;
+
+  const link = await boundedFetch(`${serverApiBaseUrl()}/auth/supabase/link`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ requested_provider: requestedProvider }),
+    cache: 'no-store',
+  });
+  return Boolean(link?.ok);
 }
 
 async function commitMergeIntent(session: Session, signedIntentCookie: string): Promise<boolean> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), BACKEND_CALLBACK_TIMEOUT_MS);
-  try {
-    const response = await fetch(new URL(COMMIT_PATH, apiBaseUrl()), {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({ signed_intent_cookie_value: signedIntentCookie }),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function persistKakaoSyncConsent(
-  session: Session,
-  linkedProvider: Extract<SupabaseProvider, 'kakao' | 'custom:kakao'>,
-): Promise<boolean> {
-  if (!kakaoAuditEnabled()) return false;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), BACKEND_CALLBACK_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${apiBaseUrl()}/auth/terms/kakao-sync`, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({
-        supabase_user_id: session.user.id,
-        linked_provider: linkedProvider,
-        provider_access_token: session.provider_token ?? null,
-        provider_refresh_token: session.provider_refresh_token ?? null,
-      }),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function termsRedirect(request: NextRequest, seed: NextResponse, safeNext: string): NextResponse {
-  const target = new URL('/auth/terms', origin(request));
-  target.searchParams.set('next', safeNext);
-  seed.cookies.set({
-    name: TERMS_PENDING_HINT_COOKIE,
-    value: '1',
-    sameSite: 'lax',
-    path: '/',
-    maxAge: TERMS_PENDING_HINT_MAX_AGE_SECONDS,
+  const response = await boundedFetch(new URL(COMMIT_PATH, serverApiBaseUrl()), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({ signed_intent_cookie_value: signedIntentCookie }),
+    cache: 'no-store',
   });
-  return expireCallbackCookies(redirectFromSeed(seed, target));
+  return Boolean(response?.ok);
+}
+
+function termsRedirect(
+  request: NextRequest,
+  seed: NextResponse,
+  safeNext: string,
+  redirectUrl?: string | null,
+): NextResponse {
+  const target = new URL(redirectUrl ?? '/auth/terms', origin(request));
+  target.searchParams.set('next', safeNext);
+  appendCookie(
+    seed,
+    `${TERMS_PENDING_HINT_COOKIE}=1; Path=/; Max-Age=${TERMS_PENDING_HINT_MAX_AGE_SECONDS}; SameSite=Lax`,
+  );
+  return expirePendingAnonymousCookie(expireCallbackCookies(redirectFromSeed(seed, target)));
 }
 
 function successRedirect(request: NextRequest, seed: NextResponse, safeNext: string): NextResponse {
   const done = new URL('/auth/callback-done', origin(request));
   done.searchParams.set('next', safeNext);
-  return expireCallbackCookies(redirectFromSeed(seed, done));
+  return expireTermsPendingCookie(
+    expirePendingAnonymousCookie(expireCallbackCookies(redirectFromSeed(seed, done))),
+  );
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -193,25 +288,25 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = url.searchParams.get('code');
   const nextRaw = url.searchParams.get('next');
   const safeNext = nextRaw && isSafeNext(nextRaw) ? nextRaw : defaultNext();
-  const intendedProviderCookie = request.cookies.get('jippin_oauth_provider')?.value ?? null;
-  const flowContext = parseOAuthFlowContext(intendedProviderCookie);
+  const parsedFlow = flowContext(request);
+  const context = parsedFlow.ok ? parsedFlow.context : null;
 
+  if (!parsedFlow.ok) {
+    return failureRedirect(request, 'oauth_guard_stale', undefined, {
+      next: nextRaw,
+      provider: parsedFlow.provider,
+    });
+  }
   if (errorCode) {
     return failureRedirect(request, errorCode, undefined, {
       next: nextRaw,
-      provider: flowContext?.provider,
+      provider: context?.supabaseProvider,
     });
   }
   if (!code) {
     return failureRedirect(request, 'missing_code', undefined, {
       next: nextRaw,
-      provider: flowContext?.provider,
-    });
-  }
-  if (isOAuthFlowContextStale(intendedProviderCookie)) {
-    return failureRedirect(request, 'oauth_guard_stale', undefined, {
-      next: nextRaw,
-      provider: flowContext?.provider,
+      provider: context?.supabaseProvider,
     });
   }
 
@@ -222,50 +317,44 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (error || !data?.session) {
     return failureRedirect(request, error?.code ?? 'exchange_failed', seed, {
       next: nextRaw,
-      provider: flowContext?.provider,
+      provider: context?.supabaseProvider,
     });
   }
 
-  const mergeIntentCookie = request.cookies.get('jippin_merge_intent')?.value ?? null;
-  let mergeStatus: 'none' | 'committed' | 'commit_failed' = 'none';
-  if (mergeIntentCookie) {
-    try {
-      mergeStatus = (await commitMergeIntent(data.session, mergeIntentCookie))
-        ? 'committed'
-        : 'commit_failed';
-    } catch {
-      mergeStatus = 'commit_failed';
-    }
-  }
-
-  const linkedProvider = detectNewlyLinkedProvider(
-    data.session.user,
-    intendedProviderCookie,
-    flowContext?.createdAt,
-  );
-  if (isKakaoProvider(linkedProvider)) {
-    const persisted = await persistKakaoSyncConsent(data.session, linkedProvider);
-    if (!persisted) {
-      return failureRedirectAfterExchange(request, 'kakao_sync_unavailable', supabase, seed, {
+  const intent = callbackIntent(request, context);
+  if (intent === 'link') {
+    if (!context || !(await linkBackendAccount(data.session, context.provider, request))) {
+      return failureRedirectAfterExchange(request, 'oauth_error', supabase, {
         next: safeNext,
-        provider: linkedProvider,
+        provider: context?.supabaseProvider,
       });
     }
+    return successRedirect(request, seed, safeNext);
   }
 
-  if (mergeStatus === 'commit_failed') {
-    return failureRedirectAfterExchange(request, 'merge_commit_failed', supabase, seed, {
+  const bridge = await mintBackendSession(
+    data.session,
+    url.searchParams.get('anonymous_user_id'),
+    context?.provider ?? null,
+    seed,
+  );
+  if (!bridge) {
+    return failureRedirectAfterExchange(request, 'exchange_failed', supabase, {
       next: safeNext,
-      provider: linkedProvider,
+      provider: context?.supabaseProvider,
     });
   }
 
-  const shouldGateInternalTerms =
-    requiresInternalTerms(linkedProvider) &&
-    hasNewlyLinkedIdentity(data.session.user, linkedProvider, flowContext?.createdAt);
+  const mergeIntentCookie = request.cookies.get(MERGE_INTENT_COOKIE)?.value ?? null;
+  if (mergeIntentCookie && !(await commitMergeIntent(data.session, mergeIntentCookie))) {
+    return failureRedirectAfterExchange(request, 'merge_commit_failed', supabase, {
+      next: safeNext,
+      provider: context?.supabaseProvider,
+    });
+  }
 
-  if (shouldGateInternalTerms) {
-    return termsRedirect(request, seed, safeNext);
+  if (bridge.signup_complete === false || (bridge.missing_required_terms?.length ?? 0) > 0) {
+    return termsRedirect(request, seed, safeNext, bridge.redirect_url);
   }
 
   return successRedirect(request, seed, safeNext);

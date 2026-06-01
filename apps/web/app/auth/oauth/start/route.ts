@@ -1,15 +1,15 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { apiBaseUrl } from '@/lib/api-base-url';
+import { serverApiBaseUrl } from '@/lib/api-base-url';
+import { signFlowCookie } from '@/lib/flow-cookie';
 import { resolveSafeNext } from '@/lib/safe-redirect';
 import { siteOriginFromRequest } from '@/lib/site-url';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
-import { encodeOAuthFlowContext } from '@/lib/supabase/flow-context';
 import {
   isUiProvider,
   toSupabaseProviderId,
-  type UiProvider,
   type SupabaseProvider,
+  type UiProvider,
 } from '@/lib/supabase/providers';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +22,7 @@ const CALLBACK_COOKIE_MAX_AGE_SECONDS = 300;
 const PENDING_ANONYMOUS_MAX_AGE_SECONDS = 10 * 60;
 const MERGE_INTENT_ENQUEUE_TIMEOUT_MS = 5_000;
 const VALID_INTENTS = ['link', 'signin', 'link-merge'] as const;
+const UUID_V4ISH_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type Intent = (typeof VALID_INTENTS)[number];
 
@@ -36,26 +37,32 @@ function badRequest(message: string): NextResponse {
   );
 }
 
-function callbackUrl(request: NextRequest): string {
+function safeAnonymousUserId(value: string | null): string | null {
+  return value && UUID_V4ISH_PATTERN.test(value) ? value : null;
+}
+
+function callbackUrl(request: NextRequest, intent: Intent, anonymousUserId: string | null): string {
   const configured = process.env.NEXT_PUBLIC_FRONTEND_AUTH_CALLBACK_URL;
   const callback = configured
-    ? new URL(configured)
+    ? new URL(configured, siteOriginFromRequest(request))
     : new URL('/auth/callback', siteOriginFromRequest(request));
-  callback.searchParams.set(
-    'next',
-    resolveSafeNext(
-      request.nextUrl.searchParams.get('next'),
-      process.env.NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL ?? '/',
-    ),
-  );
+  callback.searchParams.set('intent', intent);
+
+  const next = resolveSafeNext(request.nextUrl.searchParams.get('next'), '/');
+  if (next !== '/') {
+    callback.searchParams.set('next', next);
+  }
+  if (anonymousUserId) {
+    callback.searchParams.set('anonymous_user_id', anonymousUserId);
+  }
   return callback.toString();
 }
 
 function anonymousUserIdFromRequest(request: NextRequest): string | null {
-  return (
+  return safeAnonymousUserId(
     request.nextUrl.searchParams.get('anonymous_user_id') ??
-    request.cookies.get('jippin_anonymous_user_id')?.value ??
-    null
+      request.cookies.get('jippin_anonymous_user_id')?.value ??
+      null,
   );
 }
 
@@ -67,11 +74,12 @@ async function enqueueMergeIntent(
   if (!anonymousUserId) {
     throw new Error('anonymous_user_id is required for merge intent enqueue');
   }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MERGE_INTENT_ENQUEUE_TIMEOUT_MS);
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl()}/auth/anon-merge-intents`, {
+    response = await fetch(`${serverApiBaseUrl()}/auth/anon-merge-intents`, {
       method: 'POST',
       signal: controller.signal,
       headers: { 'content-type': 'application/json' },
@@ -80,6 +88,7 @@ async function enqueueMergeIntent(
         provider,
         next: resolveSafeNext(request.nextUrl.searchParams.get('next'), '/'),
       }),
+      cache: 'no-store',
     });
   } finally {
     clearTimeout(timeout);
@@ -97,9 +106,6 @@ async function enqueueMergeIntent(
 }
 
 function setCallbackCookie(response: NextResponse, name: string, value: string): void {
-  // New OAuth starts overwrite stale callback flow cookies with a 5-minute TTL.
-  // Supabase's PKCE state/code_verifier cookies are emitted by @supabase/ssr in the same response;
-  // this app does not re-sign them and relies on Supabase SSR's built-in PKCE verifier handling.
   response.cookies.set({
     name,
     value,
@@ -129,11 +135,6 @@ function setPendingAnonymousCookie(response: NextResponse, anonymousUserId: stri
     path: '/auth',
     maxAge: PENDING_ANONYMOUS_MAX_AGE_SECONDS,
   });
-}
-
-function attachPendingAnonymousCookie(response: NextResponse, anonymousUserId: string | null): void {
-  if (!anonymousUserId) return;
-  setPendingAnonymousCookie(response, anonymousUserId);
 }
 
 function expireOAuthStartCookies(response: NextResponse): void {
@@ -172,22 +173,32 @@ async function signOutAfterServerMergeIntent(
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const url = request.nextUrl;
   const providerRaw = url.searchParams.get('provider');
+  const intentRaw = url.searchParams.get('intent');
 
   if (!isUiProvider(providerRaw)) {
     return badRequest('provider must be google, kakao, or naver');
   }
+  if (!isIntent(intentRaw)) {
+    return badRequest('intent must be link, signin, or link-merge');
+  }
 
-  const intentRaw = url.searchParams.get('intent');
-  const intent: Intent = isIntent(intentRaw) ? intentRaw : 'link';
+  const intent: Intent = intentRaw;
   const provider = toSupabaseProviderId(providerRaw);
-  // Route Handler accumulator only. Do not use NextResponse.next() here; that is middleware-only.
-  // The final return is always a real 302/JSON response carrying this accumulator's headers.
   const response = new NextResponse(null);
   const supabase = createRouteHandlerClient({ request, response });
   const anonymousUserId = anonymousUserIdFromRequest(request);
 
-  setCallbackCookie(response, FLOW_CONTEXT_COOKIE, encodeOAuthFlowContext(provider));
-  attachPendingAnonymousCookie(response, anonymousUserId);
+  setCallbackCookie(
+    response,
+    FLOW_CONTEXT_COOKIE,
+    signFlowCookie(
+      { provider: providerRaw, supabase_provider: provider, intent },
+      CALLBACK_COOKIE_MAX_AGE_SECONDS,
+    ),
+  );
+  if (anonymousUserId) {
+    setPendingAnonymousCookie(response, anonymousUserId);
+  }
 
   if (intent === 'link-merge') {
     let signedToken: string;
@@ -207,19 +218,27 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   const options = {
-    redirectTo: callbackUrl(request),
+    redirectTo: callbackUrl(request, intent, anonymousUserId),
     skipBrowserRedirect: true,
   };
-  const result =
-    intent === 'link'
-      ? await supabase.auth.linkIdentity({
-          provider: provider as never,
-          options,
-        })
-      : await supabase.auth.signInWithOAuth({
-          provider: provider as never,
-          options,
-        });
+  let result: Awaited<ReturnType<typeof supabase.auth.signInWithOAuth>>;
+  try {
+    result =
+      intent === 'link'
+        ? await supabase.auth.linkIdentity({
+            provider: provider as never,
+            options,
+          })
+        : await supabase.auth.signInWithOAuth({
+            provider: provider as never,
+            options,
+          });
+  } catch {
+    return redirectToStartFailure(request, response, 'oauth_init_failed', {
+      provider: providerRaw,
+      next: url.searchParams.get('next'),
+    });
+  }
 
   if (result.error || !result.data?.url) {
     const reason =

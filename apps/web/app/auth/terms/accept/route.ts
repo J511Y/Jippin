@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { apiBaseUrl } from '@/lib/api-base-url';
+import { serverApiBaseUrl } from '@/lib/api-base-url';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -21,12 +21,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const authorization = request.headers.get('authorization');
   const payload = (await request.json()) as TermsAcceptPayload;
   const pendingAnonymousUserId = request.cookies.get(PENDING_ANONYMOUS_COOKIE)?.value ?? null;
+  const cookie = request.headers.get('cookie');
 
-  const upstream = await fetch(`${apiBaseUrl()}/auth/terms/accept`, {
+  const upstream = await fetch(`${serverApiBaseUrl()}/auth/terms/accept`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       ...(authorization ? { authorization } : {}),
+      ...(cookie ? { cookie } : {}),
     },
     body: JSON.stringify({
       consents: payload.consents ?? [],
