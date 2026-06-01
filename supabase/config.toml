@@ -226,16 +226,24 @@ enable_confirmations = false
 # 공식 disabled-provider 예시와 동일).
 #
 # **`redirect_uri` 봉인 (provider 콘솔에 등록하는 OAuth Authorized redirect URI).**
-# 본 필드는 **Supabase Auth 서버의 OAuth callback URL** 을 가리킨다 — 즉
-# `https://<PROD_PROJECT_REF>.supabase.co/auth/v1/callback`. provider (Google/Kakao/
-# Naver) 콘솔에 등록할 redirect URI 와 **반드시 동일**해야 한다. **app 의 Next.js
+# 본 필드는 **Supabase Auth 서버의 OAuth callback URL** 을 가리키며 **환경별로
+# 다른 BRANCH PROJECT REF 의 callback** 을 사용한다. 단일 PROD URL 로 고정하면
+# staging/development PoC 가 production Auth 로 인가코드를 보내 환경별 검증이
+# 무효화된다. 따라서 본 필드는 `env(SUPABASE_AUTH_EXTERNAL_REDIRECT_URI)` 로
+# variable 화해 W1~W4 (§7.4) 채널 별로 환경 값을 등록한다:
+#   - production: https://<SUPABASE_PROJECT_REF_PROD>.supabase.co/auth/v1/callback
+#   - development persistent branch: https://<SUPABASE_PROJECT_REF_DEV>.supabase.co/auth/v1/callback
+#   - staging persistent branch: https://<SUPABASE_PROJECT_REF_STAGING>.supabase.co/auth/v1/callback
+#   - local (`supabase start`): http://127.0.0.1:54321/auth/v1/callback
+# provider (Google/Kakao/Naver) 콘솔의 Authorized redirect URIs 에는 **위 4개를
+# 모두 등록**해야 환경별 PoC + production 운영이 모두 통과한다. **app 의 Next.js
 # `/auth/callback` 경로는 본 필드에 절대 넣지 않는다** — app callback 은
 # `[auth].site_url` + `[auth].additional_redirect_urls` (위) 책임이고, OAuth 흐름은
 #   provider → Supabase `/auth/v1/callback` (본 필드) → Supabase 가 세션 발급 →
 #   `redirectTo` 로 지정된 app `/auth/callback`
 # 순서다. 본 필드에 app URL 을 넣으면 provider 가 인가코드를 Next.js 로 직접 보내
 # Supabase Auth 가 code 교환을 못 하고 흐름이 깨진다 (정본:
-# https://supabase.com/docs/guides/auth/social-login).
+# https://supabase.com/docs/guides/auth/social-login + Supabase CLI config 가이드).
 #
 # **env() wiring 정본.** 활성화 시점에는 CMP-576 PR 이 본 값을 `env(VAR)` 로 바꾼다.
 # `env()` 는 **Supabase CLI/integration 이 보는 환경변수만** 읽는다 — 구체적으로
@@ -252,8 +260,9 @@ enable_confirmations = false
 enabled = false
 client_id = ""
 secret = ""
-# 활성화 시 값 예시 (placeholder — 실제 값은 §7.4 절차로 콘솔/`supabase/.env` 에 주입):
-#   redirect_uri = "https://<PROD_PROJECT_REF>.supabase.co/auth/v1/callback"
+# 활성화 시 값 (env() 로 환경별 parameterize — 위 봉인 박스 참고):
+#   redirect_uri = "env(SUPABASE_AUTH_EXTERNAL_REDIRECT_URI)"
+# 환경별 값은 W1~W4 채널 (§7.4) 별로 등록.
 redirect_uri = ""
 skip_nonce_check = false
 
@@ -261,14 +270,14 @@ skip_nonce_check = false
 enabled = false
 client_id = ""
 secret = ""
-# 활성화 시 값 예시 (placeholder):
-#   redirect_uri = "https://<PROD_PROJECT_REF>.supabase.co/auth/v1/callback"
+# 활성화 시 값 (Google 과 동일 env() 사용):
+#   redirect_uri = "env(SUPABASE_AUTH_EXTERNAL_REDIRECT_URI)"
 redirect_uri = ""
 
 # Naver — built-in provider 가 아니다. Custom OAuth/OIDC 로 PoC 후 활성화 (CMP-576).
 # 본 파일에는 정의하지 않는다 (CLI 가 unknown provider 로 거부할 수 있음).
-# Naver 도 활성화 시 redirect_uri 는 `https://<PROD_PROJECT_REF>.supabase.co/auth/v1/callback`
-# 를 그대로 사용한다 (provider 콘솔의 callback URL 등록 값과 동일).
+# Naver 도 활성화 시 redirect_uri 는 동일하게 `env(SUPABASE_AUTH_EXTERNAL_REDIRECT_URI)`
+# 환경별 callback (production/dev/staging/local) 을 가리키도록 봉인.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # [realtime] — 실시간 채널
