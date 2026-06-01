@@ -111,9 +111,23 @@ export interface KakaoSyncAuditOptions {
    * 본 값으로 전달.
    */
   enabled?: boolean;
+  /**
+   * round-14 항목 2 — endpoint path 를 단일 export 로 외부화. 기본값 KAKAO_SYNC_
+   * AUDIT_ENDPOINT_PATH. backend (`apps/api/src/routers/auth.py`) 의 라우트
+   * 정의와 정합. 호출자가 명시적으로 다른 경로를 쓰고 싶을 때만 override.
+   */
+  endpointPath?: string;
   /** 테스트/SSR 주입용. 기본값은 글로벌 fetch. */
   fetchImpl?: typeof fetch;
 }
+
+/**
+ * Kakao Sync audit endpoint path — backend `apps/api/src/routers/auth.py` 의
+ * `@router.post("/terms/kakao-sync", ...)` 와 정합 (CMP-581 round-13 에 stub
+ * 으로 ship, Backend/Auth 트랙이 실 구현 완료 예정). prefix `/auth` 는 backend
+ * router 의 APIRouter(prefix="/auth", ...) 에서 부여.
+ */
+export const KAKAO_SYNC_AUDIT_ENDPOINT_PATH = '/auth/terms/kakao-sync';
 
 export class KakaoSyncAuditError extends Error {
   readonly status: number;
@@ -134,7 +148,11 @@ export class KakaoSyncAuditError extends Error {
   }
 }
 
-export type KakaoSyncAuditErrorCode = 'http_error' | 'endpoint_not_enabled' | 'invalid_input';
+export type KakaoSyncAuditErrorCode =
+  | 'http_error'
+  | 'endpoint_not_enabled'
+  | 'invalid_input'
+  | 'network_error';
 
 /**
  * `/auth/terms/kakao-sync` 호출 — backend 가 endpoint 를 ship 한 이후에만 활성화.
@@ -180,7 +198,8 @@ export async function persistKakaoSyncConsent(
   }
 
   const fetchImpl = options.fetchImpl ?? fetch;
-  const url = `${options.apiBaseUrl}/auth/terms/kakao-sync`;
+  const endpointPath = options.endpointPath ?? KAKAO_SYNC_AUDIT_ENDPOINT_PATH;
+  const url = `${options.apiBaseUrl}${endpointPath}`;
 
   // round-12 항목 4 — Supabase SDK provider id (`'kakao'` | `'custom:kakao'`) 는
   // 콘솔 등록 방식에 따라 두 값을 가지지만 backend `terms_consents` enum 의 정본은
@@ -204,14 +223,27 @@ export async function persistKakaoSyncConsent(
     provider_refresh_token: input.providerRefreshToken ?? null,
   });
 
-  const response = await fetchImpl(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${input.supabaseAccessToken}`,
-    },
-    body,
-  });
+  // round-14 항목 3 — fetch reject (네트워크 단절 / CORS / DNS / abort) 도 raw
+  // TypeError 가 아닌 KakaoSyncAuditError(code='network_error') 로 wrap. 호출자는
+  // KakaoSyncAuditError.code/status 만으로 hard-fail vs reconcile 경로 분기 가능.
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${input.supabaseAccessToken}`,
+      },
+      body,
+    });
+  } catch (err) {
+    throw new KakaoSyncAuditError(
+      `Kakao Sync audit fetch 네트워크 실패: ${err instanceof Error ? err.message : String(err)}`,
+      0,
+      null,
+      'network_error',
+    );
+  }
 
   if (!response.ok) {
     let responseBody: string | null = null;

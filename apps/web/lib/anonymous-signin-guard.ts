@@ -82,6 +82,18 @@ export function isOAuthIntent(value: unknown): value is OAuthIntent {
  * // decision.intent 기준으로 linkIdentity / signInWithOAuth 분기.
  * ```
  */
+/**
+ * Signin intent 가 허용되는 유일한 조건 — session.kind === 'none' (round-14 항목 1).
+ *
+ * 본 헬퍼는 단일 책임 (signin allow 판정) 만 가진다. authenticated/anonymous
+ * 세션에서는 어떤 경우에도 false 를 반환하므로, 호출 측이 분기 누락으로 signin
+ * 을 통과시킬 수 없다 (structural defence in depth). `evaluateOAuthIntentGuard`
+ * 의 positive-list 가 이 헬퍼 하나만으로 signin allow 를 결정한다.
+ */
+function isSigninAllowedForSession(session: SessionShape): session is { kind: 'none' } {
+  return session.kind === 'none';
+}
+
 export function evaluateOAuthIntentGuard(
   session: SessionShape,
   intent: OAuthIntent | string,
@@ -94,19 +106,22 @@ export function evaluateOAuthIntentGuard(
     };
   }
 
-  // Positive-list of allowed (session, intent) pairs — round-13 review. 어떤
-  // 분기도 fallthrough 로 `allowed: true` 가 되지 않도록, allow 경로를 명시적으로
+  // Positive-list of allowed (session, intent) pairs — round-13/14. 어떤 분기도
+  // fallthrough 로 `allowed: true` 가 되지 않도록, allow 경로 3건 만 명시적으로
   // 열거하고 나머지는 모두 deny 한다 (defence in depth).
   //
   //   1. anonymous + link        → linkIdentity 호출 (단일 진입점).
   //   2. anonymous + link-merge  → §4.2.2 fallback ladder (signOut→signInWithOAuth).
-  //   3. none + signin           → 미로그인 user 의 정상 OAuth 로그인.
+  //   3. none + signin           → 미로그인 user 의 정상 OAuth 로그인. 본 분기는
+  //      `isSigninAllowedForSession` 단일 type guard 에 위임 — authenticated /
+  //      anonymous 에서는 이 함수가 false 를 반환하므로 signin allow 가 구조적으로
+  //      불가능하다 (round-14 항목 1 — authenticated+signin 회귀 차단).
   //
   // 그 외 모든 (session, intent) 조합은 deny.
   if (session.kind === 'anonymous' && (intent === 'link' || intent === 'link-merge')) {
     return { allowed: true, intent };
   }
-  if (session.kind === 'none' && intent === 'signin') {
+  if (intent === 'signin' && isSigninAllowedForSession(session)) {
     return { allowed: true, intent };
   }
 

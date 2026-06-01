@@ -9,6 +9,7 @@ import {
 import {
   persistKakaoSyncConsent,
   KakaoSyncAuditError,
+  KAKAO_SYNC_AUDIT_ENDPOINT_PATH,
   type KakaoSyncAuditInput,
 } from '@/lib/kakao-sync-audit';
 import {
@@ -707,5 +708,171 @@ describe('CMP-581 round-12 review fixes', () => {
       { reason: 'explicit_intent', storage, now: () => 1_000 },
     );
     expect(decision.allowed).toBe(true);
+  });
+});
+
+describe('CMP-581 round-14 review fixes', () => {
+  it('item 1: signin intent is structurally denied for any non-none session (positive-list)', () => {
+    // 항목 1 reviewer 재차 지적 — authenticated+signin 이 어떤 fallthrough 로도
+    // allow 되지 않음을 모든 세션 형태에서 검증.
+    const fromAuth = evaluateOAuthIntentGuard(
+      { kind: 'authenticated', userId: 'u-1', isAnonymous: false },
+      'signin',
+    );
+    expect(fromAuth.allowed).toBe(false);
+    if (!fromAuth.allowed) expect(fromAuth.reason).toBe('signin_blocked_authenticated_session');
+
+    const fromAnon = evaluateOAuthIntentGuard(
+      { kind: 'anonymous', userId: 'anon-1' },
+      'signin',
+    );
+    expect(fromAnon.allowed).toBe(false);
+    if (!fromAnon.allowed) expect(fromAnon.reason).toBe('signin_blocked_anonymous_session');
+
+    const fromNone = evaluateOAuthIntentGuard({ kind: 'none' }, 'signin');
+    expect(fromNone.allowed).toBe(true);
+  });
+
+  it('item 1: anonymous-signin-guard.ts source has no path that allows signin on non-none session', async () => {
+    // Forensic guard — 단일 책임 헬퍼 `isSigninAllowedForSession` 이 session.kind
+    // === "none" 만 true 로 반환해야 한다. 미래 refactor 가 이 조건을 깨면 본
+    // 테스트가 fail. body 만 정확히 추출해서 검증 (regex 가 return-type annotation
+    // 의 `{ kind: 'none' }` 와 충돌하지 않게 brace counting).
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '..', 'anonymous-signin-guard.ts'),
+      'utf8',
+    );
+    const fnHeadIdx = src.indexOf('function isSigninAllowedForSession');
+    expect(fnHeadIdx).toBeGreaterThan(-1);
+    // 함수 시그니처 이후 첫 `{` 부터 매칭되는 `}` 까지 brace 카운트로 추출.
+    const sigEnd = src.indexOf(' {\n', fnHeadIdx);
+    expect(sigEnd).toBeGreaterThan(-1);
+    const bodyStart = sigEnd + 2;
+    let depth = 1;
+    let i = bodyStart + 1;
+    for (; i < src.length && depth > 0; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') depth--;
+    }
+    const body = src.slice(bodyStart, i);
+    expect(body).toContain("session.kind === 'none'");
+    // 본 헬퍼 body 가 'authenticated' / 'anonymous' 를 true 로 반환하는 분기는 없어야 한다.
+    expect(body).not.toContain("'authenticated'");
+    expect(body).not.toContain("'anonymous'");
+  });
+
+  it('item 2: backend stub `POST /auth/terms/kakao-sync` is present in apps/api/src/routers/auth.py', async () => {
+    // Forensic cross-check — web helper 의 URL path 가 가리키는 backend route 가
+    // 실제로 repo 에 존재함을 source-level 로 박제. 미래에 누군가 backend route 를
+    // 삭제하면 본 테스트가 fail 해서 helper 가 dangling endpoint 를 가리키지
+    // 않도록 한다.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const apiRouterPath = path.resolve(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      '..',
+      'apps',
+      'api',
+      'src',
+      'routers',
+      'auth.py',
+    );
+    expect(fs.existsSync(apiRouterPath)).toBe(true);
+    const src = fs.readFileSync(apiRouterPath, 'utf8');
+    expect(src).toContain('"/terms/kakao-sync"');
+    expect(src).toContain('KakaoSyncAuditRequest');
+    expect(src).toContain('KakaoSyncAuditResponse');
+  });
+
+  it('item 2: KAKAO_SYNC_AUDIT_ENDPOINT_PATH constant matches the backend route definition', () => {
+    // helper 가 hardcode 하던 path 를 단일 export 로 외부화. backend router prefix
+    // `/auth` + route `/terms/kakao-sync` = `/auth/terms/kakao-sync`.
+    expect(KAKAO_SYNC_AUDIT_ENDPOINT_PATH).toBe('/auth/terms/kakao-sync');
+  });
+
+  it('item 2: helper uses options.endpointPath override when caller supplies it', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    await persistKakaoSyncConsent(
+      {
+        supabaseUserId: 'u',
+        linkedProvider: 'kakao',
+        supabaseAccessToken: 'jwt',
+        providerAccessToken: 'tok',
+        providerRefreshToken: null,
+      },
+      {
+        apiBaseUrl: 'http://api.test',
+        enabled: true,
+        endpointPath: '/custom/audit/path',
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+    );
+    const [url] = fetchImpl.mock.calls[0] as [string];
+    expect(url).toBe('http://api.test/custom/audit/path');
+  });
+
+  it('item 3: fetch reject (network error) is wrapped as KakaoSyncAuditError code=network_error', async () => {
+    // Raw TypeError / network down → callsite 가 try/catch 에서 KakaoSyncAuditError
+    // 만 보고 code 로 분기할 수 있어야 한다. round-11 hard-fail 정책 + round-14 의
+    // 일관된 error envelope 봉인.
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    let caught: unknown;
+    try {
+      await persistKakaoSyncConsent(
+        {
+          supabaseUserId: 'u',
+          linkedProvider: 'kakao',
+          supabaseAccessToken: 'jwt',
+          providerAccessToken: 'tok',
+          providerRefreshToken: null,
+        },
+        {
+          apiBaseUrl: 'http://api.test',
+          enabled: true,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(KakaoSyncAuditError);
+    if (caught instanceof KakaoSyncAuditError) {
+      expect(caught.code).toBe('network_error');
+      expect(caught.status).toBe(0);
+      expect(caught.message).toContain('Failed to fetch');
+    }
+  });
+
+  it('item 3: fetch reject of non-Error value also wraps cleanly (no leaked raw value)', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue('cors-blocked');
+    let caught: unknown;
+    try {
+      await persistKakaoSyncConsent(
+        {
+          supabaseUserId: 'u',
+          linkedProvider: 'kakao',
+          supabaseAccessToken: 'jwt',
+          providerAccessToken: 'tok',
+          providerRefreshToken: null,
+        },
+        {
+          apiBaseUrl: 'http://api.test',
+          enabled: true,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(KakaoSyncAuditError);
+    if (caught instanceof KakaoSyncAuditError) {
+      expect(caught.code).toBe('network_error');
+      expect(caught.message).toContain('cors-blocked');
+    }
   });
 });
