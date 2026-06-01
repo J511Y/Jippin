@@ -415,7 +415,7 @@ linkIdentity({ provider }) 실패
 |---|---|---|
 | `google` | `'google'` (native) | Supabase native. |
 | `kakao` | `'kakao'` (native) — Supabase 가 native 로 추가했는지 콘솔 세팅 트랙이 확인. **없으면 `'custom:kakao'`** 로 fallback. | Kakao Sync 동의 화면을 OAuth 화면에서 표시하려면 콘솔에서 `scope=profile_nickname,profile_image,account_email,gender,birthyear,birthday,terms_of_service` 등 명시적 입력 필요. |
-| `naver` | **`'custom:naver'`** | Supabase 는 Naver native provider 를 제공하지 않으므로 OIDC Custom Provider 로 등록한다. UI / 분석 / 텔레메트리 코드는 여전히 `'naver'` 식별자를 그대로 쓰며, **본 매핑 함수만이 SDK 경계에서 변환** 한다. |
+| `naver` | **`'custom:naver'`** | Supabase 는 Naver native provider 를 제공하지 않으므로 **Custom OAuth Provider 의 OAuth2 모드 (not OIDC)** 로 등록한다 (§4.3.1 / §8 봉인). Naver 는 `id_token` 을 발급하지 않고 OIDC discovery URL (`.well-known/openid-configuration`) 도 노출하지 않으므로 콘솔에서 OIDC 모드로 등록하면 라이브에서 즉시 실패한다. UI / 분석 / 텔레메트리 코드는 여전히 `'naver'` 식별자를 그대로 쓰며, **본 매핑 함수만이 SDK 경계에서 변환** 한다. |
 
 매핑 함수 서명 (의사 코드):
 
@@ -463,6 +463,33 @@ export function toSupabaseProviderId(ui: UiProvider): SupabaseProvider {
 - `redirectTo` 가 Supabase 콘솔의 redirect allow list 에 없으면 SDK 가 즉시 에러. 위 매트릭스의 `redirect_uri_mismatch` 분기로 처리.
 - provider OAuth error (사용자 취소, scope 거부) 는 callback 에서 처리하여 `FAILURE_URL` 로 302 (§4.7).
 
+#### 4.2.5 Provider 화이트리스트 정책 — email / passwordless 봉인 (CMP-584)
+
+> **§0.0 CMP-572 CEO 결정 정합.** Provider 화이트리스트가 좁을수록 동일 verified email 자동 merge 우회로 / 비-OAuth 인증 우회로가 줄어든다. 본 정책은 "MVP 는 manual identity linking only" CEO 결정의 Phase 1 코드 봉인이다.
+
+**정본.** `apps/web/lib/oauth-providers/index.ts` 의 `ALLOWED_PROVIDERS = ['google', 'kakao', 'naver'] as const` 단일 export 가 SSOT.
+
+**Web 트랙 봉인 (CMP-584 Phase 1 (e) 산출물):**
+
+| 경계 | 봉인 규칙 | 위반 시 동작 |
+|---|---|---|
+| **UI** — `apps/web/app/(auth)/login/login-buttons.tsx` | `ALLOWED_PROVIDERS` 에서만 버튼 라벨/순서를 derive. `<input type="email">` / `<input type="password">` / magic link / OTP / passwordless CTA 절대 노출 금지. | vitest unit test 가 `<input>` 0개 / form 0개를 강제 (`login-buttons.test.tsx`). |
+| **BFF** — `apps/web/app/auth/oauth/start/route.ts` | `provider` 쿼리가 `ALLOWED_PROVIDERS` 밖이면 400 `PROVIDER_NOT_ALLOWED`. 화이트리스트 밖 query (`password`, `email`, `next` 등) 는 backend 로 forward 하지 않음. | vitest unit test 가 `provider=facebook` / `email` / `password` / `magic_link` / `otp` / missing 모두 400 확인 (`route.test.ts`). |
+| **분석 / 텔레메트리** | provider 식별자 enum 은 `AllowedProvider` type 으로 지정. raw string 사용 금지. | TypeScript strict 가 컴파일 단계에서 차단. |
+| **Supabase 콘솔** | Authentication → Providers 에서 **email / phone provider OFF** (§8 봉인). magic link / OTP / SMS 비활성. | §8 입력 항목 표가 콘솔 운영자의 SSOT — ON 인 채 라이브 가면 본 정책 위반 → 즉시 라이브 차단. |
+
+**비-OAuth 경로 금지 (정책 사유):**
+
+- 자체 가입 / 아이디 찾기 / 비밀번호 찾기는 ADR-0003 정본대로 존재하지 않는다.
+- magic link / OTP / passwordless 는 (a) Supabase 콘솔에서 email provider 가 켜져야 하고, (b) email = 의 user 가 자동 link 되는 부수효과를 가질 수 있어 §0.0 CEO 결정 위반 위험.
+- 본 봉인 이후 새 provider 추가 (Apple, GitHub 등) 는 별도 ADR / runbook 갱신 + 자식 이슈 분리.
+
+**위반 케이스 — 즉시 reject 대상:**
+
+- `ALLOWED_PROVIDERS` 외 provider id 를 raw string 으로 SDK / fetch / 분석 코드에 직접 쓰는 PR.
+- login 페이지 (또는 그 외 경로) 에 `<input type="email">` / `<input type="password">` / magic link CTA 를 추가하는 PR.
+- `/auth/oauth/start` BFF 의 화이트리스트 가드를 우회하거나 제거하는 PR.
+
 ### 4.3 FastAPI 호출 adapter
 
 > §4.3 의 호출 어댑터 코드는 Backend/Auth 트랙이 §4.4 의 anonymous 거부 계약을 구현한 뒤에만 라이브 가능.
@@ -497,6 +524,38 @@ client.interceptors.request.use(async (config) => {
 - `withCredentials: true` — 자체 `/auth/refresh` 쿠키 의존이 사라지므로 제거 (FastAPI 가 더 이상 자체 쿠키를 발급하지 않는 시점 기준).
 
 **401 fallback (token revoke / 키 회전).** 백엔드가 token 검증 실패로 401 을 돌려주는 경우, SDK 의 자동 갱신과 무관한 영구 만료 / 키 회전 / revoke 시나리오가 있다. 그 시 한 번만 `supabase.auth.refreshSession()` 을 호출하고 재시도. 재시도까지 실패하면 client 상태를 logout 으로 전환하고 호출부에 propagate. 단 §4.4 의 403 `AUTH_ANONYMOUS_NOT_ALLOWED` 에는 본 fallback 을 적용하지 않는다 (refresh 해도 anonymous 인 사실은 바뀌지 않는다).
+
+#### 4.3.1 Naver = Custom OAuth2 (not OIDC) 봉인 (CMP-584)
+
+> **문제.** §4.2.3 매핑 표가 `naver` → `custom:naver` 로 표기하면서도 "OIDC Custom Provider" 라는 잘못된 표현이 round-9 까지 잔존했다. Naver 의 공식 인증 사양은 OAuth2 (authorize + token + user-info) 이며 OIDC discovery (`/.well-known/openid-configuration`) 와 `id_token` 발급을 지원하지 않는다. 콘솔에서 OIDC 모드로 등록하면 즉시 `provider_not_enabled` / discovery 실패.
+
+**Web 트랙 봉인 (CMP-584 산출물):**
+
+- `apps/web/lib/oauth-providers/naver.ts` — Naver Custom OAuth2 어댑터. `NAVER_PROTOCOL = 'oauth2' as const`. `NAVER_DEFAULT_ENDPOINTS` 가 authorize / token / user-info URL 3개를 명시.
+- **변수명만 SSOT, 실값 금지** (AGENTS.md §4.4 / ADR-0003 시크릿 봉인 정합): `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `NAVER_AUTHORIZE_URL`, `NAVER_TOKEN_URL`, `NAVER_USERINFO_URL`. 실값은 Supabase 콘솔 입력 또는 `.env.local`, **코드 / 문서 / 이슈 / PR 본문에 절대 기재 금지**.
+- `assertNaverIsOAuth2()` — endpoint 가 `.well-known/openid-configuration` 패턴을 포함하면 throw. vitest unit test 가 default endpoints + 의도된 override + 잘못된 OIDC discovery URL 시나리오 모두 검증 (`naver.test.ts`).
+
+**Supabase 콘솔 봉인 (§8 보강 — 운영자 SSOT):**
+
+- Authentication → Providers → Add custom OAuth provider → **`OAuth2 (Generic)`** 모드 선택 (OIDC 모드 절대 금지).
+- 입력 필드: `Client ID` (= `NAVER_CLIENT_ID`), `Client Secret` (= `NAVER_CLIENT_SECRET`), `Authorize URL` (= `NAVER_AUTHORIZE_URL`), `Token URL` (= `NAVER_TOKEN_URL`), `User-Info URL` (= `NAVER_USERINFO_URL`).
+- `provider identifier` 필드는 **반드시 `naver`** 로 등록 (§4.2.3 매핑 + §8 입력 항목 표 정합). 다른 식별자로 등록하면 SDK `signInWithOAuth({ provider: 'custom:naver' })` 호출 시 `provider not enabled`.
+- redirect allow list 에 `/auth/callback` 추가 (§4.7.2).
+
+**OIDC 와의 차이 (잘못 등록 시 증상):**
+
+| 항목 | OAuth2 (정본) | OIDC (잘못된 등록) |
+|---|---|---|
+| 토큰 응답 | `access_token` + (optional) `refresh_token` | + `id_token` (JWT) |
+| user 식별 | `userInfoUrl` 응답의 `response.id` | `id_token` 의 `sub` claim |
+| Supabase 콘솔 입력 | authorize / token / user-info URL 3개 | OIDC discovery URL 1개 |
+| Naver 지원 | ✅ 지원 | ❌ 미지원 (`/.well-known/openid-configuration` 부재) |
+
+**위반 케이스 — 즉시 차단:**
+
+- Naver provider 의 endpoints 변수에 `/.well-known/openid-configuration` URL 을 넣는 PR (`assertNaverIsOAuth2()` 가 throw).
+- 콘솔에서 Naver 를 OIDC 모드로 등록한 채 라이브 진입.
+- `id_token` 기반으로 Naver user 를 식별하려는 backend / web 코드.
 
 ### 4.4 anonymous gating contract (conversion-only 엔드포인트)
 
@@ -1091,8 +1150,9 @@ export const config = { matcher: ['/app/:path*'] };
 | Supabase `anon` key | `apps/web/.env.local::NEXT_PUBLIC_SUPABASE_ANON_KEY` | 브라우저 노출 OK. |
 | Supabase `service_role` key | `apps/api/.env.local::SUPABASE_SERVICE_ROLE_KEY` | **웹에 두지 않음.** |
 | Google OAuth client ID/secret | Supabase 콘솔 → Auth → Providers → Google | 웹·API 모두에 두지 않음. |
-| Kakao OAuth client ID/secret | Supabase 콘솔 → Auth → Providers → Custom (OIDC) | 동일. |
-| Naver OAuth client ID/secret | Supabase 콘솔 → Auth → Providers → Custom (OIDC) | 동일. |
+| Kakao OAuth client ID/secret | Supabase 콘솔 → Auth → Providers → Custom (네이티브 미지원 시 Custom OIDC 또는 OAuth2 — 콘솔 세팅 트랙 결정) | 동일. provider identifier = `kakao` 고정. |
+| **Naver Custom OAuth2 (not OIDC)** — client ID / secret / authorize URL / token URL / user-info URL | Supabase 콘솔 → Auth → Providers → **Custom OAuth Provider (`OAuth2 (Generic)` 모드)** | §4.3.1 봉인. **OIDC 모드 금지** (Naver 는 `.well-known/openid-configuration` 미지원). 입력 필드는 변수명 `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` / `NAVER_AUTHORIZE_URL` / `NAVER_TOKEN_URL` / `NAVER_USERINFO_URL` 로 SSOT. 실값은 코드 / 문서 / 이슈에 절대 기재 금지. provider identifier = `naver` 고정 (§4.2.3 매핑). |
+| **Provider 화이트리스트 정책** | Supabase 콘솔 → Auth → Providers — **Email provider OFF**, Phone provider OFF, magic link OFF, OTP OFF, SMS OFF, anonymous sign-in 만 별도 ON. UI 노출은 `ALLOWED_PROVIDERS = ['google','kakao','naver']` 한정 (§4.2.5). | §4.2.5 / CMP-584. 위 비-OAuth 경로 중 하나라도 ON 인 상태로 라이브 가면 §0.0 CMP-572 CEO 결정의 "자동 verified email merge 우회로" 위험. 즉시 라이브 차단. |
 | Identity Linking 정책 | Supabase 콘솔 → Auth → Settings → **Account Linking = `manual only`**, "Auto-link verified emails" / "Link accounts with same email" 모두 OFF | **§0.0 CMP-572 CEO 결정 + ADR-0003 §2.3.** 위 토글 중 하나라도 ON 인 상태로 라이브 가면 본 runbook 위반 → 즉시 라이브 차단. Identity Linking 자체 기능 (`auth.linkIdentity` 호출 권한) 은 ON 이어야 한다 (manual flow 의 진입 권한). |
 | **ADR-0003 supersede 결정 (=ADR-0004)** | `docs/adr/0004-*.md` 신규 + Accepted | Phase 2 (localStorage 키 제거, `lib/anonymous-user.ts` 제거, dual-write 종료) 가 시작될 수 있는 유일한 gate. ADR-0004 가 Accepted 되기 전에는 본 runbook 도 Phase 1 동작만 봉인한다. |
 | **Kakao Sync 동의 audit 경로 합의** | §4.5.2 표의 (a) / (b) / (c) 중 어느 경로를 봉인할지 Backend/Auth 트랙이 결정 | 본 runbook 은 (a) 로 가정. (b)/(c) 결정 시 본 절 갱신. |
@@ -1136,6 +1196,7 @@ PR [#42](https://github.com/J511Y/Jippin/pull/42) 의 잔여 review thread (2026
 | **CMP-580** [Phase 1 (b)](/CMP/issues/CMP-580) | SSR cookie adapter & PKCE preservation | R2, R10 | §4.2.1 BFF |
 | **CMP-581** [Phase 1 (c)](/CMP/issues/CMP-581) | Anonymous gate & Kakao Sync audit | R3, R4, R9, R13 | §4.1 / §4.4 / §4.5.2 / §8 |
 | **CMP-582** [Phase 1 (d)](/CMP/issues/CMP-582) | Open redirect hop & login next | R6, R11 | §4.6 / §4.2.1 |
+| **CMP-584** [Phase 1 (e)](/CMP/issues/CMP-584) | Provider 화이트리스트 + Naver Custom OAuth2 (not OIDC) | round-11 wake item 5 | §4.2.5 / §4.3.1 / §8 |
 
 ### 11.2 잔여 review thread → 자식 이슈 매핑
 
