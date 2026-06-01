@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { apiBaseUrl } from '@/lib/api-base-url';
+import { publicApiBaseUrl } from '@/lib/api-base-url';
 import { isAllowedProvider } from '@/lib/oauth-providers';
 
 /**
@@ -15,7 +15,10 @@ import { isAllowedProvider } from '@/lib/oauth-providers';
  *  - `provider` 파라미터가 `ALLOWED_PROVIDERS` 밖이면 400 (`provider_not_allowed`).
  *  - email / password / magic link / OTP / passwordless 등 비-OAuth 인증 경로는 본 BFF
  *    의 진입점이 아니다. 별도 라우트로도 노출하지 않는다.
- *  - `provider` 파라미터가 화이트리스트 안일 때만 백엔드 `/auth/{provider}/start` 로 302.
+ *  - `provider` 파라미터가 화이트리스트 안일 때만 **browser-reachable** 백엔드 URL 로 302.
+ *    `publicApiBaseUrl()` 가 Docker 내부 hostname (`api:`, `app:`, `web:`) 을 거부하므로
+ *    compose 의 `NEXT_PUBLIC_API_BASE_URL=http://api:8000` 같은 server-to-server 전용 값을
+ *    그대로 302 `Location` 에 흘리는 사고가 차단된다 (CMP-584 round-3 봉인).
  */
 
 const ALLOWED_FORWARD_PARAMS = new Set(['return_url', 'anonymous_user_id', 'intent']);
@@ -36,7 +39,23 @@ export function GET(request: NextRequest): NextResponse {
     );
   }
 
-  const target = new URL(`${apiBaseUrl()}/auth/${provider}/start`);
+  let baseUrl: string;
+  try {
+    baseUrl = publicApiBaseUrl();
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          code: 'OAUTH_BASE_URL_MISCONFIGURED',
+          message:
+            'OAuth redirect base URL 이 brower-reachable 하지 않습니다. 운영자에게 문의해 주세요.'
+        }
+      },
+      { status: 500 }
+    );
+  }
+
+  const target = new URL(`${baseUrl}/auth/${provider}/start`);
   for (const [key, value] of url.searchParams.entries()) {
     if (key === 'provider') continue;
     if (!ALLOWED_FORWARD_PARAMS.has(key)) continue;
