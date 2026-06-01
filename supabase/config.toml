@@ -239,13 +239,15 @@ enable_confirmations = false
 #
 # **env() wiring 정본.** 활성화 시점에는 CMP-576 PR 이 본 값을 `env(VAR)` 로 바꾼다.
 # `env()` 는 **Supabase CLI/integration 이 보는 환경변수만** 읽는다 — 구체적으로
-# (a) local 은 `supabase/.env` 또는 `supabase/.env.local` (gitignored — 본 PR 에서
-# `.gitignore` 로 봉인 예정), (b) Supabase GitHub integration 의 preview/production
-# 배포는 Supabase 콘솔의 Edge Functions Secrets / Vault 또는 `supabase secrets set
-# --project-ref <REF> VAR=...` 로 등록된 값. **`apps/api/.env.example`,
-# `apps/web/.env.example` 은 app runtime 용 placeholder 일 뿐 Supabase CLI 가 읽지
-# 않는다** — provider 활성화 PR 은 본 위치들에도 동시에 값을 등록해야 한다.
-# 자세한 절차는 `docs/runbooks/supabase-branching.md` §7.4 참고.
+# (a) local 은 **project root `.env`** (즉 본 `config.toml` 의 parent 의 parent,
+# repo root `.env`. `supabase/.env` 가 아님 — Supabase 공식:
+# https://supabase.com/docs/guides/local-development/managing-config#using-secrets-inside-configtoml),
+# (b) Supabase GitHub integration 의 preview/production 배포는 Supabase 콘솔의
+# Edge Functions Secrets / Vault 또는 `supabase secrets set --project-ref <REF>
+# VAR=...` 로 등록된 값. **`apps/api/.env.example`, `apps/web/.env.example` 은 app
+# runtime 용 placeholder 일 뿐 Supabase CLI 가 읽지 않는다** — provider 활성화 PR 은
+# repo root `.env.example` (또는 `supabase/.env.example`) 에 변수명을 추가해야 한다.
+# 자세한 절차는 `docs/runbooks/supabase-branching.md` §7.4 W1~W4 / W-A~W-D 참고.
 [auth.external.google]
 enabled = false
 client_id = ""
