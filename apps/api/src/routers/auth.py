@@ -26,6 +26,8 @@ from ..schemas.auth import (
     AuthLogoutResponse,
     AuthMeResponse,
     AuthUserResponse,
+    KakaoSyncAuditRequest,
+    KakaoSyncAuditResponse,
     OAuthStartResponse,
     SupabaseAccountLinkRequest,
     SupabaseAccountLinkResponse,
@@ -154,6 +156,59 @@ async def logout() -> JSONResponse:
     response = JSONResponse(AuthLogoutResponse().model_dump())
     clear_session_cookie(response)
     return response
+
+
+@router.post(
+    "/terms/kakao-sync",
+    response_model=KakaoSyncAuditResponse,
+    status_code=202,
+)
+async def kakao_sync_audit_stub(
+    payload: KakaoSyncAuditRequest,
+    request: Request,
+) -> KakaoSyncAuditResponse:
+    """Phase 1 stub — `apps/web/lib/kakao-sync-audit.ts` 의 호출 대상 (CMP-581 round-13).
+
+    web helper 가 `enabled: true` + 실제 backend route 를 가리키도록 하기 위한
+    minimal stub. 본 핸들러는 다음만 수행한다:
+
+    - Authorization: Bearer 헤더 존재 확인 (실 JWT 검증은 Backend/Auth 트랙).
+    - payload schema 검증 (Pydantic).
+    - 호출 사실을 logger 로 남김 — 운영이 Sentry breadcrumb 로 추적 가능.
+
+    실 `terms_consents(source='kakao_sync')` upsert + Kakao OpenAPI 검증은
+    Backend/Auth 트랙 (별 이슈) 의 책임. 본 stub 은 web 어댑터가 무조건 실패
+    경로로 빠지는 회귀를 막기 위한 placeholder.
+
+    응답은 202 Accepted + `stubbed: true` — callsite (callback Route Handler)
+    가 stub 상태를 인지하고 success page 로 진입할지 별도 판단할 수 있게 한다.
+    """
+    authorization = request.headers.get("authorization", "")
+    # 기존 API error contract (auth/session.py, services/auth.py) 와 정합:
+    # uppercase stable code `AUTH_UNAUTHENTICATED` 사용 (CMP-581 round-16 항목 3).
+    # round-17 항목 2 — `Bearer ` prefix 만 보고 통과시키면 빈 token 도 허용되어
+    # 실제 인증이 없는 상태로 stub 가 200 을 반환하는 회귀. prefix + non-empty
+    # value 둘 다 검증해야 한다.
+    if not authorization.lower().startswith("bearer "):
+        raise ZippinException(
+            "Authorization: Bearer <supabase access_token> 헤더가 필요합니다.",
+            code="AUTH_UNAUTHENTICATED",
+            http_status=401,
+        )
+    bearer_value = authorization[len("Bearer ") :].strip()
+    if not bearer_value:
+        raise ZippinException(
+            "Authorization Bearer token 이 비어 있습니다.",
+            code="AUTH_UNAUTHENTICATED",
+            http_status=401,
+        )
+    logger.info(
+        "kakao_sync_audit_stub_received",
+        supabase_user_id=payload.supabase_user_id,
+        linked_provider=payload.linked_provider,
+        has_provider_access_token=payload.provider_access_token is not None,
+    )
+    return KakaoSyncAuditResponse()
 
 
 @router.post("/supabase/session", response_model=SupabaseSessionBridgeResponse)
