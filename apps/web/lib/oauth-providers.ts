@@ -58,28 +58,33 @@
 export type UiProvider = 'google' | 'kakao' | 'naver';
 export type SupabaseProvider = 'google' | 'kakao' | `custom:${string}`;
 
-const KAKAO_PROVIDER_ID_ENV = 'NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID';
+// Next.js 는 `process.env.NEXT_PUBLIC_*` 를 **정적 참조** 일 때만 client bundle 에
+// build-time inline 한다 (`process.env[변수명]` 같은 computed-property 접근은
+// inline 되지 않아 브라우저에서 항상 undefined). 따라서 본 모듈은 env var 를
+// 항상 직접 멤버 접근으로 읽고, 호출자는 string override 가 필요할 때만 인자로
+// 전달한다 (테스트/SSR 주입용).
+function readKakaoProviderIdEnv(): string | undefined {
+  const raw = process.env.NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID;
+  return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
+}
 
 function isSupabaseKakaoProvider(value: string | undefined): value is SupabaseProvider {
   return value === 'kakao' || value === 'custom:kakao';
 }
 
-export function resolveKakaoProviderId(
-  envValue: string | undefined = process.env[KAKAO_PROVIDER_ID_ENV],
-): SupabaseProvider {
-  if (envValue === undefined || envValue.length === 0) return 'kakao';
-  if (!isSupabaseKakaoProvider(envValue)) {
+export function resolveKakaoProviderId(envValue?: string | undefined): SupabaseProvider {
+  const value = envValue !== undefined ? envValue : readKakaoProviderIdEnv();
+  if (value === undefined || value.length === 0) return 'kakao';
+  if (!isSupabaseKakaoProvider(value)) {
     throw new Error(
-      `[oauth-providers] ${KAKAO_PROVIDER_ID_ENV}="${envValue}" 는 허용되지 않는 값입니다. ` +
+      `[oauth-providers] NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID="${value}" 는 허용되지 않는 값입니다. ` +
         `'kakao' 또는 'custom:kakao' 만 허용.`,
     );
   }
-  return envValue;
+  return value;
 }
 
-export function buildProviderMap(
-  envValue: string | undefined = process.env[KAKAO_PROVIDER_ID_ENV],
-): Record<UiProvider, SupabaseProvider> {
+export function buildProviderMap(envValue?: string | undefined): Record<UiProvider, SupabaseProvider> {
   return {
     google: 'google',
     kakao: resolveKakaoProviderId(envValue),
@@ -87,13 +92,28 @@ export function buildProviderMap(
   };
 }
 
-export function toSupabaseProviderId(
-  ui: UiProvider,
-  envValue: string | undefined = process.env[KAKAO_PROVIDER_ID_ENV],
-): SupabaseProvider {
+export function toSupabaseProviderId(ui: UiProvider, envValue?: string | undefined): SupabaseProvider {
   return buildProviderMap(envValue)[ui];
 }
 
 export function isKakaoProvider(provider: SupabaseProvider | string | null | undefined): boolean {
   return provider === 'kakao' || provider === 'custom:kakao';
+}
+
+/**
+ * Backend audit / consent SSOT 정본 provider id 로 정규화 (round-12 항목 4).
+ *
+ * Supabase SDK provider id (`'kakao'` | `'custom:kakao'`) 는 콘솔 등록 방식에 따라
+ * 두 값을 가질 수 있지만, backend `terms_consents.source` enum 과 `/auth/terms/
+ * kakao-sync` payload `linked_provider` enum 의 정본은 **`'kakao'` 단일 값** 이다
+ * (콘솔 등록이 native 든 Custom OIDC 든 사람·법적 관점에서 같은 카카오 계정).
+ * 본 helper 는 SDK id 를 backend enum 으로 normalize 한다.
+ */
+export function normalizeProviderForBackend(provider: SupabaseProvider | string): 'google' | 'kakao' | 'naver' {
+  if (provider === 'kakao' || provider === 'custom:kakao') return 'kakao';
+  if (provider === 'naver' || provider === 'custom:naver') return 'naver';
+  if (provider === 'google') return 'google';
+  throw new Error(
+    `[oauth-providers] provider="${provider}" 는 backend enum 으로 normalize 할 수 없습니다.`,
+  );
 }

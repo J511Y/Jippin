@@ -104,6 +104,13 @@ export interface KakaoSyncAuditInput {
 
 export interface KakaoSyncAuditOptions {
   apiBaseUrl: string;
+  /**
+   * round-12 항목 5 — backend `/auth/terms/kakao-sync` 라우트가 ship 된 환경에서만
+   * true. 기본값은 false 로 hard-fail (silent no-op 회귀 방지). 호출자는 보통
+   * `process.env.NEXT_PUBLIC_KAKAO_SYNC_AUDIT_ENABLED === 'true'` 를 직접 평가해
+   * 본 값으로 전달.
+   */
+  enabled?: boolean;
   /** 테스트/SSR 주입용. 기본값은 글로벌 fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -111,32 +118,87 @@ export interface KakaoSyncAuditOptions {
 export class KakaoSyncAuditError extends Error {
   readonly status: number;
   readonly responseBody: string | null;
+  readonly code: KakaoSyncAuditErrorCode;
 
-  constructor(message: string, status: number, responseBody: string | null) {
+  constructor(
+    message: string,
+    status: number,
+    responseBody: string | null,
+    code: KakaoSyncAuditErrorCode = 'http_error',
+  ) {
     super(message);
     this.name = 'KakaoSyncAuditError';
     this.status = status;
     this.responseBody = responseBody;
+    this.code = code;
   }
 }
 
+export type KakaoSyncAuditErrorCode = 'http_error' | 'endpoint_not_enabled' | 'invalid_input';
+
 /**
- * `/auth/terms/kakao-sync` 호출. 성공 시 void, 4xx/5xx 또는 네트워크 실패 시 throw.
+ * `/auth/terms/kakao-sync` 호출 — backend 가 endpoint 를 ship 한 이후에만 활성화.
  *
- * 호출자는 throw 를 catch 하여 §4.5.2 fallback (Sentry breadcrumb + reconcile 잡 enqueue)
- * 로 진입해야 한다. 본 헬퍼는 silent success 회귀를 방지하기 위해 응답 본문을 절대
- * `response.ok === false` 인 채로 통과시키지 않는다 (R13).
+ * **endpoint feature gate (round-12 항목 5).** 현재 backend repo (`apps/api`) 에는
+ * `/auth/terms/kakao-sync` 라우트가 아직 구현되어 있지 않다 (이슈 비목표 — Backend/
+ * Auth 트랙). web 어댑터가 무조건 호출하면 모든 Kakao OAuth 가 audit 실패 경로로
+ * 빠지므로, 호출자는 backend 가 endpoint 를 ship 했음을 환경변수로 선언해야 한다.
+ *
+ * `options.enabled` 가 false (기본값) 이면 fetch 자체를 시도하지 않고 즉시 throw —
+ * 명시적 hard-fail 로 호출자가 "backend audit 미 ship" 상태임을 코드로 인지하게
+ * 한다 (silent no-op 으로 success 페이지 진입하는 회귀 방지, round-11 항목 4 hard-
+ * fail 정책과 정합). callsite (callback Route Handler) 는 다음과 같이 gating:
+ *
+ * ```ts
+ * const auditEnabled = process.env.NEXT_PUBLIC_KAKAO_SYNC_AUDIT_ENABLED === 'true';
+ * if (!auditEnabled) {
+ *   // backend 가 endpoint 를 ship 할 때까지 Kakao OAuth 흐름 자체를 차단.
+ *   return blockKakaoOAuth('audit_endpoint_not_enabled');
+ * }
+ * await persistKakaoSyncConsent(input, { ...options, enabled: true });
+ * ```
+ *
+ * 성공 시 void, 4xx/5xx 또는 네트워크 실패 시 throw `KakaoSyncAuditError`.
+ * 호출자는 throw 를 catch 하여 §4.5.2 fallback (Sentry breadcrumb + reconcile 잡
+ * enqueue) 로 진입해야 한다. 본 헬퍼는 silent success 회귀를 방지하기 위해 응답
+ * 본문을 절대 `response.ok === false` 인 채로 통과시키지 않는다 (R13).
  */
 export async function persistKakaoSyncConsent(
   input: KakaoSyncAuditInput,
   options: KakaoSyncAuditOptions,
 ): Promise<void> {
+  if (options.enabled !== true) {
+    throw new KakaoSyncAuditError(
+      'Kakao Sync audit endpoint 가 아직 활성화되지 않았습니다 ' +
+        '(NEXT_PUBLIC_KAKAO_SYNC_AUDIT_ENABLED!=="true" 또는 호출자가 enabled:true 미전달). ' +
+        'backend `/auth/terms/kakao-sync` 라우트가 ship 된 뒤에만 호출하세요.',
+      0,
+      null,
+      'endpoint_not_enabled',
+    );
+  }
+
   const fetchImpl = options.fetchImpl ?? fetch;
   const url = `${options.apiBaseUrl}/auth/terms/kakao-sync`;
 
+  // round-12 항목 4 — Supabase SDK provider id (`'kakao'` | `'custom:kakao'`) 는
+  // 콘솔 등록 방식에 따라 두 값을 가지지만 backend `terms_consents` enum 의 정본은
+  // 'kakao' 단일. 본 helper 가 wire-level 에서 normalize 한다 (호출자 실수 차단).
+  const normalizedLinkedProvider: 'kakao' =
+    input.linkedProvider === 'kakao' || input.linkedProvider === 'custom:kakao'
+      ? 'kakao'
+      : (() => {
+          throw new KakaoSyncAuditError(
+            `linkedProvider="${String(input.linkedProvider)}" 는 'kakao' / 'custom:kakao' 외에 허용되지 않습니다.`,
+            0,
+            null,
+            'invalid_input',
+          );
+        })();
+
   const body = JSON.stringify({
     supabase_user_id: input.supabaseUserId,
-    linked_provider: input.linkedProvider,
+    linked_provider: normalizedLinkedProvider,
     provider_access_token: input.providerAccessToken,
     provider_refresh_token: input.providerRefreshToken ?? null,
   });
@@ -161,6 +223,7 @@ export async function persistKakaoSyncConsent(
       `Kakao Sync audit 호출이 실패했습니다 (status=${response.status}).`,
       response.status,
       responseBody,
+      'http_error',
     );
   }
 }

@@ -52,6 +52,7 @@ export type OAuthGuardDecision =
 
 export type OAuthGuardBlockReason =
   | 'signin_blocked_anonymous_session'
+  | 'signin_blocked_authenticated_session'
   | 'link_blocked_authenticated_session'
   | 'link_merge_requires_anonymous_session'
   | 'unknown_intent';
@@ -121,6 +122,19 @@ export function evaluateOAuthIntentGuard(
           reason: 'link_blocked_authenticated_session',
           detail:
             '이미 실명 user 로 로그인된 상태입니다. provider 추가 연결은 별도 UX (account-settings) 에서 진입해야 합니다.',
+        };
+      }
+      if (intent === 'signin') {
+        // 이미 인증된 세션에서 새 OAuth `signin` 흐름을 시작하면 (1) 기존 세션의
+        // claims 를 덮어쓰는 회귀, (2) 의도치 않은 provider switch, (3) account
+        // takeover (CSRF-induced auto-login) 위험이 생긴다. 실명 user 가 다른
+        // 계정으로 갈아타려면 명시적 signOut 후 재진입해야 한다.
+        return {
+          allowed: false,
+          reason: 'signin_blocked_authenticated_session',
+          detail:
+            '이미 로그인된 상태에서는 signin intent 로 새 OAuth 흐름을 시작할 수 없습니다. ' +
+            '명시적 signOut 후 다시 시도하거나, provider 추가는 account-settings UX 로 진입하세요.',
         };
       }
       return { allowed: true, intent };

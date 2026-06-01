@@ -161,7 +161,10 @@ export async function evaluateAnonymousGate(
     const now = (request.now ?? Date.now)();
     if (config.minIntervalMs > 0) {
       const lastRaw = storage.getItem(LAST_ATTEMPT_KEY);
-      const last = lastRaw === null ? NaN : Number(lastRaw);
+      // non-numeric (예: 사용자 수동 편집) 은 prior attempt 없음으로 간주 — NaN 을
+      // 그대로 비교에 쓰지 않는다.
+      const lastParsed = lastRaw === null ? NaN : Number(lastRaw);
+      const last = Number.isFinite(lastParsed) ? lastParsed : NaN;
       if (Number.isFinite(last) && now - last < config.minIntervalMs) {
         return {
           allowed: false,
@@ -172,17 +175,42 @@ export async function evaluateAnonymousGate(
     }
     if (config.maxAttemptsPerSession > 0) {
       const countRaw = storage.getItem(ATTEMPT_COUNT_KEY);
-      const count = countRaw === null ? 0 : Number(countRaw);
-      if (Number.isFinite(count) && count >= config.maxAttemptsPerSession) {
+      // non-numeric / NaN 은 0 으로 reset — 'NaN' 문자열을 재저장하는 회귀 방지.
+      const parsedCount = countRaw === null ? 0 : Number(countRaw);
+      const count = Number.isFinite(parsedCount) && parsedCount >= 0 ? parsedCount : 0;
+      if (count >= config.maxAttemptsPerSession) {
         return {
           allowed: false,
           reason: 'rate_limited',
           detail: `maxAttemptsPerSession=${config.maxAttemptsPerSession} 초과.`,
         };
       }
-      storage.setItem(ATTEMPT_COUNT_KEY, String(count + 1));
+      try {
+        storage.setItem(ATTEMPT_COUNT_KEY, String(count + 1));
+      } catch (err) {
+        // quota exceeded / private mode / disabled storage — 회귀를 만들지 않고
+        // 명시적으로 차단. setItem 실패 시 rate-limit 카운터를 갱신하지 못하므로
+        // 다음 요청이 동일 윈도우에서 무한 발급될 위험을 차단.
+        return {
+          allowed: false,
+          reason: 'storage_unavailable',
+          detail:
+            'sessionStorage.setItem 호출이 실패했습니다 (quota / private mode / disabled). ' +
+            (err instanceof Error ? err.message : String(err)),
+        };
+      }
     }
-    storage.setItem(LAST_ATTEMPT_KEY, String(now));
+    try {
+      storage.setItem(LAST_ATTEMPT_KEY, String(now));
+    } catch (err) {
+      return {
+        allowed: false,
+        reason: 'storage_unavailable',
+        detail:
+          'sessionStorage.setItem (last_attempt) 호출이 실패했습니다. ' +
+          (err instanceof Error ? err.message : String(err)),
+      };
+    }
   }
 
   return { allowed: true };

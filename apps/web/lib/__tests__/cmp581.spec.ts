@@ -15,6 +15,7 @@ import {
   resolveKakaoProviderId,
   toSupabaseProviderId,
   isKakaoProvider,
+  normalizeProviderForBackend,
 } from '@/lib/oauth-providers';
 import {
   evaluateOAuthIntentGuard,
@@ -117,6 +118,7 @@ describe('CMP-581 kakao-sync-audit (R3, R13)', () => {
     );
     await persistKakaoSyncConsent(input, {
       apiBaseUrl: 'http://api.test',
+      enabled: true,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -143,6 +145,7 @@ describe('CMP-581 kakao-sync-audit (R3, R13)', () => {
     await expect(
       persistKakaoSyncConsent(input, {
         apiBaseUrl: 'http://api.test',
+        enabled: true,
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
     ).rejects.toBeInstanceOf(KakaoSyncAuditError);
@@ -156,6 +159,7 @@ describe('CMP-581 kakao-sync-audit (R3, R13)', () => {
     try {
       await persistKakaoSyncConsent(input, {
         apiBaseUrl: 'http://api.test',
+        enabled: true,
         fetchImpl: fetchImpl as unknown as typeof fetch,
       });
     } catch (err) {
@@ -188,6 +192,7 @@ describe('CMP-581 kakao-sync-audit (R3, R13)', () => {
     } as unknown as KakaoSyncAuditInput;
     await persistKakaoSyncConsent(dirtyInput, {
       apiBaseUrl: 'http://api.test',
+      enabled: true,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
@@ -515,5 +520,192 @@ describe('CMP-581 oauth-providers (R9)', () => {
     expect(toSupabaseProviderId('naver', undefined)).toBe('custom:naver');
     expect(toSupabaseProviderId('naver', 'custom:kakao')).toBe('custom:naver');
     expect(toSupabaseProviderId('google', undefined)).toBe('google');
+  });
+});
+
+describe('CMP-581 round-12 review fixes', () => {
+  it('item 1: oauth-providers.ts references process.env.NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID via direct member access (Next.js client-bundle inlining)', async () => {
+    // Static guard — Next.js inlines `process.env.NEXT_PUBLIC_*` at build time ONLY
+    // when the source references it via direct member access. Computed-property
+    // forms (`process.env[varName]`) survive into the client bundle as undefined,
+    // so this test reads the source as a string and asserts the literal access
+    // pattern is present.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const sourcePath = path.resolve(__dirname, '..', 'oauth-providers.ts');
+    const source = fs.readFileSync(sourcePath, 'utf8');
+    expect(source).toContain('process.env.NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID');
+    // And the forbidden computed-property form must not be present.
+    expect(source).not.toMatch(/process\.env\[[^\]]*KAKAO/);
+  });
+
+  it('item 2: authenticated session + signin intent is blocked (no new OAuth flow on logged-in users)', () => {
+    const decision = evaluateOAuthIntentGuard(
+      { kind: 'authenticated', userId: 'u-1', isAnonymous: false },
+      'signin',
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toBe('signin_blocked_authenticated_session');
+      expect(decision.detail).toContain('signOut');
+    }
+  });
+
+  it('item 3: anonymous gate returns storage_unavailable when sessionStorage.setItem throws (quota / private mode)', async () => {
+    const throwingStorage: Pick<Storage, 'getItem' | 'setItem'> = {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException('QuotaExceededError', 'QuotaExceededError');
+      },
+    };
+    const decision = await evaluateAnonymousGate(
+      {
+        requireExplicitIntent: false,
+        requireChallengeToken: false,
+        minIntervalMs: 60_000,
+        maxAttemptsPerSession: 5,
+      },
+      { reason: 'explicit_intent', storage: throwingStorage, now: () => 1_000 },
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toBe('storage_unavailable');
+      expect(decision.detail).toContain('setItem');
+    }
+  });
+
+  it('item 4: Kakao Sync audit payload normalizes custom:kakao SDK id to backend enum "kakao"', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response('{}', { status: 200 }),
+    );
+    await persistKakaoSyncConsent(
+      {
+        supabaseUserId: 'user-x',
+        linkedProvider: 'custom:kakao',
+        supabaseAccessToken: 'jwt',
+        providerAccessToken: 'access-tok',
+        providerRefreshToken: null,
+      },
+      {
+        apiBaseUrl: 'http://api.test',
+        enabled: true,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      },
+    );
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    // SDK passed 'custom:kakao' but wire payload must be normalized to 'kakao'.
+    expect(body.linked_provider).toBe('kakao');
+  });
+
+  it('item 4 (sister): normalizeProviderForBackend collapses Supabase SDK ids to backend enum', () => {
+    expect(normalizeProviderForBackend('kakao')).toBe('kakao');
+    expect(normalizeProviderForBackend('custom:kakao')).toBe('kakao');
+    expect(normalizeProviderForBackend('naver')).toBe('naver');
+    expect(normalizeProviderForBackend('custom:naver')).toBe('naver');
+    expect(normalizeProviderForBackend('google')).toBe('google');
+    expect(() => normalizeProviderForBackend('github')).toThrow(/normalize/);
+  });
+
+  it('item 5: audit helper hard-fails when enabled flag is missing (endpoint not yet shipped)', async () => {
+    const fetchImpl = vi.fn();
+    let caught: unknown;
+    try {
+      await persistKakaoSyncConsent(
+        {
+          supabaseUserId: 'user-1',
+          linkedProvider: 'kakao',
+          supabaseAccessToken: 'jwt',
+          providerAccessToken: 'tok',
+          providerRefreshToken: null,
+        },
+        { apiBaseUrl: 'http://api.test', fetchImpl: fetchImpl as unknown as typeof fetch },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(KakaoSyncAuditError);
+    if (caught instanceof KakaoSyncAuditError) {
+      expect(caught.code).toBe('endpoint_not_enabled');
+      expect(caught.status).toBe(0);
+    }
+    // And no fetch was attempted — defensive hard-fail before network.
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('item 5: enabled:false produces the same endpoint_not_enabled hard-fail', async () => {
+    const fetchImpl = vi.fn();
+    let caught: unknown;
+    try {
+      await persistKakaoSyncConsent(
+        {
+          supabaseUserId: 'u',
+          linkedProvider: 'kakao',
+          supabaseAccessToken: 'jwt',
+          providerAccessToken: 'tok',
+          providerRefreshToken: null,
+        },
+        {
+          apiBaseUrl: 'http://api.test',
+          enabled: false,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(KakaoSyncAuditError);
+    if (caught instanceof KakaoSyncAuditError) expect(caught.code).toBe('endpoint_not_enabled');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('item 6: non-numeric attempt_count is reset to 0 instead of re-storing NaN', async () => {
+    const writes: Array<[string, string]> = [];
+    const storage: Pick<Storage, 'getItem' | 'setItem'> = {
+      getItem: (key) => {
+        if (key === 'jippin_anon_gate.attempt_count') return 'not-a-number';
+        return null;
+      },
+      setItem: (key, value) => {
+        writes.push([key, value]);
+      },
+    };
+    const decision = await evaluateAnonymousGate(
+      {
+        requireExplicitIntent: false,
+        requireChallengeToken: false,
+        minIntervalMs: 0,
+        maxAttemptsPerSession: 3,
+      },
+      { reason: 'explicit_intent', storage, now: () => 1_000 },
+    );
+    expect(decision.allowed).toBe(true);
+    const countWrite = writes.find(([k]) => k === 'jippin_anon_gate.attempt_count');
+    expect(countWrite).toBeDefined();
+    // Bad input was 'not-a-number' → reset to 0, then +1 = '1'. Must NOT be 'NaN'.
+    expect(countWrite?.[1]).toBe('1');
+    expect(countWrite?.[1]).not.toBe('NaN');
+  });
+
+  it('item 6: non-numeric last_attempt is ignored (not used as a comparison anchor)', async () => {
+    const storage: Pick<Storage, 'getItem' | 'setItem'> = {
+      getItem: (key) => {
+        if (key === 'jippin_anon_gate.last_attempt_ms') return 'corrupted';
+        return null;
+      },
+      setItem: () => {},
+    };
+    // With non-numeric last_attempt, the gate must treat it as "no prior attempt"
+    // and ALLOW the call (rather than incorrectly comparing now - NaN < window).
+    const decision = await evaluateAnonymousGate(
+      {
+        requireExplicitIntent: false,
+        requireChallengeToken: false,
+        minIntervalMs: 60_000,
+        maxAttemptsPerSession: 0,
+      },
+      { reason: 'explicit_intent', storage, now: () => 1_000 },
+    );
+    expect(decision.allowed).toBe(true);
   });
 });
