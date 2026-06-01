@@ -1,12 +1,22 @@
 /**
  * UI provider id → Supabase provider id 매핑 (CMP-581 / runbook §4.3 / §4.2.3).
  *
- * SSOT: `docs/runbooks/supabase-web-auth.md` §4.2.3.
+ * SSOT:
+ *   - `docs/runbooks/supabase-web-auth.md` §4.2.3.
+ *   - `docs/adr/0003-anon-user-and-sso.md` §2.3 — 동일 verified email automatic
+ *     identity link/merge 는 영구 금지. 본 provider 매핑은 manual `auth.linkIdentity()`
+ *     호출의 인자 정본이며, Supabase 콘솔의 "Auto-link verified emails" /
+ *     "Link accounts with same email" 토글 (= `dangerously_enable_same_email_link_
+ *     identity`) 은 모두 **OFF** (기본값) 이어야 한다 (§8 console track 책임).
  *
  * Phase 1 봉인 — Naver 는 항상 Custom OIDC (`custom:naver`). Kakao 는 §8 콘솔 트랙이
  * native (`kakao`) / Custom (`custom:kakao`) 중 어느 경로로 등록할지 결정한다 (R9 review).
  * 콘솔이 Custom 으로 가는데 SDK 가 default `'kakao'` 를 호출하면 Supabase 가
  * "provider not enabled" 로 거부하므로, default 매핑이 콘솔과 정합해야 한다.
+ *
+ * 본 모듈은 SDK / BFF / audit helper 가 같은 Kakao provider id 를 쓰도록 보장하는
+ * **단일 export** 다 (round-11 항목 4). 콘솔 등록 id 가 바뀌면 본 파일의 환경변수
+ * 하나만 갱신하면 된다.
  *
  * 콘솔 트랙이 결정한 값은 환경변수 `NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID` 로 주입한다:
  *   - 'kakao'        — Supabase native Kakao 활성 (현재 SDK default 와 일치).

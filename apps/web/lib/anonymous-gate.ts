@@ -1,7 +1,11 @@
 /**
  * Anonymous sign-in abuse-control gate (CMP-581 / runbook §4.1 / §4.4).
  *
- * SSOT: `docs/runbooks/supabase-web-auth.md` §4.1 익명 sign-in 호출 시점.
+ * SSOT:
+ *   - `docs/runbooks/supabase-web-auth.md` §4.1 익명 sign-in 호출 시점.
+ *   - `docs/adr/0003-anon-user-and-sso.md` §2.5 / §5 — anonymous identifier 정책.
+ *     본 모듈은 ADR-0003 의 legacy `localStorage.jippin_anonymous_user_id` 와
+ *     Supabase anonymous user 가 Phase 1 동안 dual-write 되는 모델을 봉인한다.
  *
  * R4 회귀 방지 — `app/*` 의 첫 paint 에서 무조건 `supabase.auth.signInAnonymously()`
  * 를 호출하면 봇·크롤러·반복 미인증 방문이 `auth.users` 행을 무한 생성한다.
@@ -18,6 +22,10 @@
  *        받은 후에만 발급. 호출자는 토큰 획득 후 `requestAnonymousBootstrap('challenge', { token })`.
  *   (G3) **클라이언트 rate-limit** — 같은 브라우저에서 짧은 윈도우 안의 반복 발급 요청
  *        차단. `sessionStorage` 기반 (서버 IP rate-limit 은 backend 의 책임 — §4.4).
+ *   (G4) **client-side single-flight** — 같은 브라우저 탭에서 동시에 호출되는
+ *        anonymous bootstrap 요청을 하나의 in-flight promise 로 묶는다. race 시
+ *        같은 브라우저가 여러 anonymous user 를 만들지 않도록 보장. server-side
+ *        dedupe key 는 `anonymous-signin-guard.shouldIssueAnonymousSignIn` 가 책임.
  *
  * 본 gate 는 **클라이언트 1차 방어**. backend (`POST /auth/anonymous-users`, 익명
  * 핸들 발급 라우트) 와 Supabase Auth 콘솔의 anonymous quota / IP rate-limit 이 항상
@@ -25,6 +33,12 @@
  *
  * 본 모듈은 Supabase SDK 에 직접 의존하지 않고, "익명 발급을 진행해도 되는가?" 판정만
  * 책임진다. 발급 자체는 호출자(SessionProvider 의 anonymous-bootstrap singleton)가 한다.
+ *
+ * ADR-0003 §2.3 정책 봉인 — 동일 verified email 의 automatic identity link/merge 는
+ * 영구 금지. Supabase 콘솔 `Auth → Settings → Account Linking = manual only` +
+ * `dangerously_enable_same_email_link_identity: false` (기본값) 가 보드 책임 (§8).
+ * 본 모듈이 발급한 anonymous user 가 OAuth 로 전환될 때는 항상 `auth.linkIdentity()`
+ * (= manual 흐름) 만 사용한다 — `anonymous-signin-guard.evaluateOAuthIntentGuard` 참조.
  */
 
 export type AnonymousGateReason = 'explicit_intent' | 'challenge';
@@ -172,4 +186,83 @@ export async function evaluateAnonymousGate(
   }
 
   return { allowed: true };
+}
+
+// ---------------------------------------------------------------------------
+// G4 — client-side single-flight (race 방지).
+//
+// 같은 브라우저 탭에서 anonymous bootstrap 이 동시에 호출돼도 in-flight promise
+// 하나로 묶어 `auth.users` 중복 생성을 막는다. 호출자는 본 helper 를 anonymous
+// bootstrap singleton (SessionProvider) 에서 사용한다.
+//
+// 동일 호출이 끝나면 in-flight slot 을 비워서 다음 호출이 정상 진입할 수 있다.
+// reject 도 동일하게 slot 을 비운다 — 실패한 호출이 cache 되어 재시도를 막는
+// 회귀를 피하기 위해.
+// ---------------------------------------------------------------------------
+
+let inFlightAnonymousBootstrap: Promise<unknown> | null = null;
+
+export function withAnonymousSingleFlight<T>(invoke: () => Promise<T>): Promise<T> {
+  if (inFlightAnonymousBootstrap !== null) {
+    return inFlightAnonymousBootstrap as Promise<T>;
+  }
+  const promise = invoke()
+    .finally(() => {
+      if (inFlightAnonymousBootstrap === promise) {
+        inFlightAnonymousBootstrap = null;
+      }
+    });
+  inFlightAnonymousBootstrap = promise;
+  return promise;
+}
+
+/** Test-only — single-flight slot 을 강제 리셋. 운영 코드에서 호출 금지. */
+export function __resetAnonymousSingleFlightForTests(): void {
+  inFlightAnonymousBootstrap = null;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy `localStorage.jippin_anonymous_user_id` → Supabase user_metadata 백필.
+//
+// Phase 1 dual-write 동안 두 ID 체계가 공존하지만 (runbook §0 / §4.1), Phase 2 에서
+// localStorage 키를 폐기하기 전에 Supabase anonymous user 에 legacy id 를 1회성
+// 백필해 두어야 도면/리포트 claim 경로가 끊기지 않는다.
+//
+//   - 1회성: `user_metadata.legacy_anonymous_id` 가 이미 존재하면 호출하지 않는다.
+//   - 비파괴: legacy id 가 null/빈 문자열이면 호출하지 않는다.
+//   - 본 helper 는 Supabase SDK 에 직접 의존하지 않고 `updateUserMetadata` 콜백을
+//     주입받는다 — 테스트와 SSR 모두 SDK 없이 검증 가능.
+// ---------------------------------------------------------------------------
+
+export interface LegacyAnonymousIdBackfillInput {
+  /** 현재 Supabase anonymous user 의 user_metadata. */
+  currentMetadata: Record<string, unknown> | null | undefined;
+  /** localStorage 에 남아 있는 legacy uuid (또는 null). */
+  legacyAnonymousId: string | null;
+  /** 실제 update 호출 (SDK / fetch). 테스트에서는 mock. */
+  updateUserMetadata: (
+    next: Record<string, unknown> & { legacy_anonymous_id: string },
+  ) => Promise<void>;
+}
+
+export type LegacyAnonymousIdBackfillResult =
+  | { backfilled: true; legacyAnonymousId: string }
+  | { backfilled: false; reason: 'no_legacy_id' | 'already_backfilled' };
+
+export async function backfillLegacyAnonymousId(
+  input: LegacyAnonymousIdBackfillInput,
+): Promise<LegacyAnonymousIdBackfillResult> {
+  const legacyId = input.legacyAnonymousId;
+  if (legacyId === null || legacyId.length === 0) {
+    return { backfilled: false, reason: 'no_legacy_id' };
+  }
+  const metadata = input.currentMetadata ?? {};
+  if (typeof metadata.legacy_anonymous_id === 'string' && metadata.legacy_anonymous_id.length > 0) {
+    return { backfilled: false, reason: 'already_backfilled' };
+  }
+  await input.updateUserMetadata({
+    ...metadata,
+    legacy_anonymous_id: legacyId,
+  });
+  return { backfilled: true, legacyAnonymousId: legacyId };
 }

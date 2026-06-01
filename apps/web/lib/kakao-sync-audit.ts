@@ -1,14 +1,35 @@
 /**
  * Kakao Sync 동의 audit 호출 helper (CMP-581 / runbook §4.5.2 경로 (a)).
  *
- * SSOT: `docs/runbooks/supabase-web-auth.md` §4.5.2.2.
+ * SSOT:
+ *   - `docs/runbooks/supabase-web-auth.md` §4.5.2.2.
+ *   - `docs/adr/0003-anon-user-and-sso.md` §2 — Kakao Sync 약관은 `terms_consents.
+ *     source = 'kakao_sync'` 로 별도 저장. 내부 약관 화면은 Google/Naver 만 통과.
  *
- * 두 가지 회귀 방지 책임:
+ * 세 가지 회귀 방지 책임:
  *   - R3: callback payload 정본은 `provider_access_token` 이다. `id_token` 은 SDK 가
  *         안정적으로 노출하지 않으므로 보내지 않는다.
  *   - R13: backend 의 4xx/5xx 응답이 silent success 로 처리돼 `terms_consents(source='kakao_sync')`
  *         가 누락되는 회귀를 막기 위해 `response.ok` 를 명시 검증한다. 4xx/5xx 는
  *         throw — 호출부(callback Route Handler) 가 Sentry alert + reconcile 잡 트리거.
+ *   - 약관 동의 SSOT 는 Supabase `auth.users.user_metadata` 가 아니라 backend 의
+ *     `terms_consents(source='kakao_sync')` 행이다. metadata 만 갱신되고 행이 누락된
+ *     상태는 audit 실패로 본다.
+ *
+ * **이메일 scope / linkIdentity 정합 (round-11 항목 4).** Kakao 비즈니스 앱 승인
+ * 전에는 email scope 가 거부될 수 있다. 본 audit 라우트와 callback 흐름은 모두
+ * `email` 의 유무에 의존하지 않는다 — Supabase `auth.users.email` 은 NULL 가능
+ * (ADR-0003 §2.1 `users.email TEXT NULL`). `auth.linkIdentity({ provider: 'kakao' })`
+ * 도 동일 — provider_subject 만 기준으로 linking 되므로 email scope 가 없어도 정상
+ * 동작한다. 본 helper 는 email 을 payload 에 싣지 않으며, backend 가 audit 후
+ * email 의 빈 값과 채워진 값을 모두 idempotent 하게 처리해야 한다.
+ *
+ * **호출 실패 → terms_consents rollback (round-11).** 본 helper 가 throw 하면
+ * 호출자 (callback Route Handler) 는 동일 트랜잭션의 `terms_consents(source=
+ * 'kakao_sync')` 삽입을 rollback 해야 한다 — Supabase user_metadata 만 갱신된
+ * 채로 SSOT 가 비는 회귀를 막기 위해. provider access token 이 만료/revoke 된
+ * 경우의 재시도 정책은 backend 의 audit 라우트 retry policy 가 SSOT (Phase 1
+ * 에서는 callback 단발성 호출, 실패 시 Sentry breadcrumb + reconcile 잡 enqueue).
  *
  * Phase 1 dual-write 동안 본 헬퍼는 callback Route Handler 가 `exchangeCodeForSession`
  * 직후 한 번만 호출한다. provider 가 Kakao 가 아닐 때는 호출 자체를 하지 않는다 —

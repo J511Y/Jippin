@@ -1,6 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   evaluateAnonymousGate,
+  withAnonymousSingleFlight,
+  backfillLegacyAnonymousId,
+  __resetAnonymousSingleFlightForTests,
   type AnonymousGateConfig,
 } from '@/lib/anonymous-gate';
 import {
@@ -13,6 +16,11 @@ import {
   toSupabaseProviderId,
   isKakaoProvider,
 } from '@/lib/oauth-providers';
+import {
+  evaluateOAuthIntentGuard,
+  shouldIssueAnonymousSignIn,
+  isOAuthIntent,
+} from '@/lib/anonymous-signin-guard';
 
 const BASE_GATE: AnonymousGateConfig = {
   requireExplicitIntent: true,
@@ -157,6 +165,136 @@ describe('CMP-581 kakao-sync-audit (R3, R13)', () => {
       expect(caught.status).toBe(502);
       expect(caught.responseBody).toBe('upstream timeout');
     }
+  });
+});
+
+describe('CMP-581 anonymous-gate single-flight (round-11 race)', () => {
+  beforeEach(() => {
+    __resetAnonymousSingleFlightForTests();
+  });
+
+  it('dedupes concurrent calls into one in-flight promise', async () => {
+    let resolveInner!: (value: string) => void;
+    const invoke = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveInner = resolve;
+        }),
+    );
+    const p1 = withAnonymousSingleFlight(invoke);
+    const p2 = withAnonymousSingleFlight(invoke);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    resolveInner('anon-user-id');
+    await expect(p1).resolves.toBe('anon-user-id');
+    await expect(p2).resolves.toBe('anon-user-id');
+  });
+
+  it('releases the slot after rejection so retries can re-enter', async () => {
+    const failing = vi.fn(() => Promise.reject(new Error('boom')));
+    await expect(withAnonymousSingleFlight(failing)).rejects.toThrow('boom');
+    const succeeding = vi.fn(() => Promise.resolve('ok'));
+    await expect(withAnonymousSingleFlight(succeeding)).resolves.toBe('ok');
+    expect(failing).toHaveBeenCalledTimes(1);
+    expect(succeeding).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CMP-581 legacy anonymous id backfill (round-11 item 2)', () => {
+  it('does nothing when no legacy id is present', async () => {
+    const update = vi.fn();
+    const result = await backfillLegacyAnonymousId({
+      currentMetadata: {},
+      legacyAnonymousId: null,
+      updateUserMetadata: update,
+    });
+    expect(result).toEqual({ backfilled: false, reason: 'no_legacy_id' });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when metadata already has legacy_anonymous_id', async () => {
+    const update = vi.fn();
+    const result = await backfillLegacyAnonymousId({
+      currentMetadata: { legacy_anonymous_id: 'existing-uuid' },
+      legacyAnonymousId: 'fresh-uuid',
+      updateUserMetadata: update,
+    });
+    expect(result).toEqual({ backfilled: false, reason: 'already_backfilled' });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('merges legacy id into existing metadata without dropping prior keys', async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    const result = await backfillLegacyAnonymousId({
+      currentMetadata: { display_name: 'Alice', other_key: 1 },
+      legacyAnonymousId: 'legacy-uuid',
+      updateUserMetadata: update,
+    });
+    expect(result).toEqual({ backfilled: true, legacyAnonymousId: 'legacy-uuid' });
+    expect(update).toHaveBeenCalledWith({
+      display_name: 'Alice',
+      other_key: 1,
+      legacy_anonymous_id: 'legacy-uuid',
+    });
+  });
+});
+
+describe('CMP-581 anonymous-signin-guard (round-11 items 2/6/7)', () => {
+  it('blocks signin intent on anonymous session (item 2 — no new auth.users row)', () => {
+    const decision = evaluateOAuthIntentGuard(
+      { kind: 'anonymous', userId: 'anon-1' },
+      'signin',
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe('signin_blocked_anonymous_session');
+  });
+
+  it('allows link intent on anonymous session (manual linkIdentity is the only conversion path)', () => {
+    const decision = evaluateOAuthIntentGuard(
+      { kind: 'anonymous', userId: 'anon-1' },
+      'link',
+    );
+    expect(decision.allowed).toBe(true);
+    if (decision.allowed) expect(decision.intent).toBe('link');
+  });
+
+  it('allows link-merge only inside the anonymous fallback ladder', () => {
+    const merge = evaluateOAuthIntentGuard(
+      { kind: 'anonymous', userId: 'anon-1' },
+      'link-merge',
+    );
+    expect(merge.allowed).toBe(true);
+
+    const fromAuthed = evaluateOAuthIntentGuard(
+      { kind: 'authenticated', userId: 'u-1', isAnonymous: false },
+      'link-merge',
+    );
+    expect(fromAuthed.allowed).toBe(false);
+    if (!fromAuthed.allowed) {
+      expect(fromAuthed.reason).toBe('link_merge_requires_anonymous_session');
+    }
+  });
+
+  it('allows signin only when no session is present', () => {
+    expect(evaluateOAuthIntentGuard({ kind: 'none' }, 'signin').allowed).toBe(true);
+    const fromAuth = evaluateOAuthIntentGuard(
+      { kind: 'authenticated', userId: 'u-1', isAnonymous: false },
+      'link',
+    );
+    expect(fromAuth.allowed).toBe(false);
+    if (!fromAuth.allowed) expect(fromAuth.reason).toBe('link_blocked_authenticated_session');
+  });
+
+  it('rejects unknown intents (defence in depth for BFF query parsing)', () => {
+    expect(isOAuthIntent('signin')).toBe(true);
+    expect(isOAuthIntent('register')).toBe(false);
+    const decision = evaluateOAuthIntentGuard({ kind: 'none' }, 'register');
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toBe('unknown_intent');
+  });
+
+  it('server-side anonymous sign-in only fires when no session exists (item 6)', () => {
+    expect(shouldIssueAnonymousSignIn({ existingSessionUserId: null })).toBe(true);
+    expect(shouldIssueAnonymousSignIn({ existingSessionUserId: 'u-1' })).toBe(false);
   });
 });
 
