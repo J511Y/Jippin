@@ -1,9 +1,9 @@
 // Unit tests for the next / OAuth handoff guard SSOT (CMP-582, runbook §11 R6/R11).
 //
-// Run: `pnpm test` (apps/web) — uses node:test + --experimental-strip-types (Node ≥ 22).
+// Run: `pnpm test` (apps/web).
 
-import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
+import { describe, it } from 'vitest';
 
 import {
   DEFAULT_NEXT,
