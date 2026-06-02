@@ -403,22 +403,30 @@ jobs:
           fi
           base_sha="${{ github.event.pull_request.base.sha }}"
           head_sha="${{ github.event.pull_request.head.sha }}"
-          # 변경 파일 목록 (Added / Modified / Renamed).
-          changed=$(git diff --name-only --diff-filter=AMR "${base_sha}" "${head_sha}")
+
+          # Model 변경 감지: Added / Copied / Deleted / Modified / Renamed 모두 schema-impacting.
+          # 특히 모델 파일 삭제 (D) 도 테이블 제거를 의미할 수 있으므로 반드시 포함한다.
+          model_lines=$(git diff --name-status --diff-filter=ACDMR "${base_sha}" "${head_sha}" -- 'apps/api/src/models/**/*.py' || true)
+
+          # SQL migration 동행 변경 감지: Added / Modified / Renamed 만 — 마이그레이션 파일 삭제는
+          # "새 forward migration 추가" 신호가 아니므로 sql_added 로 인정하지 않는다.
+          sql_lines=$(git diff --name-only --diff-filter=AMR "${base_sha}" "${head_sha}" -- 'supabase/migrations/**/*.sql' || true)
+
           model_changed="false"
           sql_added="false"
-          if echo "${changed}" | grep -Eq '^apps/api/src/models/.*\.py$'; then
+          if [[ -n "${model_lines}" ]]; then
             model_changed="true"
           fi
-          if echo "${changed}" | grep -Eq '^supabase/migrations/.*\.sql$'; then
+          if [[ -n "${sql_lines}" ]]; then
             sql_added="true"
           fi
+
           if [[ "${model_changed}" == "true" && "${sql_added}" != "true" ]]; then
             echo "::error::SQLAlchemy 모델이 변경되었으나 supabase/migrations/*.sql 동행 변경이 없습니다."
-            echo "::error::본 PR 의 모델 변경 (참고):"
-            echo "${changed}" | grep -E '^apps/api/src/models/.*\.py$' | sed 's/^/  - /'
+            echo "::error::본 PR 의 모델 변경 (status path — D=Deleted 포함):"
+            echo "${model_lines}" | sed 's/^/  - /'
             echo "::error::DB schema SSOT 는 supabase/migrations/*.sql 입니다 (docs/runbooks/supabase-branching.md §6.3.2)."
-            echo "::error::조치: 같은 PR 에 새 supabase/migrations/<timestamp>_<name>.sql 을 추가하거나, 모델 변경이 schema-impacting 이 아니면 PR 본문에 명시적으로 사유를 적어주세요."
+            echo "::error::조치: 같은 PR 에 새 supabase/migrations/<timestamp>_<name>.sql 을 추가하거나 (테이블 삭제도 DROP TABLE 마이그레이션이 필요), 모델 변경이 schema-impacting 이 아니면 PR 본문에 명시적으로 사유를 적어주세요."
             exit 1
           fi
           if [[ "${model_changed}" == "true" && "${sql_added}" == "true" ]]; then
