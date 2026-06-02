@@ -1,8 +1,20 @@
-# 집핀(Jippin) Neon preview branch — CMP-539
+# 집핀(Jippin) Neon preview branch — CMP-539. **TRANSITIONAL (ADR-0004 / CMP-574)**.
 #
 # Neon GitHub integration 권장 흐름에 맞춰 PR 별 preview branch 를 생성/삭제한다.
 #
-# 동작:
+# 전환 상태 (ADR-0004 Proposed / CMP-574 Supabase Automatic Branching):
+#   본 워크플로우는 Neon GitHub integration 이 정본일 때의 PR preview 생성을
+#   담당한다. **Supabase 전환 완료 시 본 워크플로우는 폐기 후보** — Supabase
+#   Automatic Branching 이 콘솔 토글 1회 설정으로 같은 역할 (PR 별 preview
+#   branch 생성·삭제, `supabase/**` 변경 PR 한정 트리거) 을 수행한다.
+#   세부 절차: docs/runbooks/supabase-branching.md §0 + §6 (CI 대체 순서).
+#
+#   cutover 시점에 NEON_API_KEY / NEON_PROJECT_ID / NEON_DEV_PARENT_BRANCH /
+#   NEON_BRANCH_CAP 시크릿 + 변수 일괄 제거. **본 워크플로우 자체도 archive
+#   (`.github/workflows/_archive/` 또는 PR-삭제) 후보** — DevOps Lead 후속
+#   이슈에서 처리한다.
+#
+# 동작 (cutover 전 한시 정본):
 #   - PR opened/reopened/synchronize: `preview/pr-<PR번호>-<head branch>` 브랜치 생성/갱신.
 #   - PR base 가 dev 이면 NEON_DEV_PARENT_BRANCH(권장: branch id) 에서,
 #     main 이면 Neon production 에서 preview 를 딴다.
@@ -10,7 +22,7 @@
 #   - PR closed: 같은 이름의 preview branch 삭제.
 #   - branch 는 14일 만료(expires_at)를 가진다.
 #
-# GitHub 설정:
+# GitHub 설정 (cutover 전 한시):
 #   - Repository variable: `NEON_PROJECT_ID`
 #   - Repository secret:   `NEON_API_KEY`
 #
