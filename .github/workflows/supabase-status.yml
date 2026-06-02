@@ -1,0 +1,151 @@
+# 집핀(Jippin) Supabase integration status wrapper — CMP-603.
+#
+# 책임 (정본: docs/runbooks/supabase-branching.md §6.3):
+#   `supabase/**` 변경이 없는 PR 에서 Supabase Automatic Branching 의 preview
+#   check 가 등록되지 않아 발생하는 required-check deadlock 을 회피한다. 동시에
+#   `supabase/**` 변경이 있는 PR 에서는 실제 Supabase integration check 의
+#   성공 / 실패를 그대로 본 잡의 결과로 반영해 운영 사고를 초록색으로 숨기지 않는다.
+#
+# 동작:
+#   1. PR diff 에 `supabase/**` 가 포함됐는지 확인. diff 범위는 **PR merge-base 기준**
+#      (`git merge-base base.sha head.sha` ↔ head). 두 점 직접 비교 (`base..head`) 를
+#      쓰면 base 브랜치가 PR 생성 이후 앞서간 경우 base-only 변경이 diff 에 섞여 false
+#      positive 가 나고, 본 wrapper 는 Supabase check 를 영원히 기다리며 PR 이 deadlock /
+#      false fail 한다. Added / Copied / Deleted / Modified / Renamed 모두 잡는다 (삭제
+#      도 Supabase integration validation 대상 — migration 삭제 / config 삭제 포함).
+#   2. 변경 없음 → wrapper 가 자체 succeed (skip 의미). path-filter deadlock 회피.
+#   3. 변경 있음 → repository variable `SUPABASE_INTEGRATION_CHECK_NAME` 이 가리키는
+#      Supabase 측 check context 를 polling. 결과를 그대로 wrapper 의 결과로 반영.
+#      변수가 비어 있으면 명시적으로 실패 (콘솔 연결 미완료 — 정본 §6.3.1).
+#
+# Branch protection 등록 (사용자 작업, PR 머지 후):
+#   GitHub Settings → Branches → `dev` / `main` 보호 규칙의 required checks 에
+#   `supabase-status` 를 추가한다. 자세한 절차는 CMP-603 PR 본문 §사용자 작업 체크리스트.
+#
+# 시크릿 누출 가드 (정본: docs/runbooks/supabase-branching.md §7.3):
+#   본 워크플로우는 check-run 의 status / conclusion 외 메타데이터를 로그에 출력하지
+#   않는다. Supabase integration 이 PR 코멘트에 connection string 을 게시하는 옵션이
+#   있다면 콘솔에서 OFF 로 두는 것이 §3.1 U4 의 봉인이다 — wrapper 가 본 옵션을 대체하지 않는다.
+name: supabase-status
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  supabase-status:
+    name: supabase-status
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect supabase/** change
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          # PR-owned diff 만 검사한다. base.sha ↔ head.sha 직접 비교는 base 가 PR
+          # 생성 이후 앞서간 경우 base-only 변경이 섞여 wrapper 가 무관한 PR 의
+          # Supabase check 를 영원히 기다리는 deadlock / false fail 을 만든다.
+          # 따라서 merge-base 를 분기점으로 잡고 그 점에서 head 까지만 diff 한다.
+          if ! merge_base=$(git merge-base "${base_sha}" "${head_sha}"); then
+            echo "::warning::merge-base 산출 실패 — base.sha 로 fallback."
+            merge_base="${base_sha}"
+          fi
+          # supabase/** 변경 감지는 Added / Copied / Deleted / Modified / Renamed 모두
+          # 포함한다. migration 파일 삭제, config 삭제, schema 파일 삭제도 Supabase
+          # integration validation 대상이므로 wrapper 가 Supabase check 결과를 본다.
+          if git diff --name-only --diff-filter=ACDMR "${merge_base}" "${head_sha}" -- 'supabase/**' | grep -Eq '^supabase/'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::supabase/** 변경 감지 (ACDMR) — Supabase integration check 결과를 polling 한다. merge_base=${merge_base}"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::supabase/** 변경 없음 (merge-base 기준) — Supabase Automatic Branching trigger 대상이 아니므로 wrapper 자체 통과."
+          fi
+
+      - name: No-op (path-filter deadlock 회피)
+        if: steps.detect.outputs.changed == 'false'
+        run: echo "ok"
+
+      - name: Validate SUPABASE_INTEGRATION_CHECK_NAME variable
+        id: configured
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          NAME: ${{ vars.SUPABASE_INTEGRATION_CHECK_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${NAME:-}" ]]; then
+            echo "::error::repository variable SUPABASE_INTEGRATION_CHECK_NAME 가 설정되지 않았습니다."
+            echo "::error::절차: Supabase Console → GitHub Integration 연결 후 첫 PR 에 나타나는 Supabase 측 check context 이름을 확인하고 Settings → Variables → Actions 에 등록한다 (예: 'Supabase Preview' 또는 'Supabase Migrations'). 봉인 절차: docs/runbooks/supabase-branching.md §6.3.1."
+            exit 1
+          fi
+          # check name 자체는 비밀이 아니므로 출력해도 안전.
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "::notice::polling target check name: ${NAME}"
+
+      - name: Poll Supabase integration check
+        if: steps.detect.outputs.changed == 'true' && steps.configured.outputs.name != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          NAME: ${{ steps.configured.outputs.name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # job timeout (20분) 보다 살짝 짧게 끝나도록 17분 deadline.
+          deadline=$(( $(date +%s) + 17 * 60 ))
+          attempt=0
+          while :; do
+            attempt=$((attempt + 1))
+            now=$(date +%s)
+            if (( now > deadline )); then
+              echo "::error::Supabase integration check '${NAME}' 가 17분 내에 완료되지 않았습니다."
+              exit 1
+            fi
+            # check-runs API. check_name 으로 정확히 매칭 + 가장 최근 1건만.
+            # output 의 summary/text 는 connection string 노출 가능성이 있어 일부러 보지 않는다 (§7.3).
+            payload=$(gh api -H "Accept: application/vnd.github+json" \
+              "repos/${OWNER}/${REPO}/commits/${SHA}/check-runs?check_name=${NAME}&per_page=1" 2>/dev/null || echo '{"total_count":0,"check_runs":[]}')
+            count=$(echo "${payload}" | jq -r '.total_count // 0')
+            if [[ "${count}" -eq 0 ]]; then
+              echo "[${attempt}] check '${NAME}' 아직 등록 안 됨 — 30초 후 재시도"
+              sleep 30
+              continue
+            fi
+            status=$(echo "${payload}" | jq -r '.check_runs[0].status // empty')
+            conclusion=$(echo "${payload}" | jq -r '.check_runs[0].conclusion // empty')
+            echo "[${attempt}] status=${status} conclusion=${conclusion:-<pending>}"
+            if [[ "${status}" == "completed" ]]; then
+              case "${conclusion}" in
+                success|skipped|neutral)
+                  echo "::notice::Supabase integration check '${NAME}' 통과: ${conclusion}"
+                  exit 0
+                  ;;
+                *)
+                  echo "::error::Supabase integration check '${NAME}' 실패: ${conclusion}"
+                  exit 1
+                  ;;
+              esac
+            fi
+            sleep 30
+          done

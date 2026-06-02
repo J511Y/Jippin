@@ -2,13 +2,19 @@
 
 이 문서는 본 모노레포에서 일하는 **Paperclip 에이전트(자율형)** 와 **사람 개발자** 모두를 대상으로 한다. 한 줄 요약: *집핀은 비내력벽 철거 사전검토 AI 서비스이며, 이 레포는 단일 인스턴스 docker-compose 모노레포다. 모든 결정은 `docs/명세서/`(요구·기능·기술·SDD)와 `docs/brief/CEO_PROJECT_BRIEF.md` 에 우선 따른다.*
 
-> **⚠ DB / Auth SSOT 전환 (Neon → Supabase, 2026-06-02 기준)**
+> **⚠ DB / Auth SSOT — Supabase (CI/CD cutover 완료, CMP-603 / 2026-06-02 기준)**
 >
-> 본 레포는 Neon Postgres + 자체 OAuth/JWT 에서 **Supabase Postgres + Supabase Auth** 로 전환 중이다. 정책 정본은 [`docs/adr/0004-supabase-transition.md`](docs/adr/0004-supabase-transition.md) (현재 **Proposed**), 운영 정본은 [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) · [`docs/runbooks/supabase-migration-plan.md`](docs/runbooks/supabase-migration-plan.md) · [`docs/runbooks/supabase-auth-poc.md`](docs/runbooks/supabase-auth-poc.md) · [`docs/runbooks/supabase-web-auth.md`](docs/runbooks/supabase-web-auth.md) · [`docs/runbooks/supabase-session-bridge.md`](docs/runbooks/supabase-session-bridge.md) 다. DB schema source of truth 는 `supabase/migrations/*.sql` 로 cutover 진행 중이며 (CMP-575), Alembic (`apps/api/migrations/`) 과 Neon workflow 는 **cutover PR 승인 전까지 한시적으로 활성 정본**이다 — `docs/runbooks/supabase-migration-plan.md §Alembic Keep/Remove` 참조.
+> 본 레포의 DB / Auth 정본은 **Supabase Postgres + Supabase Auth** 다. 정책 정본은 [`docs/adr/0004-supabase-transition.md`](docs/adr/0004-supabase-transition.md) (CMP-603 시점 Proposed — CI/CD 측 cutover 는 본 PR 로 완료, ADR Accepted 는 CEO 결정 대기). 운영 정본은 [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) · [`docs/runbooks/supabase-migration-plan.md`](docs/runbooks/supabase-migration-plan.md) · [`docs/runbooks/supabase-auth-poc.md`](docs/runbooks/supabase-auth-poc.md) · [`docs/runbooks/supabase-web-auth.md`](docs/runbooks/supabase-web-auth.md) · [`docs/runbooks/supabase-session-bridge.md`](docs/runbooks/supabase-session-bridge.md) 다.
 >
-> 본 문서 §4.4 / §5.9 / §6 에 남아 있는 Neon / `DATABASE_POOL_URL` / Alembic 문구는 **transitional state** 표기이지 미래 정본이 아니다. 신규 작업자는 ADR-0004 + Supabase 런북을 먼저 통독한 뒤 Neon 항목을 “현 단계 운영 절차” 로만 읽어야 한다. ADR-0004 Accepted + Supabase CI/deploy cutover PR 머지 시점에 본 문서가 다시 갱신된다.
+> Forward DB schema SSOT 는 **`supabase/migrations/*.sql`** 이며, **Supabase GitHub Integration** 이 `dev` push → development branch / `main` push → production branch 로 migration 을 적용한다. Alembic (`apps/api/migrations/`) 은 historical reference 로만 잔존한다 (forward authority 아님). 콘솔에서 remote schema 를 직접 수정하지 말 것 — repo migration 파일과 어긋나 `supabase db push` sync error 가 난다. 직접 수정한 경우 `supabase db pull` / `supabase migration repair` 절차가 필요하다 (정본: docs/runbooks/supabase-migration-plan.md).
 >
-> Neon 런북([`docs/runbooks/neon-branches.md`](docs/runbooks/neon-branches.md) · [`docs/runbooks/neon-credential-rotation.md`](docs/runbooks/neon-credential-rotation.md)) 은 cutover 완료 시점까지 잔존하지만 상단에 archive/reference 배너가 붙어 있다.
+> CI/CD 책임 분기 (CMP-603):
+> - `.github/workflows/ci.yml::migrate-check` = Supabase SQL migration drift 가드 (model-only PR 차단). Neon / Alembic 의존 없음.
+> - `.github/workflows/deploy.yml` = 어플리케이션 빌드 + 배포 스텁만. DB migration 미실행 (Supabase Integration 단독).
+> - `.github/workflows/supabase-status.yml` = path-filter deadlock 회피용 wrapper. `supabase/**` 변경 없는 PR 은 자체 succeed, 변경 있는 PR 은 실제 Supabase integration check 결과를 polling.
+> - `.github/workflows/_archive/neon-pr-branch.yml.archived` = 비활성. 이력 참조용.
+>
+> Neon 런북([`docs/runbooks/neon-branches.md`](docs/runbooks/neon-branches.md) · [`docs/runbooks/neon-credential-rotation.md`](docs/runbooks/neon-credential-rotation.md)) 은 archive 배너가 붙어 있으며 Neon project 자체는 폐기 대상이다 (사용자 콘솔 작업). Neon 시크릿/변수 (`NEON_API_KEY`, `NEON_PROJECT_ID`, `NEON_TEST_DATABASE_URL`, `NEON_DEV_DATABASE_URL`, `NEON_PROD_DATABASE_URL`, `NEON_DEV_PARENT_BRANCH`, `NEON_BRANCH_CAP`) 는 본 PR 머지 후 GitHub Settings 에서 일괄 삭제 대상이다.
 
 ---
 
@@ -54,7 +60,7 @@ jippin/
 > **봉인 ADR**: 본 트리·패키지 매니저·런타임은 [`docs/adr/0001-stack-reevaluation.md`](docs/adr/0001-stack-reevaluation.md) 가 봉인한다. 변경은 새 ADR을 발행해 supersede 해야 한다. 핵심 결정:
 > - `apps/web` = **Next.js 16.2 LTS** · React 19 · Node 22 LTS · **pnpm 9.x**
 > - `apps/api` = **FastAPI 0.115** · Python 3.12 · **uv 0.5+**
-> - DB = **Supabase Postgres** (외부 managed, 로컬 DB 컨테이너 없음) — Neon → Supabase 전환 중 (ADR-0004 Proposed). 현 시점 운영 DB URL 은 Supabase project 가 발급한 connection string 이며, Alembic / Neon workflow 가 한시적 운영 정본을 유지한다. 캐시 = **Redis 7.4-alpine** 컨테이너.
+> - DB = **Supabase Postgres** (외부 managed, 로컬 DB 컨테이너 없음). ADR-0004 cutover 완료 (CMP-603). 운영 DB URL 은 Supabase project 가 발급한 connection string. Forward migration SSOT 는 `supabase/migrations/*.sql` + Supabase GitHub Integration. Alembic 은 historical reference 만. 캐시 = **Redis 7.4-alpine** 컨테이너.
 > - 객체 스토리지 = **Cloudflare R2** (S3 호환, zero-egress).
 > - LLM 오케스트레이션 = **LangChain v0.3+**. VLM 기본 = OpenAI `gpt-4.1-mini` / 정밀 = `gpt-4o`.
 > - 클라우드 MVP = **AWS Lightsail Seoul (`ap-northeast-2`)** — ADR-0002 Accepted 후 확정.
@@ -83,7 +89,7 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - **DevOps Engineer** — CI, gitmoji 검증, GitHub Flow 정책 자동화
 - **Security Lead / Security Engineer** — 시크릿 헌팅, OAuth/PII/암호화 정책 가드
 - **QA Lead / Test Engineer** — 테스트 피라미드, 룰 결정성 회귀 테스트
-- **Database Engineer** — DB 스키마·마이그레이션·인덱스. 현 단계 SSOT 는 `supabase/migrations/*.sql` (cutover 중, CMP-575) + Alembic 한시 유지. 운영 절차는 [`docs/runbooks/supabase-migration-plan.md`](docs/runbooks/supabase-migration-plan.md) · [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md).
+- **Database Engineer** — DB 스키마·마이그레이션·인덱스. Forward migration SSOT 는 `supabase/migrations/*.sql` (CMP-603 cutover 완료). Alembic 은 historical reference. 운영 절차는 [`docs/runbooks/supabase-migration-plan.md`](docs/runbooks/supabase-migration-plan.md) · [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md).
 
 ---
 
@@ -131,18 +137,18 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 
 - 실제 값은 `.env` 로컬 또는 운영 시크릿 매니저. 커밋 금지.
 - `.env.example` 만 커밋. 변수명·예시값 형식·설명 포함.
-- **DB URL 관리 (전환 중)**: 현 단계는 두 가지를 모두 관리한다 — `DATABASE_URL` (non-pooler, 마이그레이션·DDL), `DATABASE_POOL_URL` (pooler, 일반 쿼리). `sslmode=require` 는 모든 URL 에 필수. 두 URL 의 호스트는 **Supabase project 의 direct port 5432 / pooler port 6543** 을 가리키며, Neon URL 은 cutover 완료 시점까지 한시적으로 운영 시크릿으로 잔존한다 (ci.yml / deploy.yml / neon-pr-branch.yml 워크플로우 참조).
+- **DB URL 관리**: `DATABASE_URL` (non-pooler, 마이그레이션·DDL), `DATABASE_POOL_URL` (pooler, 일반 쿼리). `sslmode=require` 는 모든 URL 에 필수. 두 URL 의 호스트는 **Supabase project 의 direct port 5432 / pooler port 6543** 을 가리킨다. Neon URL 은 cutover 완료 (CMP-603) 시점에 forward authority 가 아니다 — Neon project 잔존 동안에는 archive 런북 ([`docs/runbooks/neon-branches.md`](docs/runbooks/neon-branches.md)) 참조 가능하지만 신규 워크플로우/secret 추가 금지.
 - **Supabase Auth 환경변수**: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_FLOW_COOKIE_SECRET`, `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_AUDIENCE`, (ADR-0004 §2.3 rev9 신설) `SUPABASE_JWKS_URL`. 정본 정의는 `apps/api/.env.example` / `apps/web/.env.example`.
 - **APP_ENV ↔ DB 브랜치 매핑은 봉인** (CMP-538 / CMP-574). 코드 분기 금지 — 매핑은 환경별 `.env` 의 URL 값으로만 한다 (12-factor). `apps/api/src/config.py::ALLOWED_APP_ENVS` 가 그 외 값을 부팅 단계에서 차단한다. 변경하려면 ADR 을 새로 발행한다.
 
-  | APP_ENV       | Supabase 브랜치 (현 SSOT) | Neon 브랜치 (cutover 전 한시 매핑) | 수명           | 비고                                                |
-  |---------------|---------------------------|------------------------------------|----------------|-----------------------------------------------------|
-  | `development` | `development`             | `dev` 또는 `local`                 | 장기, 공유     | 로컬 개발자 공용 / `development` GitHub Environment |
-  | `test`        | preview/pr-N (ephemeral)  | `dev` 또는 PR ephemeral            | 단기           | CI / 단위 테스트                                    |
-  | `staging`     | `staging`                 | `staging`                          | 장기           | QA / 사전검증 — Supabase 콘솔에서 수동 promote      |
-  | `production`  | `production`              | `main`                             | 장기           | 운영 (Supabase / Neon 각자의 default branch)        |
+  | APP_ENV       | Supabase 브랜치           | GitHub branch                  | 수명           | 비고                                                |
+  |---------------|---------------------------|--------------------------------|----------------|-----------------------------------------------------|
+  | `development` | `development`             | `dev`                          | 장기, 공유     | `dev` push → Supabase Integration 이 development 적용 |
+  | `test`        | preview/pr-N (ephemeral)  | feature/fix/* (PR base=`dev`)  | 단기           | Automatic Branching, `supabase/**` 변경 PR 한정     |
+  | `staging`     | `staging`                 | (없음 — Supabase-only)         | 장기           | QA / 사전검증 — Supabase 콘솔에서 수동 promote      |
+  | `production`  | `production`              | `main`                         | 장기           | `main` push → Supabase Integration 이 production 적용 |
 
-  Supabase 운영 절차 (정본): [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md). Neon 운영 절차 (한시 유지·archive 배너): [`docs/runbooks/neon-branches.md`](docs/runbooks/neon-branches.md). Neon 비밀번호 회전 절차 (한시 유지): [`docs/runbooks/neon-credential-rotation.md`](docs/runbooks/neon-credential-rotation.md).
+  Supabase 운영 절차 (정본): [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md). hotfix/fix/security PR (base=`main`) 의 preview branch parent 는 `production` 이다 (드물게만 사용). Neon archive 런북 ([`docs/runbooks/neon-branches.md`](docs/runbooks/neon-branches.md) · [`docs/runbooks/neon-credential-rotation.md`](docs/runbooks/neon-credential-rotation.md)) 은 이력 참조용만 — 신규 작업 base 로 쓰지 말 것.
 
 ### 4.5 에러·응답 표준
 
@@ -328,26 +334,30 @@ node -e "const d=JSON.parse(require('fs').readFileSync('.tmp/resp.json','utf8'))
 
 > 사람 작업자 주의: 시스템 PowerShell 콘솔 폰트가 `Lucida Console` 인 경우 정상 출력된 한글도 콘솔에서는 `?` 로 보일 수 있다. **보드(웹 UI) 또는 `GET /api/issues/<ID>` 응답을 진실의 원천으로 삼는다.**
 
-### 5.9 CI 마이그레이션 워크플로우 — Alembic drift 가드 / 운영 적용 / PR ephemeral (CMP-539, transitional)
+### 5.9 CI/CD 워크플로우 — Supabase Integration + drift guard + status wrapper (CMP-603 cutover 완료)
 
-> **전환 상태 (2026-06-02)**: 본 절의 세 워크플로우는 **Neon + Alembic 기반 한시 운영 정본** 이다. ADR-0004 Accepted + CMP-575 supabase SQL cutover PR 머지 시점에 Supabase Automatic Branching + `supabase/migrations/*.sql` apply 로 대체된다 ([`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) §6 / [`docs/runbooks/supabase-migration-plan.md`](docs/runbooks/supabase-migration-plan.md) §Follow-up). 본 절은 cutover 완료까지 정본을 유지한다. workflow 단계적 폐기는 DevOps Lead 후속 이슈에서 다룬다.
+`.github/workflows/` 가 다음과 같이 책임을 나눈다.
 
-`.github/workflows/` 의 세 잡이 Alembic 마이그레이션 라이프사이클을 책임진다. 어떤 잡이 무엇을 보장하는지 한 단락으로 요약한다.
+- **`ci.yml` → `migrate-check`** (PR) — Supabase SQL migration drift 가드. `apps/api/src/models/**/*.py` 가 변경됐는데 `supabase/migrations/*.sql` 동행이 없으면 fail. Neon / Alembic 의존 없음, secret 불필요. 정본: [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) §6.3.2. `ci-status` 메타 게이트에 포함되어 브랜치 보호의 required check 1개 (`ci-status`) 로 자동 보장.
+- **`deploy.yml`** (push to `dev` / `main`) — 어플리케이션 빌드 smoke + 클라우드 배포 스텁. **DB migration 미실행** (Supabase GitHub Integration 단독 책임). 후속 클라우드 target (Vercel / Fly / Cloud Run / Lightsail) 은 별도 이슈에서 채운다.
+- **`supabase-status.yml`** (PR) — path-filter deadlock 회피 wrapper. `supabase/**` 변경 없는 PR 은 자체 succeed (skip 의미), 변경 있는 PR 은 `vars.SUPABASE_INTEGRATION_CHECK_NAME` 으로 지정된 Supabase 측 check context 결과를 polling 해 그대로 반영. 변수 미설정 시 fail (운영 사고를 초록색으로 숨기지 않음). 정본: [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) §6.3 / §6.3.1.
+- **`secret-scan.yml`** / **`main-promotion-guard.yml`** / **`pr-title-lint.yml`** — 변경 없음 (CMP-533 / branch-strategy 가드).
+- **`_archive/neon-pr-branch.yml.archived`** — 비활성. Neon GitHub integration 시절의 PR preview 잡을 이력 참조용으로 보존. GitHub Actions 는 `.yml` 확장자만 워크플로우로 인식하므로 본 파일은 실행되지 않는다.
 
-- **`ci.yml` → `migrate-check`** (PR / push, apps/api 변경시) — 테스트용 Neon 브랜치(`secrets.NEON_TEST_DATABASE_URL`, non-pooler) 에 `alembic upgrade head` 를 돌린 뒤 `alembic check` 로 모델↔리비전 drift 가 있으면 빨갛게 실패한다. 엔티티 모델만 바꾸고 마이그레이션 파일을 안 만든 PR 이 이 단계에서 차단된다. `ci-status` 메타 게이트의 needs 에 포함되므로 브랜치 보호의 required check 1개로 자동 보장.
-- **`deploy.yml` → `release-migrate`** (push to `dev` / `main`) — `dev` push 는 `development` GitHub Environment 에서 `secrets.NEON_DEV_DATABASE_URL` 로 `APP_ENV=development` 마이그레이션을 적용하고, `main` push 는 `production` GitHub Environment 에서 `secrets.NEON_PROD_DATABASE_URL` 로 `APP_ENV=production` 마이그레이션을 적용한다. bootstrap 단계에서 시크릿이 아직 없으면 warning + no-op 으로 통과하지만, 실제 배포 전에는 각 environment secret 을 발급해야 한다. `cancel-in-progress: false` 로 마이그레이션 도중 중단을 막는다.
-- **`neon-pr-branch.yml`** (PR open/reopen/synchronize/close) — Neon GitHub integration 권장 흐름에 맞춰 `preview/pr-<PR번호>-<head branch>` preview 브랜치를 만들고, PR base 가 `dev` 면 `vars.NEON_DEV_PARENT_BRANCH`(권장: Neon branch id) 에서, `main` 이면 Neon `production` 에서 preview 를 딴다. 생성 직후 preview connection 에 `alembic upgrade head` 를 적용해 PR 단위 스키마를 검증한다. branch id 만 PR 코멘트로 게시하고, connection string 은 credential 이므로 PR 코멘트에 게시하지 않는다. PR close/merge 시 preview branch 는 자동 삭제된다. fork PR 은 `secrets` 미접근으로 자동 skip — 운영 시크릿이 fork 에 노출되지 않게 의도된 동작.
+DB 마이그레이션 적용 책임 (cutover 후 봉인):
+- `dev` push → **Supabase GitHub Integration** 이 development branch 에 `supabase/migrations/*.sql` 을 timestamp 순서로 적용.
+- `main` push → **Supabase GitHub Integration** 이 production branch 에 동일 적용. 콘솔의 "production migrations" 토글 ON 이 전제 (`docs/runbooks/supabase-branching.md` §3.1 U7).
+- `staging` → Supabase 콘솔에서 사람이 수동 promote 또는 로컬 `supabase db push` (정본: §3.2 A1.2).
+- preview/pr-N (ephemeral) → Automatic Branching 이 PR base 매핑에 따라 development 또는 production parent 에서 분기, SQL apply.
 
-운영 시크릿 (Settings → Secrets and variables → Actions / Environments):
+운영 시크릿 / 변수 (Settings → Secrets and variables → Actions / Environments):
 
-- `NEON_TEST_DATABASE_URL` — CI drift 가드용 테스트 브랜치. non-pooler.
-- `NEON_DEV_DATABASE_URL` — `dev` 브랜치 merge 후 development 적용용. `development` Environment 에 둔다. non-pooler.
-- `NEON_PROD_DATABASE_URL` — `main` 브랜치 merge 후 production 적용용. `production` Environment 에 두고 required reviewers 보호 권장. non-pooler.
-- `NEON_API_KEY` — preview 브랜치 생성/삭제용 Neon API token. GitHub Actions secret.
-- `NEON_PROJECT_ID` — preview 브랜치 대상 Neon project id. GitHub Actions repository variable.
-- `NEON_DEV_PARENT_BRANCH` — `dev` 대상 PR preview parent. Neon branch name 이 UI와 다를 수 있으므로 branch id 사용 권장.
+- `SUPABASE_ACCESS_TOKEN` (Secret) — Personal Access Token, Supabase Console → Account → Access Tokens 발급.
+- `SUPABASE_PROJECT_REF_PROD` / `SUPABASE_PROJECT_REF_DEV` / `SUPABASE_PROJECT_REF_STAGING` (Variable) — 환경별 Supabase project ref / branch project id. 값 자체는 비밀이 아니지만 변수로 관리해 PR 본문 노출을 차단.
+- `SUPABASE_DB_PASSWORD_PROD` / `SUPABASE_DB_PASSWORD_DEV` / `SUPABASE_DB_PASSWORD_STAGING` (Secret) — 각 persistent branch DB password.
+- `SUPABASE_INTEGRATION_CHECK_NAME` (Variable) — `supabase-status.yml` wrapper 의 polling target. 첫 `supabase/**` PR 에서 실제 check context 이름을 확인한 뒤 등록 (정본: §6.3.1).
 
-> 시크릿 이름만 본 문서에 정한다. 실제 값 발급은 사람이 Neon 콘솔에서 수행하고 `npg_` prefix 가 코드/이슈/PR 본문에 새는지 §5.7 시크릿 헌팅 단계로 점검한다.
+> 실값 발급/등록은 사용자가 Supabase 콘솔 + GitHub Settings 에서 수행한다. 본 PR 머지 후 사용자 체크리스트는 PR 본문 참고. cutover 이후 폐기된 Neon 시크릿/변수 (`NEON_API_KEY`, `NEON_PROJECT_ID`, `NEON_TEST_DATABASE_URL`, `NEON_DEV_DATABASE_URL`, `NEON_PROD_DATABASE_URL`, `NEON_DEV_PARENT_BRANCH`, `NEON_BRANCH_CAP`) 는 GitHub Settings 에서 삭제 대상이다.
 
 ---
 
@@ -356,7 +366,7 @@ node -e "const d=JSON.parse(require('fs').readFileSync('.tmp/resp.json','utf8'))
 각 앱의 정본 명령은 해당 앱 README에 두되, 모노레포 루트에서 자주 쓰는 명령은 다음과 같다.
 
 ```bash
-# 전체 부팅 (web + api + redis. DB는 외부 managed Postgres — Supabase 또는 Neon)
+# 전체 부팅 (web + api + redis. DB는 외부 managed Supabase Postgres)
 docker compose -f infra/compose/docker-compose.yml up --build
 
 # 백엔드 단독 (uv)
@@ -368,12 +378,15 @@ cd apps/web && corepack pnpm@9 install && corepack pnpm@9 dev
 # 헬스체크 (DB SELECT 1 결과 포함)
 curl http://localhost:8000/healthz
 
-# 마이그레이션 (현 SSOT — Alembic, transitional): api 컨테이너 내부
-docker compose exec api alembic upgrade head
-
-# 마이그레이션 (cutover 후 SSOT — Supabase SQL): Supabase CLI 또는 GitHub integration
-#   supabase db push --linked            # CMP-575 / docs/runbooks/supabase-migration-plan.md
-#   supabase db reset --linked           # preview branch only — 실 데이터 폐기 주의
+# DB 마이그레이션 (forward SSOT — Supabase SQL):
+#   - dev/main 으로 머지하면 Supabase GitHub Integration 이 자동 적용.
+#   - 로컬에서 직접 적용해야 할 때 (staging promote / 콘솔 link 후 검증):
+#       supabase link --project-ref <BRANCH_PROJECT_REF>
+#       supabase db diff --linked       # remote 상태와 비교 (plain `db diff` 는 local Docker DB)
+#       supabase db push                # SQL 마이그레이션 적용
+#   세부 절차: docs/runbooks/supabase-branching.md §3.2 / supabase-migration-plan.md
+#
+# Alembic 은 historical reference 만 — 신규 forward migration 생성/적용 금지.
 
 # 정본 docx/xlsx 텍스트 캐시 재생성
 python tooling/extract_specs.py

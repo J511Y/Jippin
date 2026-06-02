@@ -1,22 +1,25 @@
 # Supabase SQL Migration Plan
 
-- Issue: CMP-575
-- Status: first conversion candidate
-- Scope: local file conversion only. Do not apply these migrations to a real Supabase project until the board approves the source-of-truth switch.
+- Issues: CMP-575 (SQL conversion candidates), CMP-603 (CI/CD cutover)
+- Status: forward migration SSOT switched to `supabase/migrations/*.sql` (CMP-603 cutover). Alembic demoted to historical reference.
+- Scope: this document covers the conversion inventory + post-cutover guard. Direct schema edits in the Supabase Console SQL editor are prohibited (`db pull` / `migration repair` required if it happens — see Console hygiene below).
 
 ## Decision
 
-Use `supabase/migrations/*.sql` as the database schema source of truth after the switch. Keep SQLAlchemy models as application ORM models that must match the SQL schema, not as the primary DB definition. Alembic should be retired for forward migrations once Supabase CI/deploy jobs are in place.
+Use `supabase/migrations/*.sql` as the database schema source of truth. SQLAlchemy models in `apps/api/src/models/` are application ORM models that must match the SQL schema; they are no longer the primary DB definition. Alembic is retired for forward migrations as of the CMP-603 cutover and is kept only as historical reference.
 
-Recommended transition:
+Post-cutover transition (CMP-603):
 
-1. Land the SQL candidates in this issue for review.
-2. Add a CI job that applies `supabase/migrations` to a disposable Supabase or Postgres database and runs schema checks.
-3. Stop creating new Alembic revisions after the cutover PR is approved.
-4. Keep `apps/api/migrations` temporarily as historical reference for one release window.
-5. Remove Alembic workflow steps only after Supabase migration CI and deploy automation are active.
+1. Forward DB migration SSOT is `supabase/migrations/*.sql`.
+2. Application of those files is owned by **Supabase GitHub Integration**: `dev` push → development branch, `main` push → production branch. PR preview branches get the same files via Automatic Branching (Supabase-changes-only mode).
+3. CI guard: `.github/workflows/ci.yml::migrate-check` fails when a PR touches `apps/api/src/models/**/*.py` without adding a matching `supabase/migrations/*.sql` file. Static diff guard, no Neon / Alembic dependency. Definition: `docs/runbooks/supabase-branching.md` §6.3.2.
+4. `apps/api/migrations/` (Alembic revisions) is preserved as a historical reference for one release window. Do not create new Alembic revisions.
+5. Do not run both Alembic and Supabase SQL as independent forward-migration authorities. That would create schema drift because Supabase GitHub Integration reads SQL files only.
 
-Do not run both Alembic and Supabase SQL as independent forward-migration authorities. That would create schema drift because GitHub/Supabase automation reads SQL files while the current API CI reads Alembic revisions.
+Console hygiene (MUST):
+
+- Do not edit remote schema via the Supabase Console SQL editor / Table editor. Direct edits diverge from repo migrations and break `supabase db push` with `local migration files and remote migration history are out of sync`.
+- If a direct edit happens by accident: run `supabase db pull` (to bring the remote diff into a new local migration) or `supabase migration repair --status reverted|applied <timestamp>` to realign history. Document the recovery in the same PR.
 
 ## Inventory
 
@@ -61,11 +64,11 @@ Reasoning:
 - Keeping Alembic as an active migration authority duplicates the schema ledger.
 - SQLAlchemy models are still valuable for FastAPI ORM access and model metadata tests, but they should be checked against SQL, not used to generate production DDL after cutover.
 
-Temporary compatibility plan:
+Compatibility plan (post-cutover, CMP-603):
 
 - Keep `apps/api/tests/test_models_metadata.py` because it protects the OAuth-only user model, no-password invariant, and consent constraints.
-- Replace `apps/api/tests/test_alembic_revision.py` with a Supabase migration-order/static-schema test after the cutover.
-- Replace `.github/workflows/ci.yml` `migrate-check` and `.github/workflows/neon-pr-branch.yml` Alembic steps with Supabase SQL application checks.
+- `apps/api/tests/test_alembic_revision.py` is now historical-only (Alembic is retired for forward migrations). A Supabase migration-order/static-schema test is a follow-up item.
+- `.github/workflows/ci.yml::migrate-check` is now the Supabase SQL migration drift guard (model-only PR static check). `.github/workflows/_archive/neon-pr-branch.yml.archived` is no longer loaded by GitHub Actions. `.github/workflows/deploy.yml::release-migrate` was removed entirely — DB migration is owned by Supabase GitHub Integration.
 
 ## Static Verification Notes
 
@@ -84,6 +87,7 @@ Known limitations before applying to a real Supabase project:
 
 ## Follow-up Work
 
-- DevOps: replace Alembic CI/deploy migration steps with Supabase SQL migration checks.
-- Backend: add a static test that `supabase/migrations` order and final table/constraint names match expected ORM metadata.
+- DevOps: ✅ done (CMP-603) — Neon preview workflow archived, `deploy.yml::release-migrate` removed, `ci.yml::migrate-check` rewired to Supabase SQL drift guard, `supabase-status.yml` wrapper added.
+- Backend: add a static test that `supabase/migrations` order and final table/constraint names match expected ORM metadata (pending follow-up issue).
 - Architecture/DB owner: approve the exact cutover point and decide whether to squash the historical probe create/drop pair before first production Supabase apply.
+- Operator: register `supabase-status` and `ci-status` as required checks on `dev` / `main` branch protection. Register `SUPABASE_INTEGRATION_CHECK_NAME` repository variable after the first `supabase/**` PR reveals the actual Supabase integration check context (`docs/runbooks/supabase-branching.md` §6.3.1).
