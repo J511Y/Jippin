@@ -1,4 +1,19 @@
-# 집핀(Jippin) Neon preview branch — CMP-539. **TRANSITIONAL (ADR-0004 / CMP-574)**.
+# ⚠ ARCHIVED — Neon → Supabase cutover (CMP-603, 2026-06-02).
+#
+# 본 파일은 **활성 워크플로우가 아니다**. `.github/workflows/_archive/` 하위에
+# `.yml.archived` 확장자로 보관되어 GitHub Actions 가 로드하지 않는다 (Actions 는
+# `.github/workflows/*.yml|*.yaml` 만 워크플로우로 인식). 새 PR 에서 본 잡이
+# 실행되지 않으며, 콘솔에서 다시 한 번 확인할 필요도 없다.
+#
+# 이력 참조용으로만 보존한다. 다시 활성화하지 말 것 — Neon project 자체가
+# cutover 이후 폐기 대상이며 Supabase Automatic Branching 이 PR preview 책임을
+# 대체했다 (docs/runbooks/supabase-branching.md §6 단계 3). NEON_API_KEY /
+# NEON_PROJECT_ID / NEON_DEV_PARENT_BRANCH / NEON_BRANCH_CAP 등 본 잡이 의존하던
+# secrets / variables 는 본 PR 머지 후 사용자가 GitHub Settings 에서 일괄 삭제한다
+# (CMP-603 PR 본문 §사용자 작업 체크리스트 참고).
+#
+# 원래 책임 (Neon GitHub integration 시절):
+# 집핀(Jippin) Neon preview branch — CMP-539. **ARCHIVED (CMP-603)**.
 #
 # Neon GitHub integration 권장 흐름에 맞춰 PR 별 preview branch 를 생성/삭제한다.
 #

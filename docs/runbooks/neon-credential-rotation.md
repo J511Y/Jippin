@@ -1,8 +1,8 @@
 # Runbook — Neon Postgres 자격증명 회전
 
-> **⚠ TRANSITIONAL (2026-06-02)**
+> **⚠ ARCHIVE — Neon → Supabase cutover 완료 (CMP-603, 2026-06-02)**
 >
-> 본 런북은 **Neon project 가 잔존하는 동안 (cutover 완료 전) 유효** 하다. ADR-0004 (Neon → Supabase 전환, Proposed) 의 cutover PR 머지 + Neon project 폐기 시점에 본 런북은 archive (`docs/runbooks/_archive/`) 로 이동한다.
+> 본 런북은 **Neon project 가 잔존하는 동안만** 유효하다. CMP-603 cutover 이후 Neon 은 forward DB authority 가 아니며 (`.github/workflows/neon-pr-branch.yml` archive, `deploy.yml::release-migrate` 제거, `ci.yml::migrate-check` Supabase drift 가드로 교체), 본 런북은 이력 참조용 + Neon project 가 폐기되기 전 마지막 sign-off 회전 용도로만 남는다. Neon project 폐기 시점에 본 런북은 `docs/runbooks/_archive/` 로 이동한다.
 >
 > Supabase project 의 service role key / DB password 회전은 별도 Supabase 회전 런북 (후속 이슈 — DevOps Lead) 에서 다룬다. 본 런북을 Supabase 에 그대로 적용하지 말 것. 단, **시크릿 노출·이탈자 대응의 일반 절차**(§0 사전 체크리스트, 코드/이슈/PR 본문 스캐닝, 사고 코멘트) 는 그대로 참조 가능하다.
 
