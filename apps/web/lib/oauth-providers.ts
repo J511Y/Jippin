@@ -9,8 +9,10 @@
  *     "Link accounts with same email" 토글 (= `dangerously_enable_same_email_link_
  *     identity`) 은 모두 **OFF** (기본값) 이어야 한다 (§8 console track 책임).
  *
- * Phase 1 봉인 — Naver 는 항상 Custom OIDC (`custom:naver`). Kakao 는 §8 콘솔 트랙이
- * native (`kakao`) / Custom (`custom:kakao`) 중 어느 경로로 등록할지 결정한다 (R9 review).
+ * MVP 제공 provider 봉인 — 프론트 OAuth 진입은 Kakao 하나만 허용한다. Google/Naver 는
+ * backend/env 스켈레톤과 mapping helper 에 남겨 두되, 후속 명시 결정 전까지 UI/BFF 에서
+ * 시작할 수 없다. Kakao 는 §8 콘솔 트랙이 native (`kakao`) / Custom (`custom:kakao`) 중
+ * 어느 경로로 등록할지 결정한다 (R9 review).
  * 콘솔이 Custom 으로 가는데 SDK 가 default `'kakao'` 를 호출하면 Supabase 가
  * "provider not enabled" 로 거부하므로, default 매핑이 콘솔과 정합해야 한다.
  *
@@ -41,10 +43,8 @@
  * 모듈의 SDK id ↔ Supabase 콘솔 ↔ env var 매트릭스:
  *
  *   | UI provider | env var (NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID) | Supabase 콘솔 등록 | SDK 호출 id |
- *   | google      | (해당없음)                                       | Google (native)     | `'google'`        |
  *   | kakao       | (미지정) 또는 `'kakao'`                          | Kakao (native)      | `'kakao'`         |
  *   | kakao       | `'custom:kakao'`                                 | Custom OIDC (id=`kakao`) | `'custom:kakao'` |
- *   | naver       | (해당없음)                                       | Custom OIDC (id=`naver`) | `'custom:naver'` |
  *
  * Kakao 시크릿 (Client ID / Client Secret = Kakao 측 REST API key / client secret)
  * 은 **Supabase 콘솔이 단독 보유**. web 어댑터는 직접 사용하지 않으며 backend 가
@@ -55,10 +55,10 @@
  * 끝나야 할 갱신이 다중 파일로 흩어지므로 본 룰이 명시 봉인.
  */
 
-export type UiProvider = 'google' | 'kakao' | 'naver';
+export type UiProvider = 'kakao';
 export type SupabaseProvider = 'google' | 'kakao' | `custom:${string}`;
 
-const UI_PROVIDERS: ReadonlySet<UiProvider> = new Set(['google', 'kakao', 'naver']);
+const UI_PROVIDERS: ReadonlySet<UiProvider> = new Set(['kakao']);
 
 export function isUiProvider(value: string | null | undefined): value is UiProvider {
   return typeof value === 'string' && UI_PROVIDERS.has(value as UiProvider);
@@ -92,9 +92,7 @@ export function resolveKakaoProviderId(envValue?: string | undefined): SupabaseP
 
 export function buildProviderMap(envValue?: string | undefined): Record<UiProvider, SupabaseProvider> {
   return {
-    google: 'google',
     kakao: resolveKakaoProviderId(envValue),
-    naver: 'custom:naver',
   };
 }
 

@@ -17,7 +17,7 @@ import {
  * - 약관 동의 폼은 `/auth/me` 응답의 `missing_required_terms` 를 기반으로 동적으로 렌더링한다.
  */
 
-const PROVIDERS = ['kakao', 'naver', 'google'] as const;
+const PROVIDERS = ['kakao'] as const;
 type Provider = (typeof PROVIDERS)[number];
 
 type AuthMeUser = {

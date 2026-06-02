@@ -14,11 +14,7 @@ import { DEFAULT_NEXT, resolveSafeNext } from '@/lib/safe-redirect';
  * - `next` 는 lib/safe-redirect 의 `isSafeNext` SSOT 를 거친 상대 경로만 전달한다.
  */
 
-const PROVIDERS = [
-  { id: 'kakao', label: '카카오로 시작하기' },
-  { id: 'naver', label: '네이버로 시작하기' },
-  { id: 'google', label: 'Google 로 시작하기' }
-] as const;
+const PROVIDERS = [{ id: 'kakao', label: '카카오로 시작하기' }] as const;
 
 type ProviderId = (typeof PROVIDERS)[number]['id'];
 
