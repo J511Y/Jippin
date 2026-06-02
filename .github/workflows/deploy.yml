@@ -1,8 +1,15 @@
-# 집핀(Jippin) 배포 파이프라인 - CMP-539
+# 집핀(Jippin) 배포 파이프라인 - CMP-539. **TRANSITIONAL (ADR-0004 / CMP-575)**.
 #
-# GitHub branch 와 Neon branch 를 명시적으로 맞춘다.
-#   - dev  -> APP_ENV=development -> Neon development branch
-#   - main -> APP_ENV=production  -> Neon production branch
+# GitHub branch 와 외부 managed Postgres branch 를 명시적으로 맞춘다.
+#   - dev  -> APP_ENV=development -> Neon development branch (transitional)
+#   - main -> APP_ENV=production  -> Neon production branch  (transitional)
+#
+# 전환 상태 (ADR-0004 Proposed / CMP-574 Supabase branching):
+#   본 워크플로우의 release-migrate 잡은 Alembic + Neon 에 의존한다. cutover PR
+#   머지 시점에 Supabase Automatic Branching (콘솔이 dev↔development / main↔production
+#   매핑을 자동 처리) 또는 `supabase db push --linked` 잡으로 대체된다. 운영 절차:
+#   docs/runbooks/supabase-branching.md §6 / docs/runbooks/supabase-migration-plan.md.
+#   NEON_DEV_DATABASE_URL / NEON_PROD_DATABASE_URL 시크릿은 cutover 시점에 제거 후보.
 #
 # 실제 클라우드 배포 대상(Vercel/Fly/Cloud Run/Lightsail 등)은 아직 스텁이며,
 # release-migrate 가 성공한 뒤에만 deploy 단계로 넘어간다.

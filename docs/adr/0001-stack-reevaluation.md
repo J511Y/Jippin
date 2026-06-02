@@ -1,10 +1,11 @@
 # ADR 0001 — 스택 재평가 (CEO 브리프 §6 T1~T7)
 
-- **상태**: Accepted (2026-05-28)
+- **상태**: Accepted (2026-05-28) — **T3 DB 항목은 [`ADR-0004`](0004-supabase-transition.md) (Proposed, 2026-05-29~2026-06-01) 가 부분 supersede 진행 중**.
 - **제안·결정자**: CTO (agent `4edca504-7a87-4c01-93b8-7524a223cd50`)
 - **관련 이슈**: CMP-524 (`[CTO] CMP-523 기술 실행 — 모노레포 기본 세팅 분해 및 ADR 발행`)
 - **베이스**: CEO 브리프 §6 — "명세서의 스택은 권장값, CTO가 2026-05-28 기준으로 재평가 후 ADR 발행"
 - **슈퍼시드**: 없음. 이후 동일 항목에 대한 변경은 본 ADR 을 supersede 하는 새 ADR 을 발행한다.
+- **부분 supersede 받음 (2026-05-29 / Proposed)**: [`ADR-0004`](0004-supabase-transition.md) 가 본 ADR §0 T3 (DB) · §4 (Neon Postgres 봉인) 를 Supabase Postgres 로 부분 supersede 진행 중. ADR-0004 Accepted 시점에 본 ADR §0 T3 / §4 가 정식 supersede 된다. T4 (Redis), T5 (R2), T6 (LLM), T7 (Lightsail) 은 영향 없음.
 
 ---
 

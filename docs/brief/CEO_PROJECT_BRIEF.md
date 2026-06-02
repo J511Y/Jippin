@@ -6,6 +6,10 @@
 - 기준 문서: `docs/명세서/` v0.2 / v1.0 / v1.6 / v1.9 (2026-05-21~27)
 - 본 문서는 **요구사항 합의 기준선**이다. 기술 선정·구현 분해는 CTO 산출물(아키텍처 결정 기록·구현 계획)이 정본이다.
 
+> **⚠ 부분 supersede 표기 (2026-06-02 / CMP-602)**
+>
+> 본 브리프의 §2 D2/D3 “Postgres 는 Neon 원격 연결” 및 §6 T3 “Neon” 표기는 [`docs/adr/0004-supabase-transition.md`](../adr/0004-supabase-transition.md) (Proposed, 2026-05-29~) 가 **Neon → Supabase 부분 supersede 진행 중**이다. CEO 봉인 (단일 인스턴스, docker-compose, 법적 고지, 자체 비밀번호 금지, 한국 사용자 PII 보호) 은 유지된다. ADR-0004 Accepted 시점에 본 브리프 §2/§6 의 Neon 표기를 supersede 표시로 갱신할 수 있도록 CEO 가 별도 brief revision 이슈 (DevOps Lead 후속) 를 받는다. 본 PR (CMP-602) 은 브리프 본문을 직접 rewrite 하지 않는다.
+
 ---
 
 ## 1. 서비스 한 줄 정의

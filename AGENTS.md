@@ -2,6 +2,14 @@
 
 이 문서는 본 모노레포에서 일하는 **Paperclip 에이전트(자율형)** 와 **사람 개발자** 모두를 대상으로 한다. 한 줄 요약: *집핀은 비내력벽 철거 사전검토 AI 서비스이며, 이 레포는 단일 인스턴스 docker-compose 모노레포다. 모든 결정은 `docs/명세서/`(요구·기능·기술·SDD)와 `docs/brief/CEO_PROJECT_BRIEF.md` 에 우선 따른다.*
 
+> **⚠ DB / Auth SSOT 전환 (Neon → Supabase, 2026-06-02 기준)**
+>
+> 본 레포는 Neon Postgres + 자체 OAuth/JWT 에서 **Supabase Postgres + Supabase Auth** 로 전환 중이다. 정책 정본은 [`docs/adr/0004-supabase-transition.md`](docs/adr/0004-supabase-transition.md) (현재 **Proposed**), 운영 정본은 [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) · [`docs/runbooks/supabase-migration-plan.md`](docs/runbooks/supabase-migration-plan.md) · [`docs/runbooks/supabase-auth-poc.md`](docs/runbooks/supabase-auth-poc.md) · [`docs/runbooks/supabase-web-auth.md`](docs/runbooks/supabase-web-auth.md) · [`docs/runbooks/supabase-session-bridge.md`](docs/runbooks/supabase-session-bridge.md) 다. DB schema source of truth 는 `supabase/migrations/*.sql` 로 cutover 진행 중이며 (CMP-575), Alembic (`apps/api/migrations/`) 과 Neon workflow 는 **cutover PR 승인 전까지 한시적으로 활성 정본**이다 — `docs/runbooks/supabase-migration-plan.md §Alembic Keep/Remove` 참조.
+>
+> 본 문서 §4.4 / §5.9 / §6 에 남아 있는 Neon / `DATABASE_POOL_URL` / Alembic 문구는 **transitional state** 표기이지 미래 정본이 아니다. 신규 작업자는 ADR-0004 + Supabase 런북을 먼저 통독한 뒤 Neon 항목을 “현 단계 운영 절차” 로만 읽어야 한다. ADR-0004 Accepted + Supabase CI/deploy cutover PR 머지 시점에 본 문서가 다시 갱신된다.
+>
+> Neon 런북([`docs/runbooks/neon-branches.md`](docs/runbooks/neon-branches.md) · [`docs/runbooks/neon-credential-rotation.md`](docs/runbooks/neon-credential-rotation.md)) 은 cutover 완료 시점까지 잔존하지만 상단에 archive/reference 배너가 붙어 있다.
+
 ---
 
 ## 1. 우선순위 — 무엇을 먼저 읽어야 하는가
@@ -46,7 +54,7 @@ jippin/
 > **봉인 ADR**: 본 트리·패키지 매니저·런타임은 [`docs/adr/0001-stack-reevaluation.md`](docs/adr/0001-stack-reevaluation.md) 가 봉인한다. 변경은 새 ADR을 발행해 supersede 해야 한다. 핵심 결정:
 > - `apps/web` = **Next.js 16.2 LTS** · React 19 · Node 22 LTS · **pnpm 9.x**
 > - `apps/api` = **FastAPI 0.115** · Python 3.12 · **uv 0.5+**
-> - DB = **Neon Postgres** (외부, 로컬 DB 컨테이너 없음). 캐시 = **Redis 7.4-alpine** 컨테이너.
+> - DB = **Supabase Postgres** (외부 managed, 로컬 DB 컨테이너 없음) — Neon → Supabase 전환 중 (ADR-0004 Proposed). 현 시점 운영 DB URL 은 Supabase project 가 발급한 connection string 이며, Alembic / Neon workflow 가 한시적 운영 정본을 유지한다. 캐시 = **Redis 7.4-alpine** 컨테이너.
 > - 객체 스토리지 = **Cloudflare R2** (S3 호환, zero-egress).
 > - LLM 오케스트레이션 = **LangChain v0.3+**. VLM 기본 = OpenAI `gpt-4.1-mini` / 정밀 = `gpt-4o`.
 > - 클라우드 MVP = **AWS Lightsail Seoul (`ap-northeast-2`)** — ADR-0002 Accepted 후 확정.
@@ -75,7 +83,7 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - **DevOps Engineer** — CI, gitmoji 검증, GitHub Flow 정책 자동화
 - **Security Lead / Security Engineer** — 시크릿 헌팅, OAuth/PII/암호화 정책 가드
 - **QA Lead / Test Engineer** — 테스트 피라미드, 룰 결정성 회귀 테스트
-- **Database Engineer** — Neon 스키마/마이그레이션/인덱스 (후속 이슈)
+- **Database Engineer** — DB 스키마·마이그레이션·인덱스. 현 단계 SSOT 는 `supabase/migrations/*.sql` (cutover 중, CMP-575) + Alembic 한시 유지. 운영 절차는 [`docs/runbooks/supabase-migration-plan.md`](docs/runbooks/supabase-migration-plan.md) · [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md).
 
 ---
 
@@ -123,17 +131,18 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 
 - 실제 값은 `.env` 로컬 또는 운영 시크릿 매니저. 커밋 금지.
 - `.env.example` 만 커밋. 변수명·예시값 형식·설명 포함.
-- Neon DB URL은 두 가지를 모두 관리한다: `DATABASE_URL`(non-pooler, 마이그레이션), `DATABASE_POOL_URL`(pooler, 일반 쿼리). `sslmode=require` 는 모든 URL 에 필수.
-- **APP_ENV ↔ Neon 브랜치 매핑은 봉인** (CMP-538). 코드 분기 금지 — 매핑은 환경별 `.env` 의 URL 값으로만 한다 (12-factor). `apps/api/src/config.py::ALLOWED_APP_ENVS` 가 그 외 값을 부팅 단계에서 차단한다. 변경하려면 ADR 을 새로 발행한다.
+- **DB URL 관리 (전환 중)**: 현 단계는 두 가지를 모두 관리한다 — `DATABASE_URL` (non-pooler, 마이그레이션·DDL), `DATABASE_POOL_URL` (pooler, 일반 쿼리). `sslmode=require` 는 모든 URL 에 필수. 두 URL 의 호스트는 **Supabase project 의 direct port 5432 / pooler port 6543** 을 가리키며, Neon URL 은 cutover 완료 시점까지 한시적으로 운영 시크릿으로 잔존한다 (ci.yml / deploy.yml / neon-pr-branch.yml 워크플로우 참조).
+- **Supabase Auth 환경변수**: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_FLOW_COOKIE_SECRET`, `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_AUDIENCE`, (ADR-0004 §2.3 rev9 신설) `SUPABASE_JWKS_URL`. 정본 정의는 `apps/api/.env.example` / `apps/web/.env.example`.
+- **APP_ENV ↔ DB 브랜치 매핑은 봉인** (CMP-538 / CMP-574). 코드 분기 금지 — 매핑은 환경별 `.env` 의 URL 값으로만 한다 (12-factor). `apps/api/src/config.py::ALLOWED_APP_ENVS` 가 그 외 값을 부팅 단계에서 차단한다. 변경하려면 ADR 을 새로 발행한다.
 
-  | APP_ENV       | Neon 브랜치             | 수명           | 비고                              |
-  |---------------|-------------------------|----------------|-----------------------------------|
-  | `development` | `development`           | 장기, 공유     | 로컬 개발자 공용                  |
-  | `test`        | `development` 또는 PR ephemeral | 단기   | CI / 단위 테스트                  |
-  | `staging`     | `staging`               | 장기           | QA / 사전검증                     |
-  | `production`  | `production`            | 장기           | 운영 (Neon project default branch)|
+  | APP_ENV       | Supabase 브랜치 (현 SSOT) | Neon 브랜치 (cutover 전 한시 매핑) | 수명           | 비고                                                |
+  |---------------|---------------------------|------------------------------------|----------------|-----------------------------------------------------|
+  | `development` | `development`             | `dev` 또는 `local`                 | 장기, 공유     | 로컬 개발자 공용 / `development` GitHub Environment |
+  | `test`        | preview/pr-N (ephemeral)  | `dev` 또는 PR ephemeral            | 단기           | CI / 단위 테스트                                    |
+  | `staging`     | `staging`                 | `staging`                          | 장기           | QA / 사전검증 — Supabase 콘솔에서 수동 promote      |
+  | `production`  | `production`              | `main`                             | 장기           | 운영 (Supabase / Neon 각자의 default branch)        |
 
-  운영 절차: [`docs/runbooks/neon-branches.md`](docs/runbooks/neon-branches.md). 회전 절차: [`docs/runbooks/neon-credential-rotation.md`](docs/runbooks/neon-credential-rotation.md).
+  Supabase 운영 절차 (정본): [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md). Neon 운영 절차 (한시 유지·archive 배너): [`docs/runbooks/neon-branches.md`](docs/runbooks/neon-branches.md). Neon 비밀번호 회전 절차 (한시 유지): [`docs/runbooks/neon-credential-rotation.md`](docs/runbooks/neon-credential-rotation.md).
 
 ### 4.5 에러·응답 표준
 
@@ -158,6 +167,8 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 ### 4.7 사용자 식별 정책 — 비회원 사전검토 + 전환 시점 OAuth 간편가입
 
 > **봉인.** 본 절은 CEO 정책 (CMP-557) 결정. 정본은 `docs/adr/0003-anon-user-and-sso.md`. 기존 명세 4종 (요구·기능·기술·SDD) 중 “소셜 OAuth 로그인 필수 / 비회원 사전검토 불가” 가정은 본 절로 **supersede** 된다. 모순 추적: `docs/명세서-모순.md`.
+>
+> **추가 전환 표기 (Neon → Supabase, 2026-06-02)**: ADR-0003 §2.1·§2.2 (`anonymous_users` 테이블, 자체 `/auth/{provider}/start` · `/auth/callback/{provider}` 라우트, 자체 OAuth state Redis store) 는 [`docs/adr/0004-supabase-transition.md`](docs/adr/0004-supabase-transition.md) §2.2~§2.3 으로 **부분 supersede 진행 중**이다. 봉인된 항목 (자동 병합 금지 #9, 자체 비밀번호 금지 #3, 약관 분리 저장 #5·#6, OAuth provider 3종 #4) 은 ADR-0004 가 그대로 보존한다. anonymous → permanent 전환은 `supabase.auth.linkIdentity()` 만 사용 (ADR-0004 §2.3). 운영 라우트·세션 정본은 [`docs/runbooks/supabase-auth-poc.md`](docs/runbooks/supabase-auth-poc.md) · [`docs/runbooks/supabase-web-auth.md`](docs/runbooks/supabase-web-auth.md) · [`docs/runbooks/supabase-session-bridge.md`](docs/runbooks/supabase-session-bridge.md).
 
 **원칙.**
 
@@ -317,7 +328,9 @@ node -e "const d=JSON.parse(require('fs').readFileSync('.tmp/resp.json','utf8'))
 
 > 사람 작업자 주의: 시스템 PowerShell 콘솔 폰트가 `Lucida Console` 인 경우 정상 출력된 한글도 콘솔에서는 `?` 로 보일 수 있다. **보드(웹 UI) 또는 `GET /api/issues/<ID>` 응답을 진실의 원천으로 삼는다.**
 
-### 5.9 CI 마이그레이션 워크플로우 — Alembic drift 가드 / 운영 적용 / PR ephemeral (CMP-539)
+### 5.9 CI 마이그레이션 워크플로우 — Alembic drift 가드 / 운영 적용 / PR ephemeral (CMP-539, transitional)
+
+> **전환 상태 (2026-06-02)**: 본 절의 세 워크플로우는 **Neon + Alembic 기반 한시 운영 정본** 이다. ADR-0004 Accepted + CMP-575 supabase SQL cutover PR 머지 시점에 Supabase Automatic Branching + `supabase/migrations/*.sql` apply 로 대체된다 ([`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) §6 / [`docs/runbooks/supabase-migration-plan.md`](docs/runbooks/supabase-migration-plan.md) §Follow-up). 본 절은 cutover 완료까지 정본을 유지한다. workflow 단계적 폐기는 DevOps Lead 후속 이슈에서 다룬다.
 
 `.github/workflows/` 의 세 잡이 Alembic 마이그레이션 라이프사이클을 책임진다. 어떤 잡이 무엇을 보장하는지 한 단락으로 요약한다.
 
@@ -343,20 +356,24 @@ node -e "const d=JSON.parse(require('fs').readFileSync('.tmp/resp.json','utf8'))
 각 앱의 정본 명령은 해당 앱 README에 두되, 모노레포 루트에서 자주 쓰는 명령은 다음과 같다.
 
 ```bash
-# 전체 부팅 (web + api + redis. DB는 Neon 원격)
+# 전체 부팅 (web + api + redis. DB는 외부 managed Postgres — Supabase 또는 Neon)
 docker compose -f infra/compose/docker-compose.yml up --build
 
 # 백엔드 단독 (uv)
 cd apps/api && uv sync && uv run uvicorn src.main:app --reload --port 8000
 
-# 프론트엔드 단독 (pnpm)
-cd apps/web && pnpm install && pnpm dev
+# 프론트엔드 단독 (pnpm 9.x — apps/web engines.pnpm <10)
+cd apps/web && corepack pnpm@9 install && corepack pnpm@9 dev
 
-# 헬스체크 (Neon SELECT 1 결과 포함)
+# 헬스체크 (DB SELECT 1 결과 포함)
 curl http://localhost:8000/healthz
 
-# 마이그레이션 (api 컨테이너 내부 / Alembic)
+# 마이그레이션 (현 SSOT — Alembic, transitional): api 컨테이너 내부
 docker compose exec api alembic upgrade head
+
+# 마이그레이션 (cutover 후 SSOT — Supabase SQL): Supabase CLI 또는 GitHub integration
+#   supabase db push --linked            # CMP-575 / docs/runbooks/supabase-migration-plan.md
+#   supabase db reset --linked           # preview branch only — 실 데이터 폐기 주의
 
 # 정본 docx/xlsx 텍스트 캐시 재생성
 python tooling/extract_specs.py

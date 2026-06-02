@@ -3,7 +3,8 @@
 # -----------------------------------------------------------------------------
 # 봉인:
 #   - 단일 호스트 1대 가정. k8s/ECS 매니페스트 금지.
-#   - Postgres 컨테이너 금지 — Neon (DATABASE_URL / DATABASE_POOL_URL) 직결.
+#   - Postgres 컨테이너 금지 — 외부 managed Postgres (Supabase/Neon, transitional)
+#     의 DATABASE_URL / DATABASE_POOL_URL 직결. 현 SSOT 는 Supabase (ADR-0004 Proposed).
 #   - 모델 가중치/대용량 바이너리는 이미지에 포함하지 않는다.
 #   - 시크릿은 infra/compose/.env (로컬, .gitignore 차단). 자리표시자는 .env.example.
 #
@@ -11,7 +12,8 @@
 #   make up                 # foreground, override.example.yml 이 cp 되어 있으면 자동 머지
 #   docker compose -f infra/compose/docker-compose.yml up --build
 #
-# 참조: ADR-0001 §5 (컨테이너 런타임), §9 (이미지 봉인) / AGENTS.md §4.4 (env)
+# 참조: ADR-0001 §5 (컨테이너 런타임), §9 (이미지 봉인) / ADR-0004 (Supabase 전환)
+#       AGENTS.md §4.4 (env), §5.9 (CI 마이그레이션, transitional)
 # =============================================================================
 
 name: jippin
@@ -62,9 +64,13 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # migrate — Alembic 사이드카 (CMP-537 / parent: CMP-536).
+  # migrate — Alembic 사이드카 (CMP-537 / parent: CMP-536). **TRANSITIONAL**.
   # api 가 기동되기 전 한 번 실행되고 service_completed_successfully 로 종료된다.
   # ENTRYPOINT 와 분리해 multi-replica 경합/롤백 어려움을 피한다 (CTO ADR).
+  #
+  # 전환 상태 (ADR-0004 / CMP-575):
+  #   Alembic 이 현 schema SSOT. cutover PR 머지 시점에 Supabase SQL
+  #   (supabase/migrations/*.sql) + Supabase CLI / GitHub integration 으로 대체.
   # ---------------------------------------------------------------------------
   migrate:
     image: jippin-api:local
@@ -75,15 +81,17 @@ services:
     command: ["alembic", "upgrade", "head"]
     environment:
       # Alembic 은 non-pooler URL 에서만 동작한다 (DDL/Prepared-statement 호환성).
-      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set (Neon non-pooler)}"
+      # Supabase 의 direct port 5432 또는 Neon non-pooler 호스트 사용.
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set (non-pooler / direct port)}"
       PYTHONUNBUFFERED: "1"
     restart: "no"
     networks:
       - jippin
 
   # ---------------------------------------------------------------------------
-  # api — FastAPI 백엔드. Neon (non-pooler + pooler) 직결.
-  # 컨테이너 내부에서 /healthz 가 SELECT 1 으로 Neon 응답을 확인하는 것을 가정.
+  # api — FastAPI 백엔드. 외부 managed Postgres (Supabase/Neon, transitional)
+  # 의 non-pooler + pooler 두 URL 에 직결.
+  # 컨테이너 내부에서 /healthz 가 SELECT 1 으로 DB 응답을 확인.
   # ---------------------------------------------------------------------------
   api:
     build:
@@ -93,9 +101,10 @@ services:
     container_name: jippin-api
     restart: unless-stopped
     environment:
-      # Neon — 두 호스트 모두 부재 시 부팅 차단 (`:?` 가드).
-      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set (Neon non-pooler)}"
-      DATABASE_POOL_URL: "${DATABASE_POOL_URL:?DATABASE_POOL_URL must be set (Neon pgbouncer pooler)}"
+      # 외부 DB — 두 호스트 모두 부재 시 부팅 차단 (`:?` 가드).
+      # Supabase: direct port 5432 (non-pooler) + pooler port 6543. Neon: -pooler 호스트.
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set (non-pooler / direct port)}"
+      DATABASE_POOL_URL: "${DATABASE_POOL_URL:?DATABASE_POOL_URL must be set (pooler)}"
       # Redis — 컨테이너 네트워크 이름으로 경유.
       REDIS_URL: "redis://redis:6379/0"
       # 런타임 설정.
@@ -103,11 +112,12 @@ services:
       PORT: "8000"
       HOST: "0.0.0.0"
       # ---------------------------------------------------------------------
-      # AUTH (CMP-557 / CMP-558 / ADR-0003).
+      # AUTH (CMP-557 / CMP-558 / ADR-0003 + ADR-0004 §2.5 Naver fallback).
+      # Auth SSOT 는 위의 Supabase 절 (NEXT_PUBLIC_SUPABASE_*, SUPABASE_JWT_SECRET).
+      # 본 OAuth state / FRONTEND_AUTH_*_URL 변수들은 Naver Custom OAuth PoC
+      # 결과 미확정 동안 한시적으로 보존된다 (ADR-0004 §2.3 / CMP-595).
       # 정본·해설은 apps/api/.env.example AUTH 절. 자리표시자는
       # infra/compose/.env.example. 본 절은 host .env → 컨테이너 전달면.
-      # 변수 누락 시 FastAPI 부팅 단계에서 차단되도록 후속 트랙 B 모델 PR
-      # 의 config 가드에 동일 키를 등록한다.
       # ---------------------------------------------------------------------
       KAKAO_REST_API_KEY: "${KAKAO_REST_API_KEY:-}"
       KAKAO_CLIENT_SECRET: "${KAKAO_CLIENT_SECRET:-}"

@@ -1,9 +1,11 @@
 # `apps/api` — Jippin FastAPI Backend (CMP-528)
 
 FastAPI 0.115 / Python 3.13 / `uv` 패키지 매니저.
-Neon Postgres(psycopg3 async) 연결, structlog JSON 로깅, `request_id` 컨텍스트, AGENTS.md §4.5 에러 봉투, `/healthz` 를 제공한다.
+외부 managed Postgres (psycopg3 async) 연결 — **Neon → Supabase 전환 중** (ADR-0004 Proposed) — structlog JSON 로깅, `request_id` 컨텍스트, AGENTS.md §4.5 에러 봉투, `/healthz`, Supabase Auth JWT 검증 / 세션 브리지 (CMP-595) 를 제공한다.
 
 본 이슈(CMP-528) 범위는 **API 골격 + `/healthz` + 표준 에러/로깅**까지다. 도메인 라우터(AUTH/INPUT/AI/RULE/REPORT 등)는 후속 이슈에서 채운다.
+
+> **DB / Auth SSOT 전환 (2026-06-02)**: Supabase Auth bridge (`src/auth/supabase_jwt.py`, `src/services/supabase_session.py`) 와 Supabase SQL migration 후보 (`supabase/migrations/*.sql`) 가 머지된 상태이다. Alembic (`apps/api/migrations/`) 은 **CMP-575 cutover PR 승인 전까지 schema source of truth** 를 유지한다. 운영 정본은 [`docs/runbooks/supabase-migration-plan.md`](../../docs/runbooks/supabase-migration-plan.md) · [`docs/runbooks/supabase-auth-poc.md`](../../docs/runbooks/supabase-auth-poc.md) · [`docs/runbooks/supabase-session-bridge.md`](../../docs/runbooks/supabase-session-bridge.md). 정책 정본은 [`docs/adr/0004-supabase-transition.md`](../../docs/adr/0004-supabase-transition.md).
 
 ---
 
@@ -12,7 +14,8 @@ Neon Postgres(psycopg3 async) 연결, structlog JSON 로깅, `request_id` 컨텍
 - Python 3.13 (`.python-version=3.13`)
 - [uv](https://docs.astral.sh/uv/) 0.5+
 - (옵션) Docker — `docker compose up api` 실행 시
-- Neon Postgres 계정 또는 `TEST_MODE=true` (DB 없이 부팅)
+- 외부 managed Postgres 자격증명 (전환 중: Supabase project connection string 또는 Neon URL) 또는 `TEST_MODE=true` (DB 없이 부팅)
+- (Supabase Auth 검증/세션 브리지를 시험할 때만) Supabase project 의 `SUPABASE_JWT_SECRET` 또는 `SUPABASE_JWKS_URL`. 자세한 변수는 `.env.example` AUTH/Supabase 절 참조.
 
 ---
 
@@ -20,7 +23,7 @@ Neon Postgres(psycopg3 async) 연결, structlog JSON 로깅, `request_id` 컨텍
 
 ```bash
 cd apps/api
-cp .env.example .env        # 값 채우기. Neon 자격증명 또는 TEST_MODE=true.
+cp .env.example .env        # 값 채우기. Supabase/Neon DB 자격증명 또는 TEST_MODE=true.
 uv sync                     # 가상환경 + 의존성 설치
 uv run uvicorn src.main:app --reload --port 8000
 ```
@@ -43,8 +46,11 @@ curl http://localhost:8000/healthz
 | `API_PORT` | `8000` | uvicorn/gunicorn 바인드 포트 |
 | `REQUEST_ID_HEADER` | `x-request-id` | request_id 미들웨어 헤더명 |
 | `TEST_MODE` | `false` | true 시 `/healthz` 가 DB 호출 없이 `db.ok=true` 반환 (테스트·오프라인 부팅) |
-| `DATABASE_POOL_URL` | — | Neon pooler URL. **요청 경로** 쿼리. (`postgresql+psycopg://`) |
-| `DATABASE_URL` | — | Neon non-pooler URL. **마이그레이션·롱 트랜잭션.** |
+| `DATABASE_POOL_URL` | — | Pooler URL (Supabase pgbouncer port 6543 / Neon `-pooler` 호스트). **요청 경로** 쿼리. (`postgresql+psycopg://`) |
+| `DATABASE_URL` | — | Non-pooler URL (Supabase direct port 5432 / Neon non-pooler 호스트). **마이그레이션·DDL·롱 트랜잭션.** |
+| `SUPABASE_JWT_SECRET` | — | Supabase Auth HS256 verification secret. CMP-595 세션 브리지·Anonymous JWT 검증용. |
+| `SUPABASE_JWT_AUDIENCE` | `authenticated` | Supabase JWT 검증 시 허용 audience. |
+| `SUPABASE_JWKS_URL` | — | (ADR-0004 §2.3 rev5+) JWKS 1순위 — 설정 시 비대칭 키 검증. 미설정이면 `SUPABASE_JWT_SECRET` HS256 로 fallback. |
 | `CORS_ALLOW_ORIGINS` | `["*"]` | JSON 리스트. 개발 외 환경에서는 좁힌다. |
 
 전체 키는 `.env.example` 참고. 시크릿은 절대 커밋하지 않는다 (AGENTS.md §4.4).
@@ -79,7 +85,9 @@ apps/api/
 
 ---
 
-## 4.1 Alembic 마이그레이션 (CMP-537)
+## 4.1 마이그레이션 (CMP-537 / CMP-575, transitional)
+
+> **SSOT 전환 상태 (2026-06-02)**: 현 시점 schema source of truth 는 **Alembic** (`apps/api/migrations/versions/*.py`) 이다. CMP-575 가 동일 schema 의 Supabase SQL 후보 (`supabase/migrations/*.sql`) 를 이미 준비했으며, ADR-0004 Accepted + Supabase CI/deploy cutover PR 머지 시점에 SSOT 가 SQL 로 이동한다. **cutover 후에는 신규 Alembic revision 생성 금지** ([`docs/runbooks/supabase-migration-plan.md`](../../docs/runbooks/supabase-migration-plan.md) §Recommended transition). 본 절은 cutover 완료까지 운영 정본이다.
 
 DB 스키마 변경은 **autogenerate → 사람 리뷰 → upgrade** 3-step 으로 진행한다. 컨테이너 ENTRYPOINT 에 묶지 않고 `infra/compose/docker-compose.yml` 의 `migrate` 사이드카로 분리해 돌린다 (multi-replica 경합/롤백 회피).
 
@@ -94,7 +102,7 @@ make migration name=add_users
 #    - downgrade 함수에 실제 역연산을 적는다 (prod 에선 실행 안 해도, 개발/리뷰 용)
 #    - 데이터 마이그레이션이 필요한 경우 별도 리비전으로 분리
 
-# 3) Neon 에 적용
+# 3) 외부 managed Postgres 에 적용 (Supabase/Neon 자격증명, DATABASE_URL non-pooler)
 make migrate                            # 로컬: uv 가상환경에서 직접
 docker compose -f infra/compose/docker-compose.yml up migrate   # 컨테이너 사이드카
 ```
@@ -115,7 +123,7 @@ uv sync --group dev
 uv run pytest
 ```
 
-테스트는 `TEST_MODE=true` 로 동작 — Neon 자격증명 없이도 패스한다.
+테스트는 `TEST_MODE=true` 로 동작 — Supabase/Neon DB 자격증명 없이도 패스한다.
 
 ---
 
@@ -160,6 +168,8 @@ stdout JSON, 모든 라인에 `request_id` 자동 주입:
 
 ## 9. 참고
 
-- ADR-0001 §3 (백엔드), §4 (Neon 클라이언트)
-- AGENTS.md §4.4 (시크릿/환경변수), §4.5 (에러·응답 표준)
+- ADR-0001 §3 (백엔드), §4 (DB 클라이언트 — ADR-0004 가 Supabase 로 부분 supersede)
+- ADR-0004 (Neon → Supabase 전환, Proposed)
+- AGENTS.md §4.4 (시크릿/환경변수), §4.5 (에러·응답 표준), §4.7 (사용자 식별 정책)
+- `docs/runbooks/supabase-migration-plan.md`, `docs/runbooks/supabase-auth-poc.md`, `docs/runbooks/supabase-session-bridge.md`
 - SDD v1.9 §6 (모듈 구성), §8.2 (에러 코드)

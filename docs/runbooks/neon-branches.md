@@ -1,8 +1,19 @@
 # Runbook — Neon Postgres 브랜치 운영 (APP_ENV ↔ branch 매핑)
 
+> **⚠ ARCHIVE / TRANSITIONAL (2026-06-02)**
+>
+> 본 런북은 **Neon Postgres 기반 운영 절차** 이며, 현 정본은 [`supabase-branching.md`](supabase-branching.md) 다. ADR-0004 (Neon → Supabase 전환, Proposed) 의 cutover PR 머지 시점에 본 런북은 archive (`docs/runbooks/_archive/`) 로 이동한다.
+>
+> 본 런북을 참조해도 되는 경우 (cutover 완료 전 한시):
+> - `.github/workflows/ci.yml` `migrate-check`, `deploy.yml` `release-migrate`, `neon-pr-branch.yml` 의 Neon 브랜치 운영 절차 조회.
+> - Neon project 가 발급한 `DATABASE_URL` / `DATABASE_POOL_URL` 을 .env 에 채울 때의 호스트 prefix 해석.
+> - Neon 비밀번호 회전 ([`neon-credential-rotation.md`](neon-credential-rotation.md)) — Neon 시크릿이 잔존하는 동안 유효.
+>
+> 신규 작업·문서 갱신·아키텍처 결정은 [`supabase-branching.md`](supabase-branching.md) 와 [`supabase-migration-plan.md`](supabase-migration-plan.md) 를 정본으로 한다.
+
 - 정본 책임자: **Infrastructure Lead** · **Database Engineer** 리뷰
-- 관련: CMP-536 (Neon 마이그레이션 세팅), CMP-538 (본 문서), CMP-543 (개발환경 구축), CMP-544 (`local` 브랜치 신설), AGENTS.md §4.4
-- 인접 런북: [`neon-credential-rotation.md`](neon-credential-rotation.md) (비밀번호 회전)
+- 관련: CMP-536 (Neon 마이그레이션 세팅), CMP-538 (본 문서), CMP-543 (개발환경 구축), CMP-544 (`local` 브랜치 신설), AGENTS.md §4.4, **CMP-574 / CMP-602 (Supabase 전환 — 본 런북 archive 대상)**
+- 인접 런북: [`neon-credential-rotation.md`](neon-credential-rotation.md) (비밀번호 회전, 한시 잔존), [`supabase-branching.md`](supabase-branching.md) (Supabase 브랜치 운영, **현 정본**)
 - 목표 소요(신규 작업자 자기 `local` fork 생성): **30분 이내**
 
 ---

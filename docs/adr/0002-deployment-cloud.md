@@ -8,7 +8,7 @@
 - 슈퍼시드: 없음. ADR-0001 §8 (T7 결정 보류)을 후속·확정한다.
 - 강한 제약 (변경 금지 — ADR-0001 봉인 상속):
   - 단일 인스턴스 + `docker-compose` 정책 — multi-region / k8s / serverless 분산 금지.
-  - 외부 의존 (Neon Postgres `ap-southeast-1`, Cloudflare R2, OpenAI) 그대로.
+  - 외부 의존 (Postgres / Cloudflare R2 / OpenAI) 그대로. **Postgres 호스팅 사업자는 [`ADR-0004`](0004-supabase-transition.md) 가 Neon → Supabase 전환을 진행 중** (Proposed). 본 ADR 의 “단일 인스턴스 앱 배포” 결정은 영향받지 않는다 — Supabase 도 외부 managed DB 로 동일하게 취급된다.
   - 결과 화면 법적 고지 문구.
 
 ---
