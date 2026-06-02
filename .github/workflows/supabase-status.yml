@@ -124,8 +124,10 @@ jobs:
             fi
             # check-runs API. check_name 으로 정확히 매칭 + 가장 최근 1건만.
             # output 의 summary/text 는 connection string 노출 가능성이 있어 일부러 보지 않는다 (§7.3).
-            payload=$(gh api -H "Accept: application/vnd.github+json" \
-              "repos/${OWNER}/${REPO}/commits/${SHA}/check-runs?check_name=${NAME}&per_page=1" 2>/dev/null || echo '{"total_count":0,"check_runs":[]}')
+            payload=$(gh api --method GET -H "Accept: application/vnd.github+json" \
+              "repos/${OWNER}/${REPO}/commits/${SHA}/check-runs" \
+              -f check_name="${NAME}" \
+              -f per_page=1 2>/dev/null || echo '{"total_count":0,"check_runs":[]}')
             count=$(echo "${payload}" | jq -r '.total_count // 0')
             if [[ "${count}" -eq 0 ]]; then
               echo "[${attempt}] check '${NAME}' 아직 등록 안 됨 — 30초 후 재시도"
