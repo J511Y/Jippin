@@ -7,7 +7,12 @@
 #   성공 / 실패를 그대로 본 잡의 결과로 반영해 운영 사고를 초록색으로 숨기지 않는다.
 #
 # 동작:
-#   1. PR diff 에 `supabase/**` 가 포함됐는지 확인 (`git diff base..head`).
+#   1. PR diff 에 `supabase/**` 가 포함됐는지 확인. diff 범위는 **PR merge-base 기준**
+#      (`git merge-base base.sha head.sha` ↔ head). 두 점 직접 비교 (`base..head`) 를
+#      쓰면 base 브랜치가 PR 생성 이후 앞서간 경우 base-only 변경이 diff 에 섞여 false
+#      positive 가 나고, 본 wrapper 는 Supabase check 를 영원히 기다리며 PR 이 deadlock /
+#      false fail 한다. Added / Copied / Deleted / Modified / Renamed 모두 잡는다 (삭제
+#      도 Supabase integration validation 대상 — migration 삭제 / config 삭제 포함).
 #   2. 변경 없음 → wrapper 가 자체 succeed (skip 의미). path-filter deadlock 회피.
 #   3. 변경 있음 → repository variable `SUPABASE_INTEGRATION_CHECK_NAME` 이 가리키는
 #      Supabase 측 check context 를 polling. 결과를 그대로 wrapper 의 결과로 반영.
@@ -56,12 +61,23 @@ jobs:
           set -euo pipefail
           base_sha="${{ github.event.pull_request.base.sha }}"
           head_sha="${{ github.event.pull_request.head.sha }}"
-          if git diff --name-only --diff-filter=AMR "${base_sha}" "${head_sha}" | grep -Eq '^supabase/'; then
+          # PR-owned diff 만 검사한다. base.sha ↔ head.sha 직접 비교는 base 가 PR
+          # 생성 이후 앞서간 경우 base-only 변경이 섞여 wrapper 가 무관한 PR 의
+          # Supabase check 를 영원히 기다리는 deadlock / false fail 을 만든다.
+          # 따라서 merge-base 를 분기점으로 잡고 그 점에서 head 까지만 diff 한다.
+          if ! merge_base=$(git merge-base "${base_sha}" "${head_sha}"); then
+            echo "::warning::merge-base 산출 실패 — base.sha 로 fallback."
+            merge_base="${base_sha}"
+          fi
+          # supabase/** 변경 감지는 Added / Copied / Deleted / Modified / Renamed 모두
+          # 포함한다. migration 파일 삭제, config 삭제, schema 파일 삭제도 Supabase
+          # integration validation 대상이므로 wrapper 가 Supabase check 결과를 본다.
+          if git diff --name-only --diff-filter=ACDMR "${merge_base}" "${head_sha}" -- 'supabase/**' | grep -Eq '^supabase/'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::supabase/** 변경 감지 — Supabase integration check 결과를 polling 한다."
+            echo "::notice::supabase/** 변경 감지 (ACDMR) — Supabase integration check 결과를 polling 한다. merge_base=${merge_base}"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::supabase/** 변경 없음 — Supabase Automatic Branching trigger 대상이 아니므로 wrapper 자체 통과."
+            echo "::notice::supabase/** 변경 없음 (merge-base 기준) — Supabase Automatic Branching trigger 대상이 아니므로 wrapper 자체 통과."
           fi
 
       - name: No-op (path-filter deadlock 회피)

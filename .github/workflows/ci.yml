@@ -404,13 +404,26 @@ jobs:
           base_sha="${{ github.event.pull_request.base.sha }}"
           head_sha="${{ github.event.pull_request.head.sha }}"
 
+          # PR-owned diff 만 검사하기 위해 merge-base 기준으로 비교한다.
+          # base.sha 와 head.sha 를 직접 두 점으로 비교하면 base 브랜치가 PR 생성
+          # 이후 앞서간 경우 base-only 변경이 diff 에 섞여 무관한 PR 이 fail 한다.
+          # 따라서 `git merge-base` 로 분기점을 찾고 그 점에서 head 까지만 본다
+          # (= triple-dot `base...head` 의미).
+          if ! merge_base=$(git merge-base "${base_sha}" "${head_sha}"); then
+            echo "::warning::merge-base 산출 실패 — base.sha 로 fallback (base 가 PR 이후 변경되지 않은 경우 의미 동일)."
+            merge_base="${base_sha}"
+          fi
+          echo "::notice::diff range merge_base=${merge_base} head=${head_sha}"
+
           # Model 변경 감지: Added / Copied / Deleted / Modified / Renamed 모두 schema-impacting.
           # 특히 모델 파일 삭제 (D) 도 테이블 제거를 의미할 수 있으므로 반드시 포함한다.
-          model_lines=$(git diff --name-status --diff-filter=ACDMR "${base_sha}" "${head_sha}" -- 'apps/api/src/models/**/*.py' || true)
+          model_lines=$(git diff --name-status --diff-filter=ACDMR "${merge_base}" "${head_sha}" -- 'apps/api/src/models/**/*.py' || true)
 
           # SQL migration 동행 변경 감지: Added / Modified / Renamed 만 — 마이그레이션 파일 삭제는
           # "새 forward migration 추가" 신호가 아니므로 sql_added 로 인정하지 않는다.
-          sql_lines=$(git diff --name-only --diff-filter=AMR "${base_sha}" "${head_sha}" -- 'supabase/migrations/**/*.sql' || true)
+          # (테이블 DROP 이 필요한 경우 새 DROP TABLE 마이그레이션 SQL 을 추가해야 하며, 그것은
+          # 본 가드에서 Added 로 잡힌다 — 즉 SQL 삭제로 SQL 추가를 대체할 수 없다.)
+          sql_lines=$(git diff --name-only --diff-filter=AMR "${merge_base}" "${head_sha}" -- 'supabase/migrations/**/*.sql' || true)
 
           model_changed="false"
           sql_added="false"
