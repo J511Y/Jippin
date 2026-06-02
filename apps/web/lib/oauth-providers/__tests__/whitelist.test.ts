@@ -7,16 +7,18 @@ import {
 } from '../index';
 
 describe('ALLOWED_PROVIDERS SSOT', () => {
-  it('is the exact tuple google/kakao/naver (no email/passwordless/etc)', () => {
-    expect([...ALLOWED_PROVIDERS]).toEqual(['google', 'kakao', 'naver']);
+  it('is the exact tuple kakao only (no google/naver/email/passwordless/etc)', () => {
+    expect([...ALLOWED_PROVIDERS]).toEqual(['kakao']);
   });
 
-  it.each(['google', 'kakao', 'naver'])('accepts allowed provider %s', (id) => {
+  it.each(['kakao'])('accepts allowed provider %s', (id) => {
     expect(isAllowedProvider(id)).toBe(true);
     expect(assertAllowedProvider(id)).toBe(id);
   });
 
   it.each([
+    'google',
+    'naver',
     'facebook',
     'apple',
     'github',

@@ -105,7 +105,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const intentRaw = url.searchParams.get('intent');
 
   if (!isUiProvider(uiProviderRaw)) {
-    return badRequest('provider must be one of google | kakao | naver');
+    return badRequest('provider must be kakao');
   }
   if (!isIntent(intentRaw)) {
     return badRequest('intent must be one of link | signin | link-merge');

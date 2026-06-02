@@ -16,6 +16,7 @@ import {
   resolveKakaoProviderId,
   toSupabaseProviderId,
   isKakaoProvider,
+  isUiProvider,
   normalizeProviderForBackend,
 } from '@/lib/oauth-providers';
 import {
@@ -541,10 +542,10 @@ describe('CMP-581 oauth-providers (R9)', () => {
     expect(() => resolveKakaoProviderId('google')).toThrow(/허용되지 않는 값/);
   });
 
-  it('keeps Naver pinned to custom:naver regardless of Kakao env', () => {
-    expect(toSupabaseProviderId('naver', undefined)).toBe('custom:naver');
-    expect(toSupabaseProviderId('naver', 'custom:kakao')).toBe('custom:naver');
-    expect(toSupabaseProviderId('google', undefined)).toBe('google');
+  it('keeps frontend OAuth entrypoints narrowed to Kakao only', () => {
+    expect(isUiProvider('kakao')).toBe(true);
+    expect(isUiProvider('google')).toBe(false);
+    expect(isUiProvider('naver')).toBe(false);
   });
 });
 

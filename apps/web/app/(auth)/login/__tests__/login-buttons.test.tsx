@@ -12,13 +12,13 @@ afterEach(() => {
 });
 
 describe('LoginButtons — provider whitelist UI seal', () => {
-  it('renders exactly 3 OAuth provider buttons (Kakao / Naver / Google)', () => {
+  it('renders exactly 1 OAuth provider button (Kakao only)', () => {
     render(<LoginButtons nextPath={null} />);
     const buttons = screen.getAllByRole('button');
-    expect(buttons).toHaveLength(3);
+    expect(buttons).toHaveLength(1);
     expect(screen.getByText('카카오로 시작하기')).toBeDefined();
-    expect(screen.getByText('네이버로 시작하기')).toBeDefined();
-    expect(screen.getByText('Google 로 시작하기')).toBeDefined();
+    expect(screen.queryByText('네이버로 시작하기')).toBeNull();
+    expect(screen.queryByText('Google 로 시작하기')).toBeNull();
   });
 
   it('does not render any email / password / OTP / magic-link input field', () => {
@@ -69,13 +69,11 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
     });
   });
 
-  it.each(['naver', 'kakao', 'google'] as const)(
+  it.each(['kakao'] as const)(
     'navigates to same-origin /auth/oauth/start BFF (provider=%s, not to NEXT_PUBLIC_API_BASE_URL)',
     async (provider) => {
       const labels = {
         kakao: '카카오로 시작하기',
-        naver: '네이버로 시작하기',
-        google: 'Google 로 시작하기'
       } as const;
 
       render(<LoginButtons nextPath="/dashboard" />);

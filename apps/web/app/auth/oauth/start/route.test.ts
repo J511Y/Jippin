@@ -38,7 +38,7 @@ process.env.SUPABASE_FLOW_COOKIE_SECRET = 'test-flow-cookie-secret';
 
 const PKCE_COOKIE_NAME = 'sb-example-auth-token-code-verifier';
 const PKCE_COOKIE_VALUE = 'pkce-verifier-12345';
-const AUTHZ_URL = 'https://example.supabase.co/auth/v1/authorize?provider=google&state=abc';
+const AUTHZ_URL = 'https://example.supabase.co/auth/v1/authorize?provider=kakao&state=abc';
 
 function makeRequest(pathAndQuery: string): NextRequest {
   // NextRequest 를 직접 인스턴스화하기 보다 GET handler 가 실제 사용하는 메서드만 stub.
@@ -83,7 +83,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
                 options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 600 },
               },
             ]);
-            return { data: { url: AUTHZ_URL, provider: 'google' }, error: null };
+            return { data: { url: AUTHZ_URL, provider: 'kakao' }, error: null };
           }),
           signInWithOAuth: vi.fn(),
           signOut: vi.fn(),
@@ -92,7 +92,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     });
 
     const { GET } = await import('./route');
-    const request = makeRequest('/auth/oauth/start?provider=google&intent=link');
+    const request = makeRequest('/auth/oauth/start?provider=kakao&intent=link');
 
     // Act
     const response = await GET(request);
@@ -110,7 +110,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     expect(verified).toEqual(
       expect.objectContaining({
         ok: true,
-        payload: expect.objectContaining({ provider: 'google', supabase_provider: 'google', intent: 'link' }),
+        payload: expect.objectContaining({ provider: 'kakao', supabase_provider: 'kakao', intent: 'link' }),
       }),
     );
     // flow context cookie 는 callback path 로만 좁혀져 있어야 한다.
@@ -118,7 +118,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
   });
 
   it('preserves a safe next path on the Supabase callback redirectTo URL', async () => {
-    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'google' }, error: null });
+    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'kakao' }, error: null });
     mocks.createServerClient.mockImplementation(() => ({
       auth: {
         linkIdentity,
@@ -128,11 +128,11 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     }));
 
     const { GET } = await import('./route');
-    const response = await GET(makeRequest('/auth/oauth/start?provider=google&intent=link&next=/app/consult?draft=1'));
+    const response = await GET(makeRequest('/auth/oauth/start?provider=kakao&intent=link&next=/app/consult?draft=1'));
 
     expect(response.status).toBe(302);
     expect(linkIdentity).toHaveBeenCalledWith({
-      provider: 'google',
+      provider: 'kakao',
       options: {
         redirectTo: 'http://localhost:3000/auth/callback?intent=link&next=%2Fapp%2Fconsult%3Fdraft%3D1',
         skipBrowserRedirect: true,
@@ -141,7 +141,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
   });
 
   it('preserves the legacy anonymous user id on the Supabase callback redirectTo URL', async () => {
-    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'google' }, error: null });
+    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'kakao' }, error: null });
     mocks.createServerClient.mockImplementation(() => ({
       auth: {
         linkIdentity,
@@ -153,12 +153,12 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     const { GET } = await import('./route');
     const anonymousUserId = '0f5f8f33-7f55-48e8-9bf1-1bda6e8db91d';
     const response = await GET(
-      makeRequest(`/auth/oauth/start?provider=google&intent=link&anonymous_user_id=${anonymousUserId}`),
+      makeRequest(`/auth/oauth/start?provider=kakao&intent=link&anonymous_user_id=${anonymousUserId}`),
     );
 
     expect(response.status).toBe(302);
     expect(linkIdentity).toHaveBeenCalledWith({
-      provider: 'google',
+      provider: 'kakao',
       options: {
         redirectTo: `http://localhost:3000/auth/callback?intent=link&anonymous_user_id=${anonymousUserId}`,
         skipBrowserRedirect: true,
@@ -167,7 +167,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
   });
 
   it('drops non-UUID anonymous user ids before building redirectTo', async () => {
-    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'google' }, error: null });
+    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'kakao' }, error: null });
     mocks.createServerClient.mockImplementation(() => ({
       auth: {
         linkIdentity,
@@ -179,12 +179,12 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     const { GET } = await import('./route');
     const longInvalidId = 'x'.repeat(4096);
     const response = await GET(
-      makeRequest(`/auth/oauth/start?provider=google&intent=link&anonymous_user_id=${longInvalidId}`),
+      makeRequest(`/auth/oauth/start?provider=kakao&intent=link&anonymous_user_id=${longInvalidId}`),
     );
 
     expect(response.status).toBe(302);
     expect(linkIdentity).toHaveBeenCalledWith({
-      provider: 'google',
+      provider: 'kakao',
       options: {
         redirectTo: 'http://localhost:3000/auth/callback?intent=link',
         skipBrowserRedirect: true,
@@ -193,7 +193,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
   });
 
   it('drops unsafe backslash next paths before building redirectTo', async () => {
-    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'google' }, error: null });
+    const linkIdentity = vi.fn().mockResolvedValue({ data: { url: AUTHZ_URL, provider: 'kakao' }, error: null });
     mocks.createServerClient.mockImplementation(() => ({
       auth: {
         linkIdentity,
@@ -203,11 +203,11 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
     }));
 
     const { GET } = await import('./route');
-    const response = await GET(makeRequest('/auth/oauth/start?provider=google&intent=link&next=/\\evil.com'));
+    const response = await GET(makeRequest('/auth/oauth/start?provider=kakao&intent=link&next=/\\evil.com'));
 
     expect(response.status).toBe(302);
     expect(linkIdentity).toHaveBeenCalledWith({
-      provider: 'google',
+      provider: 'kakao',
       options: {
         redirectTo: 'http://localhost:3000/auth/callback?intent=link',
         skipBrowserRedirect: true,
@@ -278,7 +278,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
 
   it('fails closed for intent=link-merge until merge intent state exists', async () => {
     const { GET } = await import('./route');
-    const response = await GET(makeRequest('/auth/oauth/start?provider=naver&intent=link-merge'));
+    const response = await GET(makeRequest('/auth/oauth/start?provider=kakao&intent=link-merge'));
 
     expect(response.status).toBe(501);
     expect(mocks.createServerClient).not.toHaveBeenCalled();
@@ -306,8 +306,8 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
       auth: { linkIdentity: vi.fn(), signInWithOAuth: vi.fn(), signOut: vi.fn() },
     }));
     const { GET } = await import('./route');
-    const missing = await GET(makeRequest('/auth/oauth/start?provider=google'));
-    const typo = await GET(makeRequest('/auth/oauth/start?provider=google&intent=singin'));
+    const missing = await GET(makeRequest('/auth/oauth/start?provider=kakao'));
+    const typo = await GET(makeRequest('/auth/oauth/start?provider=kakao&intent=singin'));
 
     expect(missing.status).toBe(400);
     expect(typo.status).toBe(400);
@@ -335,7 +335,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
       },
     }));
     const { GET } = await import('./route');
-    const response = await GET(makeRequest('/auth/oauth/start?provider=google&intent=link'));
+    const response = await GET(makeRequest('/auth/oauth/start?provider=kakao&intent=link'));
     expect(response.status).toBe(500);
     expect(response.headers.get('Location')).toBeNull();
     expect(setCookieValues(response)).toHaveLength(0);
@@ -350,7 +350,7 @@ describe('GET /auth/oauth/start — PKCE cookie preservation (R2 + R10)', () => 
       },
     }));
     const { GET } = await import('./route');
-    const response = await GET(makeRequest('/auth/oauth/start?provider=google&intent=link'));
+    const response = await GET(makeRequest('/auth/oauth/start?provider=kakao&intent=link'));
     expect(response.status).toBe(500);
     expect(response.headers.get('Location')).toBeNull();
     expect(setCookieValues(response)).toHaveLength(0);
