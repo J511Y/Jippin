@@ -17,12 +17,10 @@
 #      차후 Storage ADR) 이 개별 PR 로 켠다.
 
 # ─────────────────────────────────────────────────────────────────────────────
-# project_id — Supabase project ref (placeholder)
+# project_id — Supabase default project ref
 # ─────────────────────────────────────────────────────────────────────────────
-# 사용자 작업: `supabase projects list` 의 `Reference ID` 값으로 교체한다.
-# 예: "abcdefghijklmnopqrst" (20자 lowercase)
-# **본 PR 머지 시점에는 placeholder 그대로 둔다.**
-project_id = "jippin-placeholder"
+# Supabase project `Jippin` / default branch `main`.
+project_id = "ywtfmiawlramqqcfwsiv"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # [remotes.*] — persistent branch 별 remote 설정
@@ -34,20 +32,17 @@ project_id = "jippin-placeholder"
 # Supabase CLI 는 `--remote <name>` 플래그를 지원하지 않는다.
 # 정본: https://supabase.com/docs/guides/deployment/branching/configuration#remote-specific-configuration
 #
-# 사용자 작업 (CMP-574 머지 후 §3.2 A1 후속 PR):
-#   1. `supabase --experimental branches list` 의 `BRANCH PROJECT ID` 값을 본 절의
-#      `project_id` 에 채운다.
-#   2. 같은 PR 에서 `[remotes.staging]` 도 동일 패턴으로 추가한다.
+# `supabase --experimental branches list --project-ref ywtfmiawlramqqcfwsiv`
+# 기준 `development` branch 의 `BRANCH PROJECT ID` 값을 사용한다.
 [remotes.development]
-project_id = "jippin-development-placeholder"
+project_id = "vrxdfratsckukzyxrlce"
 
 # staging persistent branch — §7.1.1 G3 / §7.1.3 A5 / §7.1.4 O3 PoC 의 대상 환경.
 # staging 은 Supabase-only branch (GitHub 측 트리거 없음) 이지만 CMP-576 가 PoC
 # 시나리오를 적용하려면 CLI 가 staging 의 BRANCH PROJECT ID 를 알아야 한다.
-# 사용자 작업 (CMP-574 머지 후 §3.2 A1.2 후속 PR): `SUPABASE_PROJECT_REF_STAGING`
-# (U5) 값을 본 절의 project_id 에 채운다.
-[remotes.staging]
-project_id = "jippin-staging-placeholder"
+# staging branch 는 아직 생성되지 않았으므로 active `[remotes.staging]` 섹션을 두지
+# 않는다. Supabase GitHub integration 은 모든 configured remote 의 `project_id` 를
+# 검증하므로 placeholder 값을 남기면 migration 전에 config validation 이 실패한다.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # [api] — PostgREST 자동 생성 REST API
