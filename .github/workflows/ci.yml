@@ -390,7 +390,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # base..head 비교를 위해 PR 양 끝 SHA 가 필요.
+          # merge-base 기준 비교를 위해 PR 양 끝 SHA + 분기점이 모두 필요.
           fetch-depth: 0
 
       - name: Detect model vs SQL migration drift
