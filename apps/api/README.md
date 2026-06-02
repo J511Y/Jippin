@@ -15,7 +15,7 @@ FastAPI 0.115 / Python 3.13 / `uv` 패키지 매니저.
 - [uv](https://docs.astral.sh/uv/) 0.5+
 - (옵션) Docker — `docker compose up api` 실행 시
 - 외부 managed Postgres 자격증명 (전환 중: Supabase project connection string 또는 Neon URL) 또는 `TEST_MODE=true` (DB 없이 부팅)
-- (Supabase Auth 검증/세션 브리지를 시험할 때만) Supabase project 의 `SUPABASE_JWT_SECRET` 또는 `SUPABASE_JWKS_URL`. 자세한 변수는 `.env.example` AUTH/Supabase 절 참조.
+- (Supabase Auth 검증/세션 브리지를 시험할 때만) Supabase project 의 `SUPABASE_JWT_ISSUER` + `SUPABASE_JWKS_URL` 및 fallback 용 `SUPABASE_JWT_SECRET`. 자세한 변수는 `.env.example` AUTH/Supabase 절 참조.
 
 ---
 
@@ -50,6 +50,7 @@ curl http://localhost:8000/healthz
 | `DATABASE_URL` | — | Non-pooler URL (Supabase direct port 5432 / Neon non-pooler 호스트). **마이그레이션·DDL·롱 트랜잭션.** |
 | `SUPABASE_JWT_SECRET` | — | Supabase Auth HS256 verification secret. CMP-595 세션 브리지·Anonymous JWT 검증용. |
 | `SUPABASE_JWT_AUDIENCE` | `authenticated` | Supabase JWT 검증 시 허용 audience. |
+| `SUPABASE_JWT_ISSUER` | — | Supabase JWT issuer (`https://<project-ref>.supabase.co/auth/v1`). CMP-595 세션 브리지 필수. |
 | `SUPABASE_JWKS_URL` | — | (ADR-0004 §2.3 rev5+) JWKS 1순위 — 설정 시 비대칭 키 검증. 미설정이면 `SUPABASE_JWT_SECRET` HS256 로 fallback. |
 | `CORS_ALLOW_ORIGINS` | `["*"]` | JSON 리스트. 개발 외 환경에서는 좁힌다. |
 
