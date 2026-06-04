@@ -91,8 +91,12 @@ def test_floorplan_candidates_keep_presented_snapshot_contract() -> None:
         "lookup_revision",
         "rank",
     )
+    assert table.c.floorplan_id.nullable is True
+    assert next(iter(table.c.floorplan_id.foreign_keys)).ondelete == "SET NULL"
     assert isinstance(table.c.match_reasons.type, postgresql.JSONB)
     assert isinstance(table.c.lookup_input.type, postgresql.JSONB)
+    assert isinstance(table.c.floorplan_snapshot.type, postgresql.JSONB)
+    assert table.c.floorplan_snapshot.nullable is False
 
 
 def test_chat_tool_calls_store_redacted_payload_surfaces() -> None:

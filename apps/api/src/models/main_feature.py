@@ -325,10 +325,9 @@ class FloorplanCandidate(CreatedAtMixin, Base):
         nullable=False,
         server_default=sa.text("1"),
     )
-    floorplan_id: Mapped[uuid.UUID] = mapped_column(
+    floorplan_id: Mapped[uuid.UUID | None] = mapped_column(
         postgresql.UUID(as_uuid=True),
-        sa.ForeignKey("floorplans.id", ondelete="CASCADE"),
-        nullable=False,
+        sa.ForeignKey("floorplans.id", ondelete="SET NULL"),
     )
     rank: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     confidence: Mapped[Decimal] = mapped_column(sa.Numeric(5, 4), nullable=False)
@@ -338,6 +337,11 @@ class FloorplanCandidate(CreatedAtMixin, Base):
         server_default=jsonb_empty_array,
     )
     lookup_input: Mapped[dict[str, object]] = mapped_column(
+        postgresql.JSONB,
+        nullable=False,
+        server_default=jsonb_empty_object,
+    )
+    floorplan_snapshot: Mapped[dict[str, object]] = mapped_column(
         postgresql.JSONB,
         nullable=False,
         server_default=jsonb_empty_object,

@@ -146,6 +146,8 @@ def test_sessions_reference_pointers_are_guarded_by_trigger() -> None:
         "sessions.selected_floorplan_upload_id must reference a same-session upload"
         in sql
     )
+    assert "and new.address_id is null" in sql
+    assert "sessions entering analysis must reference a same-session address" in sql
 
 
 def test_selected_asset_matches_selected_source() -> None:
@@ -170,14 +172,19 @@ def test_session_workflow_result_fields_are_service_controlled() -> None:
     )
     assert "create trigger trg_sessions_service_fields_client_guard" in sql
     assert "current_role <> 'authenticated'" in sql
-    assert "new.last_activity_at := now()" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.updated_at := new.created_at" in sql
+    assert "new.last_activity_at := new.created_at" in sql
     assert "new.status <> 'draft'" in sql
     assert "new.judgment_schema <> '{}'::jsonb" in sql
     assert "new.completion_decision is not null" in sql
+    assert "new.created_at is distinct from old.created_at" in sql
+    assert "new.updated_at := now()" in sql
     assert "new.status is distinct from old.status" in sql
     assert "new.judgment_schema is distinct from old.judgment_schema" in sql
     assert "new.completion_decision is distinct from old.completion_decision" in sql
     assert "new.last_activity_at is distinct from old.last_activity_at" in sql
+    assert "authenticated clients cannot change session audit timestamps" in sql
 
 
 def test_completed_session_input_pointers_are_service_controlled() -> None:
@@ -343,11 +350,16 @@ def test_floorplan_upload_status_is_service_controlled_after_initial_write() -> 
         in sql
     )
     assert "create trigger trg_floorplan_uploads_client_service_guard" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.updated_at := new.created_at" in sql
     assert "new.status not in ('uploaded', 'scan_pending')" in sql
+    assert "new.created_at is distinct from old.created_at" in sql
+    assert "new.updated_at := now()" in sql
     assert "new.session_id is distinct from old.session_id" in sql
     assert "authenticated clients cannot move floorplan uploads between sessions" in sql
     assert "old.status not in ('uploaded', 'scan_pending')" in sql
     assert "new.status is distinct from old.status" in sql
+    assert "authenticated clients cannot change upload audit timestamps" in sql
     assert "authenticated clients cannot mutate service-controlled upload rows" in sql
     assert "authenticated clients cannot change service-controlled upload status" in sql
 
@@ -393,6 +405,22 @@ def test_floorplan_candidates_are_read_only_for_clients() -> None:
         r"create policy (floorplan_candidates_\w+)", sql
     )
     assert candidate_policy_names == ["floorplan_candidates_session_owner_read"]
+
+
+def test_floorplan_candidates_preserve_snapshot_when_floorplan_is_deleted() -> None:
+    sql = migration_sql()
+    candidate_fk = sql[
+        sql.index(
+            "constraint fk_floorplan_candidates_floorplan_id_floorplans"
+        ) : sql.index(
+            "constraint uq_floorplan_candidates_session_id_lookup_revision_floorplan_id"
+        )
+    ]
+
+    assert "floorplan_id uuid,\n  rank integer not null" in sql
+    assert "floorplan_snapshot jsonb not null default '{}'::jsonb" in sql
+    assert "on delete set null" in candidate_fk
+    assert "on delete cascade" not in candidate_fk
 
 
 def test_chat_browser_writes_are_limited_to_user_messages() -> None:

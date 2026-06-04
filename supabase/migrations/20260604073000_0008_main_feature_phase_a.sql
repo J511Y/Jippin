@@ -206,11 +206,12 @@ create table public.floorplan_candidates (
   id uuid not null default gen_random_uuid(),
   session_id uuid not null,
   lookup_revision integer not null default 1,
-  floorplan_id uuid not null,
+  floorplan_id uuid,
   rank integer not null,
   confidence numeric(5, 4) not null,
   match_reasons jsonb not null default '[]'::jsonb,
   lookup_input jsonb not null default '{}'::jsonb,
+  floorplan_snapshot jsonb not null default '{}'::jsonb,
   selected_at timestamp with time zone,
   rejected_at timestamp with time zone,
   created_at timestamp with time zone not null default now(),
@@ -231,7 +232,7 @@ create table public.floorplan_candidates (
   constraint fk_floorplan_candidates_floorplan_id_floorplans
     foreign key (floorplan_id)
     references public.floorplans (id)
-    on delete cascade,
+    on delete set null,
   constraint uq_floorplan_candidates_session_id_lookup_revision_floorplan_id
     unique (session_id, lookup_revision, floorplan_id),
   constraint uq_floorplan_candidates_session_id_lookup_revision_rank
@@ -474,6 +475,20 @@ begin
       using errcode = '23514';
   end if;
 
+  if new.status in (
+    'analyzing',
+    'awaiting_overlay',
+    'collecting_info',
+    'ready_for_rule',
+    'report_ready',
+    'handoff'
+  )
+    and new.address_id is null
+  then
+    raise exception 'sessions entering analysis must reference a same-session address'
+      using errcode = '23514';
+  end if;
+
   if new.address_id is not null and not exists (
     select 1
     from public.session_addresses as sa
@@ -596,7 +611,9 @@ begin
   end if;
 
   if tg_op = 'INSERT' then
-    new.last_activity_at := now();
+    new.created_at := now();
+    new.updated_at := new.created_at;
+    new.last_activity_at := new.created_at;
 
     if new.status <> 'draft'
       or new.judgment_schema <> '{}'::jsonb
@@ -607,6 +624,9 @@ begin
       raise exception 'authenticated clients cannot set service-controlled session fields'
         using errcode = '42501';
     end if;
+  elsif new.created_at is distinct from old.created_at then
+    raise exception 'authenticated clients cannot change session audit timestamps'
+      using errcode = '42501';
   elsif new.status is distinct from old.status
     or new.judgment_schema is distinct from old.judgment_schema
     or new.judgment_schema_version is distinct from old.judgment_schema_version
@@ -618,18 +638,16 @@ begin
       using errcode = '42501';
   end if;
 
+  if tg_op = 'UPDATE' then
+    new.updated_at := now();
+  end if;
+
   return new;
 end;
 $$;
 
 create trigger trg_sessions_service_fields_client_guard
-  before insert or update of
-    status,
-    judgment_schema,
-    judgment_schema_version,
-    completion_decision,
-    last_activity_at,
-    expires_at
+  before insert or update
   on public.sessions
   for each row
   execute function public.prevent_session_client_service_field_mutation();
@@ -1009,10 +1027,16 @@ begin
   end if;
 
   if tg_op = 'INSERT' then
+    new.created_at := now();
+    new.updated_at := new.created_at;
+
     if new.status not in ('uploaded', 'scan_pending') then
       raise exception 'authenticated clients cannot set service-controlled upload status'
         using errcode = '42501';
     end if;
+  elsif new.created_at is distinct from old.created_at then
+    raise exception 'authenticated clients cannot change upload audit timestamps'
+      using errcode = '42501';
   elsif new.session_id is distinct from old.session_id then
     raise exception 'authenticated clients cannot move floorplan uploads between sessions'
       using errcode = '42501';
@@ -1024,19 +1048,16 @@ begin
       using errcode = '42501';
   end if;
 
+  if tg_op = 'UPDATE' then
+    new.updated_at := now();
+  end if;
+
   return new;
 end;
 $$;
 
 create trigger trg_floorplan_uploads_client_service_guard
-  before insert or update of
-    session_id,
-    user_id,
-    original_asset_id,
-    status,
-    file_name,
-    source_note,
-    upload_metadata
+  before insert or update
   on public.floorplan_uploads
   for each row
   execute function public.prevent_floorplan_upload_client_service_mutation();
