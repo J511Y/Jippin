@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from src.auth.providers import OAuthProvider, ProviderProfile
 from src.auth.session import create_session_token
 from src.auth.state_store import OAuthStatePayload
 from src.config import get_settings
