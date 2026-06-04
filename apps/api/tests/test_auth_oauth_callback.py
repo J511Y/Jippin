@@ -99,7 +99,9 @@ def test_oauth_callback_removed_before_state_lookup(monkeypatch, callback_env):
     assert store.consume_calls == []
 
 
-def test_oauth_callback_removed_before_provider_mismatch_check(monkeypatch, callback_env):
+def test_oauth_callback_removed_before_provider_mismatch_check(
+    monkeypatch, callback_env
+):
     store = _FakeStateStore(
         OAuthStatePayload(
             anonymous_user_id=None,
