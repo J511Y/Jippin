@@ -2,7 +2,7 @@
 
 - 작성자: Frontend Lead (`60ef2b0f`)
 - 작성일: 2026-05-29
-- 상태: **Design (Draft)** — 본 문서는 설계 정본이다. 실제 Supabase 콘솔 세팅 / 라이브 로그인 검증은 후속 트랙이 별도로 수행한다.
+- 상태: **Current runbook (CMP-604 cleanup 반영)** — Supabase Auth + Supabase Anonymous Sign-In + `linkIdentity()` 가 현재 정본이다. pre-CMP-604 dual-write 설계 문구는 historical 로만 취급한다.
 - 관련 이슈: **CMP-577** (`[SUPABASE][WEB] Next.js Supabase Auth client/session adapter 전환 설계`)
 - 의존 트랙: Backend/Auth Supabase JWT 검증 트랙 (별도 CMP-* 이슈 — `apps/api` 가 Supabase JWKS 또는 공유 비밀로 access token 을 검증하는 흐름이 합의되어야 본 설계가 닫힌다)
 - 정본 종속: `docs/adr/0003-anon-user-and-sso.md` (익명 + OAuth 정책), `docs/brief/CEO_PROJECT_BRIEF.md`, `AGENTS.md §4.4` (시크릿 봉인), **CMP-572 CEO 결정 — MVP linking 정책** (아래 §0.0 callout).
@@ -37,7 +37,7 @@
 |---|---|
 | **세션 1차 소스** | Supabase Auth session (`supabase.auth.getSession()`). 자체 JWT / 자체 메모리 토큰 / 자체 `jippin_session` 쿠키 폐기. |
 | **클라이언트 라이브러리** | `@supabase/supabase-js` + `@supabase/ssr` (Next.js 16 App Router · Edge proxy / Route Handler / Server Component cookie 통합). |
-| **익명 흐름** | `supabase.auth.signInAnonymously()` — 페이지 첫 진입 시 세션이 없으면 1회 호출. Supabase user `id` 가 익명/실명 user 의 단일 키. **단계적 폐기.** 기존 `localStorage.jippin_anonymous_user_id` 와 `POST /auth/anonymous-users` 는 **ADR-0003 §2 supersede 가 Accepted 되기 전까지 코드에서 제거하지 않는다** (§9 Phase 표 / [§6 Phase Gate](#6-트랙-간-의존--연결점) 참조). Phase 1 에서는 dual-write 로 양쪽을 동시에 갱신하고 도면/리포트 claim 경로를 끊지 않는다. |
+| **익명 흐름** | `supabase.auth.signInAnonymously()` — 페이지 첫 진입 시 세션이 없으면 1회 호출. Supabase user `id` 가 익명/실명 user 의 단일 키. `localStorage.jippin_anonymous_user_id`, `POST /auth/anonymous-users`, `x-jippin-anon-id`, `anonymous_users.converted_user_id` 는 CMP-604 이후 forward 정본이 아니며 accidental call 은 410/throw 로 실패시킨다. |
 | **전환 시점 CTA** | 익명 세션 존재 시 1) `supabase.auth.linkIdentity({ provider })` 시도 → 2) 실패(provider identity 가 다른 user 에 이미 연결)면 [§4.2.2 fallback ladder](#422-linkidentity-실패-fallback) 진입: 사용자에게 "익명 데이터를 기존 계정으로 이전하시겠습니까?" 명시 confirm → 수락 시 익명 데이터 merge 큐 enqueue + `supabase.auth.signOut()` → `signInWithOAuth`. 익명 세션이 아닌 비로그인 진입은 곧바로 `signInWithOAuth({ provider, options: { redirectTo } })`. 두 경로 모두 Supabase 가 hosted login page / provider redirect 를 owner 로 가진다. |
 | **OAuth provider** | UI 노출 정본은 `google`, `kakao`, `naver` (ADR-0003 봉인). Supabase native = `google` + `kakao` (Supabase Auth 가 Kakao 를 built-in provider 로 지원). **Naver 만** Supabase Custom OAuth Provider 의 **OAuth2 모드 (not OIDC)** 로 등록하고 SDK 호출 시 `custom:naver` 식별자로 매핑한다 — UI provider id → Supabase provider id 변환은 [§4.2.3 provider mapping](#423-provider-id-매핑) 표 단일 SSOT 가 owner. Naver = OAuth2 봉인의 근거는 [§4.3.1](#431-naver--custom-oauth2-not-oidc-봉인-cmp-584). |
 | **OAuth callback route** | provider redirect URL 은 `/auth/success` 가 아니라 **`/auth/callback?next=<원래 목적지>`**. 콜백 Route Handler 가 `exchangeCodeForSession(code)` 로 PKCE 코드를 세션 쿠키로 교환한 뒤 `next` 로 302. **failure redirect 는 query 비상속 fresh URL + sanitize 된 `reason` 만** — `?code=…` 가 `/auth/failure` URL / log / Referer 에 절대 남지 않게 한다. merge intent 쿠키 `jippin_merge_intent` 가 있으면 commit 후 1회용 expire. Supabase 콘솔 redirect allow list 도 `/auth/callback` 기준으로 등록한다 ([§4.7](#47-oauth-callback-route--exchangecodeforsession)). |
@@ -55,15 +55,15 @@
 | `apps/web/proxy.ts` | `/app/consult`, `/app/leads`, `/app/reports` 진입 시 `jippin_session` 쿠키 존재 여부 가드. | **재작성.** Supabase 세션 기반으로 변경. matcher 와 prefix 정책은 유지. |
 | `apps/web/lib/auth-token.ts` | 메모리 access token 저장 + listener. | **폐기.** Supabase SDK 가 세션을 관리. |
 | `apps/web/lib/api-client.ts` | axios + `/auth/refresh` 401 인터셉터 + `Bearer <메모리 토큰>` 주입. | **재작성.** Supabase session 에서 token 을 읽어 주입. 401 refresh 큐 삭제 (SDK 가 처리). `withCredentials` 도 제거 가능 (쿠키 의존 종료). |
-| `apps/web/lib/anonymous-user.ts` | `POST /auth/anonymous-users` 로 익명 ID 발급 + `localStorage.jippin_anonymous_user_id` 캐싱. | **Phase 1 유지 (dual-write).** ADR-0003 §2 가 정본인 동안에는 Supabase 익명 sign-in 과 병행해서 호출하여 기존 도면/리포트 claim 경로가 끊기지 않게 한다. **Phase 2 폐기** — ADR-0004 (Supabase Auth + anon 정책) Accepted 또는 ADR-0003 supersede 자식 이슈 완료 시점에 본 파일과 localStorage 키를 함께 제거한다 ([§9 Phase 표](#9-phase-별-전환-순서)). |
+| `apps/web/lib/anonymous-user.ts` | pre-CMP-604: `POST /auth/anonymous-users` 로 익명 ID 발급 + `localStorage.jippin_anonymous_user_id` 캐싱. | **폐기.** Supabase Anonymous Sign-In 이 정본이다. 남은 helper/route 는 accidental legacy call 을 실패시키는 guard 로만 남긴다. 신규 코드에서 import 금지. |
 | `apps/web/lib/api-base-url.ts` | `NEXT_PUBLIC_API_BASE_URL` fallback. | **유지.** Supabase 와 무관. |
 | `apps/web/lib/api/error.ts` | 백엔드 에러 정규화. | **유지.** `apiClient` 재작성 후에도 그대로 호출 가능. |
 | `apps/web/app/(auth)/login/page.tsx` | "집핀 로그인" 소개 + provider 버튼 placeholder. | **부분 유지.** 카피만 갱신 (§5.2). 페이지 구조는 동일. |
-| `apps/web/app/(auth)/login/login-buttons.tsx` | `GET /auth/{provider}/start?return_url=...&anonymous_user_id=...` 로 브라우저 redirect. | **재작성.** 클라이언트는 Supabase SDK 를 직접 호출하지 않고 `GET /auth/oauth/start?provider=<ui>&intent=<link\|signin>` BFF 로 navigate (§4.2.1). BFF 가 `linkIdentity` / `signInWithOAuth` 분기 + flow context 쿠키 발급 + 서버측 OAuth URL 생성 + 302. `linkIdentity` 실패 fallback ladder (§4.2.2) 는 클라이언트 모달 후 BFF 의 `?intent=link-merge` 모드로 재진입하여 merge intent + signOut + signInWithOAuth 를 서버측에서 일괄 처리. `redirectTo` 는 항상 `/auth/callback?next=...` 절대 URL. anonymous_user_id 쿼리는 Phase 2 시점에 폐기 (Phase 1 는 dual-write 위해 호출 유지). |
+| `apps/web/app/(auth)/login/login-buttons.tsx` | pre-CMP-604: `GET /auth/{provider}/start?return_url=...&anonymous_user_id=...` 로 브라우저 redirect. | **현재 정본.** `GET /auth/oauth/start?provider=<ui>&intent=<link\|signin>` BFF 로 navigate 한다. 현재 Supabase session 이 anonymous 이면 `intent=link`, 세션이 없거나 이미 permanent user 이면 `intent=signin`. `anonymous_user_id` 쿼리/legacy handoff 는 사용하지 않는다. |
 | `apps/web/app/auth/test/page.tsx` + `auth-test-panel.tsx` | CMP-557 통합 검증 페이지 — anonymous ID / `/auth/me` / link / terms / logout. | **재작성.** Supabase session / linkIdentity / sign-out 으로 교체. 약관 동의는 백엔드에 남기되 호출 방식은 §4.4 참조. |
 | `apps/web/app/layout.tsx` | 루트 layout + `Providers` 마운트. | **유지.** `Providers` 내부에 Supabase session listener 만 추가. |
 | `apps/web/lib/providers.tsx` | React Query Provider. | **확장.** Supabase Session Provider 를 wrap. |
-| `apps/web/.env.example` | `NEXT_PUBLIC_API_BASE_URL`, success/failure URL, `AUTH_COOKIE_NAME`. | **확장.** Supabase env 추가 (§3). `AUTH_COOKIE_NAME` 은 Supabase 의 자체 쿠키 이름 정책으로 대체되며 표기 변경. |
+| `apps/web/.env.example` | `NEXT_PUBLIC_API_BASE_URL`, success/failure URL, Supabase public env. | **현재 정본.** Supabase env 와 BFF/API base URL 만 유지한다. `AUTH_COOKIE_NAME` 류 자체 session-cookie 가드 변수는 forward auth 정본이 아니다. |
 
 > **API 측 폐기 상태 (CMP-604).** `POST /auth/anonymous-users`, `GET /auth/{provider}/start`, `GET /auth/callback/{provider}`, `POST /auth/sso-accounts/{provider}/link` 는 FastAPI route entrypoint 에서 즉시 `410 AUTH_LEGACY_FLOW_REMOVED` 를 반환한다. Supabase Auth 공식 OAuth / `linkIdentity()` 가 provider redirect 와 identity linking 을 소유한다. Web `/auth/callback` 의 link callback 은 Supabase `exchangeCodeForSession()` 성공과 signed flow context 만 확인하고 backend `/auth/supabase/link` 를 호출하지 않는다. `/auth/logout` 은 backend cookie cleanup 호환 엔드포인트로만 남고, 자체 OAuth/JWT refresh 흐름은 정본이 아니다.
 
@@ -71,18 +71,18 @@
 
 ## 2. 패키지 / 디렉터리 도입
 
-### 2.1 의존성 (Phase 1 (a) 자식 이슈 설치 예정 — 본 절은 설계 정본)
+### 2.1 의존성
 
-> **상태 (review item 5 정합).** 본 절은 **설계 의도** 이며 `apps/web/package.json` 에 두 패키지가 아직 추가되지 않았다. 실제 install 은 Phase 1 (a) 자식 이슈 (Supabase 클라이언트 도입 / SSR cookie adapter — CMP-580 계열) 에서 수행한다. 본 runbook 의 §2.2 / §4.1 / §4.2 의 의사 코드는 모두 본 패키지가 설치된 시점을 가정한 설계이며, Phase 1 (e) 코드 (provider 화이트리스트 + Naver 어댑터) 는 Supabase SDK 를 직접 호출하지 않으므로 본 패키지 부재와 무관하게 supabaseScopeed pure 모듈로 봉인되어 있다.
+> **현재 상태.** Supabase client/SSR packages are part of the web auth implementation. This section records the expected dependency surface; it is not a future Phase 1 install gate.
 
-`apps/web/package.json` `dependencies` 에 **Phase 1 (a) 시점에** 추가:
+`apps/web/package.json` `dependencies`:
 
 ```json
 "@supabase/supabase-js": "^2.45.0",
 "@supabase/ssr": "^0.5.0"
 ```
 
-> 정확한 minor 는 설치 시점에 lockfile 로 봉인한다. Major 만 `^2` / `^0` 으로 명시. Next.js 16 App Router 와 `@supabase/ssr` 의 cookie 통합은 v0.5+ 가 안정 라인. 본 install PR 이 머지되기 전까지는 본 runbook 의 `@supabase/*` import 가 등장하는 코드 블록은 모두 의사 코드로 취급한다.
+> 정확한 minor 는 lockfile 로 봉인한다. Next.js App Router 와 `@supabase/ssr` 의 cookie 통합은 v0.5+ 라인을 사용한다.
 
 ### 2.2 신설 SSOT 디렉터리
 
@@ -128,7 +128,7 @@ apps/web/lib/supabase/
 | `NEXT_PUBLIC_FRONTEND_AUTH_SUCCESS_URL` | 기존 유지 | **사용 변경.** 더 이상 `signInWithOAuth({ redirectTo })` 의 직접 인자로 쓰지 않는다. 인자는 항상 `/auth/callback?next=<SUCCESS_URL>` 절대 URL. SUCCESS_URL 자체는 callback 이후 302 목적지로만 쓰인다. | ADR-0003 정합. |
 | `NEXT_PUBLIC_FRONTEND_AUTH_FAILURE_URL` | 기존 유지 | OAuth 실패 시 redirect 표시 경로. callback Route Handler 가 `exchangeCodeForSession` 실패 시 이 URL 로 302. | 정본은 `apps/api/.env.example`. |
 | `NEXT_PUBLIC_FRONTEND_AUTH_CALLBACK_URL` | **신설(선택)** | OAuth provider 가 redirect 해 오는 절대 URL. 미설정 시 코드가 `new URL('/auth/callback', window.location.origin)` 로 합성한다. Vercel preview 처럼 origin 이 동적인 환경에서 명시 봉인이 필요할 때만 설정. | Supabase 콘솔 redirect allow list 에도 동일 값을 등록한다. |
-| `AUTH_COOKIE_NAME` | **폐기 후보 (Phase 2)** | 기존 `jippin_session` 가드용. Supabase 가 자체 쿠키 (`sb-<project-ref>-auth-token`) 를 발급하므로 web 쿠키 이름은 더 이상 의미가 없다. | Phase 1 에서는 dual-write 호환을 위해 라인을 주석으로 유지하고, proxy.ts 재작성 PR 머지 시점에 라인 제거. |
+| `AUTH_COOKIE_NAME` | **폐기됨** | 기존 `jippin_session` 가드용. Supabase 가 자체 쿠키 (`sb-<project-ref>-auth-token`) 를 발급하므로 web auth guard 의 정본이 아니다. | 신규 env/코드에서 사용 금지. 남은 backend `jippin_session` 은 API compatibility/session bridge 책임이며 web anonymous ownership 정본이 아니다. |
 | `NEXT_PUBLIC_API_BASE_URL` | `apps/web/.env.example` (기존) | **server-to-server** 백엔드 base URL. Next.js SSR/Route Handler 의 server-side `fetch` 가 사용. Docker compose 의 내부 host (`http://api:8000`) 도 허용. | 브라우저 도달성 보장 안 함. browser-reachable 이 필요한 경로는 `API_PUBLIC_BASE_URL` 사용. |
 | `API_PUBLIC_BASE_URL` | `apps/web/.env.example` (**신설 — CMP-584 round-3**) | **Browser-reachable** 백엔드 base URL (server-only env, `NEXT_PUBLIC_` prefix 없음). `/auth/oauth/start` 같은 BFF 가 302 `Location` 으로 사용. 미설정 시 `NEXT_PUBLIC_API_BASE_URL` 로 fallback 하되 Docker 내부 hostname (`api:`, `web:`, `app:`) 이면 500 `OAUTH_BASE_URL_MISCONFIGURED`. | `apps/web/lib/api-base-url.ts::publicApiBaseUrl()` 단일 SSOT. compose 환경에서는 별도 값 (예: `http://localhost:8000`) 으로 봉인. |
 
@@ -197,7 +197,7 @@ export function ensureAnonymousSession(supabase: SupabaseClient): Promise<Sessio
 ```
 
 - SessionProvider 의 useEffect 는 `ensureAnonymousSession(supabase)` 만 호출한다 — 자체적으로 `getSession` / `signInAnonymously` 를 직접 호출하지 않는다.
-- module-scope 변수이므로 같은 브라우저 탭의 모든 SessionProvider mount 가 동일 promise 를 공유. 다른 탭은 자체 module scope 이므로 별도 promise 를 갖지만, 탭마다 1 익명 user 는 정합 (multi-tab 시 backend 가 매핑 — Phase 2 ADR-0004 작업 범위).
+- module-scope 변수이므로 같은 브라우저 탭의 모든 SessionProvider mount 가 동일 promise 를 공유. 다른 탭은 자체 module scope 이므로 별도 promise 를 갖지만, 탭마다 1 익명 user 는 정합이다. multi-tab ownership 병합이 필요해지면 Supabase `auth.users.id` 기준으로 별도 backend reconciliation 을 둔다.
 - `onAuthStateChange` listener 안에서도 자체적으로 anonymous sign-in 을 호출하지 말고 본 헬퍼만 호출.
 - 1초 debounce 는 `inFlight` 해제 후 잘못된 mount 가 즉시 또 fire 하는 corner case 를 막는다. paint cycle 안 race 흡수 + 사용자가 retry 버튼을 누르는 명시적 요청은 1초 후 통과.
 
@@ -223,7 +223,7 @@ export function ensureAnonymousSession(supabase: SupabaseClient): Promise<Sessio
 - **저장 위치.** `sessionStorage.jippin_oauth_in_progress` (탭 한정 + 새로고침 생존). `localStorage` 는 다른 탭으로 누설되므로 부적합. 쿠키는 사용하지 않는다 (서버 side 의사결정에 들어가지 않음).
 - **set 시점 — BFF.** `apps/web/app/auth/oauth/start/route.ts` 가 302 응답에 small inline HTML 또는 별도 redirect-via-page 를 통해 `sessionStorage.setItem('jippin_oauth_in_progress', '1')` 를 실행한 뒤 OAuth URL 로 navigate. 또는 BFF 가 302 직전에 `Location: /auth/redirect?to=<encoded-oauth-url>` 로 보내고, `/auth/redirect/page.tsx` 가 `useEffect` 에서 flag set 후 `window.location.assign(to)` 를 수행. **server-only 302 만으로는 sessionStorage 를 만질 수 없으므로 client-side 한 단계가 반드시 필요**하다.
 - **clear 시점.** (1) callback Route Handler 의 redirect 목적지가 항상 `/auth/callback-done?next=<safeNext>` (small client page) 로 들어가고, 이 page 가 `sessionStorage.removeItem('jippin_oauth_in_progress')` **한 키만** 제거한 뒤 `next` 로 navigate. (2) 안전망으로 SessionProvider mount 시 flag 의 timestamp 가 10분 초과면 강제 clear.
-- **금지 — `Clear-Site-Data` 헤더 (review item 2).** callback 응답에 `Clear-Site-Data: "storage"` 또는 `"*"` 를 부착하면 같은 origin 의 모든 storage 가 비워진다. Phase 1 dual-write 가 의존하는 `localStorage.jippin_anonymous_user_id` / Supabase 의 `sb-<ref>-auth-token` / React Query persist cache 까지 함께 사라져 사용자 데이터 / 세션이 손실된다. callback 의 cookie 정리는 §4.7.1 의 `response.cookies.set(..., { maxAge: 0 })` (개별 키 지정) 로만 한다. guard 정리도 위 callback-done page 의 `sessionStorage.removeItem` 단일 키 호출로 한정.
+- **금지 — `Clear-Site-Data` 헤더 (review item 2).** callback 응답에 `Clear-Site-Data: "storage"` 또는 `"*"` 를 부착하면 같은 origin 의 모든 storage 가 비워진다. Supabase 의 `sb-<ref>-auth-token` / React Query persist cache / 사용자 입력 임시 상태까지 함께 사라져 사용자 데이터 / 세션이 손실된다. callback 의 cookie 정리는 §4.7.1 의 `response.cookies.set(..., { maxAge: 0 })` (개별 키 지정) 로만 한다. guard 정리도 위 callback-done page 의 `sessionStorage.removeItem` 단일 키 호출로 한정.
 - **bootstrap 측 확인.** SessionProvider 가 `getSession()` 호출 전에 `sessionStorage.getItem('jippin_oauth_in_progress') === '1'` 이면 anonymous bootstrap 을 **완전히 skip** 하고 onAuthStateChange listener 만 등록. callback 이후 첫 navigation 에서 flag 가 clear 되어 다음 bootstrap (보통은 새 실명 세션이 이미 있으므로 no-op) 이 fire.
 - **race-free 보장.** signOut 이 onAuthStateChange 를 통해 SessionProvider 의 callback 도 trigger 한다. 이 callback 안에서 다시 `signInAnonymously` 가 fire 하지 않도록, listener 콜백도 동일 guard 를 본다.
 
@@ -233,15 +233,9 @@ export function ensureAnonymousSession(supabase: SupabaseClient): Promise<Sessio
 - 사용자가 OAuth 진행 중 탭을 닫고 새 탭에서 들어오는 경우 — guard 가 없으므로 새 탭은 정상적으로 익명 sign-in. 본래 탭의 merge intent 는 callback 도착 시점에 cookie 가 살아 있는 한 정상 commit.
 - guard 가 10분을 넘기면 stale 로 간주하고 강제 clear — 사용자가 OAuth provider 화면에서 멈춰 있는 동안 익명 흐름이 영구 차단되지 않도록 한다.
 
-- **fail-soft + API 계약 정합 (review item 6).** `signInAnonymously` 실패 / Supabase 도달 불가 시 두 가지 행동을 동시에 적용한다:
-  - **(A) Phase 1 동안 backend 가 legacy 익명 ID 호출을 받아들인다.** Phase 1 dual-write 가 살아 있는 동안 `/app/pre-review` 의 core run 호출 (`POST /pre-review/run` 등 공개/사전검토 분류) 은 **`Authorization: Bearer <supabase>` 가 없어도 `x-jippin-anon-id: <legacy uuid>` 헤더만으로 진입**할 수 있다. backend 의 §4.4 anonymous gating contract 가 "공개/사전검토" 분류에 한해 이 fallback 을 허용한다 — conversion-only 분류에는 절대 적용되지 않는다 (legacy anon id 로는 영구 데이터를 만들 수 없다). axios 인터셉터는 Supabase 토큰이 없으면 자동으로 supabase header 만 빼고 호출. ADR-0004 Accepted (Phase 2) 시점에 본 fallback 도 함께 폐기.
-  - **(B) UI 가 fallback 도 실패한 경우의 disabled 상태를 명시.** Supabase 도달 + legacy header 둘 다 비어 있는 사용자는 (예: localStorage 차단 + Supabase 5xx) `/app/pre-review` 진입 시 "현재 비회원 모드로 진행할 수 없습니다. 다시 시도해 주세요" 카드만 노출하고 core run 버튼은 disabled. 비회원 데이터 손실보다 명시적 차단이 안전.
-  - 재시도 버튼은 LegalNotice 또는 sticky toast 로 노출 (UX 트랙 후속).
+- **fail-soft + API 계약 정합 (CMP-604 이후).** `signInAnonymously` 실패 / Supabase 도달 불가 시 legacy `x-jippin-anon-id` 로 fallback 하지 않는다. `/app/pre-review` 는 Supabase anonymous session 을 만들 수 없으면 "현재 비회원 모드로 진행할 수 없습니다. 다시 시도해 주세요" 카드만 노출하고 core run 버튼은 disabled. 비회원 데이터 손실보다 명시적 차단이 안전하다. 재시도 버튼은 LegalNotice 또는 sticky toast 로 노출 (UX 트랙 후속).
 
-- **Phase 1 dual-write 정합 (ADR-0003 supersede 전).** Phase 1 동안 SessionProvider 는 Supabase 익명 sign-in 직후, 기존 `getOrCreateAnonymousUserId()` 도 **함께** 호출하고 두 ID 를 모두 유지한다. 이유:
-  - 기존 도면/리포트가 `localStorage.jippin_anonymous_user_id` 와 `anonymous_users.id` 외부 키로 보관되어 있으므로, ADR-0003 의 claim 경로 (콜백 트랜잭션의 `anonymous_users.converted_user_id` 갱신) 를 끊으면 사용자 데이터 손실.
-  - dual-write 동안 Supabase user `id` 와 ADR-0003 익명 ID 의 매핑은 backend 가 supersede 이슈 (ADR-0004 자식) 에서 일괄 backfill 한다. 웹은 두 ID 를 모두 axios 호출 헤더에 실어 호환을 유지: `Authorization: Bearer <supabase access_token>` + `x-jippin-anon-id: <legacy uuid>`.
-  - 본 dual-write 는 ADR-0003 이 supersede 되는 ADR-0004 Accepted 시점에 종료된다. 종료 시점에 `lib/anonymous-user.ts`, localStorage 키, 헤더 전송이 같은 PR 에서 일괄 제거된다 ([§9 Phase 표](#9-phase-별-전환-순서)).
+- **Legacy dual-write 종료.** SessionProvider 는 `getOrCreateAnonymousUserId()` 를 호출하지 않는다. 웹 호출 헤더는 `Authorization: Bearer <supabase access_token>` 이 정본이며, `localStorage.jippin_anonymous_user_id`, `anonymous_users.id`, `x-jippin-anon-id` 는 pre-CMP-604 historical 경로다. 남은 references 는 archive/ADR context 로만 유지한다.
 
 ### 4.2 로그인 / 전환 CTA — `linkIdentity` 와 `signInWithOAuth` 분기
 
@@ -376,7 +370,7 @@ linkIdentity({ provider }) 실패
    │         · [예, 옮기고 로그인]
    │         · [아니오, 비회원으로 계속]
    │      2) "예" 선택 시:
-   │         a) 익명 user id + ADR-0003 익명 ID(=Phase 1 dual-write) 를 백엔드의
+   │         a) Supabase anonymous user id 를 백엔드의
    │            `POST /auth/anon-merge-intents` 큐에 enqueue (멱등).
    │            backend 응답 JSON: { intent_id, nonce, expires_at, signed_token }.
    │            signed_token = HMAC( intent_id | nonce | exp ) — backend 서명.
@@ -471,11 +465,11 @@ export function toSupabaseProviderId(ui: UiProvider): SupabaseProvider {
 
 #### 4.2.5 Provider 화이트리스트 정책 — email / passwordless 봉인 (CMP-584)
 
-> **§0.0 CMP-572 CEO 결정 정합.** Provider 화이트리스트가 좁을수록 동일 verified email 자동 merge 우회로 / 비-OAuth 인증 우회로가 줄어든다. 본 정책은 "MVP 는 manual identity linking only" CEO 결정의 Phase 1 코드 봉인이다.
+> **§0.0 CMP-572 CEO 결정 정합.** Provider 화이트리스트가 좁을수록 동일 verified email 자동 merge 우회로 / 비-OAuth 인증 우회로가 줄어든다. 본 정책은 "MVP 는 manual identity linking only" CEO 결정의 current code 봉인이다.
 
 **정본.** `apps/web/lib/oauth-providers/index.ts` 의 `ALLOWED_PROVIDERS = ['google', 'kakao', 'naver'] as const` 단일 export 가 SSOT.
 
-**Web 트랙 봉인 (CMP-584 Phase 1 (e) 산출물):**
+**Web 트랙 봉인 (CMP-584 provider whitelist 산출물):**
 
 | 경계 | 봉인 규칙 | 위반 시 동작 |
 |---|---|---|
@@ -540,12 +534,12 @@ client.interceptors.request.use(async (config) => {
 - `apps/web/lib/oauth-providers/naver.ts` — Naver Custom OAuth2 어댑터. `NAVER_PROTOCOL = 'oauth2' as const`. `NAVER_DEFAULT_ENDPOINTS` 가 authorize / token / user-info URL 3개를 명시.
 - **변수명만 SSOT, 실값 금지** (AGENTS.md §4.7 + `apps/api/.env.example` + `apps/api/src/config.py` 정합): `NAVER_OAUTH_CLIENT_ID`, `NAVER_OAUTH_CLIENT_SECRET`, `NAVER_OAUTH_AUTHORIZE_URL`, `NAVER_OAUTH_TOKEN_URL`, `NAVER_OAUTH_USERINFO_URL`, (옵션) `NAVER_OAUTH_SCOPE`. 실값은 Supabase 콘솔 입력 또는 `.env.local`, **코드 / 문서 / 이슈 / PR 본문에 절대 기재 금지**.
 - `assertNaverIsOAuth2()` — endpoint 가 `.well-known/openid-configuration` 패턴을 포함하면 throw. vitest unit test 가 default endpoints + 의도된 override + 잘못된 OIDC discovery URL 시나리오 모두 검증 (`naver.test.ts`).
-- **`NAVER_DEFAULT_SCOPE = ''` (빈 문자열, round-4 봉인)** — Naver authorize endpoint 는 `scope` 쿼리 파라미터를 정식 사양에 두지 않으므로 Phase 1 은 scope 를 보내지 않는 것이 정본. `resolveNaverScope()` 가 `NAVER_OAUTH_SCOPE` env 가 있으면 그 값을, 없으면 빈 문자열을 반환. Supabase 콘솔 scope 필드도 비워두는 것을 권장.
+- **`NAVER_DEFAULT_SCOPE = ''` (빈 문자열, round-4 봉인)** — Naver authorize endpoint 는 `scope` 쿼리 파라미터를 정식 사양에 두지 않으므로 MVP 기본값은 scope 를 보내지 않는 것이 정본. `resolveNaverScope()` 가 `NAVER_OAUTH_SCOPE` env 가 있으면 그 값을, 없으면 빈 문자열을 반환. Supabase 콘솔 scope 필드도 비워두는 것을 권장.
 
-**Scope 정책 (Phase 1, round-4 재서술):**
+**Scope 정책 (MVP, round-4 재서술):**
 
 - Naver 의 공식 OAuth 2.0 가이드 (`https://developers.naver.com/docs/login/api/`) 는 authorize 요청에 `client_id` / `response_type` / `redirect_uri` / `state` 만 명시한다. **`scope` 파라미터는 사용하지 않는다** — `account` / `name` / `email` 등 미문서화 토큰을 보내면 Naver 가 `invalid_request` 로 거부하거나 무시할 수 있다.
-- 사용자에게 보여줄 권한 범위 (이름 / 프로필 이미지 / 이메일 등) 는 **Naver Developers 콘솔의 "동의 항목" UI 에서 선언**한다. Phase 1 은 식별만 필요하므로 "필수 동의" 에서 최소 항목만 ON 으로 두고, "추가 동의" 의 `이메일` 항목은 비즈니스 앱 심사 통과 후에만 추가한다.
+- 사용자에게 보여줄 권한 범위 (이름 / 프로필 이미지 / 이메일 등) 는 **Naver Developers 콘솔의 "동의 항목" UI 에서 선언**한다. MVP 는 식별만 필요하므로 "필수 동의" 에서 최소 항목만 ON 으로 두고, "추가 동의" 의 `이메일` 항목은 비즈니스 앱 심사 통과 후에만 추가한다.
 - 따라서 Supabase Custom OAuth Provider 의 `Scope` 필드는 **비워둔다 (default `''`)**. 정말 필요한 환경에서만 `NAVER_OAUTH_SCOPE` env 로 검증된 값 (예: 비즈니스 심사 통과 후 Naver 가 자체 검증한 토큰) 을 주입한다.
 - email 동의 항목을 콘솔에 추가하면 user-info 응답에 `response.email` 이 포함되지만, 본 트랙은 그 변화를 강제하지 않으며 callback / backend sync 는 `response.email` 부재 가능을 가정으로 동작해야 한다 (§4.5.1 internal_signup 약관 화면이 email 을 user 입력으로 받는 분기 정합).
 - 향후 명시 scope 가 필요해지면 별도 자식 이슈에서 (1) Naver 비즈니스 심사 통과 + 동의 항목 등록, (2) Naver 가 자체 검증한 정확한 토큰 문자열 확인, (3) `NAVER_OAUTH_SCOPE` env 갱신, (4) callback 분기 정리를 한 set 로 처리한다. raw scope 문자열을 코드에 hardcode 하는 PR 은 reject.
@@ -554,14 +548,14 @@ client.interceptors.request.use(async (config) => {
 
 - Authentication → Providers → Add custom OAuth provider → **`OAuth2 (Generic)`** 모드 선택 (OIDC 모드 절대 금지).
 - 입력 필드: `Client ID` (= `NAVER_OAUTH_CLIENT_ID`), `Client Secret` (= `NAVER_OAUTH_CLIENT_SECRET`), `Authorize URL` (= `NAVER_OAUTH_AUTHORIZE_URL`), `Token URL` (= `NAVER_OAUTH_TOKEN_URL`), `User-Info URL` (= `NAVER_OAUTH_USERINFO_URL`), `Scope` = **비워둔다 (default `''`, round-4 봉인)** — Naver authorize 는 scope 파라미터 미사용. env override `NAVER_OAUTH_SCOPE` 는 Naver 비즈니스 심사 통과 후 자체 검증된 토큰을 강제해야 할 때만 사용. 사용자 동의 항목은 Naver Developers 콘솔 UI 에서 별도 선언.
-- **`email_optional=true` 체크 (CMP-584 round-3 추가, 필수).** Phase 1 정책상 Naver authorize 요청에 `scope` 파라미터를 보내지 않으므로 (round-4 봉인) user-info 응답에 `response.email` 이 부재할 수 있다. Supabase Custom OAuth Provider 의 `email_optional` (또는 동등) 플래그를 **반드시 ON** 으로 등록해야 `auth.users` insert 가 email 부재로 실패하지 않는다. OFF 인 채 라이브 가면 Naver 로그인 시 `email_required` 류 에러 — 사용자가 가입 자체를 못 한다. 본 봉인은 Scope 정책 (위) 과 함께 1 set 로 결정한다. 향후 비즈니스 심사 통과 후 Naver Developers 콘솔의 "동의 항목" 으로 email 을 추가하면 이 플래그를 OFF 로 되돌릴지 별도 자식 이슈에서 결정.
+- **`email_optional=true` 체크 (CMP-584 round-3 추가, 필수).** MVP 정책상 Naver authorize 요청에 `scope` 파라미터를 보내지 않으므로 (round-4 봉인) user-info 응답에 `response.email` 이 부재할 수 있다. Supabase Custom OAuth Provider 의 `email_optional` (또는 동등) 플래그를 **반드시 ON** 으로 등록해야 `auth.users` insert 가 email 부재로 실패하지 않는다. OFF 인 채 라이브 가면 Naver 로그인 시 `email_required` 류 에러 — 사용자가 가입 자체를 못 한다. 본 봉인은 Scope 정책 (위) 과 함께 1 set 로 결정한다. 향후 비즈니스 심사 통과 후 Naver Developers 콘솔의 "동의 항목" 으로 email 을 추가하면 이 플래그를 OFF 로 되돌릴지 별도 자식 이슈에서 결정.
 - `provider identifier` 필드는 **반드시 `naver`** 로 (prefix 없이) 등록한다. Supabase 가 내부적으로 `custom:` prefix 를 prepend 하여 **SDK 가 보는 canonical provider id = `custom:naver`** 가 된다. 콘솔에 직접 `custom:naver` 를 입력하면 결과가 `custom:custom:naver` 로 이중 prepend 되어 SDK `signInWithOAuth({ provider: 'custom:naver' })` 호출 시 `provider_not_enabled`. §4.2.3 매핑 + §8 입력 항목 표가 SSOT.
 - redirect allow list 에 `/auth/callback` 추가 (§4.7.2).
 
 **사전 등록 가드 (signInWithOAuth 콜 전 운영 SSOT 확인):**
 
 - `supabase.auth.signInWithOAuth({ provider: 'custom:naver' })` 또는 `linkIdentity({ provider: 'custom:naver' })` 호출은 Supabase 콘솔에 Custom OAuth Provider 가 등록되어 있어야 한다.
-- **신규 환경 라이브 진입 전**: 운영자가 위 입력 필드 표 + `provider identifier=naver` + **Scope 필드 비워둠 (Phase 1 정책, round-4 봉인)** + `email_optional=true` 가 모두 SSOT 와 일치하는지 §8 표를 보고 1회 수동 확인.
+- **신규 환경 라이브 진입 전**: 운영자가 위 입력 필드 표 + `provider identifier=naver` + **Scope 필드 비워둠 (MVP 정책, round-4 봉인)** + `email_optional=true` 가 모두 SSOT 와 일치하는지 §8 표를 보고 1회 수동 확인.
 - 콘솔 등록 누락 / mismatch 시 §4.2.4 에러 매트릭스의 `provider_not_enabled` 분기로 빠진다 → 사용자에게 "일시적 로그인 오류" toast + Sentry alert + 5분간 Naver 버튼 disabled.
 - 본 가드는 out-of-band SSOT (Supabase 콘솔) 이므로 코드 레벨에서 자동 검증 불가. naver.ts JSDoc 의 "사전 등록 가드" 단락이 코드 측 정본 주석이다.
 
@@ -588,7 +582,7 @@ client.interceptors.request.use(async (config) => {
 
 | 엔드포인트 분류 | 예시 라우트 | 허용되는 인증 입력 | 거부 응답 |
 |---|---|---|---|
-| **공개 / 사전검토** (anonymous 허용) | `GET /catalog/*`, `POST /pre-review/run`, `GET /pre-review/{id}` | anonymous Supabase access token **OR** non-anonymous Supabase access token **OR** Phase 1 한정 `x-jippin-anon-id: <legacy uuid>` (Supabase 도달 실패 fallback — §4.1 fail-soft (A)). 셋 다 없으면 익명 핸들 발급 후 응답. | 401 만 비정상적 케이스 (legacy header 도 invalid format). |
+| **공개 / 사전검토** (anonymous 허용) | `GET /catalog/*`, `POST /pre-review/run`, `GET /pre-review/{id}` | anonymous Supabase access token **OR** non-anonymous Supabase access token. Supabase session 이 없으면 web 이 anonymous sign-in 을 먼저 시도하고, 실패하면 UI 를 disabled 상태로 둔다. `x-jippin-anon-id` fallback 은 CMP-604 이후 정본이 아니다. | Supabase token 없음/검증 실패는 retry 가능한 auth bootstrap 실패로 처리. |
 | **terms submission — chicken-and-egg 면제 (item 3 new)** | `POST /auth/terms/accept`, `GET /auth/terms/pending` (약관 본문 조회 등 동의 화면 표시용) | **non-anonymous Supabase access token**. `terms_accepted_at` 검사 (검증 우선순위 #3) 에서 **면제**. anonymous 는 거부 (403 `AUTH_ANONYMOUS_NOT_ALLOWED`). | 401 / 403 `AUTH_ANONYMOUS_NOT_ALLOWED` |
 | **conversion-only — 사용자 영속 데이터** | `POST /consults`, `GET /consults/{id}`, `POST /leads`, `POST /reports`, `GET /users/me` | **non-anonymous Supabase access token + `required_consent_set(now) ⊆ accepted_consents(user)`** (검증 우선순위 #3). legacy `x-jippin-anon-id` 헤더는 **절대 허용하지 않는다** — 영구 데이터를 만들 수 없으므로. | `403` + 본문은 repo 표준 envelope (§4.4.1) — `AUTH_ANONYMOUS_NOT_ALLOWED` (anonymous) / `AUTH_TERMS_NOT_ACCEPTED` (required 중 누락, `body.detail.missing` 에 누락 목록) |
 | **conversion intent** | `POST /auth/anon-merge-intents`, `POST /auth/anon-merge-intents/commit` | anonymous **또는** non-anonymous (각각 from/target 측에서 호출) | 잘못된 단계의 token 은 422. |
@@ -1104,7 +1098,7 @@ export const config = { matcher: ['/app/:path*'] };
 |---|---|---|
 | `login/page.tsx` | "소셜 OAuth 로 로그인하면 백엔드가 자체 JWT 를 발급합니다." | "Google / 카카오 / 네이버 계정으로 시작하세요. 비밀번호는 만들지 않습니다." 로 교체. 자체 JWT 표현 금지. |
 | `login-buttons.tsx` | `GET /auth/{provider}/start?return_url=...&anonymous_user_id=...` 호출 | `linkIdentity` / `signInWithOAuth` 분기 (§4.2.1) + `linkIdentity` 실패 ladder (§4.2.2) + provider mapping (§4.2.3). `redirectTo` 는 항상 `/auth/callback?next=...` 절대 URL. |
-| `login-buttons.tsx` | `getOrCreateAnonymousUserId()` import | **Phase 1 유지**, Phase 2 에서 import 제거. ([§9](#9-phase-별-전환-순서)) |
+| `login-buttons.tsx` | `getOrCreateAnonymousUserId()` import | **제거됨.** 현재 CTA 는 Supabase session 을 확인해 anonymous 이면 `intent=link`, 그 외에는 `intent=signin` 으로 BFF 에 진입한다. |
 | (신규) `app/auth/callback/route.ts` | (없음) | OAuth provider redirect 의 1차 수신점. `exchangeCodeForSession` + 쿠리 query 비상속 failure URL + merge intent commit + Kakao Sync audit 트리거 (§4.7). |
 | (신규) `app/auth/oauth/start/route.ts` | (없음) | OAuth 진입 BFF. `jippin_oauth_provider` flow context 쿠키 + (옵션) `jippin_merge_intent` 쿠키 발급 후 server-side `signInWithOAuth({ skipBrowserRedirect: true })` URL 로 302. 클라이언트가 SDK 를 직접 호출하지 않는 이유는 httpOnly 쿠키 발급을 위한 것 (§4.2.1). |
 | (신규) `lib/supabase/providers.ts` | (없음) | UI provider id (`google\|kakao\|naver`) → Supabase provider id 매핑 SSOT (§4.2.3). |
@@ -1114,16 +1108,16 @@ export const config = { matcher: ['/app/:path*'] };
 | (신규) `app/auth/redirect/page.tsx` | (없음) | OAuth 진입 단계 small client page — `sessionStorage.jippin_oauth_in_progress='1'` set 후 `window.location.assign(?to=<oauth_url>)` 로 진짜 OAuth URL 로 navigate (§4.1.1 guard set 시점). server-only 302 만으로는 sessionStorage 를 만질 수 없어 client-side 한 단계가 필수. |
 | (신규) `app/auth/callback-done/page.tsx` | (없음) | callback 직후 small client page — `sessionStorage.removeItem('jippin_oauth_in_progress')` 후 `next` 로 navigate (§4.1.1 guard clear 시점). `isSafeNext` 재검증 + invalid 시 Sentry breadcrumb. |
 | (재작성) `app/auth/failure/page.tsx` | (placeholder) | client component 로서 mount 시 `sessionStorage.removeItem('jippin_oauth_in_progress')` 호출 — failureRedirect 경로의 guard 정리 책임 (§4.7.4 (d) round-9 강화). reason 별 안내 + retry CTA 도 본 page 책임. |
-| `/auth/test` | "비회원 ID" 섹션의 `localStorage.jippin_anonymous_user_id` 표기 | **Phase 1: 양쪽 표시.** Supabase user `id` + `is_anonymous` + legacy `jippin_anonymous_user_id` 를 함께 노출하여 dual-write 가 정합한지 검증. **Phase 2 폐기.** |
+| `/auth/test` | "비회원 ID" 섹션의 `localStorage.jippin_anonymous_user_id` 표기 | **제거.** Supabase user `id` + `is_anonymous` 만 표시한다. legacy localStorage 키를 검증 대상으로 되살리지 않는다. |
 | `/auth/test` | `/auth/me` raw fetch | `supabase.auth.getUser()` 결과 + 백엔드 `/users/me` 응답 split 으로 교체. |
 | `/auth/test` | `POST /auth/logout` 호출 | `supabase.auth.signOut()` 로 교체. |
 | `/auth/test` | "provider link" 섹션의 `POST /auth/sso-accounts/{provider}/link?mode=json` | `supabase.auth.linkIdentity({ provider: toSupabaseProviderId(uiProvider) })` 로 교체. 실패 케이스에서 §4.2.2 fallback ladder 의 모달 동작도 직접 검증 가능하도록 "ladder 강제 트리거" 버튼 추가. |
 | `proxy.ts` | `jippin_session` 쿠키 가드 | Supabase session + `is_anonymous` 가드 (§4.8). |
-| `lib/auth-token.ts` | 파일 전체 | **Phase 2 삭제** (Phase 1 동안에는 호출자가 줄어들면서 dead code 가 되며, 단일 PR 에서 dual-write 종료와 함께 제거). |
-| `lib/anonymous-user.ts` | 파일 전체 | **Phase 2 삭제** ([§1 인벤토리](#1-현-웹-인증-코드-인벤토리-origindev-ad57caa1-기준) / §9). |
+| `lib/auth-token.ts` | 파일 전체 | **폐기.** 자체 JWT 메모리 토큰은 forward auth 정본이 아니다. |
+| `lib/anonymous-user.ts` | 파일 전체 | **폐기.** Supabase Anonymous Sign-In 이 anonymous identity SSOT 다. |
 | `lib/api-client.ts` | 401 refresh 큐 / `withCredentials` | 재작성 (§4.3). 403 `AUTH_ANONYMOUS_NOT_ALLOWED` 처리 추가 (§4.4). |
-| `README.md` (apps/web) | "## 인증 전략 (CMP-529 선택)" 섹션 | "## 인증 전략 (CMP-577 — Supabase Auth 전환 중, Phase 1)" 로 교체. NextAuth v5 언급 제거. Phase 1/2 표 링크. |
-| `.env.example` | `AUTH_COOKIE_NAME` 주석 | Phase 1 주석 유지, Phase 2 폐기 표기. |
+| `README.md` (apps/web) | "## 인증 전략 (CMP-529 선택)" 섹션 | "## 인증 전략 — Supabase Auth" 로 교체. NextAuth v5 / 전환 중 / Phase 1 표현 제거. |
+| `.env.example` | `AUTH_COOKIE_NAME` 주석 | 제거. Supabase cookie 와 session bridge 계약을 문서화한다. |
 
 ### 5.3 비목표 (이번 트랙에서 손대지 않음)
 
@@ -1141,7 +1135,7 @@ export const config = { matcher: ['/app/:path*'] };
 | **Backend/Auth — Supabase JWT 검증 + anonymous gating** | `apps/api` 가 `Authorization: Bearer <supabase access_token>` 헤더에서 JWT 를 검증 (JWKS endpoint or HS256 shared secret) 하고 `user.id` + `is_anonymous` claim 을 신뢰. conversion-only 라우트에 §4.3.2 의 403 계약을 적용. | CMP-604 이후 `public.users.id = auth.users.id` 가 봉인이다. Session bridge 는 유효한 non-anonymous Supabase token 의 `sub` 로 profile row 를 안전하게 `ON CONFLICT DO NOTHING` upsert 한 뒤 active profile 을 조회한다. |
 | **Backend/Auth — `POST /auth/anon-merge-intents` 라우트** | §4.2.2 fallback ladder 의 익명 데이터 이전 큐. 멱등 + 단일 트랜잭션 ownership 이전 + audit log. | 본 트랙은 호출 계약과 payload 만 봉인. |
 | **Backend/Auth — `POST /auth/terms/kakao-sync` 라우트** | §4.5.2 경로 (a) 의 callback-side audit insert. payload 는 `provider_access_token: session.provider_token` 로 봉인 — 백엔드가 그 access token 으로 Kakao `/v2/user/scopes` + `/v2/user/me` 재조회 후 `terms_consents(source='kakao_sync')` 단일 트랜잭션 insert. **`id_token` fallback 금지** (§4.5.2 review item 4 / round-3 봉인). | 콜백 실패 대비 reconcile 잡도 owner. |
-| **ADR-0003 supersede (=ADR-0004 가칭)** | ADR-0003 의 "익명 식별자 = localStorage.jippin_anonymous_user_id" / "POST /auth/anonymous-users 발급 라우트" 결정을 supersede 하는 ADR-0004 신규 작성 + Accepted. | **본 runbook 의 Phase 2 작업 (localStorage 키 삭제, `lib/anonymous-user.ts` 삭제, dual-write 종료) 은 ADR-0004 Accepted 또는 동등한 supersede 자식 이슈 완료 전까지 코드/PR 에서 수행하지 않는다.** Phase 1 PR (= 본 PR) 은 ADR-0003 정본을 유지한다. |
+| **ADR-0003 supersede (=ADR-0004/CMP-604)** | ADR-0003 의 "익명 식별자 = localStorage.jippin_anonymous_user_id" / "POST /auth/anonymous-users 발급 라우트" 결정은 CMP-604 이후 forward auth 경로에서 supersede 되었다. | Current code/runbook must not reintroduce legacy anonymous dual-write. ADR-0003 의 provider 정책/자동 병합 금지/약관 source 분리 같은 봉인 항목은 계속 보존한다. |
 | **Supabase 콘솔 세팅** | Project 생성, OAuth provider 등록 (Google native + Kakao/Naver Custom OAuth), redirect URL 화이트리스트 (`/auth/callback` 만 등록 — `/auth/success` 는 등록 불필요, §4.7.2), Email/Phone provider OFF, Anonymous sign-in ON, Identity Linking 정책 = "수동". | 본 트랙은 콘솔 작업을 수행하지 않는다. 변수명·기능 flag 만 봉인. |
 | **ADR-0003 §2.3 + CMP-572 자동 병합 금지** | Supabase 콘솔의 동일 verified email auto-link / Account Linking auto / "Link accounts with same email" 옵션이 모두 OFF. CMP-572 CEO 결정 (§0.0) 으로 hard-requirement 격상. | 콘솔 세팅 트랙이 라이브 전 강제 검증. 켜진 상태로 라이브 가면 본 runbook + CMP-572 + ADR-0003 동시 위반 — 발견 즉시 라이브 차단. |
 | **약관 동의 흐름 (Google · Naver)** | `terms_consents(source='internal_signup')` 데이터는 백엔드가 owner. Supabase user metadata 에는 약관 동의를 저장하지 않는다. | `POST /auth/terms/accept` 라우트 자체는 유지되지만 호출자가 보내는 token 이 자체 JWT → Supabase access token 으로 바뀐다. |
@@ -1157,7 +1151,7 @@ export const config = { matcher: ['/app/:path*'] };
 |---|---|---|
 | Lint / Typecheck | `pnpm lint`, `pnpm typecheck` 가 본 PR 의 변경 후에도 통과. | **예** (라이브 키 불요). |
 | Build | `pnpm build` 가 통과. | **예** (env 미설정 시 runtime fail 만 발생, build 통과). |
-| 익명 sign-in 실호출 | `supabase.auth.signInAnonymously()` 가 실제 Supabase project 에 세션을 만든다. | **아니오** (콘솔 세팅 + env 필요. 후속 트랙). |
+| 익명 sign-in 실호출 | `supabase.auth.signInAnonymously()` 가 실제 Supabase project 에 세션을 만든다. | **예** (CMP-604 이후 current path). 환경별 콘솔 toggle / abuse-control 상태는 운영 smoke 에서 확인한다. |
 | OAuth 라이브 | Kakao/Naver/Google 로그인 실 흐름. | **아니오** (콘솔 + provider client ID/secret 필요. 후속 트랙). |
 | linkIdentity 검증 | 익명 → 실명 전환 시 user `id` 유지. | **아니오** (콘솔). |
 
@@ -1174,27 +1168,28 @@ export const config = { matcher: ['/app/:path*'] };
 | Supabase `service_role` key | `apps/api/.env.local::SUPABASE_SERVICE_ROLE_KEY` | **웹에 두지 않음.** |
 | Google OAuth client ID/secret | Supabase 콘솔 → Auth → Providers → Google | 웹·API 모두에 두지 않음. |
 | Kakao OAuth client ID/secret | Supabase 콘솔 → Auth → Providers → **Kakao** (Supabase native built-in provider 패널) | 동일. **Custom 경로 없음** — §4.2.3 매핑 표 정합. provider identifier = `kakao` 고정. |
-| **Naver Custom OAuth2 (not OIDC)** — client ID / secret / authorize URL / token URL / user-info URL / scope / email_optional | Supabase 콘솔 → Auth → Providers → **Custom OAuth Provider (`OAuth2 (Generic)` 모드)** | §4.3.1 봉인. **OIDC 모드 금지** (Naver 는 `.well-known/openid-configuration` 미지원). 입력 필드는 변수명 `NAVER_OAUTH_CLIENT_ID` / `NAVER_OAUTH_CLIENT_SECRET` / `NAVER_OAUTH_AUTHORIZE_URL` / `NAVER_OAUTH_TOKEN_URL` / `NAVER_OAUTH_USERINFO_URL` / (옵션) `NAVER_OAUTH_SCOPE` 로 SSOT — AGENTS.md §4.7 정합. 실값은 코드 / 문서 / 이슈에 절대 기재 금지. provider identifier = `naver` (prefix 없이) 고정 — Supabase 가 SDK 측에서 `custom:` 를 자동 prepend 하여 `custom:naver` 가 된다 (§4.2.3 매핑). **Scope 필드는 비워둔다 (default `''`, round-4 봉인)** — Naver authorize 가 scope 파라미터를 정식 사양에 두지 않으므로 임의 토큰을 보내면 `invalid_request` 위험. 사용자 동의 항목은 Naver Developers 콘솔 UI 에서 별도 선언. **`email_optional=true` 필수** — Phase 1 은 email 동의 항목을 요구하지 않으므로 user-info `response.email` 부재 가능 → OFF 면 `auth.users` insert 가 `email_required` 로 실패해 사용자 가입 자체가 막힌다 (§4.3.1 round-3 봉인). |
+| **Naver Custom OAuth2 (not OIDC)** — client ID / secret / authorize URL / token URL / user-info URL / scope / email_optional | Supabase 콘솔 → Auth → Providers → **Custom OAuth Provider (`OAuth2 (Generic)` 모드)** | §4.3.1 봉인. **OIDC 모드 금지** (Naver 는 `.well-known/openid-configuration` 미지원). 입력 필드는 변수명 `NAVER_OAUTH_CLIENT_ID` / `NAVER_OAUTH_CLIENT_SECRET` / `NAVER_OAUTH_AUTHORIZE_URL` / `NAVER_OAUTH_TOKEN_URL` / `NAVER_OAUTH_USERINFO_URL` / (옵션) `NAVER_OAUTH_SCOPE` 로 SSOT — AGENTS.md §4.7 정합. 실값은 코드 / 문서 / 이슈에 절대 기재 금지. provider identifier = `naver` (prefix 없이) 고정 — Supabase 가 SDK 측에서 `custom:` 를 자동 prepend 하여 `custom:naver` 가 된다 (§4.2.3 매핑). **Scope 필드는 비워둔다 (default `''`, round-4 봉인)** — Naver authorize 가 scope 파라미터를 정식 사양에 두지 않으므로 임의 토큰을 보내면 `invalid_request` 위험. 사용자 동의 항목은 Naver Developers 콘솔 UI 에서 별도 선언. **`email_optional=true` 필수** — MVP 는 email 동의 항목을 요구하지 않으므로 user-info `response.email` 부재 가능 → OFF 면 `auth.users` insert 가 `email_required` 로 실패해 사용자 가입 자체가 막힌다 (§4.3.1 round-3 봉인). |
 | **Provider 화이트리스트 정책** | Supabase 콘솔 → Auth → Providers — **Email provider OFF**, Phone provider OFF, magic link OFF, OTP OFF, SMS OFF, anonymous sign-in 만 별도 ON. UI 노출은 `ALLOWED_PROVIDERS = ['google','kakao','naver']` 한정 (§4.2.5). | §4.2.5 / CMP-584. 위 비-OAuth 경로 중 하나라도 ON 인 상태로 라이브 가면 §0.0 CMP-572 CEO 결정의 "자동 verified email merge 우회로" 위험. 즉시 라이브 차단. |
 | Identity Linking 정책 | Supabase 콘솔 → Auth → Settings → **Account Linking = `manual only`**, "Auto-link verified emails" / "Link accounts with same email" 모두 OFF | **§0.0 CMP-572 CEO 결정 + ADR-0003 §2.3.** 위 토글 중 하나라도 ON 인 상태로 라이브 가면 본 runbook 위반 → 즉시 라이브 차단. Identity Linking 자체 기능 (`auth.linkIdentity` 호출 권한) 은 ON 이어야 한다 (manual flow 의 진입 권한). |
-| **ADR-0003 supersede 결정 (=ADR-0004)** | `docs/adr/0004-*.md` 신규 + Accepted | Phase 2 (localStorage 키 제거, `lib/anonymous-user.ts` 제거, dual-write 종료) 가 시작될 수 있는 유일한 gate. ADR-0004 가 Accepted 되기 전에는 본 runbook 도 Phase 1 동작만 봉인한다. |
+| **Legacy anonymous cleanup 상태** | CMP-604 PR / Supabase migration / API-web cleanup | `localStorage` anonymous id, `/auth/anonymous-users`, `x-jippin-anon-id`, `anonymous_users` table, 자체 OAuth route 가 forward 정본에서 빠져 있는지 확인한다. |
 | **Kakao Sync 동의 audit 경로 합의** | §4.5.2 표의 (a) / (b) / (c) 중 어느 경로를 봉인할지 Backend/Auth 트랙이 결정 | 본 runbook 은 (a) 로 가정. (b)/(c) 결정 시 본 절 갱신. |
 
 값이 모이지 않은 동안 본 이슈는 설계 산출물(본 문서 + env 변수 + UI 변경 계획) 완료로 종결한다. 라이브 검증은 별도 자식 이슈 (`[SUPABASE][WEB] live wiring + smoke`) 로 분리한다.
 
 ---
 
-## 9. Phase 별 전환 순서
+## 9. CMP-604 이후 현재 상태
 
-본 runbook 은 ADR-0003 정본을 유지한 상태로 **단계적 전환** 을 봉인한다. 단일 PR 에서 전부 폐기하지 않는다. ADR-0003 §2 (익명 식별자 / 발급 라우트 / 콜백 트랜잭션 claim) 은 ADR-0004 (가칭, Supabase Auth supersede) 가 Accepted 되기 전까지 살아 있다.
+본 runbook 의 현재 정본은 Supabase Auth 단일 경로다. pre-CMP-604 단계적 전환표는 historical context 로만 남기며, 신규 작업의 실행 기준으로 사용하지 않는다.
 
-| Phase | 진입 조건 | 본 runbook 이 봉인하는 작업 | 종료 조건 |
-|---|---|---|---|
-| **0 — 설계 봉인** | (현재) | 본 문서, env 변수명, SSOT 디렉터리 구조, 흐름 설계 | 본 PR 머지 |
-| **1 — Supabase adapter 도입 + dual-write** | Phase 0 종료 + Supabase 콘솔 세팅 + 라이브 키 입력 (§8) + Backend/Auth 트랙의 JWT 검증 라우트 + `POST /auth/anon-merge-intents` + `POST /auth/terms/kakao-sync` 라우트 완료 | • `lib/supabase/*` 추가 · `/auth/callback` Route Handler 신설 (§4.7)<br>• `signInAnonymously` + 기존 `getOrCreateAnonymousUserId()` 를 **둘 다** 호출 (§4.1 dual-write)<br>• axios 인터셉터: `Authorization: Bearer <supabase>` + `x-jippin-anon-id: <legacy>` 헤더 동시 전송<br>• login-buttons → `linkIdentity` / `signInWithOAuth` 분기 + fallback ladder (§4.2)<br>• `/auth/test` 페이지가 Supabase + legacy 양쪽 ID 를 표시 (정합 검증)<br>• proxy.ts 가 Supabase 세션 + `is_anonymous` 가드로 전환 (§4.8)<br>• `lib/auth-token.ts` 는 호출자 제거하되 파일 유지<br>• `lib/anonymous-user.ts` 는 유지 (dual-write 책임)<br>• Kakao Sync audit insert (§4.5.2 경로 (a)) 활성화 | ADR-0004 Accepted (또는 ADR-0003 supersede 자식 이슈 완료) |
-| **2 — Legacy 폐기** | ADR-0004 Accepted / CMP-604 cleanup | • `lib/anonymous-user.ts` 삭제<br>• `localStorage.jippin_anonymous_user_id` 폐기<br>• axios 의 `x-jippin-anon-id` 헤더 제거<br>• `lib/auth-token.ts` 파일 삭제<br>• `.env.example` 의 `AUTH_COOKIE_NAME` 주석 라인 제거<br>• `/auth/test` 에서 legacy 표시 라인 제거<br>• ADR-0003 §2 의 익명 발급 라우트 호출 코드 일괄 제거<br>• backend 측 `anonymous_users` table 과 자체 OAuth/link route 는 CMP-604 에서 폐기. API entrypoint 는 즉시 410 반환. | Live smoke 통과 (`[SUPABASE][WEB] live wiring + smoke` 자식 이슈) |
+| 영역 | 현재 정본 | 금지 / legacy |
+|---|---|---|
+| Anonymous identity | Supabase Anonymous Sign-In 이 만든 `auth.users.id` | `localStorage.jippin_anonymous_user_id`, `POST /auth/anonymous-users`, `x-jippin-anon-id` 신규 호출 |
+| OAuth/linking | Web BFF → Supabase Auth hosted OAuth / `linkIdentity()` | FastAPI 자체 `/auth/{provider}/start`, `/auth/callback/{provider}`, `/auth/sso-accounts/{provider}/link` |
+| Backend session bridge | `/auth/supabase/session` 이 Supabase token/provider 검증 후 app profile/session 처리 | provider 검증 없는 session mint, legacy provider token exchange |
+| Public auth schema | `public.users(id = auth.users.id)` app profile + `terms_consents` audit | `external_sso_accounts`, `anonymous_users`, `auth_identities` 를 forward auth SSOT 로 재도입 |
 
-> **위반 케이스 — 즉시 차단.** ADR-0004 Accepted 전에 Phase 2 변경 (예: `localStorage.jippin_anonymous_user_id` 키 삭제, `POST /auth/anonymous-users` 호출 제거) 을 포함한 PR 은 **본 runbook 위반** 으로 reject 한다.
+> **위반 케이스 — 즉시 차단.** legacy anonymous dual-write, 자체 OAuth callback/start, provider 검증 없는 session mint 를 새 PR 이 되살리면 CMP-604 회귀로 reject 한다.
 
 ---
 
@@ -1203,23 +1198,23 @@ export const config = { matcher: ['/app/:path*'] };
 - 본 runbook 의 흐름·환경변수·SSOT 디렉터리 구조·Phase 표는 본 PR 머지 시점부터 봉인된다. 변경 시 새 PR + 본 문서 갱신을 같은 커밋에 포함.
 - ADR-0003 의 결정 (provider 3종, 자동 병합 금지, 약관 source 분리) 은 본 runbook 보다 상위. 충돌 시 ADR-0003 가 우선. ADR-0004 Accepted 시점 이후에는 ADR-0004 가 §2 범위에서 우선.
 - Supabase SDK major 버전 변경 (`@supabase/supabase-js` v3 등) 은 새 runbook 절 / ADR 로 처리.
-- §9 Phase 표의 진입/종료 조건은 본 runbook 의 SSOT. 다른 트랙의 progress 추적 문서가 Phase 정의를 바꾸려면 본 절을 먼저 갱신한다.
+- §9 의 현재 상태 표가 CMP-604 이후 본 runbook 의 SSOT. pre-CMP-604 phase labels 는 historical handoff 절에서만 유지한다.
 
 ---
 
-## 11. Open review handoff (Phase 1 자식 이슈)
+## 11. Historical PR #42 review handoff (pre-CMP-604)
 
-PR [#42](https://github.com/J511Y/Jippin/pull/42) 의 잔여 review thread (2026-06-01 기준 13건 non-outdated) 는 round-2 ~ round-9 누적 incremental 패치로 더는 닫히지 않는다. 본 runbook 은 Phase 0 (설계 봉인) 의 SSOT 로서 봉인되며, 잔여 review 항목은 Phase 1 자식 이슈로 분리해 **실 코드 구현 단계에서 봉인**한다.
+PR [#42](https://github.com/J511Y/Jippin/pull/42) 의 잔여 review thread (2026-06-01 기준 13건 non-outdated) 를 자식 이슈로 넘긴 이력이다. 본 절은 pre-CMP-604 historical record 이며 현재 실행 지시가 아니다. 현재 지시는 §1-§10 의 Supabase Auth 단일 경로와 §9 의 CMP-604 이후 현재 상태 표를 따른다.
 
 ### 11.1 자식 이슈 매핑
 
 | 자식 이슈 | 영역 | 포함 thread | runbook anchor |
 |---|---|---|---|
-| **CMP-579** [Phase 1 (a)](/CMP/issues/CMP-579) | OAuth callback ladder & guard cleanup | R1, R5, R7, R8, R12 | §4.2 / §4.7 |
-| **CMP-580** [Phase 1 (b)](/CMP/issues/CMP-580) | SSR cookie adapter & PKCE preservation | R2, R10 | §4.2.1 BFF |
-| **CMP-581** [Phase 1 (c)](/CMP/issues/CMP-581) | Anonymous gate & Kakao Sync audit | R3, R4, R9, R13 | §4.1 / §4.4 / §4.5.2 / §8 |
-| **CMP-582** [Phase 1 (d)](/CMP/issues/CMP-582) | Open redirect hop & login next | R6, R11 | §4.6 / §4.2.1 |
-| **CMP-584** [Phase 1 (e)](/CMP/issues/CMP-584) | Provider 화이트리스트 + Naver Custom OAuth2 (not OIDC) | round-11 wake item 5 | §4.2.5 / §4.3.1 / §8 |
+| **CMP-579** [historical child](/CMP/issues/CMP-579) | OAuth callback ladder & guard cleanup | R1, R5, R7, R8, R12 | §4.2 / §4.7 |
+| **CMP-580** [historical child](/CMP/issues/CMP-580) | SSR cookie adapter & PKCE preservation | R2, R10 | §4.2.1 BFF |
+| **CMP-581** [historical child](/CMP/issues/CMP-581) | Anonymous gate & Kakao Sync audit | R3, R4, R9, R13 | §4.1 / §4.4 / §4.5.2 / §8 |
+| **CMP-582** [historical child](/CMP/issues/CMP-582) | Open redirect hop & login next | R6, R11 | §4.6 / §4.2.1 |
+| **CMP-584** [historical child](/CMP/issues/CMP-584) | Provider 화이트리스트 + Naver Custom OAuth2 (not OIDC) | round-11 wake item 5 | §4.2.5 / §4.3.1 / §8 |
 
 ### 11.2 잔여 review thread → 자식 이슈 매핑
 
@@ -1241,7 +1236,7 @@ PR [#42](https://github.com/J511Y/Jippin/pull/42) 의 잔여 review thread (2026
 
 ### 11.3 봉인 규칙
 
-- 본 runbook 의 §1–§10 본문은 Phase 0 SSOT 로서 **본 PR 머지 시점에 봉인**된다. PR #42 의 잔여 review thread 13건은 본 §11 표를 통해 Phase 1 자식 이슈로 위임되며, 본 PR 머지가 위 13건 thread 해결의 사전 조건은 아니다.
+- 본 runbook 의 §1–§10 본문은 CMP-604 이후 현재 상태의 SSOT 다. PR #42 의 잔여 review thread 13건은 당시 자식 이슈로 위임됐던 historical record 이며, current implementation guidance 로 복사하지 않는다.
 - 각 자식 이슈는 해당 row 의 `runbook anchor` 절을 SSOT 로 참조하며, 코드 구현 시 anchor 절과 충돌하면 자식 이슈가 본 runbook 을 갱신하는 같은 커밋을 동반한다 (§10 변경 절차).
 - 자식 이슈 4개가 모두 `done` 으로 종료되면 Paperclip `issue_children_completed` wake 가 CMP-577 의 assignee 를 깨우고, 본 이슈는 최종 `done` 처리된다.
 
