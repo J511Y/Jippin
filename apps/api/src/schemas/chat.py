@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 ChatRole = Literal["user", "assistant", "system", "tool"]
 # 공개 endpoint 에 client 가 직접 만들 수 있는 role 만. assistant/system/tool 은
@@ -35,6 +35,15 @@ ToolKind = Literal[
 ToolCallStatus = Literal["started", "succeeded", "failed", "cancelled"]
 
 
+# SQLAlchemy 모델은 ``metadata`` 가 예약어이므로 컬럼을 ``metadata_`` 로 매핑한다
+# (``apps/api/src/models/main_feature.py`` 의 ``ChatMessage`` / ``ChatToolCall``).
+# Pydantic ``from_attributes=True`` 가 ORM row 에서 ``row.metadata`` 만 시도하면
+# AttributeError 가 나기 때문에 두 이름 모두 받아들이는 alias 를 둔다 — dict
+# 입력 (skeleton in-memory store) 은 ``metadata`` 키로, ORM row 는 ``metadata_``
+# 속성으로 모두 검증된다 (board round-3 #2).
+_METADATA_ALIAS = AliasChoices("metadata_", "metadata")
+
+
 class ChatMessageCreateRequest(BaseModel):
     """`POST /sessions/{id}/chat/messages` body — 공개 endpoint.
 
@@ -50,7 +59,7 @@ class ChatMessageCreateRequest(BaseModel):
 
 
 class ChatMessageResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: uuid.UUID
     session_id: uuid.UUID
@@ -60,7 +69,9 @@ class ChatMessageResponse(BaseModel):
     content_redacted: bool
     ui_components: list[Any]
     judgment_snapshot: dict[str, Any] | None
-    metadata: dict[str, Any]
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, validation_alias=_METADATA_ALIAS
+    )
     created_at: datetime
 
 
@@ -95,7 +106,7 @@ class ChatToolCallCompleteRequest(BaseModel):
 
 
 class ChatToolCallResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: uuid.UUID
     session_id: uuid.UUID
@@ -113,4 +124,6 @@ class ChatToolCallResponse(BaseModel):
     duration_ms: int | None
     started_at: datetime
     completed_at: datetime | None
-    metadata: dict[str, Any]
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, validation_alias=_METADATA_ALIAS
+    )

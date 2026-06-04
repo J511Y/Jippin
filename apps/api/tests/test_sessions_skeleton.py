@@ -51,7 +51,11 @@ def test_create_session_allows_non_anonymous_user(monkeypatch):
     assert response.status_code == 201
     body = response.json()
     assert body["user_id"] == str(subject)
-    assert body["is_anonymous_owner"] is False
+    # permanent user 는 ``expires_at`` 정책이 없으므로 None — 익명 owner 와의
+    # discriminator. response shape 자체에는 ``is_anonymous_owner`` 가 없다
+    # (board round-3 #1: DB row 에 없는 속성을 노출하지 않는다).
+    assert body["expires_at"] is None
+    assert "is_anonymous_owner" not in body
     assert body["status"] == "draft"
 
 
@@ -67,7 +71,9 @@ def test_create_session_allows_anonymous_supabase_token(monkeypatch):
     assert response.status_code == 201
     body = response.json()
     assert body["user_id"] == str(subject)
-    assert body["is_anonymous_owner"] is True
+    # 익명 owner 는 ``expires_at`` 가 TTL 만큼 미래로 설정되어 있다.
+    assert body["expires_at"] is not None
+    assert "is_anonymous_owner" not in body
 
 
 def test_anonymous_session_has_expires_at_from_ttl_setting(monkeypatch):
@@ -292,8 +298,11 @@ def test_non_anonymous_access_clears_anon_owner_and_expires_at(monkeypatch):
             headers={"Authorization": f"Bearer {anon_token}"},
             json={},
         ).json()
-        assert created["is_anonymous_owner"] is True
+        # 익명 owner 세션은 TTL 정책으로 ``expires_at`` 가 잡힌다 —
+        # ``is_anonymous_owner`` 는 DB row 에 없으므로 response shape 에도 없다
+        # (board round-3 #1).
         assert created["expires_at"] is not None
+        assert "is_anonymous_owner" not in created
         session_id = created["id"]
 
         # 같은 sub UUID 로 발급된 non-anonymous token (Supabase linkIdentity 시뮬).
@@ -306,9 +315,12 @@ def test_non_anonymous_access_clears_anon_owner_and_expires_at(monkeypatch):
             headers={"Authorization": f"Bearer {perm_token}"},
         ).json()
 
-    assert promoted["is_anonymous_owner"] is False
+    # permanent owner 로 승격되면 ``expires_at`` 가 정리되어야 한다 — 가입 완료
+    # 사용자의 사전검토 artifact 가 익명 TTL cleanup 으로 사라지지 않게 하는
+    # board P2-5 회귀 가드.
     assert promoted["expires_at"] is None
     assert promoted["user_id"] == str(subject)
+    assert "is_anonymous_owner" not in promoted
 
 
 def test_legacy_anonymous_header_is_ignored(monkeypatch):

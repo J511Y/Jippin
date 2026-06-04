@@ -83,16 +83,21 @@ class SessionAddressResponse(BaseModel):
 
 
 class SessionResponse(BaseModel):
+    """DB-shaped ``sessions`` row.
+
+    Phase A DB 모델에 실제 존재하는 컬럼만 노출한다. ``is_anonymous_owner`` 처럼
+    Supabase ``auth.users.is_anonymous`` 에서 derive 되는 값은 본 response 에
+    포함하지 않는다 — DB row 에 없는 속성을 ``from_attributes=True`` 로 직접
+    읽으면 ORM-backed repo 로 swap 시 검증 실패가 난다 (board round-3 #1).
+    Anonymous owner 여부는 클라이언트가 자신의 Supabase 토큰에서 직접 확인하거나
+    ``expires_at`` 의 존재로 판단할 수 있다 — 익명 owner 세션은 TTL 정책에 따라
+    ``expires_at`` 이 설정되고, permanent owner 는 ``None`` 이다.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     user_id: uuid.UUID
-    is_anonymous_owner: bool = Field(
-        description=(
-            "True 면 owner 가 Supabase Anonymous Sign-In 으로 만든 임시 사용자다."
-            " conversion-only API (lead/report share) 에서는 차단되어야 한다."
-        )
-    )
     status: SessionStatus
     address_id: uuid.UUID | None
     selected_floorplan_id: uuid.UUID | None
