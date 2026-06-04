@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
 
-from src.auth.providers import OAuthProvider, OAuthTokens, ProviderProfile, google
+from src.auth.providers import OAuthProvider, ProviderProfile
 from src.auth.session import create_session_token
 from src.auth.state_store import OAuthStatePayload
 from src.config import get_settings
@@ -315,18 +314,18 @@ async def test_service_level_supabase_session_bridge_is_not_execution_path(auth_
     assert exc_info.value.code == "AUTH_SESSION_INTERNAL_ERROR"
 
 
-def test_sso_link_start_requires_login(auth_env):
+def test_sso_link_start_removed_before_session_lookup(auth_env):
     app = create_app()
     with TestClient(app) as client:
         response = client.post(
             "/auth/sso-accounts/google/link", params={"mode": "json"}
         )
 
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "AUTH_UNAUTHENTICATED"
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
 
 
-def test_sso_link_start_stores_linking_user_id(monkeypatch, auth_env):
+def test_sso_link_start_removed_without_state_write(monkeypatch, auth_env):
     user_id = uuid.uuid4()
     store = _FakeStateStore()
     monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: store)
@@ -342,23 +341,12 @@ def test_sso_link_start_stores_linking_user_id(monkeypatch, auth_env):
             },
         )
 
-    assert response.status_code == 200
-    authorization_url = response.json()["authorization_url"]
-    parsed = urlparse(authorization_url)
-    query = parse_qs(parsed.query)
-    assert (
-        f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        == google.AUTHORIZATION_ENDPOINT
-    )
-    assert query["state"] == [store.put_calls[0][0]]
-    assert store.put_calls[0][1].linking_user_id == user_id
-    assert store.put_calls[0][1].anonymous_user_id is None
-    assert store.put_calls[0][1].return_url == (
-        "http://localhost:3000/auth/success?linked=1"
-    )
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
+    assert store.put_calls == []
 
 
-def test_link_callback_links_account_without_creating_user(monkeypatch, auth_env):
+def test_link_callback_route_removed_without_provider_exchange(monkeypatch, auth_env):
     user_id = uuid.uuid4()
     payload = OAuthStatePayload(
         anonymous_user_id=None,
@@ -370,29 +358,13 @@ def test_link_callback_links_account_without_creating_user(monkeypatch, auth_env
     )
     store = _FakeStateStore(payload)
     monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: store)
-    provider_module = auth_router.PROVIDER_MODULES[OAuthProvider.GOOGLE]
-    linked_calls = []
-
-    async def fake_exchange_code(code, *, http_client, settings):
-        assert code == "oauth-code"
-        return OAuthTokens(access_token="provider-access-token")
-
-    async def fake_fetch_userinfo(tokens, *, http_client, settings, **kwargs):
-        assert kwargs == {"expected_nonce": "nonce-value"}
-        return ProviderProfile(
-            provider_subject="google-subject",
-            email="google@example.com",
-            display_name="Google User",
-        )
 
     async def fake_link_oauth_account(*, linking_user_id, provider, profile):
-        linked_calls.append((linking_user_id, provider, profile.provider_subject))
+        raise AssertionError("legacy link callback must not call link_oauth_account")
 
     async def fail_complete_oauth_login(**kwargs):
         raise AssertionError("link callback must not create or login a user")
 
-    monkeypatch.setattr(provider_module, "exchange_code", fake_exchange_code)
-    monkeypatch.setattr(provider_module, "fetch_userinfo", fake_fetch_userinfo)
     monkeypatch.setattr(auth_router, "link_oauth_account", fake_link_oauth_account)
     monkeypatch.setattr(auth_router, "complete_oauth_login", fail_complete_oauth_login)
 
@@ -403,12 +375,12 @@ def test_link_callback_links_account_without_creating_user(monkeypatch, auth_env
             params={"code": "oauth-code", "state": "state-value"},
         )
 
-    assert response.status_code == 302
-    assert response.headers["location"] == "http://localhost:3000/auth/success?linked=1"
-    assert linked_calls == [(user_id, OAuthProvider.GOOGLE, "google-subject")]
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
+    assert store.consume_calls == []
 
 
-def test_link_callback_returns_409_for_other_user_link(monkeypatch, auth_env):
+def test_link_callback_removed_before_link_conflict(monkeypatch, auth_env):
     payload = OAuthStatePayload(
         anonymous_user_id=None,
         provider="google",
@@ -420,13 +392,6 @@ def test_link_callback_returns_409_for_other_user_link(monkeypatch, auth_env):
     monkeypatch.setattr(
         auth_router, "get_oauth_state_store", lambda: _FakeStateStore(payload)
     )
-    provider_module = auth_router.PROVIDER_MODULES[OAuthProvider.GOOGLE]
-
-    async def fake_exchange_code(code, *, http_client, settings):
-        return OAuthTokens(access_token="provider-access-token")
-
-    async def fake_fetch_userinfo(tokens, *, http_client, settings, **kwargs):
-        return ProviderProfile(provider_subject="google-subject")
 
     async def fake_link_oauth_account(*, linking_user_id, provider, profile):
         raise ZippinException(
@@ -435,8 +400,6 @@ def test_link_callback_returns_409_for_other_user_link(monkeypatch, auth_env):
             http_status=409,
         )
 
-    monkeypatch.setattr(provider_module, "exchange_code", fake_exchange_code)
-    monkeypatch.setattr(provider_module, "fetch_userinfo", fake_fetch_userinfo)
     monkeypatch.setattr(auth_router, "link_oauth_account", fake_link_oauth_account)
 
     app = create_app()
@@ -446,8 +409,8 @@ def test_link_callback_returns_409_for_other_user_link(monkeypatch, auth_env):
             params={"code": "oauth-code", "state": "state-value"},
         )
 
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "SSO_ALREADY_LINKED_TO_OTHER_USER"
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
 
 
 def test_terms_accept_requires_login(auth_env):

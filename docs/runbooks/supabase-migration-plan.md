@@ -42,6 +42,8 @@ Final schema after CMP-604 cleanup:
 
 The temporary `deployment_probe_temp` table is intentionally absent after the sequence completes. The legacy `external_sso_accounts`, `anonymous_users`, `auth_identities`, and `external_sso_provider` objects are intentionally absent after CMP-604.
 
+CMP-604 also treats pre-cutover public auth rows that do not map to `auth.users(id)` as legacy orphan data. The forward migration deletes orphan `terms_consents` and `users` rows before adding the `auth.users(id)` FKs, so `fk_users_id_auth_users` and `fk_terms_consents_user_id_auth_users` are added as validated constraints rather than left permanently `NOT VALID`.
+
 ## Supabase Auth Impact
 
 | Current public table | Supabase Auth adoption impact | Recommendation |

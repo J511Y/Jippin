@@ -6,14 +6,13 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from src.auth.providers import OAuthProvider, OAuthTokens, ProviderProfile
+from src.auth.providers import OAuthProvider, ProviderProfile
 from src.auth.state_store import OAuthStatePayload
 from src.config import get_settings
 from src.errors import ZippinException
 from src.main import create_app
 from src.routers import auth as auth_router
 from src.services import auth as auth_service
-from src.services.auth import OAuthLoginResult
 
 
 class _FakeStateStore:
@@ -55,24 +54,14 @@ def callback_env(monkeypatch):
     get_settings.cache_clear()
 
 
-@pytest.mark.parametrize(
-    ("provider", "signup_completed", "expected_location"),
-    [
-        ("kakao", True, "http://localhost:3000/auth/success?from=callback"),
-        ("google", False, "http://localhost:3000/auth/terms"),
-        ("naver", False, "http://localhost:3000/auth/terms"),
-    ],
-)
-def test_oauth_callback_consumes_state_sets_cookie_and_redirects(
+@pytest.mark.parametrize("provider", ["kakao", "google", "naver"])
+def test_oauth_callback_removed_returns_410_without_state_consume(
     monkeypatch,
     callback_env,
     provider,
-    signup_completed,
-    expected_location,
 ):
-    anonymous_user_id = uuid.uuid4()
     payload = OAuthStatePayload(
-        anonymous_user_id=anonymous_user_id,
+        anonymous_user_id=uuid.uuid4(),
         provider=provider,
         return_url="http://localhost:3000/auth/success?from=callback",
         nonce="nonce-value",
@@ -81,39 +70,6 @@ def test_oauth_callback_consumes_state_sets_cookie_and_redirects(
     store = _FakeStateStore(payload)
     monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: store)
 
-    provider_module = auth_router.PROVIDER_MODULES[OAuthProvider(provider)]
-
-    async def fake_exchange_code(code, *, http_client, settings):
-        assert code == "oauth-code"
-        return OAuthTokens(access_token="provider-access-token")
-
-    async def fake_fetch_userinfo(tokens, *, http_client, settings, **kwargs):
-        assert tokens.access_token == "provider-access-token"
-        if provider == "google":
-            assert kwargs == {"expected_nonce": payload.nonce}
-        else:
-            assert kwargs == {}
-        return ProviderProfile(
-            provider_subject=f"{provider}-subject",
-            email=f"{provider}@example.com",
-            display_name=f"{provider.title()} User",
-            profile_image_url="https://cdn.example/profile.png",
-            agreed_terms_tags=("service_terms", "privacy_policy"),
-        )
-
-    async def fake_complete_oauth_login(*, provider, profile, anonymous_user_id):
-        assert profile.provider_subject == f"{provider.value}-subject"
-        assert anonymous_user_id == payload.anonymous_user_id
-        return OAuthLoginResult(
-            user_id=uuid.uuid4(),
-            signup_completed=signup_completed,
-            claimed_anonymous_user_id=(anonymous_user_id if signup_completed else None),
-        )
-
-    monkeypatch.setattr(provider_module, "exchange_code", fake_exchange_code)
-    monkeypatch.setattr(provider_module, "fetch_userinfo", fake_fetch_userinfo)
-    monkeypatch.setattr(auth_router, "complete_oauth_login", fake_complete_oauth_login)
-
     app = create_app()
     with TestClient(app, follow_redirects=False) as client:
         response = client.get(
@@ -121,15 +77,13 @@ def test_oauth_callback_consumes_state_sets_cookie_and_redirects(
             params={"code": "oauth-code", "state": "state-value"},
         )
 
-    assert response.status_code == 302
-    assert response.headers["location"] == expected_location
-    assert store.consume_calls == ["state-value"]
-    assert "jippin_session=" in response.headers["set-cookie"]
-    assert "HttpOnly" in response.headers["set-cookie"]
-    assert "SameSite=lax" in response.headers["set-cookie"]
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
+    assert store.consume_calls == []
+    assert "set-cookie" not in response.headers
 
 
-def test_oauth_callback_invalid_state_returns_422(monkeypatch, callback_env):
+def test_oauth_callback_removed_before_state_lookup(monkeypatch, callback_env):
     store = _FakeStateStore(None)
     monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: store)
 
@@ -140,11 +94,12 @@ def test_oauth_callback_invalid_state_returns_422(monkeypatch, callback_env):
             params={"code": "oauth-code", "state": "missing-state"},
         )
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "OAUTH_STATE_INVALID"
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
+    assert store.consume_calls == []
 
 
-def test_oauth_callback_provider_mismatch_returns_422(monkeypatch, callback_env):
+def test_oauth_callback_removed_before_provider_mismatch_check(monkeypatch, callback_env):
     store = _FakeStateStore(
         OAuthStatePayload(
             anonymous_user_id=None,
@@ -163,8 +118,9 @@ def test_oauth_callback_provider_mismatch_returns_422(monkeypatch, callback_env)
             params={"code": "oauth-code", "state": "wrong-provider"},
         )
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "OAUTH_STATE_INVALID"
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
+    assert store.consume_calls == []
 
 
 class _FakeResult:

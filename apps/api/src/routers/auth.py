@@ -57,6 +57,14 @@ logger = get_logger("zippin.auth")
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _legacy_oauth_flow_removed() -> ZippinException:
+    return ZippinException(
+        "Legacy OAuth routes were removed after Supabase Auth cutover.",
+        code="AUTH_LEGACY_FLOW_REMOVED",
+        http_status=410,
+    )
+
+
 @dataclass(frozen=True)
 class _OAuthProviderSettings:
     client_id: str | None
@@ -344,6 +352,7 @@ async def link_sso_account(
     return_url: str | None = Query(default=None),
     mode: Literal["redirect", "json"] = Query(default="redirect"),
 ) -> OAuthStartResponse | RedirectResponse:
+    raise _legacy_oauth_flow_removed()
     claims = read_session_claims(request)
     settings = get_settings()
     provider_settings = _provider_settings(provider, settings)
@@ -409,6 +418,7 @@ async def start_oauth(
     return_url: str | None = Query(default=None),
     mode: Literal["redirect", "json"] = Query(default="redirect"),
 ) -> OAuthStartResponse | RedirectResponse:
+    raise _legacy_oauth_flow_removed()
     settings = get_settings()
     provider_settings = _provider_settings(provider, settings)
     if not provider_settings.client_id or not provider_settings.redirect_uri:
@@ -487,6 +497,7 @@ async def oauth_callback(
     state: str = Query(...),
     id_token: str | None = Query(default=None),
 ) -> RedirectResponse:
+    raise _legacy_oauth_flow_removed()
     settings = get_settings()
     provider_settings = _provider_settings(provider, settings)
     if not provider_settings.client_id or not provider_settings.redirect_uri:

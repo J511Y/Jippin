@@ -21,12 +21,29 @@ alter table if exists public.users
 alter table if exists public.users
   drop constraint if exists fk_users_id_auth_users;
 
+-- Legacy self-auth rows cannot satisfy the new Supabase Auth profile FK unless
+-- their UUID already exists in auth.users. Drop orphan profile/consent rows
+-- before adding validated constraints so the cleanup does not leave permanent
+-- NOT VALID integrity gaps.
+delete from public.terms_consents as terms
+where not exists (
+  select 1
+  from auth.users as auth_user
+  where auth_user.id = terms.user_id
+);
+
+delete from public.users as app_user
+where not exists (
+  select 1
+  from auth.users as auth_user
+  where auth_user.id = app_user.id
+);
+
 alter table if exists public.users
   add constraint fk_users_id_auth_users
   foreign key (id)
   references auth.users (id)
-  on delete cascade
-  not valid;
+  on delete cascade;
 
 alter table if exists public.terms_consents
   drop constraint if exists fk_terms_consents_user_id_auth_users;
@@ -35,7 +52,6 @@ alter table if exists public.terms_consents
   add constraint fk_terms_consents_user_id_auth_users
   foreign key (user_id)
   references auth.users (id)
-  on delete cascade
-  not valid;
+  on delete cascade;
 
 drop type if exists public.external_sso_provider;

@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
 
-from src.auth.providers import google, kakao, naver
 from src.auth.state_store import (
-    OAuthStateBackendUnavailable,
     OAuthStatePayload,
     OAuthStateStore,
 )
@@ -51,20 +48,9 @@ def oauth_env(monkeypatch):
     get_settings.cache_clear()
 
 
-@pytest.mark.parametrize(
-    ("provider", "expected_endpoint", "expected_client_id"),
-    [
-        ("kakao", kakao.AUTHORIZATION_ENDPOINT, "kakao-client"),
-        ("naver", naver.AUTHORIZATION_ENDPOINT, "naver-client"),
-        ("google", google.AUTHORIZATION_ENDPOINT, "google-client"),
-    ],
-)
-def test_oauth_start_json_builds_provider_authorization_url(
-    monkeypatch,
-    oauth_env,
-    provider,
-    expected_endpoint,
-    expected_client_id,
+@pytest.mark.parametrize("provider", ["kakao", "naver", "google"])
+def test_oauth_start_removed_returns_410_without_state_write(
+    monkeypatch, oauth_env, provider
 ):
     store = _FakeStateStore()
     monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: store)
@@ -81,24 +67,12 @@ def test_oauth_start_json_builds_provider_authorization_url(
             },
         )
 
-    assert response.status_code == 200
-    authorization_url = response.json()["authorization_url"]
-    parsed = urlparse(authorization_url)
-    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == expected_endpoint
-    query = parse_qs(parsed.query)
-    assert query["client_id"] == [expected_client_id]
-    assert query["response_type"] == ["code"]
-    assert query["state"] == [store.put_calls[0][0]]
-    assert query["nonce"] == [store.put_calls[0][1].nonce]
-    assert len(store.put_calls[0][0]) >= 64
-    assert store.put_calls[0][1].anonymous_user_id == anonymous_user_id
-    assert store.put_calls[0][1].provider == provider
-    assert store.put_calls[0][1].return_url == (
-        "http://localhost:3000/auth/success?from=login"
-    )
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
+    assert store.put_calls == []
 
 
-def test_oauth_start_defaults_to_redirect(monkeypatch, oauth_env):
+def test_oauth_start_removed_before_redirect_mode_state_write(monkeypatch, oauth_env):
     store = _FakeStateStore()
     monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: store)
 
@@ -106,8 +80,10 @@ def test_oauth_start_defaults_to_redirect(monkeypatch, oauth_env):
     with TestClient(app, follow_redirects=False) as client:
         response = client.get("/auth/google/start")
 
-    assert response.status_code == 302
-    assert response.headers["location"].startswith(google.AUTHORIZATION_ENDPOINT)
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
+    assert "location" not in response.headers
+    assert store.put_calls == []
 
 
 def test_oauth_start_invalid_provider_returns_422(oauth_env):
@@ -119,7 +95,7 @@ def test_oauth_start_invalid_provider_returns_422(oauth_env):
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
-def test_oauth_start_rejects_unapproved_return_url(monkeypatch, oauth_env):
+def test_oauth_start_removed_before_return_url_validation(monkeypatch, oauth_env):
     store = _FakeStateStore()
     monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: store)
 
@@ -133,12 +109,12 @@ def test_oauth_start_rejects_unapproved_return_url(monkeypatch, oauth_env):
             },
         )
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "RETURN_URL_NOT_ALLOWED"
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
     assert store.put_calls == []
 
 
-def test_oauth_start_ignores_invalid_anonymous_user_id(monkeypatch, oauth_env):
+def test_oauth_start_removed_before_anonymous_id_parsing(monkeypatch, oauth_env):
     store = _FakeStateStore()
     monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: store)
 
@@ -149,23 +125,9 @@ def test_oauth_start_ignores_invalid_anonymous_user_id(monkeypatch, oauth_env):
             params={"mode": "json", "anonymous_user_id": "not-a-uuid"},
         )
 
-    assert response.status_code == 200
-    assert store.put_calls[0][1].anonymous_user_id is None
-
-
-def test_oauth_start_redis_failure_returns_503(monkeypatch, oauth_env):
-    class FailingStore:
-        async def put(self, state: str, payload: OAuthStatePayload) -> bool:
-            raise OAuthStateBackendUnavailable("OAuth state backend is unavailable.")
-
-    monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: FailingStore())
-
-    app = create_app()
-    with TestClient(app) as client:
-        response = client.get("/auth/google/start", params={"mode": "json"})
-
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "OAUTH_STATE_BACKEND_UNAVAILABLE"
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
+    assert store.put_calls == []
 
 
 class _FakeRedis:

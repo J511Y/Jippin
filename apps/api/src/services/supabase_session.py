@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import httpx
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from jose import ExpiredSignatureError, JWTError, jwt
 
 from ..auth.jwks import get_supabase_jwks
@@ -118,7 +119,12 @@ async def resolve_jippin_user_for_supabase(
     except ValueError as exc:
         raise _invalid_token("Supabase access token subject must be a UUID.") from exc
 
-    async with get_engine().connect() as conn:
+    async with get_engine().begin() as conn:
+        await conn.execute(
+            pg_insert(User)
+            .values(id=supabase_user_id)
+            .on_conflict_do_nothing(index_elements=[User.id])
+        )
         row = await conn.execute(
             sa.select(User.id).where(
                 User.id == supabase_user_id,

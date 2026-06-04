@@ -8,6 +8,8 @@
 - 정본 종속: `docs/adr/0003-anon-user-and-sso.md` (익명 + OAuth 정책), `docs/brief/CEO_PROJECT_BRIEF.md`, `AGENTS.md §4.4` (시크릿 봉인), **CMP-572 CEO 결정 — MVP linking 정책** (아래 §0.0 callout).
 - 비목표: 실제 Supabase project URL / `anon` key / `service_role` key / OAuth client secret 의 본 문서 기재. 본 문서는 **변수명과 보관 위치만** 명시한다.
 
+> **CMP-604 update (2026-06-04).** Backend/Auth post-cutover cleanup 이 완료되어 API legacy 자체 OAuth entrypoint (`GET /auth/{provider}/start`, `GET /auth/callback/{provider}`, `POST /auth/sso-accounts/{provider}/link`) 는 route entrypoint 에서 즉시 `410 AUTH_LEGACY_FLOW_REMOVED` 를 반환한다. `POST /auth/anonymous-users` 도 동일하게 폐기 상태다. OAuth/linking URL 생성과 code exchange 는 Supabase Auth / `linkIdentity()` 가 owner 이며 FastAPI 는 provider config 조회, Redis state write, provider token exchange 를 수행하지 않는다.
+
 ---
 
 ## 0.0 MVP linking 정책 (CMP-572 CEO 결정 — 2026-06-01)
@@ -63,7 +65,7 @@
 | `apps/web/lib/providers.tsx` | React Query Provider. | **확장.** Supabase Session Provider 를 wrap. |
 | `apps/web/.env.example` | `NEXT_PUBLIC_API_BASE_URL`, success/failure URL, `AUTH_COOKIE_NAME`. | **확장.** Supabase env 추가 (§3). `AUTH_COOKIE_NAME` 은 Supabase 의 자체 쿠키 이름 정책으로 대체되며 표기 변경. |
 
-> **추가 폐기 후보 (API 측 — Backend/Auth 트랙 owner).** `POST /auth/anonymous-users`, `GET /auth/{provider}/start`, `GET /auth/callback/{provider}`, `POST /auth/refresh`, `POST /auth/logout`, `POST /auth/sso-accounts/{provider}/link`. Backend 트랙이 ADR-0003 의 OAuth 핸들러를 Supabase 로 대체하는 별도 이슈에서 판단한다. **본 웹 트랙은 폐기를 강제하지 않는다.** 단지 웹이 더 이상 호출하지 않을 뿐이며, API 측 cleanup 일정은 트랙 간 합의 후 별도 이슈로 끊는다.
+> **API 측 폐기 상태 (CMP-604).** `POST /auth/anonymous-users`, `GET /auth/{provider}/start`, `GET /auth/callback/{provider}`, `POST /auth/sso-accounts/{provider}/link` 는 FastAPI route entrypoint 에서 즉시 `410 AUTH_LEGACY_FLOW_REMOVED` 를 반환한다. Supabase Auth 공식 OAuth / `linkIdentity()` 가 provider redirect 와 identity linking 을 소유한다. `/auth/logout` 은 backend cookie cleanup 호환 엔드포인트로만 남고, 자체 OAuth/JWT refresh 흐름은 정본이 아니다.
 
 ---
 
@@ -1128,7 +1130,7 @@ export const config = { matcher: ['/app/:path*'] };
 - 디자인 SSOT (`docs/brand/...`) 의 색상 / 타이포그래피.
 - `/auth/success` · `/auth/failure` 페이지 자체 카피 — 라우팅 흐름만 검증되면 다음 디자인 트랙에서 다듬는다.
 - 실제 Supabase 콘솔 세팅 / Custom Provider 등록 / redirect URL 화이트리스트.
-- API 측 `/auth/*` 라우트 정리. 웹이 호출하지 않게 되는 시점부터의 cleanup 일정은 Backend/Auth 트랙 합의 후 별도 이슈로 끊는다.
+- API 측 자체 OAuth route 구현. CMP-604 이후 `GET /auth/{provider}/start`, `GET /auth/callback/{provider}`, `POST /auth/sso-accounts/{provider}/link` 는 즉시 410 상태이며, 웹은 Supabase Auth / `linkIdentity()` 경로만 사용한다.
 
 ---
 
@@ -1136,7 +1138,7 @@ export const config = { matcher: ['/app/:path*'] };
 
 | 의존 | 무엇 | 본 트랙이 가정하는 것 |
 |---|---|---|
-| **Backend/Auth — Supabase JWT 검증 + anonymous gating** | `apps/api` 가 `Authorization: Bearer <supabase access_token>` 헤더에서 JWT 를 검증 (JWKS endpoint or HS256 shared secret) 하고 `user.id` + `is_anonymous` claim 을 신뢰. conversion-only 라우트에 §4.3.2 의 403 계약을 적용. | `users.id` 가 Supabase user `id` 와 동일하거나, 매핑 테이블로 1:1 매핑. ADR-0003 의 `external_sso_accounts` 가 Supabase `auth.users` 와 어떻게 정렬되는지는 Backend/Auth 트랙이 결정. |
+| **Backend/Auth — Supabase JWT 검증 + anonymous gating** | `apps/api` 가 `Authorization: Bearer <supabase access_token>` 헤더에서 JWT 를 검증 (JWKS endpoint or HS256 shared secret) 하고 `user.id` + `is_anonymous` claim 을 신뢰. conversion-only 라우트에 §4.3.2 의 403 계약을 적용. | CMP-604 이후 `public.users.id = auth.users.id` 가 봉인이다. Session bridge 는 유효한 non-anonymous Supabase token 의 `sub` 로 profile row 를 안전하게 `ON CONFLICT DO NOTHING` upsert 한 뒤 active profile 을 조회한다. |
 | **Backend/Auth — `POST /auth/anon-merge-intents` 라우트** | §4.2.2 fallback ladder 의 익명 데이터 이전 큐. 멱등 + 단일 트랜잭션 ownership 이전 + audit log. | 본 트랙은 호출 계약과 payload 만 봉인. |
 | **Backend/Auth — `POST /auth/terms/kakao-sync` 라우트** | §4.5.2 경로 (a) 의 callback-side audit insert. payload 는 `provider_access_token: session.provider_token` 로 봉인 — 백엔드가 그 access token 으로 Kakao `/v2/user/scopes` + `/v2/user/me` 재조회 후 `terms_consents(source='kakao_sync')` 단일 트랜잭션 insert. **`id_token` fallback 금지** (§4.5.2 review item 4 / round-3 봉인). | 콜백 실패 대비 reconcile 잡도 owner. |
 | **ADR-0003 supersede (=ADR-0004 가칭)** | ADR-0003 의 "익명 식별자 = localStorage.jippin_anonymous_user_id" / "POST /auth/anonymous-users 발급 라우트" 결정을 supersede 하는 ADR-0004 신규 작성 + Accepted. | **본 runbook 의 Phase 2 작업 (localStorage 키 삭제, `lib/anonymous-user.ts` 삭제, dual-write 종료) 은 ADR-0004 Accepted 또는 동등한 supersede 자식 이슈 완료 전까지 코드/PR 에서 수행하지 않는다.** Phase 1 PR (= 본 PR) 은 ADR-0003 정본을 유지한다. |
@@ -1190,7 +1192,7 @@ export const config = { matcher: ['/app/:path*'] };
 |---|---|---|---|
 | **0 — 설계 봉인** | (현재) | 본 문서, env 변수명, SSOT 디렉터리 구조, 흐름 설계 | 본 PR 머지 |
 | **1 — Supabase adapter 도입 + dual-write** | Phase 0 종료 + Supabase 콘솔 세팅 + 라이브 키 입력 (§8) + Backend/Auth 트랙의 JWT 검증 라우트 + `POST /auth/anon-merge-intents` + `POST /auth/terms/kakao-sync` 라우트 완료 | • `lib/supabase/*` 추가 · `/auth/callback` Route Handler 신설 (§4.7)<br>• `signInAnonymously` + 기존 `getOrCreateAnonymousUserId()` 를 **둘 다** 호출 (§4.1 dual-write)<br>• axios 인터셉터: `Authorization: Bearer <supabase>` + `x-jippin-anon-id: <legacy>` 헤더 동시 전송<br>• login-buttons → `linkIdentity` / `signInWithOAuth` 분기 + fallback ladder (§4.2)<br>• `/auth/test` 페이지가 Supabase + legacy 양쪽 ID 를 표시 (정합 검증)<br>• proxy.ts 가 Supabase 세션 + `is_anonymous` 가드로 전환 (§4.8)<br>• `lib/auth-token.ts` 는 호출자 제거하되 파일 유지<br>• `lib/anonymous-user.ts` 는 유지 (dual-write 책임)<br>• Kakao Sync audit insert (§4.5.2 경로 (a)) 활성화 | ADR-0004 Accepted (또는 ADR-0003 supersede 자식 이슈 완료) |
-| **2 — Legacy 폐기** | ADR-0004 Accepted | • `lib/anonymous-user.ts` 삭제<br>• `localStorage.jippin_anonymous_user_id` 폐기<br>• axios 의 `x-jippin-anon-id` 헤더 제거<br>• `lib/auth-token.ts` 파일 삭제<br>• `.env.example` 의 `AUTH_COOKIE_NAME` 주석 라인 제거<br>• `/auth/test` 에서 legacy 표시 라인 제거<br>• ADR-0003 §2 의 익명 발급 라우트 호출 코드 일괄 제거<br>• backend 측 `anonymous_users` 테이블 / `POST /auth/anonymous-users` cleanup 은 Backend/Auth 트랙 별도 이슈로 끊는다 (web 트랙 비범위) | Live smoke 통과 (`[SUPABASE][WEB] live wiring + smoke` 자식 이슈) |
+| **2 — Legacy 폐기** | ADR-0004 Accepted / CMP-604 cleanup | • `lib/anonymous-user.ts` 삭제<br>• `localStorage.jippin_anonymous_user_id` 폐기<br>• axios 의 `x-jippin-anon-id` 헤더 제거<br>• `lib/auth-token.ts` 파일 삭제<br>• `.env.example` 의 `AUTH_COOKIE_NAME` 주석 라인 제거<br>• `/auth/test` 에서 legacy 표시 라인 제거<br>• ADR-0003 §2 의 익명 발급 라우트 호출 코드 일괄 제거<br>• backend 측 `anonymous_users` table 과 자체 OAuth/link route 는 CMP-604 에서 폐기. API entrypoint 는 즉시 410 반환. | Live smoke 통과 (`[SUPABASE][WEB] live wiring + smoke` 자식 이슈) |
 
 > **위반 케이스 — 즉시 차단.** ADR-0004 Accepted 전에 Phase 2 변경 (예: `localStorage.jippin_anonymous_user_id` 키 삭제, `POST /auth/anonymous-users` 호출 제거) 을 포함한 PR 은 **본 runbook 위반** 으로 reject 한다.
 

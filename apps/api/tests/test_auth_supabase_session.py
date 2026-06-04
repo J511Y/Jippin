@@ -327,7 +327,7 @@ class _FakeScalarResult:
         return self.value
 
 
-class _FakeConnect:
+class _FakeBegin:
     def __init__(self, conn):
         self.conn = conn
 
@@ -342,8 +342,8 @@ class _FakeEngine:
     def __init__(self, conn):
         self.conn = conn
 
-    def connect(self):
-        return _FakeConnect(self.conn)
+    def begin(self):
+        return _FakeBegin(self.conn)
 
 
 class _FakeProfileConnection:
@@ -354,16 +354,19 @@ class _FakeProfileConnection:
     async def execute(self, statement):
         sql = str(statement)
         self.statements.append(sql)
+        assert "auth_identities" not in sql
+        assert "lower(users.email)" not in sql
+        if sql.startswith("INSERT INTO users"):
+            assert "ON CONFLICT (id) DO NOTHING" in sql
+            return _FakeScalarResult(None)
         assert "FROM users" in sql
         assert "users.id =" in sql
         assert "users.status" in sql
-        assert "auth_identities" not in sql
-        assert "lower(users.email)" not in sql
         return _FakeScalarResult(self.value)
 
 
 @pytest.mark.asyncio
-async def test_supabase_identity_lookup_uses_supabase_subject_uuid(monkeypatch):
+async def test_supabase_identity_lookup_upserts_profile_from_subject_uuid(monkeypatch):
     user_id = uuid.uuid4()
     conn = _FakeProfileConnection(user_id)
     monkeypatch.setattr(bridge_service, "get_engine", lambda: _FakeEngine(conn))
@@ -374,6 +377,9 @@ async def test_supabase_identity_lookup_uses_supabase_subject_uuid(monkeypatch):
     )
 
     assert result.user_id == user_id
+    assert len(conn.statements) == 2
+    assert conn.statements[0].startswith("INSERT INTO users")
+    assert conn.statements[1].startswith("SELECT users.id")
 
 
 @pytest.mark.asyncio
