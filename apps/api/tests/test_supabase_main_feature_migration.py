@@ -37,7 +37,10 @@ def test_phase_a_supabase_migration_uses_auth_users_ownership() -> None:
     sql = migration_sql()
 
     assert "references auth.users (id)" in sql
-    assert "sessions (\n  id uuid not null default gen_random_uuid(),\n  user_id uuid not null" in sql
+    assert (
+        "sessions (\n  id uuid not null default gen_random_uuid(),\n  user_id uuid not null"
+        in sql
+    )
     assert "floorplan_uploads (\n  id uuid not null default gen_random_uuid()," in sql
     assert "user_id uuid not null" in sql
 

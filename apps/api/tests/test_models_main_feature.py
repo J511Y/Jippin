@@ -56,13 +56,16 @@ def test_floorplan_uploads_and_assets_do_not_shadow_catalog_or_signed_urls() -> 
     upload_table = FloorplanUpload.__table__
     asset_table = FloorplanAsset.__table__
 
-    assert next(iter(upload_table.c.session_id.foreign_keys)).target_fullname == "sessions.id"
-    assert next(iter(upload_table.c.original_asset_id.foreign_keys)).target_fullname == (
-        "floorplan_assets.id"
+    assert (
+        next(iter(upload_table.c.session_id.foreign_keys)).target_fullname
+        == "sessions.id"
     )
-    assert next(iter(asset_table.c.floorplan_upload_id.foreign_keys)).target_fullname == (
-        "floorplan_uploads.id"
-    )
+    assert next(
+        iter(upload_table.c.original_asset_id.foreign_keys)
+    ).target_fullname == ("floorplan_assets.id")
+    assert next(
+        iter(asset_table.c.floorplan_upload_id.foreign_keys)
+    ).target_fullname == ("floorplan_uploads.id")
     assert {"signed_url", "presigned_url", "access_token", "secret"}.isdisjoint(
         asset_table.c.keys()
     )
@@ -81,7 +84,9 @@ def test_floorplan_candidates_keep_presented_snapshot_contract() -> None:
     assert unique_constraints[
         "uq_floorplan_candidates_session_id_lookup_revision_floorplan_id"
     ] == ("session_id", "lookup_revision", "floorplan_id")
-    assert unique_constraints["uq_floorplan_candidates_session_id_lookup_revision_rank"] == (
+    assert unique_constraints[
+        "uq_floorplan_candidates_session_id_lookup_revision_rank"
+    ] == (
         "session_id",
         "lookup_revision",
         "rank",
@@ -98,7 +103,10 @@ def test_chat_tool_calls_store_redacted_payload_surfaces() -> None:
     assert isinstance(table.c.output.type, postgresql.JSONB)
     assert "output_summary" in table.c
     assert "duration_ms" in table.c
-    assert next(iter(table.c.message_id.foreign_keys)).target_fullname == "chat_messages.id"
+    assert (
+        next(iter(table.c.message_id.foreign_keys)).target_fullname
+        == "chat_messages.id"
+    )
 
 
 def test_phase_a_status_values_use_text_check_constraints() -> None:
@@ -139,9 +147,7 @@ def test_all_phase_a_foreign_key_columns_are_indexed() -> None:
     for table_name in PHASE_A_TABLES:
         table = Base.metadata.tables[table_name]
         indexed_columns = {
-            column.name
-            for index in table.indexes
-            for column in index.columns
+            column.name for index in table.indexes for column in index.columns
         }
         unique_columns = {
             column.name
@@ -152,6 +158,6 @@ def test_all_phase_a_foreign_key_columns_are_indexed() -> None:
 
         for column in table.c:
             if column.foreign_keys:
-                assert column.name in indexed_columns | unique_columns, (
-                    f"{table_name}.{column.name} is a foreign key without an index"
-                )
+                assert (
+                    column.name in indexed_columns | unique_columns
+                ), f"{table_name}.{column.name} is a foreign key without an index"
