@@ -27,18 +27,44 @@ from .auth import (  # noqa: E402
     TermsConsent,
     User,
 )
+from .main_feature import (  # noqa: E402
+    ChatMessage,
+    ChatToolCall,
+    ExternalSyncRecord,
+    Floorplan,
+    FloorplanAsset,
+    FloorplanCandidate,
+    FloorplanUpload,
+    ProcessingJob,
+    ScheduledTaskRun,
+    Session,
+    SessionAddress,
+    WebhookDelivery,
+)
 
 from .request_log import RequestLog  # noqa: E402
 
 __all__ = [
     "AuditMixin",
     "Base",
+    "ChatMessage",
+    "ChatToolCall",
     "CreatedAtMixin",
     "CreatedByMixin",
+    "ExternalSyncRecord",
+    "Floorplan",
+    "FloorplanAsset",
+    "FloorplanCandidate",
+    "FloorplanUpload",
     "NAMING_CONVENTION",
+    "ProcessingJob",
     "RequestLog",
+    "ScheduledTaskRun",
+    "Session",
+    "SessionAddress",
     "TermsConsent",
     "TimestampMixin",
     "User",
+    "WebhookDelivery",
     "utc_now",
 ]
