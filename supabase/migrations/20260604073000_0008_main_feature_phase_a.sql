@@ -452,6 +452,28 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
+  if new.selected_floorplan_id is not null
+    and new.selected_floorplan_upload_id is not null
+  then
+    raise exception 'sessions must select exactly one floorplan source'
+      using errcode = '23514';
+  end if;
+
+  if new.status in (
+    'analyzing',
+    'awaiting_overlay',
+    'collecting_info',
+    'ready_for_rule',
+    'report_ready',
+    'handoff'
+  )
+    and new.selected_floorplan_id is null
+    and new.selected_floorplan_upload_id is null
+  then
+    raise exception 'sessions entering analysis must select a floorplan source'
+      using errcode = '23514';
+  end if;
+
   if new.address_id is not null and not exists (
     select 1
     from public.session_addresses as sa
@@ -553,6 +575,7 @@ $$;
 
 create trigger trg_sessions_reference_scope
   before insert or update of
+    status,
     user_id,
     address_id,
     selected_floorplan_id,
@@ -618,7 +641,14 @@ set search_path = public, pg_temp
 as $$
 begin
   if current_role = 'authenticated'
-    and old.status in ('ready_for_rule', 'report_ready', 'handoff')
+    and old.status in (
+      'analyzing',
+      'awaiting_overlay',
+      'collecting_info',
+      'ready_for_rule',
+      'report_ready',
+      'handoff'
+    )
     and (
       new.address_id is distinct from old.address_id
       or new.selected_floorplan_id is distinct from old.selected_floorplan_id
@@ -750,6 +780,44 @@ create trigger trg_session_addresses_active_client_guard
   for each row
   execute function public.prevent_active_session_address_client_mutation();
 
+create or replace function public.prevent_active_session_address_client_delete()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and exists (
+      select 1
+      from public.sessions as s
+      where s.address_id = old.id
+        or (
+          s.id = old.session_id
+          and s.status in (
+            'analyzing',
+            'awaiting_overlay',
+            'collecting_info',
+            'ready_for_rule',
+            'report_ready',
+            'handoff'
+          )
+        )
+    )
+  then
+    raise exception 'authenticated clients cannot delete current or active session addresses'
+      using errcode = '42501';
+  end if;
+
+  return old;
+end;
+$$;
+
+create trigger trg_session_addresses_active_delete_client_guard
+  before delete
+  on public.session_addresses
+  for each row
+  execute function public.prevent_active_session_address_client_delete();
+
 create or replace function public.prevent_floorplan_client_catalog_promotion()
 returns trigger
 language plpgsql
@@ -792,6 +860,52 @@ create trigger trg_floorplans_client_catalog_promotion_guard
   on public.floorplans
   for each row
   execute function public.prevent_floorplan_client_catalog_promotion();
+
+create or replace function public.prevent_selected_floorplan_client_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and exists (
+      select 1
+      from public.sessions as s
+      where s.selected_floorplan_id = old.id
+        and s.status in (
+          'analyzing',
+          'awaiting_overlay',
+          'collecting_info',
+          'ready_for_rule',
+          'report_ready',
+          'handoff'
+        )
+    )
+  then
+    raise exception 'authenticated clients cannot mutate selected floorplans after analysis starts'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_floorplans_selected_client_guard
+  before update of
+    source,
+    apartment_name,
+    building_dong,
+    size_type,
+    exclusive_area_m2,
+    layout_family,
+    address_fingerprint,
+    promoted_from_upload_id,
+    metadata,
+    quality_status,
+    visibility
+  on public.floorplans
+  for each row
+  execute function public.prevent_selected_floorplan_client_mutation();
 
 create or replace function public.enforce_floorplan_upload_original_asset_scope()
 returns trigger
@@ -840,6 +954,9 @@ begin
       raise exception 'authenticated clients cannot set service-controlled upload status'
         using errcode = '42501';
     end if;
+  elsif new.session_id is distinct from old.session_id then
+    raise exception 'authenticated clients cannot move floorplan uploads between sessions'
+      using errcode = '42501';
   elsif old.status not in ('uploaded', 'scan_pending') then
     raise exception 'authenticated clients cannot mutate service-controlled upload rows'
       using errcode = '42501';
@@ -1391,3 +1508,25 @@ create policy chat_tool_calls_session_owner_read
         and s.user_id = (select auth.uid())
     )
   );
+
+grant usage on schema public to authenticated;
+
+grant select, insert, update, delete
+  on public.sessions,
+     public.session_addresses,
+     public.floorplans,
+     public.floorplan_assets
+  to authenticated;
+
+grant select, insert, update
+  on public.floorplan_uploads
+  to authenticated;
+
+grant select, insert
+  on public.chat_messages
+  to authenticated;
+
+grant select
+  on public.floorplan_candidates,
+     public.chat_tool_calls
+  to authenticated;

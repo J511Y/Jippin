@@ -65,6 +65,23 @@ def test_phase_a_supabase_migration_enables_rls_for_user_owned_tables() -> None:
     assert "(select auth.uid())" in sql
 
 
+def test_phase_a_supabase_migration_grants_authenticated_api_access() -> None:
+    sql = migration_sql()
+
+    assert "grant usage on schema public to authenticated;" in sql
+    assert "grant select, insert, update, delete" in sql
+    assert "public.sessions" in sql
+    assert "public.session_addresses" in sql
+    assert "public.floorplans" in sql
+    assert "public.floorplan_assets" in sql
+    assert "grant select, insert, update\n  on public.floorplan_uploads" in sql
+    assert "grant select, insert\n  on public.chat_messages" in sql
+    assert "grant select\n  on public.floorplan_candidates" in sql
+    assert "public.chat_tool_calls\n  to authenticated" in sql
+    assert "grant insert\n  on public.chat_tool_calls" not in sql
+    assert "grant update\n  on public.chat_tool_calls" not in sql
+
+
 def test_public_catalog_rls_requires_verified_floorplans() -> None:
     sql = migration_sql()
 
@@ -113,6 +130,8 @@ def test_sessions_reference_pointers_are_guarded_by_trigger() -> None:
     assert "create or replace function public.enforce_session_reference_scope()" in sql
     assert "create trigger trg_sessions_reference_scope" in sql
     assert "before insert or update of" in sql
+    assert "sessions must select exactly one floorplan source" in sql
+    assert "sessions entering analysis must select a floorplan source" in sql
     assert "sa.session_id = new.id" in sql
     assert "u.session_id = new.id" in sql
     assert "a.session_id = new.id" in sql
@@ -166,7 +185,12 @@ def test_completed_session_input_pointers_are_service_controlled() -> None:
         in sql
     )
     assert "create trigger trg_sessions_completed_pointer_client_guard" in sql
-    assert "old.status in ('ready_for_rule', 'report_ready', 'handoff')" in sql
+    assert "'analyzing'" in sql
+    assert "'awaiting_overlay'" in sql
+    assert "'collecting_info'" in sql
+    assert "'ready_for_rule'" in sql
+    assert "'report_ready'" in sql
+    assert "'handoff'" in sql
     assert "new.address_id is distinct from old.address_id" in sql
     assert "new.selected_floorplan_id is distinct from old.selected_floorplan_id" in sql
     assert (
@@ -266,6 +290,21 @@ def test_current_address_is_frozen_after_analysis_starts() -> None:
     )
 
 
+def test_current_or_active_address_delete_is_service_controlled() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_active_session_address_client_delete()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_active_delete_client_guard" in sql
+    assert "s.address_id = old.id" in sql
+    assert "s.id = old.session_id" in sql
+    assert (
+        "authenticated clients cannot delete current or active session addresses" in sql
+    )
+
+
 def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
     sql = migration_sql()
 
@@ -289,6 +328,8 @@ def test_floorplan_upload_status_is_service_controlled_after_initial_write() -> 
     )
     assert "create trigger trg_floorplan_uploads_client_service_guard" in sql
     assert "new.status not in ('uploaded', 'scan_pending')" in sql
+    assert "new.session_id is distinct from old.session_id" in sql
+    assert "authenticated clients cannot move floorplan uploads between sessions" in sql
     assert "old.status not in ('uploaded', 'scan_pending')" in sql
     assert "new.status is distinct from old.status" in sql
     assert "authenticated clients cannot mutate service-controlled upload rows" in sql
@@ -388,6 +429,22 @@ def test_catalog_verification_is_not_user_mutable() -> None:
         )
         assert "quality_status = 'verified'" not in mutation_policy
         assert "visibility = 'public_catalog'" not in mutation_policy
+
+
+def test_selected_floorplan_metadata_is_frozen_after_analysis_starts() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_selected_floorplan_client_mutation()"
+        in sql
+    )
+    assert "create trigger trg_floorplans_selected_client_guard" in sql
+    assert "s.selected_floorplan_id = old.id" in sql
+    assert "metadata" in sql
+    assert (
+        "authenticated clients cannot mutate selected floorplans after analysis starts"
+        in sql
+    )
 
 
 def test_chat_tool_call_message_is_same_session() -> None:
