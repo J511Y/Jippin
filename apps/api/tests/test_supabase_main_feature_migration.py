@@ -88,7 +88,7 @@ def test_public_catalog_rls_requires_verified_floorplans() -> None:
 
     assert "visibility = 'public_catalog'\n      and quality_status = 'verified'" in sql
     assert (
-        "f.visibility = 'public_catalog'\n            and f.quality_status = 'verified'"
+        "f.visibility = 'public_catalog'\n          and f.quality_status = 'verified'"
         in sql
     )
 
@@ -102,9 +102,19 @@ def test_floorplan_asset_public_catalog_read_is_select_only() -> None:
 
     assert "\n  for select\n" in read_policy
     assert (
-        "f.visibility = 'public_catalog'\n            and f.quality_status = 'verified'"
+        "f.visibility = 'public_catalog'\n          and f.quality_status = 'verified'"
         in read_policy
     )
+    assert "kind in ('thumbnail', 'preview')" in read_policy
+    for unsafe_kind in (
+        "'ocr_debug'",
+        "'segmentation_mask'",
+        "'overlay'",
+        "'report_pdf'",
+        "'report_image'",
+        "'masked'",
+    ):
+        assert unsafe_kind not in read_policy
     assert "from public.floorplan_uploads as u" in read_policy
     assert "where u.id = floorplan_upload_id" in read_policy
     assert "and u.user_id = (select auth.uid())" in read_policy
@@ -400,6 +410,9 @@ def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
     assert "new.status in (\n    'scan_pending'," in sql
     assert "and new.original_asset_id is null" in sql
     assert "floorplan_uploads queue-visible status requires an original asset" in sql
+    assert "new.status in (\n    'ready_for_processing',\n    'processing',\n" in sql
+    assert "and a.scan_status = 'clean'" in sql
+    assert "floorplan_uploads processing status requires a clean original asset" in sql
 
 
 def test_floorplan_upload_status_is_service_controlled_after_initial_write() -> None:

@@ -1128,6 +1128,27 @@ begin
       using errcode = '23514';
   end if;
 
+  if new.status in (
+    'ready_for_processing',
+    'processing',
+    'processed',
+    'promoted_to_catalog'
+  )
+    and not exists (
+      select 1
+      from public.floorplan_assets as a
+      where a.id = new.original_asset_id
+        and a.floorplan_upload_id = new.id
+        and a.session_id = new.session_id
+        and a.owner_user_id = new.user_id
+        and a.kind = 'original'
+        and a.scan_status = 'clean'
+    )
+  then
+    raise exception 'floorplan_uploads processing status requires a clean original asset'
+      using errcode = '23514';
+  end if;
+
   return new;
 end;
 $$;
@@ -1620,12 +1641,16 @@ create policy floorplan_assets_owner_or_session_read
       select 1
       from public.floorplans as f
       where f.id = floorplan_id
-        and (
-          (
-            f.visibility = 'public_catalog'
-            and f.quality_status = 'verified'
-          )
-          or f.created_by = (select auth.uid())
+        and f.created_by = (select auth.uid())
+    )
+    or (
+      kind in ('thumbnail', 'preview')
+      and exists (
+        select 1
+        from public.floorplans as f
+        where f.id = floorplan_id
+          and f.visibility = 'public_catalog'
+          and f.quality_status = 'verified'
         )
     )
   );
