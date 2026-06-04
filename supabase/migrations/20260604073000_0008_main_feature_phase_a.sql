@@ -918,6 +918,7 @@ begin
     select 1
     from public.floorplan_assets as a
     where a.id = new.original_asset_id
+      and a.floorplan_upload_id = new.id
       and a.session_id = new.session_id
       and a.owner_user_id = new.user_id
       and a.kind = 'original'
@@ -1003,6 +1004,15 @@ begin
       or new.owner_user_id is distinct from old.owner_user_id
       or new.floorplan_upload_id is distinct from old.floorplan_upload_id
       or new.floorplan_id is distinct from old.floorplan_id
+      or new.storage_provider is distinct from old.storage_provider
+      or new.bucket is distinct from old.bucket
+      or new.object_key is distinct from old.object_key
+      or new.content_type is distinct from old.content_type
+      or new.byte_size is distinct from old.byte_size
+      or new.sha256_hex is distinct from old.sha256_hex
+      or new.width_px is distinct from old.width_px
+      or new.height_px is distinct from old.height_px
+      or new.page_count is distinct from old.page_count
     then
       raise exception 'authenticated clients cannot mutate referenced original asset invariants'
         using errcode = '42501';
@@ -1032,10 +1042,69 @@ create trigger trg_floorplan_assets_referenced_original_client_guard
     session_id,
     owner_user_id,
     kind,
+    storage_provider,
+    bucket,
+    object_key,
+    content_type,
+    byte_size,
+    sha256_hex,
+    width_px,
+    height_px,
+    page_count,
     scan_status
   on public.floorplan_assets
   for each row
   execute function public.prevent_referenced_original_asset_client_mutation();
+
+create or replace function public.prevent_selected_asset_client_metadata_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and exists (
+      select 1
+      from public.sessions as s
+      where s.selected_floorplan_asset_id = old.id
+        and s.status in (
+          'analyzing',
+          'awaiting_overlay',
+          'collecting_info',
+          'ready_for_rule',
+          'report_ready',
+          'handoff'
+        )
+    )
+  then
+    raise exception 'authenticated clients cannot mutate selected asset metadata after analysis starts'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_floorplan_assets_selected_metadata_client_guard
+  before update of
+    floorplan_id,
+    floorplan_upload_id,
+    session_id,
+    owner_user_id,
+    kind,
+    storage_provider,
+    bucket,
+    object_key,
+    content_type,
+    byte_size,
+    sha256_hex,
+    width_px,
+    height_px,
+    page_count,
+    scan_status
+  on public.floorplan_assets
+  for each row
+  execute function public.prevent_selected_asset_client_metadata_mutation();
 
 create or replace function public.prevent_floorplan_asset_mixed_parent_scope()
 returns trigger
@@ -1268,6 +1337,12 @@ create policy floorplan_assets_owner_or_session_read
       from public.sessions as s
       where s.id = session_id
         and s.user_id = (select auth.uid())
+    )
+    or exists (
+      select 1
+      from public.floorplan_uploads as u
+      where u.id = floorplan_upload_id
+        and u.user_id = (select auth.uid())
     )
     or exists (
       select 1

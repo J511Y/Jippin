@@ -104,6 +104,9 @@ def test_floorplan_asset_public_catalog_read_is_select_only() -> None:
         "f.visibility = 'public_catalog'\n            and f.quality_status = 'verified'"
         in read_policy
     )
+    assert "from public.floorplan_uploads as u" in read_policy
+    assert "where u.id = floorplan_upload_id" in read_policy
+    assert "and u.user_id = (select auth.uid())" in read_policy
     assert "create policy floorplan_assets_owner_or_session_all" not in sql
 
     assert "\n  for insert\n" in insert_policy
@@ -314,6 +317,7 @@ def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
     )
     assert "create trigger trg_floorplan_uploads_original_asset_scope" in sql
     assert "a.id = new.original_asset_id" in sql
+    assert "a.floorplan_upload_id = new.id" in sql
     assert "a.session_id = new.session_id" in sql
     assert "a.owner_user_id = new.user_id" in sql
     assert "a.kind = 'original'" in sql
@@ -509,11 +513,52 @@ def test_referenced_original_asset_invariants_are_client_immutable() -> None:
     assert "new.owner_user_id is distinct from old.owner_user_id" in sql
     assert "new.floorplan_upload_id is distinct from old.floorplan_upload_id" in sql
     assert "new.floorplan_id is distinct from old.floorplan_id" in sql
+    assert "new.storage_provider is distinct from old.storage_provider" in sql
+    assert "new.bucket is distinct from old.bucket" in sql
+    assert "new.object_key is distinct from old.object_key" in sql
+    assert "new.content_type is distinct from old.content_type" in sql
+    assert "new.byte_size is distinct from old.byte_size" in sql
+    assert "new.sha256_hex is distinct from old.sha256_hex" in sql
+    assert "new.width_px is distinct from old.width_px" in sql
+    assert "new.height_px is distinct from old.height_px" in sql
+    assert "new.page_count is distinct from old.page_count" in sql
     assert "new.kind = 'original'" in sql
     assert "new.session_id = u.session_id" in sql
     assert "new.owner_user_id = u.user_id" in sql
     assert (
         "authenticated clients cannot mutate referenced original asset invariants"
+        in sql
+    )
+
+
+def test_selected_asset_metadata_is_frozen_after_analysis_starts() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_selected_asset_client_metadata_mutation()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_assets_selected_metadata_client_guard" in sql
+    assert "s.selected_floorplan_asset_id = old.id" in sql
+    for column in (
+        "floorplan_id",
+        "floorplan_upload_id",
+        "session_id",
+        "owner_user_id",
+        "storage_provider",
+        "bucket",
+        "object_key",
+        "content_type",
+        "byte_size",
+        "sha256_hex",
+        "width_px",
+        "height_px",
+        "page_count",
+        "scan_status",
+    ):
+        assert column in sql
+    assert (
+        "authenticated clients cannot mutate selected asset metadata after analysis starts"
         in sql
     )
 
