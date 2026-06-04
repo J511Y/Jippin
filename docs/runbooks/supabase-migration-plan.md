@@ -1,6 +1,6 @@
 # Supabase SQL Migration Plan
 
-- Issues: CMP-575 (SQL conversion candidates), CMP-603 (CI/CD cutover)
+- Issues: CMP-575 (SQL conversion candidates), CMP-603 (CI/CD cutover), CMP-604 (public auth cleanup)
 - Status: forward migration SSOT switched to `supabase/migrations/*.sql` (CMP-603 cutover). Alembic demoted to historical reference.
 - Scope: this document covers the conversion inventory + post-cutover guard. Direct schema edits in the Supabase Console SQL editor are prohibited (`db pull` / `migration repair` required if it happens — see Console hygiene below).
 
@@ -29,30 +29,28 @@ Console hygiene (MUST):
 | `0002_deployment_probe_temp` | `20260528_0645_0002_deployment_probe_temp.py` | Creates `deployment_probe_temp(id, created_at, marker)`. Historical deployment probe. | `20260528064500_0002_deployment_probe_temp.sql`. |
 | `0003_drop_deployment_probe_temp` | `20260528_0655_0003_drop_deployment_probe_temp.py` | Drops `deployment_probe_temp`; no net final schema. | `20260528065500_0003_drop_deployment_probe_temp.sql`. |
 | `0004_request_logs` | `20260528_0905_0004_request_logs.py` | Creates `request_logs` plus indexes on `created_at`, `request_id`, `response_code`, and `(user_id, created_at desc)`. | `20260528090500_0004_request_logs.sql`. |
-| `0005_auth_skeleton` | `20260529_1200_0005_auth_skeleton.py` | Creates enum `external_sso_provider`, tables `users`, `external_sso_accounts`, `anonymous_users`, `terms_consents`, and `ix_anonymous_users_last_seen_at`. | `20260529120000_0005_auth_skeleton.sql`. |
+| `0005_auth_skeleton` | `20260529_1200_0005_auth_skeleton.py` | Historical self-auth skeleton: enum `external_sso_provider`, tables `users`, `external_sso_accounts`, `anonymous_users`, `terms_consents`, and `ix_anonymous_users_last_seen_at`. | `20260529120000_0005_auth_skeleton.sql`, followed by CMP-604 cleanup. |
 | `0006_terms_consent_unique_key` | `20260529_1330_0006_terms_consent_unique_key.py` | Changes `terms_consents` uniqueness from `(user_id, term_id, version, source)` to `(user_id, term_id, version)`. | `20260529133000_0006_terms_consent_unique_key.sql`. |
 
 ## Current Final Schema
 
-Final schema after the converted sequence:
+Final schema after CMP-604 cleanup:
 
 - `request_logs`
-- `users`
-- `external_sso_accounts`
-- `anonymous_users`
-- `terms_consents`
-- enum `external_sso_provider`
+- `users` — app profile/RBAC table keyed by `auth.users.id`
+- `terms_consents` — consent audit table keyed by `auth.users.id`
 
-The temporary `deployment_probe_temp` table is intentionally absent after the sequence completes.
+The temporary `deployment_probe_temp` table is intentionally absent after the sequence completes. The legacy `external_sso_accounts`, `anonymous_users`, `auth_identities`, and `external_sso_provider` objects are intentionally absent after CMP-604.
 
 ## Supabase Auth Impact
 
 | Current public table | Supabase Auth adoption impact | Recommendation |
 |---|---|---|
-| `users` | Supabase also has `auth.users`. Do not modify or shadow it. `public.users` can remain the application profile/account table. | Keep `public.users` for Jippin user metadata. If Supabase Auth becomes the identity provider, add a nullable `auth_user_id uuid references auth.users(id)` in a new migration and ADR. |
-| `anonymous_users` | Anonymous pre-review sessions are product-specific and not provided by Supabase Auth. | Keep in `public`. Later add RLS policies only when client-side direct table access is introduced. |
-| `external_sso_accounts` | Supabase Auth stores provider identities internally when using Supabase Auth. The current table is still needed while FastAPI owns OAuth. | Keep while FastAPI OAuth remains canonical. If Supabase Auth owns OAuth, migrate this table to an audit/linking table or retire it through a dedicated data migration. |
-| `terms_consents` | Supabase Auth does not replace Jippin's consent audit requirement. | Keep in `public` and preserve the current unique key `(user_id, term_id, version)`. |
+| `users` | Supabase `auth.users` is identity SSOT. | Keep as `public.users(id references auth.users(id))` for Jippin profile/RBAC only. Do not store email/provider subject/password columns. |
+| `anonymous_users` | Supabase Anonymous Sign-In (`auth.users.is_anonymous`) replaces it. | Drop through CMP-604 forward migration. |
+| `external_sso_accounts` | Supabase `auth.identities` replaces it. | Drop through CMP-604 forward migration. |
+| `auth_identities` | Supabase JWT `sub` maps directly to `auth.users.id`. | Drop through CMP-604 forward migration if present. |
+| `terms_consents` | Supabase Auth does not replace Jippin's consent audit requirement. | Keep in `public`; `user_id` references `auth.users(id)`. |
 
 ## Alembic Keep/Remove Recommendation
 
@@ -66,7 +64,7 @@ Reasoning:
 
 Compatibility plan (post-cutover, CMP-603):
 
-- Keep `apps/api/tests/test_models_metadata.py` because it protects the OAuth-only user model, no-password invariant, and consent constraints.
+- Keep `apps/api/tests/test_models_metadata.py` because it protects the Supabase-profile model, no-password/no-shadow-email invariant, and consent constraints.
 - `apps/api/tests/test_alembic_revision.py` is now historical-only (Alembic is retired for forward migrations). A Supabase migration-order/static-schema test is a follow-up item.
 - `.github/workflows/ci.yml::migrate-check` is now the Supabase SQL migration drift guard (model-only PR static check). `.github/workflows/_archive/neon-pr-branch.yml.archived` is no longer loaded by GitHub Actions. `.github/workflows/deploy.yml::release-migrate` was removed entirely — DB migration is owned by Supabase GitHub Integration.
 
@@ -83,7 +81,7 @@ Known limitations before applying to a real Supabase project:
 
 - No real Supabase connection string was available, so migrations were not applied.
 - `gen_random_uuid()` assumes the Supabase/Postgres project exposes that function. Supabase projects normally do, but the apply job should verify it before cutover.
-- The SQL candidates preserve Alembic exactly. They do not add new foreign-key indexes beyond current Alembic. A follow-up performance pass should evaluate `anonymous_users.converted_user_id` after access patterns are known.
+- Pre-CMP-604 SQL candidates preserve Alembic exactly. CMP-604 intentionally diverges forward schema from historical Alembic to remove self-auth tables and align public FKs to `auth.users(id)`.
 
 ## Follow-up Work
 

@@ -1,11 +1,11 @@
 # `apps/api` — Jippin FastAPI Backend (CMP-528)
 
 FastAPI 0.115 / Python 3.13 / `uv` 패키지 매니저.
-외부 managed Postgres (psycopg3 async) 연결 — **Neon → Supabase 전환 중** (ADR-0004 Proposed) — structlog JSON 로깅, `request_id` 컨텍스트, AGENTS.md §4.5 에러 봉투, `/healthz`, Supabase Auth JWT 검증 / 세션 브리지 (CMP-595) 를 제공한다.
+외부 managed Postgres (psycopg3 async) 연결 — **Supabase Postgres + Supabase Auth** — structlog JSON 로깅, `request_id` 컨텍스트, AGENTS.md §4.5 에러 봉투, `/healthz`, Supabase Auth JWT 검증 / 세션 브리지 (CMP-595) 를 제공한다.
 
 본 이슈(CMP-528) 범위는 **API 골격 + `/healthz` + 표준 에러/로깅**까지다. 도메인 라우터(AUTH/INPUT/AI/RULE/REPORT 등)는 후속 이슈에서 채운다.
 
-> **DB / Auth SSOT 전환 (2026-06-02)**: Supabase Auth bridge (`src/auth/supabase_jwt.py`, `src/services/supabase_session.py`) 와 Supabase SQL migration 후보 (`supabase/migrations/*.sql`) 가 머지된 상태이다. Alembic (`apps/api/migrations/`) 은 **CMP-575 cutover PR 승인 전까지 schema source of truth** 를 유지한다. 운영 정본은 [`docs/runbooks/supabase-migration-plan.md`](../../docs/runbooks/supabase-migration-plan.md) · [`docs/runbooks/supabase-auth-poc.md`](../../docs/runbooks/supabase-auth-poc.md) · [`docs/runbooks/supabase-session-bridge.md`](../../docs/runbooks/supabase-session-bridge.md). 정책 정본은 [`docs/adr/0004-supabase-transition.md`](../../docs/adr/0004-supabase-transition.md).
+> **DB / Auth SSOT (CMP-603/CMP-604)**: forward schema authority is `supabase/migrations/*.sql` plus Supabase GitHub Integration. Alembic (`apps/api/migrations/`) remains historical reference only. Supabase JWT `sub` maps directly to `auth.users.id`; `public.users` is an app profile table and `public.terms_consents` is the product consent audit table.
 
 ---
 
@@ -14,7 +14,7 @@ FastAPI 0.115 / Python 3.13 / `uv` 패키지 매니저.
 - Python 3.13 (`.python-version=3.13`)
 - [uv](https://docs.astral.sh/uv/) 0.5+
 - (옵션) Docker — `docker compose up api` 실행 시
-- 외부 managed Postgres 자격증명 (전환 중: Supabase project connection string 또는 Neon URL) 또는 `TEST_MODE=true` (DB 없이 부팅)
+- Supabase project connection string 또는 `TEST_MODE=true` (DB 없이 부팅)
 - (Supabase Auth 검증/세션 브리지를 시험할 때만) Supabase project 의 `SUPABASE_JWT_ISSUER` + `SUPABASE_JWKS_URL` 및 fallback 용 `SUPABASE_JWT_SECRET`. 자세한 변수는 `.env.example` AUTH/Supabase 절 참조.
 
 ---
@@ -23,7 +23,7 @@ FastAPI 0.115 / Python 3.13 / `uv` 패키지 매니저.
 
 ```bash
 cd apps/api
-cp .env.example .env        # 값 채우기. Supabase/Neon DB 자격증명 또는 TEST_MODE=true.
+cp .env.example .env        # 값 채우기. Supabase DB 자격증명 또는 TEST_MODE=true.
 uv sync                     # 가상환경 + 의존성 설치
 uv run uvicorn src.main:app --reload --port 8000
 ```
@@ -46,8 +46,8 @@ curl http://localhost:8000/healthz
 | `API_PORT` | `8000` | uvicorn/gunicorn 바인드 포트 |
 | `REQUEST_ID_HEADER` | `x-request-id` | request_id 미들웨어 헤더명 |
 | `TEST_MODE` | `false` | true 시 `/healthz` 가 DB 호출 없이 `db.ok=true` 반환 (테스트·오프라인 부팅) |
-| `DATABASE_POOL_URL` | — | Pooler URL (Supabase pgbouncer port 6543 / Neon `-pooler` 호스트). **요청 경로** 쿼리. (`postgresql+psycopg://`) |
-| `DATABASE_URL` | — | Non-pooler URL (Supabase direct port 5432 / Neon non-pooler 호스트). **마이그레이션·DDL·롱 트랜잭션.** |
+| `DATABASE_POOL_URL` | — | Supabase pooler URL (port 6543). **요청 경로** 쿼리. (`postgresql+psycopg://`) |
+| `DATABASE_URL` | — | Supabase direct URL (port 5432). **마이그레이션·DDL·롱 트랜잭션.** |
 | `SUPABASE_JWT_SECRET` | — | Supabase Auth HS256 verification secret. CMP-595 세션 브리지·Anonymous JWT 검증용. |
 | `SUPABASE_JWT_AUDIENCE` | `authenticated` | Supabase JWT 검증 시 허용 audience. |
 | `SUPABASE_JWT_ISSUER` | — | Supabase JWT issuer (`https://<project-ref>.supabase.co/auth/v1`). CMP-595 세션 브리지 필수. |
@@ -86,33 +86,22 @@ apps/api/
 
 ---
 
-## 4.1 마이그레이션 (CMP-537 / CMP-575, transitional)
+## 4.1 마이그레이션 (Supabase SQL SSOT)
 
-> **SSOT 전환 상태 (2026-06-02)**: 현 시점 schema source of truth 는 **Alembic** (`apps/api/migrations/versions/*.py`) 이다. CMP-575 가 동일 schema 의 Supabase SQL 후보 (`supabase/migrations/*.sql`) 를 이미 준비했으며, ADR-0004 Accepted + Supabase CI/deploy cutover PR 머지 시점에 SSOT 가 SQL 로 이동한다. **cutover 후에는 신규 Alembic revision 생성 금지** ([`docs/runbooks/supabase-migration-plan.md`](../../docs/runbooks/supabase-migration-plan.md) §Recommended transition). 본 절은 cutover 완료까지 운영 정본이다.
+Forward schema source of truth is `supabase/migrations/*.sql`. Supabase GitHub Integration applies migrations on `dev` and `main` pushes. Do not create new Alembic revisions for forward schema changes; `apps/api/migrations/` is historical reference only.
 
 DB 스키마 변경은 **autogenerate → 사람 리뷰 → upgrade** 3-step 으로 진행한다. 컨테이너 ENTRYPOINT 에 묶지 않고 `infra/compose/docker-compose.yml` 의 `migrate` 사이드카로 분리해 돌린다 (multi-replica 경합/롤백 회피).
 
 ```bash
-# 1) 모델 변경 후 리비전 자동 생성
-make migration name=add_users
-#   → apps/api/migrations/versions/<UTC ts>_<rev>_add_users.py 생성
-#   → ruff format 이 post-write hook 으로 즉시 적용된다.
-
-# 2) 생성된 파일을 PR 에 첨부하기 전 반드시 **사람 리뷰**:
-#    - autogenerate 가 놓친 인덱스/제약/타입 차이 보강
-#    - downgrade 함수에 실제 역연산을 적는다 (prod 에선 실행 안 해도, 개발/리뷰 용)
-#    - 데이터 마이그레이션이 필요한 경우 별도 리비전으로 분리
-
-# 3) 외부 managed Postgres 에 적용 (Supabase/Neon 자격증명, DATABASE_URL non-pooler)
-make migrate                            # 로컬: uv 가상환경에서 직접
-docker compose -f infra/compose/docker-compose.yml up migrate   # 컨테이너 사이드카
+# 새 forward migration 생성
+supabase migration new <slug>
+# 생성된 supabase/migrations/<timestamp>_<slug>.sql 을 사람 리뷰 후 PR 에 포함
 ```
 
 봉인:
 
-- **`DATABASE_URL` (non-pooler) 만 사용한다.** `DATABASE_POOL_URL` (pgbouncer) 은 DDL/prepared-statement 호환성 문제로 alembic 경로에서 금지.
-- **`alembic downgrade` 는 prod 에서 금지.** roll-forward only — 잘못된 리비전은 보상 리비전으로 되돌린다.
-- 리비전 파일명은 `YYYYMMDD_HHMM_<rev>_<slug>.py` 로 고정 (`alembic.ini` `file_template`).
+- **콘솔 직접 수정 금지.** repo migration 파일과 remote schema 가 어긋나면 `supabase db pull` / `supabase migration repair` 절차가 필요하다.
+- **운영 DB 수동 SQL 금지.** roll-forward only — 잘못된 리비전은 보상 SQL migration 으로 되돌린다.
 
 ---
 
@@ -124,7 +113,7 @@ uv sync --group dev
 uv run pytest
 ```
 
-테스트는 `TEST_MODE=true` 로 동작 — Supabase/Neon DB 자격증명 없이도 패스한다.
+테스트는 `TEST_MODE=true` 로 동작 — Supabase DB 자격증명 없이도 패스한다.
 
 ---
 
@@ -170,7 +159,7 @@ stdout JSON, 모든 라인에 `request_id` 자동 주입:
 ## 9. 참고
 
 - ADR-0001 §3 (백엔드), §4 (DB 클라이언트 — ADR-0004 가 Supabase 로 부분 supersede)
-- ADR-0004 (Neon → Supabase 전환, Proposed)
+- ADR-0004 (Supabase 전환)
 - AGENTS.md §4.4 (시크릿/환경변수), §4.5 (에러·응답 표준), §4.7 (사용자 식별 정책)
 - `docs/runbooks/supabase-migration-plan.md`, `docs/runbooks/supabase-auth-poc.md`, `docs/runbooks/supabase-session-bridge.md`
 - SDD v1.9 §6 (모듈 구성), §8.2 (에러 코드)

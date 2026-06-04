@@ -1,11 +1,9 @@
 """Supabase session bridge service.
 
 Verifies a Supabase Auth access token (RS256/ES256 via Supabase JWKS) and
-resolves the jippin user to mint a backend session cookie for. The link-writer
-side (CMP-579 / CMP-583 link ladder) is responsible for populating
-``auth_identities`` rows; this service is read-only and raises
-``ZippinException`` for every off-happy-path branch so the router can convert
-them into the canonical AGENTS.md §4.5 error envelope.
+resolves it directly to the Jippin application profile keyed by
+``auth.users.id``. CMP-604 removed the legacy ``auth_identities`` bridge table;
+Supabase Auth is the identity SSOT and ``public.users`` is only a profile table.
 """
 
 from __future__ import annotations
@@ -21,9 +19,8 @@ from ..auth.jwks import get_supabase_jwks
 from ..config import Settings, get_settings
 from ..db import get_engine
 from ..errors import ZippinException
-from ..models import AuthIdentity, User
+from ..models import User
 
-SUPABASE_PROVIDER = "supabase"
 _SUPPORTED_ALGORITHMS: tuple[str, ...] = ("RS256", "ES256")
 
 
@@ -114,15 +111,17 @@ async def verify_supabase_access_token(
 async def resolve_jippin_user_for_supabase(
     *,
     supabase_subject: str,
-    email_claim: str | None,
+    email_claim: str | None,  # noqa: ARG001 - email is not stored in public.users.
 ) -> SupabaseBridgeResult:
+    try:
+        supabase_user_id = uuid.UUID(supabase_subject)
+    except ValueError as exc:
+        raise _invalid_token("Supabase access token subject must be a UUID.") from exc
+
     async with get_engine().connect() as conn:
         row = await conn.execute(
-            sa.select(AuthIdentity.user_id)
-            .join(User, User.id == AuthIdentity.user_id)
-            .where(
-                AuthIdentity.provider == SUPABASE_PROVIDER,
-                AuthIdentity.external_id == supabase_subject,
+            sa.select(User.id).where(
+                User.id == supabase_user_id,
                 User.status == "active",
             )
         )
@@ -130,26 +129,8 @@ async def resolve_jippin_user_for_supabase(
         if user_id is not None:
             return SupabaseBridgeResult(user_id=user_id)
 
-        if email_claim:
-            normalized_email = email_claim.strip().lower()
-            email_row = await conn.execute(
-                sa.select(User.id)
-                .where(
-                    User.email.is_not(None),
-                    User.status == "active",
-                    sa.func.lower(User.email) == normalized_email,
-                )
-                .limit(1)
-            )
-            if email_row.scalar_one_or_none() is not None:
-                raise ZippinException(
-                    "Supabase identity is not linked to a jippin account.",
-                    code="AUTH_IDENTITY_NOT_LINKED",
-                    http_status=401,
-                )
-
     raise ZippinException(
-        "No jippin account exists for this Supabase identity. Sign up first.",
+        "No active Jippin profile exists for this Supabase user.",
         code="AUTH_SIGNUP_REQUIRED",
         http_status=401,
     )

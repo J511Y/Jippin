@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 
-import { getOrCreateAnonymousUserId } from '@/lib/anonymous-user';
 import { DEFAULT_NEXT, resolveSafeNext } from '@/lib/safe-redirect';
 
 /**
@@ -38,7 +37,6 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
       const url = new URL('/auth/oauth/start', window.location.origin);
       url.searchParams.set('provider', provider);
       url.searchParams.set('intent', 'signin');
-      url.searchParams.set('anonymous_user_id', await getOrCreateAnonymousUserId());
       const next = safeNextPath(nextPath);
       if (next) {
         url.searchParams.set('next', next);

@@ -9,20 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
 
-EXTERNAL_SSO_PROVIDER_VALUES = ("kakao", "naver", "google")
-
-external_sso_provider_enum = postgresql.ENUM(
-    *EXTERNAL_SSO_PROVIDER_VALUES,
-    name="external_sso_provider",
-    native_enum=True,
-    create_type=True,
-)
-
-AUTH_IDENTITY_PROVIDER_VALUES = ("supabase",)
-
 
 class User(TimestampMixin, Base):
-    """OAuth-only user account; role authorization is separate from lifecycle status."""
+    """Application profile keyed by Supabase Auth's ``auth.users.id``."""
 
     __tablename__ = "users"
     __table_args__ = (
@@ -34,10 +23,9 @@ class User(TimestampMixin, Base):
 
     id: Mapped[uuid.UUID] = mapped_column(
         postgresql.UUID(as_uuid=True),
+        sa.ForeignKey("auth.users.id", ondelete="CASCADE"),
         primary_key=True,
-        server_default=sa.text("gen_random_uuid()"),
     )
-    email: Mapped[str | None] = mapped_column(sa.Text)
     display_name: Mapped[str | None] = mapped_column(sa.Text)
     profile_image_url: Mapped[str | None] = mapped_column(sa.Text)
     role: Mapped[str] = mapped_column(
@@ -55,65 +43,8 @@ class User(TimestampMixin, Base):
     )
 
 
-class AnonymousUser(TimestampMixin, Base):
-    """Anonymous pre-review actor. Only HMAC IP/UA hashes are stored."""
-
-    __tablename__ = "anonymous_users"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        postgresql.UUID(as_uuid=True),
-        primary_key=True,
-        server_default=sa.text("gen_random_uuid()"),
-    )
-    converted_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        postgresql.UUID(as_uuid=True),
-        sa.ForeignKey("users.id", ondelete="SET NULL"),
-    )
-    ip_hash: Mapped[bytes | None] = mapped_column(postgresql.BYTEA)
-    ua_hash: Mapped[bytes | None] = mapped_column(postgresql.BYTEA)
-    last_seen_at: Mapped[datetime] = mapped_column(
-        postgresql.TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=sa.func.now(),
-    )
-    converted_at: Mapped[datetime | None] = mapped_column(
-        postgresql.TIMESTAMP(timezone=True)
-    )
-
-
-class ExternalSsoAccount(TimestampMixin, Base):
-    """Provider account linked to a local OAuth-only user."""
-
-    __tablename__ = "external_sso_accounts"
-    __table_args__ = (
-        sa.UniqueConstraint("provider", "provider_subject"),
-        sa.UniqueConstraint("user_id", "provider"),
-    )
-
-    id: Mapped[int] = mapped_column(
-        sa.BigInteger,
-        sa.Identity(),
-        primary_key=True,
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        postgresql.UUID(as_uuid=True),
-        sa.ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    provider: Mapped[str] = mapped_column(external_sso_provider_enum, nullable=False)
-    provider_subject: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    provider_email: Mapped[str | None] = mapped_column(sa.Text)
-    linked_at: Mapped[datetime] = mapped_column(
-        postgresql.TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=sa.func.now(),
-    )
-    display_name: Mapped[str | None] = mapped_column(sa.Text)
-    profile_image_url: Mapped[str | None] = mapped_column(sa.Text)
-
-
 class TermsConsent(TimestampMixin, Base):
-    """Canonical consent row plus TimestampMixin audit columns outside ADR-0003."""
+    """Product consent audit row keyed by Supabase Auth user id."""
 
     __tablename__ = "terms_consents"
     __table_args__ = (
@@ -131,7 +62,7 @@ class TermsConsent(TimestampMixin, Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         postgresql.UUID(as_uuid=True),
-        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        sa.ForeignKey("auth.users.id", ondelete="CASCADE"),
         nullable=False,
     )
     term_id: Mapped[str] = mapped_column(sa.Text, nullable=False)
@@ -142,37 +73,3 @@ class TermsConsent(TimestampMixin, Base):
         nullable=False,
         server_default=sa.func.now(),
     )
-
-
-class AuthIdentity(TimestampMixin, Base):
-    """Third-party authenticator subject → jippin user mapping.
-
-    Populated by the Supabase OAuth link ladder (CMP-579 / CMP-583); read by
-    POST /auth/supabase/session to mint a jippin session cookie.
-    """
-
-    __tablename__ = "auth_identities"
-    __table_args__ = (
-        sa.CheckConstraint(
-            "provider IN ('supabase')",
-            name="auth_identities_provider_allowed",
-        ),
-        sa.UniqueConstraint("provider", "external_id"),
-        sa.UniqueConstraint("provider", "user_id"),
-    )
-
-    id: Mapped[int] = mapped_column(
-        sa.BigInteger,
-        sa.Identity(),
-        primary_key=True,
-    )
-    provider: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    external_id: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        postgresql.UUID(as_uuid=True),
-        sa.ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-
-
-sa.Index(None, AnonymousUser.last_seen_at)

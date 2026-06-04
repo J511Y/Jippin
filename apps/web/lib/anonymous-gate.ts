@@ -3,9 +3,7 @@
  *
  * SSOT:
  *   - `docs/runbooks/supabase-web-auth.md` §4.1 익명 sign-in 호출 시점.
- *   - `docs/adr/0003-anon-user-and-sso.md` §2.5 / §5 — anonymous identifier 정책.
- *     본 모듈은 ADR-0003 의 legacy `localStorage.jippin_anonymous_user_id` 와
- *     Supabase anonymous user 가 Phase 1 동안 dual-write 되는 모델을 봉인한다.
+ *   - Supabase Anonymous Sign-In is the identity SSOT after CMP-604.
  *
  * R4 회귀 방지 — `app/*` 의 첫 paint 에서 무조건 `supabase.auth.signInAnonymously()`
  * 를 호출하면 봇·크롤러·반복 미인증 방문이 `auth.users` 행을 무한 생성한다.
@@ -27,9 +25,8 @@
  *        같은 브라우저가 여러 anonymous user 를 만들지 않도록 보장. server-side
  *        dedupe key 는 `anonymous-signin-guard.shouldIssueAnonymousSignIn` 가 책임.
  *
- * 본 gate 는 **클라이언트 1차 방어**. backend (`POST /auth/anonymous-users`, 익명
- * 핸들 발급 라우트) 와 Supabase Auth 콘솔의 anonymous quota / IP rate-limit 이 항상
- * 2차 방어로 동작한다 — 본 gate 를 우회한 호출도 backend / Supabase 가 막는다.
+ * 본 gate 는 **클라이언트 1차 방어**. Supabase Auth 콘솔의 anonymous quota /
+ * IP rate-limit 이 항상 2차 방어로 동작한다.
  *
  * 본 모듈은 Supabase SDK 에 직접 의존하지 않고, "익명 발급을 진행해도 되는가?" 판정만
  * 책임진다. 발급 자체는 호출자(SessionProvider 의 anonymous-bootstrap singleton)가 한다.
@@ -303,11 +300,11 @@ export function __resetAnonymousSingleFlightForTests(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy `localStorage.jippin_anonymous_user_id` → Supabase user_metadata 백필.
+// Legacy `localStorage.jippin_anonymous_user_id` → Supabase user_metadata cleanup.
 //
-// Phase 1 dual-write 동안 두 ID 체계가 공존하지만 (runbook §0 / §4.1), Phase 2 에서
-// localStorage 키를 폐기하기 전에 Supabase anonymous user 에 legacy id 를 1회성
-// 백필해 두어야 도면/리포트 claim 경로가 끊기지 않는다.
+// CMP-604 removed the issuance path. This helper remains for one-way cleanup
+// tasks that need to preserve a stale browser id in Supabase metadata before
+// deleting localStorage.
 //
 //   - 1회성: `user_metadata.legacy_anonymous_id` 가 이미 존재하면 호출하지 않는다.
 //   - 비파괴: legacy id 가 null/빈 문자열이면 호출하지 않는다.

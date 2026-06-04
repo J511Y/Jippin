@@ -3,10 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LoginButtons } from '../login-buttons';
 
-vi.mock('@/lib/anonymous-user', () => ({
-  getOrCreateAnonymousUserId: vi.fn(async () => '00000000-0000-0000-0000-000000000000')
-}));
-
 afterEach(() => {
   cleanup();
 });
@@ -92,9 +88,7 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
       expect(url.searchParams.get('provider')).toBe(provider);
       expect(url.searchParams.get('intent')).toBe('signin');
       expect(url.searchParams.get('next')).toBe('/dashboard');
-      expect(url.searchParams.get('anonymous_user_id')).toBe(
-        '00000000-0000-0000-0000-000000000000'
-      );
+      expect(url.searchParams.has('anonymous_user_id')).toBe(false);
       // 정합 검증 — 직접 backend host 로 가지 않음.
       expect(navigatedTo).not.toMatch(/api:8000/);
       expect(navigatedTo).not.toMatch(/localhost:8000/);

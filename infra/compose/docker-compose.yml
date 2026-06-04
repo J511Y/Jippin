@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 # 봉인:
 #   - 단일 호스트 1대 가정. k8s/ECS 매니페스트 금지.
-#   - Postgres 컨테이너 금지 — 외부 managed Postgres (Supabase/Neon, transitional)
+#   - Postgres 컨테이너 금지 — 외부 managed Postgres (Supabase)
 #     의 DATABASE_URL / DATABASE_POOL_URL 직결. 현 SSOT 는 Supabase (ADR-0004 Proposed).
 #   - 모델 가중치/대용량 바이너리는 이미지에 포함하지 않는다.
 #   - 시크릿은 infra/compose/.env (로컬, .gitignore 차단). 자리표시자는 .env.example.
@@ -81,7 +81,7 @@ services:
     command: ["alembic", "upgrade", "head"]
     environment:
       # Alembic 은 non-pooler URL 에서만 동작한다 (DDL/Prepared-statement 호환성).
-      # Supabase 의 direct port 5432 또는 Neon non-pooler 호스트 사용.
+      # Supabase direct port 5432 사용.
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set (non-pooler / direct port)}"
       PYTHONUNBUFFERED: "1"
     restart: "no"
@@ -89,7 +89,7 @@ services:
       - jippin
 
   # ---------------------------------------------------------------------------
-  # api — FastAPI 백엔드. 외부 managed Postgres (Supabase/Neon, transitional)
+  # api — FastAPI 백엔드. 외부 managed Postgres (Supabase)
   # 의 non-pooler + pooler 두 URL 에 직결.
   # 컨테이너 내부에서 /healthz 가 SELECT 1 으로 DB 응답을 확인.
   # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ services:
     restart: unless-stopped
     environment:
       # 외부 DB — 두 호스트 모두 부재 시 부팅 차단 (`:?` 가드).
-      # Supabase: direct port 5432 (non-pooler) + pooler port 6543. Neon: -pooler 호스트.
+      # Supabase: direct port 5432 (non-pooler) + pooler port 6543.
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set (non-pooler / direct port)}"
       DATABASE_POOL_URL: "${DATABASE_POOL_URL:?DATABASE_POOL_URL must be set (pooler)}"
       # Redis — 컨테이너 네트워크 이름으로 경유.

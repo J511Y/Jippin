@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from src.auth.providers import OAuthProvider, OAuthTokens, ProviderProfile
 from src.auth.state_store import OAuthStatePayload
 from src.config import get_settings
+from src.errors import ZippinException
 from src.main import create_app
 from src.routers import auth as auth_router
 from src.services import auth as auth_service
@@ -213,67 +214,18 @@ class _FakeConnection:
 
 
 @pytest.mark.asyncio
-async def test_complete_oauth_login_creates_new_sso_records_terms_and_claims_anonymous(
-    monkeypatch,
-    callback_env,
-):
-    user_id = uuid.uuid4()
-    anonymous_user_id = uuid.uuid4()
-    conn = _FakeConnection(existing_user_id=None, inserted_user_id=user_id)
-    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
+async def test_complete_oauth_login_is_removed_after_supabase_cutover(callback_env):
+    with pytest.raises(ZippinException) as exc_info:
+        await auth_service.complete_oauth_login(
+            provider=OAuthProvider.KAKAO,
+            profile=ProviderProfile(
+                provider_subject="kakao-subject",
+                email="shared@example.com",
+                display_name="Kakao User",
+                agreed_terms_tags=("service_terms", "privacy_policy"),
+            ),
+            anonymous_user_id=uuid.uuid4(),
+        )
 
-    result = await auth_service.complete_oauth_login(
-        provider=OAuthProvider.KAKAO,
-        profile=ProviderProfile(
-            provider_subject="kakao-subject",
-            email="shared@example.com",
-            display_name="Kakao User",
-            agreed_terms_tags=("service_terms", "privacy_policy"),
-        ),
-        anonymous_user_id=anonymous_user_id,
-    )
-
-    combined_sql = "\n".join(conn.statements)
-    assert result == OAuthLoginResult(
-        user_id=user_id,
-        signup_completed=True,
-        claimed_anonymous_user_id=anonymous_user_id,
-    )
-    assert "FROM external_sso_accounts" in combined_sql
-    assert "INSERT INTO users" in combined_sql
-    assert "INSERT INTO external_sso_accounts" in combined_sql
-    assert "INSERT INTO terms_consents" in combined_sql
-    assert "ON CONFLICT (user_id, term_id, version) DO NOTHING" in combined_sql
-    assert "ON CONFLICT (user_id, term_id, version, source) DO NOTHING" not in (
-        combined_sql
-    )
-    assert "UPDATE anonymous_users" in combined_sql
-    assert "WHERE users.email" not in combined_sql
-
-
-@pytest.mark.asyncio
-async def test_complete_oauth_login_reuses_existing_provider_subject_without_new_user(
-    monkeypatch,
-    callback_env,
-):
-    existing_user_id = uuid.uuid4()
-    conn = _FakeConnection(existing_user_id=existing_user_id)
-    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
-
-    result = await auth_service.complete_oauth_login(
-        provider=OAuthProvider.GOOGLE,
-        profile=ProviderProfile(
-            provider_subject="google-subject",
-            email="user@example.com",
-            display_name="Google User",
-        ),
-        anonymous_user_id=uuid.uuid4(),
-    )
-
-    combined_sql = "\n".join(conn.statements)
-    assert result.user_id == existing_user_id
-    assert result.signup_completed is False
-    assert result.claimed_anonymous_user_id is None
-    assert "INSERT INTO users" not in combined_sql
-    assert "UPDATE external_sso_accounts" in combined_sql
-    assert "UPDATE users" in combined_sql
+    assert exc_info.value.code == "AUTH_LEGACY_FLOW_REMOVED"
+    assert exc_info.value.http_status == 410

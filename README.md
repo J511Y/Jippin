@@ -55,7 +55,7 @@ jippin/
 | 웹 프론트엔드 | **Next.js 16 LTS (App Router)** | 명세서 권장(14+)을 재평가해 최신 LTS 채택 — CMP-529 |
 | 백엔드 API | FastAPI 계열 (CTO ADR 확정 대기) | CMP-528 에서 부트스트랩, 대안 검토 진행 중 |
 | 공통 컨트랙트 | TypeScript / Python 타입 자동 생성 | JSON 스키마 정본 — `packages/contracts/` (CMP-527) |
-| DB | **Neon Serverless Postgres** | Pooler / non-pooler 두 호스트 환경변수로 토글 |
+| DB | **Supabase Postgres + Supabase Auth** | `supabase/migrations/*.sql` 이 forward schema SSOT |
 | 세션·캐시 | Redis (compose 내부) | CMP-530 |
 | 오케스트레이션 | **단일 인스턴스 docker-compose** | 별도 클라우드 매니지드 서비스 사용 안 함 |
 | AI | Mask2Former + VLM (라인별 ADR 예정) | 후속 이슈에서 구현 |
@@ -70,15 +70,15 @@ jippin/
 - Docker 24+, Docker Compose v2
 - Node.js 20 LTS 이상 (web 로컬 개발 시)
 - Python 3.11 이상 (api 로컬 개발 시)
-- Neon 계정 + 본 프로젝트 연결 URL
+- Supabase project connection string (direct 5432 + pooler 6543)
 
 ### 4.2 환경 변수
 
 ```bash
 cp .env.example .env       # 후속 이슈에서 .env.example 추가 예정
 # 최소 변수
-# DATABASE_URL=postgresql://...neon.tech/neondb?sslmode=require            # non-pooler (마이그레이션·롱 트랜잭션)
-# DATABASE_POOL_URL=postgresql://...neon.tech/neondb?sslmode=require       # pooler (일반 쿼리·서버리스)
+# DATABASE_URL=postgresql://...supabase.co/postgres?sslmode=require       # direct 5432 (마이그레이션·롱 트랜잭션)
+# DATABASE_POOL_URL=postgresql://...pooler.supabase.com/postgres?sslmode=require # pooler 6543 (일반 쿼리)
 ```
 
 > 실제 자격 증명은 절대 커밋하지 않는다. 자세한 정책은 [`AGENTS.md §4.4`](AGENTS.md) 참조.
@@ -86,7 +86,7 @@ cp .env.example .env       # 후속 이슈에서 .env.example 추가 예정
 ### 4.3 부팅
 
 ```bash
-# 전체 부팅 (web + api + redis, Postgres 는 Neon 원격)
+# 전체 부팅 (web + api + redis, Postgres 는 Supabase 원격)
 docker compose up --build
 
 # 헬스 체크

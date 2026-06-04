@@ -7,21 +7,11 @@ from fastapi.testclient import TestClient
 
 from src.main import create_app
 from src.services import auth as auth_service
-from src.services.auth import AnonymousUserResult, parse_existing_anonymous_user_id
+from src.services.auth import parse_existing_anonymous_user_id
+from src.errors import ZippinException
 
 
-def test_post_anonymous_users_creates_new_uuid(monkeypatch):
-    created_id = uuid.uuid4()
-
-    async def fake_create_or_reuse(existing_anonymous_user_id: str | None):
-        assert existing_anonymous_user_id is None
-        return AnonymousUserResult(anonymous_user_id=created_id, reused=False)
-
-    monkeypatch.setattr(
-        "src.routers.auth.create_or_reuse_anonymous_user",
-        fake_create_or_reuse,
-    )
-
+def test_post_anonymous_users_returns_410_after_supabase_cutover():
     app = create_app()
     with TestClient(app) as client:
         response = client.post(
@@ -29,61 +19,8 @@ def test_post_anonymous_users_creates_new_uuid(monkeypatch):
             json={"existing_anonymous_user_id": None},
         )
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "anonymous_user_id": str(created_id),
-        "reused": False,
-    }
-
-
-def test_post_anonymous_users_reuses_existing_uuid(monkeypatch):
-    existing_id = uuid.uuid4()
-
-    async def fake_create_or_reuse(existing_anonymous_user_id: str | None):
-        assert existing_anonymous_user_id == str(existing_id)
-        return AnonymousUserResult(anonymous_user_id=existing_id, reused=True)
-
-    monkeypatch.setattr(
-        "src.routers.auth.create_or_reuse_anonymous_user",
-        fake_create_or_reuse,
-    )
-
-    app = create_app()
-    with TestClient(app) as client:
-        response = client.post(
-            "/auth/anonymous-users",
-            json={"existing_anonymous_user_id": str(existing_id)},
-        )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "anonymous_user_id": str(existing_id),
-        "reused": True,
-    }
-
-
-def test_post_anonymous_users_invalid_uuid_is_not_validation_error(monkeypatch):
-    created_id = uuid.uuid4()
-
-    async def fake_create_or_reuse(existing_anonymous_user_id: str | None):
-        assert existing_anonymous_user_id == "not-a-uuid"
-        return AnonymousUserResult(anonymous_user_id=created_id, reused=False)
-
-    monkeypatch.setattr(
-        "src.routers.auth.create_or_reuse_anonymous_user",
-        fake_create_or_reuse,
-    )
-
-    app = create_app()
-    with TestClient(app) as client:
-        response = client.post(
-            "/auth/anonymous-users",
-            json={"existing_anonymous_user_id": "not-a-uuid"},
-        )
-
-    assert response.status_code == 200
-    assert response.json()["anonymous_user_id"] == str(created_id)
-    assert response.json()["reused"] is False
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
 
 
 @pytest.mark.parametrize("value", [None, "", "not-a-uuid"])
@@ -145,67 +82,9 @@ class _FakeConnection:
 
 
 @pytest.mark.asyncio
-async def test_create_or_reuse_anonymous_user_touches_last_seen_on_active_reuse(
-    monkeypatch,
-):
-    existing_id = uuid.uuid4()
-    inserted_id = uuid.uuid4()
-    conn = _FakeConnection(selected_id=existing_id, inserted_id=inserted_id)
-    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
+async def test_create_or_reuse_anonymous_user_is_removed_after_supabase_cutover():
+    with pytest.raises(ZippinException) as exc_info:
+        await auth_service.create_or_reuse_anonymous_user(str(uuid.uuid4()))
 
-    result = await auth_service.create_or_reuse_anonymous_user(str(existing_id))
-
-    assert result == AnonymousUserResult(anonymous_user_id=existing_id, reused=True)
-    assert len(conn.statements) == 2
-    assert conn.statements[0].startswith("SELECT")
-    assert "last_seen_at" in conn.statements[0]
-    assert conn.statements[1].startswith("UPDATE")
-    assert "last_seen_at" in conn.statements[1]
-
-
-@pytest.mark.asyncio
-async def test_create_or_reuse_anonymous_user_inserts_when_existing_is_converted(
-    monkeypatch,
-):
-    existing_id = uuid.uuid4()
-    inserted_id = uuid.uuid4()
-    conn = _FakeConnection(selected_id=None, inserted_id=inserted_id)
-    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
-
-    result = await auth_service.create_or_reuse_anonymous_user(str(existing_id))
-
-    assert result == AnonymousUserResult(anonymous_user_id=inserted_id, reused=False)
-    assert len(conn.statements) == 2
-    assert conn.statements[0].startswith("SELECT")
-    assert conn.statements[1].startswith("INSERT")
-
-
-@pytest.mark.asyncio
-async def test_create_or_reuse_anonymous_user_inserts_when_existing_is_stale(
-    monkeypatch,
-):
-    existing_id = uuid.uuid4()
-    inserted_id = uuid.uuid4()
-    conn = _FakeConnection(selected_id=None, inserted_id=inserted_id)
-    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
-
-    result = await auth_service.create_or_reuse_anonymous_user(str(existing_id))
-
-    assert result == AnonymousUserResult(anonymous_user_id=inserted_id, reused=False)
-    assert len(conn.statements) == 2
-    assert conn.statements[0].startswith("SELECT")
-    assert "last_seen_at" in conn.statements[0]
-    assert conn.statements[1].startswith("INSERT")
-
-
-@pytest.mark.asyncio
-async def test_create_or_reuse_anonymous_user_inserts_for_invalid_uuid(monkeypatch):
-    inserted_id = uuid.uuid4()
-    conn = _FakeConnection(selected_id=None, inserted_id=inserted_id)
-    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
-
-    result = await auth_service.create_or_reuse_anonymous_user("not-a-uuid")
-
-    assert result == AnonymousUserResult(anonymous_user_id=inserted_id, reused=False)
-    assert len(conn.statements) == 1
-    assert conn.statements[0].startswith("INSERT")
+    assert exc_info.value.code == "AUTH_LEGACY_FLOW_REMOVED"
+    assert exc_info.value.http_status == 410

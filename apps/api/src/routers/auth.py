@@ -40,7 +40,6 @@ from ..services.auth import (
     OAuthLoginResult,
     SupabaseSessionBridgeResult,
     accept_required_terms,
-    _claim_anonymous_user as claim_anonymous_user,
     complete_oauth_login,
     create_or_reuse_anonymous_user,
     get_current_user_context,
@@ -167,7 +166,7 @@ async def logout() -> JSONResponse:
 async def complete_supabase_session(
     *,
     access_token: str,
-    anonymous_user_id: str | None,
+    anonymous_user_id: str | None,  # noqa: ARG001 - legacy field ignored.
     requested_provider: str | None = None,  # noqa: ARG001 - provider is verified by link writer.
 ) -> SupabaseSessionBridgeResult:
     settings = get_settings()
@@ -184,23 +183,14 @@ async def complete_supabase_session(
         if isinstance(email_claim_raw, str) and email_claim_raw.strip()
         else None
     )
-    parsed_anonymous_user_id = parse_existing_anonymous_user_id(anonymous_user_id)
     result = await resolve_jippin_user_for_supabase(
         supabase_subject=str(claims["sub"]),
         email_claim=email_claim,
     )
     context = await get_current_user_context(result.user_id)
-    pending_anonymous_user_id = (
-        parsed_anonymous_user_id if context.missing_required_terms else None
-    )
-    if parsed_anonymous_user_id is not None and not context.missing_required_terms:
-        await claim_anonymous_user(
-            user_id=result.user_id,
-            anonymous_user_id=parsed_anonymous_user_id,
-        )
     return SupabaseSessionBridgeResult(
         user_id=result.user_id,
-        pending_anonymous_user_id=pending_anonymous_user_id,
+        pending_anonymous_user_id=None,
         missing_required_terms=context.missing_required_terms,
     )
 

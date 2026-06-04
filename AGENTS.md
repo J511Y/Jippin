@@ -174,7 +174,7 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 
 > **봉인.** 본 절은 CEO 정책 (CMP-557) 결정. 정본은 `docs/adr/0003-anon-user-and-sso.md`. 기존 명세 4종 (요구·기능·기술·SDD) 중 “소셜 OAuth 로그인 필수 / 비회원 사전검토 불가” 가정은 본 절로 **supersede** 된다. 모순 추적: `docs/명세서-모순.md`.
 >
-> **추가 전환 표기 (Neon → Supabase, 2026-06-02)**: ADR-0003 §2.1·§2.2 (`anonymous_users` 테이블, 자체 `/auth/{provider}/start` · `/auth/callback/{provider}` 라우트, 자체 OAuth state Redis store) 는 [`docs/adr/0004-supabase-transition.md`](docs/adr/0004-supabase-transition.md) §2.2~§2.3 으로 **부분 supersede 진행 중**이다. 봉인된 항목 (자동 병합 금지 #9, 자체 비밀번호 금지 #3, 약관 분리 저장 #5·#6, OAuth provider 3종 #4) 은 ADR-0004 가 그대로 보존한다. anonymous → permanent 전환은 `supabase.auth.linkIdentity()` 만 사용 (ADR-0004 §2.3). 운영 라우트·세션 정본은 [`docs/runbooks/supabase-auth-poc.md`](docs/runbooks/supabase-auth-poc.md) · [`docs/runbooks/supabase-web-auth.md`](docs/runbooks/supabase-web-auth.md) · [`docs/runbooks/supabase-session-bridge.md`](docs/runbooks/supabase-session-bridge.md).
+> **Supabase Auth cutover 완료 (CMP-603/CMP-604)**: ADR-0003 §2.1·§2.2 의 `anonymous_users`, `external_sso_accounts`, 자체 `/auth/{provider}/start` · `/auth/callback/{provider}` 라우트, 자체 OAuth state store 는 forward 정본이 아니다. Supabase Auth (`auth.users`, `auth.identities`, Anonymous Sign-In, `linkIdentity()`) 가 인증 정본이다. 봉인된 항목 (자동 병합 금지 #9, 자체 비밀번호 금지 #3, 약관 분리 저장 #5·#6, OAuth provider 정책 #4) 은 보존한다. 운영 라우트·세션 정본은 [`docs/runbooks/supabase-auth-poc.md`](docs/runbooks/supabase-auth-poc.md) · [`docs/runbooks/supabase-web-auth.md`](docs/runbooks/supabase-web-auth.md) · [`docs/runbooks/supabase-session-bridge.md`](docs/runbooks/supabase-session-bridge.md).
 
 **원칙.**
 
@@ -184,20 +184,20 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
    - (b) **리드 생성** — 사업자 측 리드 풀에 사용자 식별이 필요한 시점.
    - (c) **리포트 저장 / 공유** — 익명 세션 만료 이후에도 리포트 다시 보기·공유 링크 발급이 필요한 시점.
 3. **자체 비밀번호 가입 금지.** `users` 또는 어떤 인증 테이블에도 password / hash / salt 컬럼을 두지 않는다. 모델 메타데이터 단위 테스트(`tests/auth/test_no_password_columns.py` 권고)로 가드한다.
-4. **OAuth provider 는 `google` · `naver` · `kakao` 3종 고정.** Postgres ENUM `external_sso_provider` 로 봉인. 신규 provider 추가 시 ADR + 마이그레이션 필요.
+4. **OAuth provider 정책은 `google` · `naver` · `kakao` 기준.** Supabase Auth provider / `auth.identities` 가 identity 를 관리한다. 신규 provider 추가 시 ADR + Supabase provider 설정 + 필요 public schema migration 이 필요하다.
 5. **Kakao Sync 약관 분리 저장.** Kakao 는 Kakao Sync 약관 동의 source 를 우리 내부 약관 동의와 분리하여 저장한다 (별도 `terms_consents` row + `source='kakao_sync'`). Kakao 가 자체 약관 화면을 이미 제공하므로 우리 내부 약관 화면을 중복 노출하지 않는다.
 6. **Google / Naver 는 내부 약관 동의 화면을 거친다.** OAuth 콜백 → 내부 약관 동의 화면 → 가입 완료 → 채팅/상담 진입 순. 약관 미동의 시 가입 미완료, 익명 세션 유지.
-7. **비회원 식별자.** 서버에서 발급한 UUID v4 를 `anonymous_users.id` 로 저장하고, 브라우저는 `localStorage.jippin_anonymous_user_id` 키로 보관한다. 쿠키 사용 시 약관·동의 비용이 발생하므로 localStorage 우선.
-8. **가입 성공 시 claim.** OAuth 가입 완료 시 `anonymous_users.converted_user_id` 와 `anonymous_users.converted_at` 으로 익명 세션을 사용자에게 귀속(claim)시킨다. 익명 세션의 도면·리포트·판단 결과는 새 user_id 로 이관된다.
+7. **비회원 식별자.** Supabase Anonymous Sign-In 이 생성하는 `auth.users.id` 와 Supabase access token 이 정본이다. 브라우저 `localStorage.jippin_anonymous_user_id` 및 API `/auth/anonymous-users` 는 legacy 경로이며 신규 호출 금지.
+8. **가입 성공 시 claim.** anonymous → permanent 전환은 `supabase.auth.linkIdentity()` 로 같은 `auth.users.id` 를 승격한다. 익명 세션의 도면·리포트·판단 결과는 해당 Supabase user id 를 그대로 사용한다.
 9. **동일 이메일 + 다른 provider 자동 병합 금지.** 같은 이메일이 카카오·구글·네이버에서 각각 가입되면 별개 user 로 둔다. 사용자가 명시적으로 “계정 통합” 흐름을 요청하기 전까지 자동 병합·linking 금지. 자동 병합은 계정 탈취 벡터.
 10. **OAuth state store.** Authorization Code Flow 의 `state` / `nonce` / `code_verifier` 는 **Redis** 에 짧은 TTL(≤10분)로 저장한다. 메모리 단일 인스턴스 가정과 정합.
 
 **모델 가드 (요약 — 정본은 ADR-0003).**
 
 - `users(id uuid pk, email text null, display_name, status, created_at, last_login_at)` — **password 컬럼 영구 금지**. citext 의존 회피, 대소문자 무시 매칭은 `LOWER(email)` functional index 로.
-- `anonymous_users(id uuid pk, created_at, last_seen_at, ip_hash, ua_hash, converted_user_id uuid null fk → users.id, converted_at null)` — users 를 먼저 만든 뒤 본 테이블 생성.
-- `external_sso_accounts(user_id fk, provider external_sso_provider, provider_subject text, provider_email text, linked_at, pk (provider, provider_subject), unique (user_id, provider))` — provider 는 ENUM, 한 user 가 같은 provider 를 두 번 연결 불가.
-- `terms_consents(id, user_id fk not null, term_id, version, source text, agreed_at)` — `source ∈ {'internal_signup', 'kakao_sync', ...}`. user row 생성·연결과 같은 트랜잭션에서 insert.
+- Supabase managed: `auth.users(id uuid pk, is_anonymous, email, ...)`, `auth.identities(user_id, provider, provider_id, ...)`.
+- `public.users(id uuid pk fk → auth.users.id, display_name, profile_image_url, role, status, last_login_at, created_at, updated_at)` — 앱 프로필/RBAC 전용. email/password/provider subject 를 중복 저장하지 않는다.
+- `public.terms_consents(id, user_id uuid fk → auth.users.id, term_id, version, source text, agreed_at)` — `source ∈ {'internal_signup', 'kakao_sync', ...}`.
 
 **환경변수 이름 (정본은 `apps/api/.env.example`).**
 
