@@ -156,6 +156,31 @@ def test_session_workflow_result_fields_are_service_controlled() -> None:
     assert "new.last_activity_at is distinct from old.last_activity_at" in sql
 
 
+def test_completed_session_input_pointers_are_service_controlled() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_completed_session_client_pointer_mutation()"
+        in sql
+    )
+    assert "create trigger trg_sessions_completed_pointer_client_guard" in sql
+    assert "old.status in ('ready_for_rule', 'report_ready', 'handoff')" in sql
+    assert "new.address_id is distinct from old.address_id" in sql
+    assert "new.selected_floorplan_id is distinct from old.selected_floorplan_id" in sql
+    assert (
+        "new.selected_floorplan_upload_id is distinct from old.selected_floorplan_upload_id"
+        in sql
+    )
+    assert (
+        "new.selected_floorplan_asset_id is distinct from old.selected_floorplan_asset_id"
+        in sql
+    )
+    assert (
+        "authenticated clients cannot change session inputs after rule/report readiness"
+        in sql
+    )
+
+
 def test_floorplan_catalog_promotion_is_service_owned() -> None:
     sql = migration_sql()
     insert_policy = policy_sql(sql, "floorplans_owner_insert")
@@ -196,6 +221,23 @@ def test_session_address_session_and_user_are_client_immutable() -> None:
     assert "current_role = 'authenticated'" in sql
     assert "new.session_id is distinct from old.session_id" in sql
     assert "new.user_id is distinct from old.user_id" in sql
+
+
+def test_session_address_normalized_fields_are_service_controlled() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_session_address_client_normalized_mutation()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_normalized_client_guard" in sql
+    assert "new.building_identity := '{}'::jsonb" in sql
+    assert "new.address_provider := null" in sql
+    assert "new.normalized_at := null" in sql
+    assert "new.building_identity is distinct from old.building_identity" in sql
+    assert "new.address_provider is distinct from old.address_provider" in sql
+    assert "new.normalized_at is distinct from old.normalized_at" in sql
+    assert "authenticated clients cannot change normalized address fields" in sql
 
 
 def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
@@ -294,6 +336,10 @@ def test_chat_browser_writes_are_limited_to_user_messages() -> None:
     )
     assert "create trigger trg_chat_messages_client_created_at" in sql
     assert "new.created_at := now()" in sql
+    assert "new.content_redacted := false" in sql
+    assert "new.ui_components := '[]'::jsonb" in sql
+    assert "new.judgment_snapshot := null" in sql
+    assert "new.metadata := '{}'::jsonb" in sql
     assert not re.search(
         r"create policy chat_tool_calls_\w+.*?\n  for (insert|update|delete|all)\n",
         sql,
@@ -374,6 +420,23 @@ def test_referenced_original_asset_invariants_are_client_immutable() -> None:
     assert "new.owner_user_id = u.user_id" in sql
     assert (
         "authenticated clients cannot mutate referenced original asset invariants"
+        in sql
+    )
+
+
+def test_asset_catalog_and_upload_session_scopes_are_mutually_exclusive() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_floorplan_asset_mixed_parent_scope()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_assets_mixed_parent_scope_guard" in sql
+    assert "new.floorplan_id is not null" in sql
+    assert "new.floorplan_upload_id is not null" in sql
+    assert "new.session_id is not null" in sql
+    assert (
+        "floorplan_assets cannot mix catalog floorplan scope with upload or session scope"
         in sql
     )
 

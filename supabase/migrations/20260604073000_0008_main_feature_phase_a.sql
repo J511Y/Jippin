@@ -606,6 +606,39 @@ create trigger trg_sessions_service_fields_client_guard
   for each row
   execute function public.prevent_session_client_service_field_mutation();
 
+create or replace function public.prevent_completed_session_client_pointer_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and old.status in ('ready_for_rule', 'report_ready', 'handoff')
+    and (
+      new.address_id is distinct from old.address_id
+      or new.selected_floorplan_id is distinct from old.selected_floorplan_id
+      or new.selected_floorplan_upload_id is distinct from old.selected_floorplan_upload_id
+      or new.selected_floorplan_asset_id is distinct from old.selected_floorplan_asset_id
+    )
+  then
+    raise exception 'authenticated clients cannot change session inputs after rule/report readiness'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_sessions_completed_pointer_client_guard
+  before update of
+    address_id,
+    selected_floorplan_id,
+    selected_floorplan_upload_id,
+    selected_floorplan_asset_id
+  on public.sessions
+  for each row
+  execute function public.prevent_completed_session_client_pointer_mutation();
+
 create or replace function public.prevent_session_address_client_reparent()
 returns trigger
 language plpgsql
@@ -633,6 +666,41 @@ create trigger trg_session_addresses_client_reparent_guard
   on public.session_addresses
   for each row
   execute function public.prevent_session_address_client_reparent();
+
+create or replace function public.prevent_session_address_client_normalized_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role <> 'authenticated' then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    new.building_identity := '{}'::jsonb;
+    new.address_provider := null;
+    new.normalized_at := null;
+  elsif new.building_identity is distinct from old.building_identity
+    or new.address_provider is distinct from old.address_provider
+    or new.normalized_at is distinct from old.normalized_at
+  then
+    raise exception 'authenticated clients cannot change normalized address fields'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_session_addresses_normalized_client_guard
+  before insert or update of
+    building_identity,
+    address_provider,
+    normalized_at
+  on public.session_addresses
+  for each row
+  execute function public.prevent_session_address_client_normalized_mutation();
 
 create or replace function public.prevent_floorplan_client_catalog_promotion()
 returns trigger
@@ -804,6 +872,36 @@ create trigger trg_floorplan_assets_referenced_original_client_guard
   for each row
   execute function public.prevent_referenced_original_asset_client_mutation();
 
+create or replace function public.prevent_floorplan_asset_mixed_parent_scope()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and new.floorplan_id is not null
+    and (
+      new.floorplan_upload_id is not null
+      or new.session_id is not null
+    )
+  then
+    raise exception 'floorplan_assets cannot mix catalog floorplan scope with upload or session scope'
+      using errcode = '23514';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_floorplan_assets_mixed_parent_scope_guard
+  before insert or update of
+    floorplan_id,
+    floorplan_upload_id,
+    session_id
+  on public.floorplan_assets
+  for each row
+  execute function public.prevent_floorplan_asset_mixed_parent_scope();
+
 create or replace function public.enforce_chat_tool_call_message_scope()
 returns trigger
 language plpgsql
@@ -841,6 +939,10 @@ as $$
 begin
   if current_role = 'authenticated' then
     new.created_at := now();
+    new.content_redacted := false;
+    new.ui_components := '[]'::jsonb;
+    new.judgment_snapshot := null;
+    new.metadata := '{}'::jsonb;
   end if;
 
   return new;
