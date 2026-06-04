@@ -445,6 +445,110 @@ comment on column public.chat_tool_calls.input is
 comment on column public.chat_tool_calls.output is
   'Redacted tool output only. Store large outputs in object storage and keep pointers/summaries here.';
 
+create or replace function public.enforce_session_reference_scope()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.address_id is not null and not exists (
+    select 1
+    from public.session_addresses as sa
+    where sa.id = new.address_id
+      and sa.session_id = new.id
+      and sa.user_id = new.user_id
+  ) then
+    raise exception 'sessions.address_id must reference the same session address row'
+      using errcode = '23514';
+  end if;
+
+  if new.selected_floorplan_id is not null and not exists (
+    select 1
+    from public.floorplans as f
+    where f.id = new.selected_floorplan_id
+      and (
+        (
+          f.visibility = 'public_catalog'
+          and f.quality_status = 'verified'
+        )
+        or f.created_by = new.user_id
+      )
+  ) then
+    raise exception 'sessions.selected_floorplan_id must reference a readable floorplan'
+      using errcode = '23514';
+  end if;
+
+  if new.selected_floorplan_upload_id is not null and not exists (
+    select 1
+    from public.floorplan_uploads as u
+    where u.id = new.selected_floorplan_upload_id
+      and u.session_id = new.id
+      and u.user_id = new.user_id
+  ) then
+    raise exception 'sessions.selected_floorplan_upload_id must reference a same-session upload'
+      using errcode = '23514';
+  end if;
+
+  if new.selected_floorplan_asset_id is not null and not exists (
+    select 1
+    from public.floorplan_assets as a
+    where a.id = new.selected_floorplan_asset_id
+      and (
+        (
+          a.session_id = new.id
+          and (
+            a.owner_user_id is null
+            or a.owner_user_id = new.user_id
+          )
+        )
+        or (
+          a.owner_user_id = new.user_id
+          and (
+            a.session_id is null
+            or a.session_id = new.id
+          )
+        )
+        or exists (
+          select 1
+          from public.floorplan_uploads as u
+          where u.id = a.floorplan_upload_id
+            and u.session_id = new.id
+            and u.user_id = new.user_id
+        )
+        or exists (
+          select 1
+          from public.floorplans as f
+          where f.id = a.floorplan_id
+            and (
+              (
+                f.visibility = 'public_catalog'
+                and f.quality_status = 'verified'
+              )
+              or f.created_by = new.user_id
+            )
+        )
+      )
+  ) then
+    raise exception 'sessions.selected_floorplan_asset_id must reference a same-session or readable asset'
+      using errcode = '23514';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_sessions_reference_scope
+  before insert or update of
+    user_id,
+    address_id,
+    selected_floorplan_id,
+    selected_floorplan_upload_id,
+    selected_floorplan_asset_id
+  on public.sessions
+  for each row
+  execute function public.enforce_session_reference_scope();
+
 alter table public.sessions enable row level security;
 alter table public.session_addresses enable row level security;
 alter table public.floorplans enable row level security;
@@ -492,14 +596,22 @@ create policy floorplans_owner_insert
   on public.floorplans
   for insert
   to authenticated
-  with check (created_by = (select auth.uid()));
+  with check (
+    created_by = (select auth.uid())
+    and visibility = 'admin_only'
+    and quality_status in ('unverified', 'rejected', 'needs_review')
+  );
 
 create policy floorplans_owner_update
   on public.floorplans
   for update
   to authenticated
   using (created_by = (select auth.uid()))
-  with check (created_by = (select auth.uid()));
+  with check (
+    created_by = (select auth.uid())
+    and visibility = 'admin_only'
+    and quality_status in ('unverified', 'rejected', 'needs_review')
+  );
 
 create policy floorplans_owner_delete
   on public.floorplans
@@ -522,9 +634,9 @@ create policy floorplan_uploads_owner_all
     )
   );
 
-create policy floorplan_assets_owner_or_session_all
+create policy floorplan_assets_owner_or_session_read
   on public.floorplan_assets
-  for all
+  for select
   to authenticated
   using (
     owner_user_id = (select auth.uid())
@@ -546,14 +658,164 @@ create policy floorplan_assets_owner_or_session_all
           or f.created_by = (select auth.uid())
         )
     )
+  );
+
+create policy floorplan_assets_owner_or_session_insert
+  on public.floorplan_assets
+  for insert
+  to authenticated
+  with check (
+    owner_user_id = (select auth.uid())
+    and (
+      floorplan_id is null
+      or exists (
+        select 1
+        from public.floorplans as f
+        where f.id = floorplan_id
+          and f.created_by = (select auth.uid())
+          and f.visibility = 'admin_only'
+          and f.quality_status in ('unverified', 'rejected', 'needs_review')
+      )
+    )
+    and (
+      floorplan_upload_id is null
+      or exists (
+        select 1
+        from public.floorplan_uploads as u
+        where u.id = floorplan_upload_id
+          and u.user_id = (select auth.uid())
+          and (
+            session_id is null
+            or u.session_id = session_id
+          )
+      )
+    )
+    and (
+      session_id is null
+      or exists (
+        select 1
+        from public.sessions as s
+        where s.id = session_id
+          and s.user_id = (select auth.uid())
+      )
+    )
+  );
+
+create policy floorplan_assets_owner_or_session_update
+  on public.floorplan_assets
+  for update
+  to authenticated
+  using (
+    owner_user_id = (select auth.uid())
+    and (
+      floorplan_id is null
+      or exists (
+        select 1
+        from public.floorplans as f
+        where f.id = floorplan_id
+          and f.created_by = (select auth.uid())
+          and f.visibility = 'admin_only'
+          and f.quality_status in ('unverified', 'rejected', 'needs_review')
+        )
+    )
+    and (
+      floorplan_upload_id is null
+      or exists (
+        select 1
+        from public.floorplan_uploads as u
+        where u.id = floorplan_upload_id
+          and u.user_id = (select auth.uid())
+          and (
+            session_id is null
+            or u.session_id = session_id
+          )
+      )
+    )
+    and (
+      session_id is null
+      or exists (
+        select 1
+        from public.sessions as s
+        where s.id = session_id
+          and s.user_id = (select auth.uid())
+      )
+    )
   )
   with check (
     owner_user_id = (select auth.uid())
-    or exists (
-      select 1
-      from public.sessions as s
-      where s.id = session_id
-        and s.user_id = (select auth.uid())
+    and (
+      floorplan_id is null
+      or exists (
+        select 1
+        from public.floorplans as f
+        where f.id = floorplan_id
+          and f.created_by = (select auth.uid())
+          and f.visibility = 'admin_only'
+          and f.quality_status in ('unverified', 'rejected', 'needs_review')
+      )
+    )
+    and (
+      floorplan_upload_id is null
+      or exists (
+        select 1
+        from public.floorplan_uploads as u
+        where u.id = floorplan_upload_id
+          and u.user_id = (select auth.uid())
+          and (
+            session_id is null
+            or u.session_id = session_id
+          )
+        )
+    )
+    and (
+      session_id is null
+      or exists (
+        select 1
+        from public.sessions as s
+        where s.id = session_id
+          and s.user_id = (select auth.uid())
+      )
+    )
+  );
+
+create policy floorplan_assets_owner_or_session_delete
+  on public.floorplan_assets
+  for delete
+  to authenticated
+  using (
+    owner_user_id = (select auth.uid())
+    and (
+      floorplan_id is null
+      or exists (
+        select 1
+        from public.floorplans as f
+        where f.id = floorplan_id
+          and f.created_by = (select auth.uid())
+          and f.visibility = 'admin_only'
+          and f.quality_status in ('unverified', 'rejected', 'needs_review')
+        )
+    )
+    and (
+      floorplan_upload_id is null
+      or exists (
+        select 1
+        from public.floorplan_uploads as u
+        where u.id = floorplan_upload_id
+          and u.user_id = (select auth.uid())
+          and (
+            session_id is null
+            or u.session_id = session_id
+          )
+      )
+    )
+    and (
+      session_id is null
+      or exists (
+        select 1
+        from public.sessions as s
+        where s.id = session_id
+          and s.user_id = (select auth.uid())
+      )
     )
   );
 
@@ -578,9 +840,9 @@ create policy floorplan_candidates_session_owner_all
     )
   );
 
-create policy chat_messages_session_owner_all
+create policy chat_messages_session_owner_read
   on public.chat_messages
-  for all
+  for select
   to authenticated
   using (
     exists (
@@ -589,20 +851,51 @@ create policy chat_messages_session_owner_all
       where s.id = session_id
         and s.user_id = (select auth.uid())
     )
-  )
-  with check (
-    exists (
-      select 1
-      from public.sessions as s
-      where s.id = session_id
-        and s.user_id = (select auth.uid())
-    )
-    and (user_id is null or user_id = (select auth.uid()))
   );
 
-create policy chat_tool_calls_session_owner_all
+create policy chat_messages_user_insert
+  on public.chat_messages
+  for insert
+  to authenticated
+  with check (
+    role = 'user'
+    and user_id = (select auth.uid())
+    and exists (
+      select 1
+      from public.sessions as s
+      where s.id = session_id
+        and s.user_id = (select auth.uid())
+    )
+  );
+
+create policy chat_messages_user_update
+  on public.chat_messages
+  for update
+  to authenticated
+  using (
+    role = 'user'
+    and user_id = (select auth.uid())
+    and exists (
+      select 1
+      from public.sessions as s
+      where s.id = session_id
+        and s.user_id = (select auth.uid())
+    )
+  )
+  with check (
+    role = 'user'
+    and user_id = (select auth.uid())
+    and exists (
+      select 1
+      from public.sessions as s
+      where s.id = session_id
+        and s.user_id = (select auth.uid())
+    )
+  );
+
+create policy chat_tool_calls_session_owner_read
   on public.chat_tool_calls
-  for all
+  for select
   to authenticated
   using (
     exists (
@@ -611,13 +904,4 @@ create policy chat_tool_calls_session_owner_all
       where s.id = session_id
         and s.user_id = (select auth.uid())
     )
-  )
-  with check (
-    exists (
-      select 1
-      from public.sessions as s
-      where s.id = session_id
-        and s.user_id = (select auth.uid())
-    )
-    and (user_id is null or user_id = (select auth.uid()))
   );
