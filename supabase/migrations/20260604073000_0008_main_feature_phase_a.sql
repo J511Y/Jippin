@@ -568,6 +568,8 @@ begin
   end if;
 
   if tg_op = 'INSERT' then
+    new.last_activity_at := now();
+
     if new.status <> 'draft'
       or new.judgment_schema <> '{}'::jsonb
       or new.judgment_schema_version is not null
@@ -632,6 +634,49 @@ create trigger trg_session_addresses_client_reparent_guard
   for each row
   execute function public.prevent_session_address_client_reparent();
 
+create or replace function public.prevent_floorplan_client_catalog_promotion()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role <> 'authenticated' then
+    return new;
+  end if;
+
+  if tg_op = 'UPDATE' and (
+    old.source = 'promoted_upload'
+    or old.visibility = 'public_catalog'
+    or old.quality_status = 'verified'
+    or old.promoted_from_upload_id is not null
+  ) then
+    raise exception 'authenticated clients cannot mutate service-owned catalog floorplans'
+      using errcode = '42501';
+  end if;
+
+  if new.source = 'promoted_upload'
+    or new.visibility = 'public_catalog'
+    or new.quality_status = 'verified'
+    or new.promoted_from_upload_id is not null
+  then
+    raise exception 'authenticated clients cannot promote catalog floorplans'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_floorplans_client_catalog_promotion_guard
+  before insert or update of
+    source,
+    visibility,
+    quality_status,
+    promoted_from_upload_id
+  on public.floorplans
+  for each row
+  execute function public.prevent_floorplan_client_catalog_promotion();
+
 create or replace function public.enforce_floorplan_upload_original_asset_scope()
 returns trigger
 language plpgsql
@@ -664,7 +709,7 @@ create trigger trg_floorplan_uploads_original_asset_scope
   for each row
   execute function public.enforce_floorplan_upload_original_asset_scope();
 
-create or replace function public.prevent_floorplan_upload_client_status_mutation()
+create or replace function public.prevent_floorplan_upload_client_service_mutation()
 returns trigger
 language plpgsql
 set search_path = public, pg_temp
@@ -679,6 +724,9 @@ begin
       raise exception 'authenticated clients cannot set service-controlled upload status'
         using errcode = '42501';
     end if;
+  elsif old.status not in ('uploaded', 'scan_pending') then
+    raise exception 'authenticated clients cannot mutate service-controlled upload rows'
+      using errcode = '42501';
   elsif new.status is distinct from old.status then
     raise exception 'authenticated clients cannot change service-controlled upload status'
       using errcode = '42501';
@@ -688,11 +736,67 @@ begin
 end;
 $$;
 
-create trigger trg_floorplan_uploads_status_client_guard
-  before insert or update of status
+create trigger trg_floorplan_uploads_client_service_guard
+  before insert or update of
+    session_id,
+    user_id,
+    original_asset_id,
+    status,
+    file_name,
+    source_note,
+    upload_metadata
   on public.floorplan_uploads
   for each row
-  execute function public.prevent_floorplan_upload_client_status_mutation();
+  execute function public.prevent_floorplan_upload_client_service_mutation();
+
+create or replace function public.enforce_chat_tool_call_message_scope()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.message_id is not null and not exists (
+    select 1
+    from public.chat_messages as m
+    where m.id = new.message_id
+      and m.session_id = new.session_id
+  ) then
+    raise exception 'chat_tool_calls.message_id must reference a message in the same session'
+      using errcode = '23514';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_chat_tool_calls_message_scope
+  before insert or update of
+    session_id,
+    message_id
+  on public.chat_tool_calls
+  for each row
+  execute function public.enforce_chat_tool_call_message_scope();
+
+create or replace function public.force_chat_message_client_created_at()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated' then
+    new.created_at := now();
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_chat_messages_client_created_at
+  before insert
+  on public.chat_messages
+  for each row
+  execute function public.force_chat_message_client_created_at();
 
 alter table public.sessions enable row level security;
 alter table public.session_addresses enable row level security;
@@ -743,7 +847,9 @@ create policy floorplans_owner_insert
   to authenticated
   with check (
     created_by = (select auth.uid())
+    and source in ('internal', 'external_candidate')
     and visibility = 'admin_only'
+    and promoted_from_upload_id is null
     and quality_status in ('unverified', 'rejected', 'needs_review')
   );
 
@@ -751,10 +857,18 @@ create policy floorplans_owner_update
   on public.floorplans
   for update
   to authenticated
-  using (created_by = (select auth.uid()))
+  using (
+    created_by = (select auth.uid())
+    and source in ('internal', 'external_candidate')
+    and visibility = 'admin_only'
+    and promoted_from_upload_id is null
+    and quality_status in ('unverified', 'rejected', 'needs_review')
+  )
   with check (
     created_by = (select auth.uid())
+    and source in ('internal', 'external_candidate')
     and visibility = 'admin_only'
+    and promoted_from_upload_id is null
     and quality_status in ('unverified', 'rejected', 'needs_review')
   );
 
@@ -762,15 +876,46 @@ create policy floorplans_owner_delete
   on public.floorplans
   for delete
   to authenticated
-  using (created_by = (select auth.uid()));
+  using (
+    created_by = (select auth.uid())
+    and source in ('internal', 'external_candidate')
+    and visibility = 'admin_only'
+    and promoted_from_upload_id is null
+    and quality_status in ('unverified', 'rejected', 'needs_review')
+  );
 
-create policy floorplan_uploads_owner_all
+create policy floorplan_uploads_owner_read
   on public.floorplan_uploads
-  for all
+  for select
   to authenticated
-  using (user_id = (select auth.uid()))
+  using (user_id = (select auth.uid()));
+
+create policy floorplan_uploads_owner_insert
+  on public.floorplan_uploads
+  for insert
+  to authenticated
   with check (
     user_id = (select auth.uid())
+    and status in ('uploaded', 'scan_pending')
+    and exists (
+      select 1
+      from public.sessions as s
+      where s.id = session_id
+        and s.user_id = (select auth.uid())
+    )
+  );
+
+create policy floorplan_uploads_owner_update
+  on public.floorplan_uploads
+  for update
+  to authenticated
+  using (
+    user_id = (select auth.uid())
+    and status in ('uploaded', 'scan_pending')
+  )
+  with check (
+    user_id = (select auth.uid())
+    and status in ('uploaded', 'scan_pending')
     and exists (
       select 1
       from public.sessions as s

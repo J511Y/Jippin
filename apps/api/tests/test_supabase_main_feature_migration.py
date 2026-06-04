@@ -144,12 +144,43 @@ def test_session_workflow_result_fields_are_service_controlled() -> None:
     )
     assert "create trigger trg_sessions_service_fields_client_guard" in sql
     assert "current_role <> 'authenticated'" in sql
+    assert "new.last_activity_at := now()" in sql
     assert "new.status <> 'draft'" in sql
     assert "new.judgment_schema <> '{}'::jsonb" in sql
     assert "new.completion_decision is not null" in sql
     assert "new.status is distinct from old.status" in sql
     assert "new.judgment_schema is distinct from old.judgment_schema" in sql
     assert "new.completion_decision is distinct from old.completion_decision" in sql
+    assert "new.last_activity_at is distinct from old.last_activity_at" in sql
+
+
+def test_floorplan_catalog_promotion_is_service_owned() -> None:
+    sql = migration_sql()
+    insert_policy = policy_sql(sql, "floorplans_owner_insert")
+    update_policy = policy_sql(sql, "floorplans_owner_update")
+    delete_policy = policy_sql(sql, "floorplans_owner_delete")
+
+    assert (
+        "create or replace function public.prevent_floorplan_client_catalog_promotion()"
+        in sql
+    )
+    assert "create trigger trg_floorplans_client_catalog_promotion_guard" in sql
+    assert "old.source = 'promoted_upload'" in sql
+    assert "old.visibility = 'public_catalog'" in sql
+    assert "old.quality_status = 'verified'" in sql
+    assert "old.promoted_from_upload_id is not null" in sql
+    assert "new.promoted_from_upload_id is not null" in sql
+    assert "authenticated clients cannot promote catalog floorplans" in sql
+
+    for mutation_policy in (insert_policy, update_policy, delete_policy):
+        assert "source in ('internal', 'external_candidate')" in mutation_policy
+        assert "visibility = 'admin_only'" in mutation_policy
+        assert "promoted_from_upload_id is null" in mutation_policy
+        assert "quality_status in ('unverified', 'rejected', 'needs_review')" in (
+            mutation_policy
+        )
+        assert "visibility = 'public_catalog'" not in mutation_policy
+        assert "quality_status = 'verified'" not in mutation_policy
 
 
 def test_session_address_session_and_user_are_client_immutable() -> None:
@@ -183,13 +214,36 @@ def test_floorplan_upload_status_is_service_controlled_after_initial_write() -> 
     sql = migration_sql()
 
     assert (
-        "create or replace function public.prevent_floorplan_upload_client_status_mutation()"
+        "create or replace function public.prevent_floorplan_upload_client_service_mutation()"
         in sql
     )
-    assert "create trigger trg_floorplan_uploads_status_client_guard" in sql
+    assert "create trigger trg_floorplan_uploads_client_service_guard" in sql
     assert "new.status not in ('uploaded', 'scan_pending')" in sql
+    assert "old.status not in ('uploaded', 'scan_pending')" in sql
     assert "new.status is distinct from old.status" in sql
+    assert "authenticated clients cannot mutate service-controlled upload rows" in sql
     assert "authenticated clients cannot change service-controlled upload status" in sql
+
+
+def test_floorplan_upload_policies_split_read_insert_update_without_delete() -> None:
+    sql = migration_sql()
+    read_policy = policy_sql(sql, "floorplan_uploads_owner_read")
+    insert_policy = policy_sql(sql, "floorplan_uploads_owner_insert")
+    update_policy = policy_sql(sql, "floorplan_uploads_owner_update")
+
+    assert "create policy floorplan_uploads_owner_all" not in sql
+    assert "\n  for select\n" in read_policy
+    assert "\n  for insert\n" in insert_policy
+    assert "\n  for update\n" in update_policy
+    assert "status in ('uploaded', 'scan_pending')" in insert_policy
+    assert "status in ('uploaded', 'scan_pending')" in update_policy
+    upload_policy_modes = re.findall(
+        r"create policy floorplan_uploads_\w+\n"
+        r"  on public\.floorplan_uploads\n"
+        r"  for (\w+)",
+        sql,
+    )
+    assert sorted(upload_policy_modes) == ["insert", "select", "update"]
 
 
 def test_asset_upload_session_comparison_is_outer_row_qualified() -> None:
@@ -232,6 +286,12 @@ def test_chat_browser_writes_are_limited_to_user_messages() -> None:
         "chat_messages_session_owner_read",
         "chat_messages_user_insert",
     ]
+    assert (
+        "create or replace function public.force_chat_message_client_created_at()"
+        in sql
+    )
+    assert "create trigger trg_chat_messages_client_created_at" in sql
+    assert "new.created_at := now()" in sql
     assert not re.search(
         r"create policy chat_tool_calls_\w+.*?\n  for (insert|update|delete|all)\n",
         sql,
@@ -246,12 +306,30 @@ def test_catalog_verification_is_not_user_mutable() -> None:
 
     for mutation_policy in (insert_policy, update_policy):
         assert "created_by = (select auth.uid())" in mutation_policy
+        assert "source in ('internal', 'external_candidate')" in mutation_policy
         assert "visibility = 'admin_only'" in mutation_policy
+        assert "promoted_from_upload_id is null" in mutation_policy
         assert "quality_status in ('unverified', 'rejected', 'needs_review')" in (
             mutation_policy
         )
         assert "quality_status = 'verified'" not in mutation_policy
         assert "visibility = 'public_catalog'" not in mutation_policy
+
+
+def test_chat_tool_call_message_is_same_session() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.enforce_chat_tool_call_message_scope()"
+        in sql
+    )
+    assert "create trigger trg_chat_tool_calls_message_scope" in sql
+    assert "from public.chat_messages as m" in sql
+    assert "m.id = new.message_id" in sql
+    assert "m.session_id = new.session_id" in sql
+    assert (
+        "chat_tool_calls.message_id must reference a message in the same session" in sql
+    )
 
 
 def test_authenticated_asset_writes_cannot_mark_scan_results() -> None:
