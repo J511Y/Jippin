@@ -481,7 +481,10 @@ create policy floorplans_owner_or_public_read
   for select
   to authenticated
   using (
-    visibility = 'public_catalog'
+    (
+      visibility = 'public_catalog'
+      and quality_status = 'verified'
+    )
     or created_by = (select auth.uid())
   );
 
@@ -536,7 +539,10 @@ create policy floorplan_assets_owner_or_session_all
       from public.floorplans as f
       where f.id = floorplan_id
         and (
-          f.visibility = 'public_catalog'
+          (
+            f.visibility = 'public_catalog'
+            and f.quality_status = 'verified'
+          )
           or f.created_by = (select auth.uid())
         )
     )

@@ -54,6 +54,16 @@ def test_phase_a_supabase_migration_enables_rls_for_user_owned_tables() -> None:
     assert "(select auth.uid())" in sql
 
 
+def test_public_catalog_rls_requires_verified_floorplans() -> None:
+    sql = migration_sql()
+
+    assert "visibility = 'public_catalog'\n      and quality_status = 'verified'" in sql
+    assert (
+        "f.visibility = 'public_catalog'\n            and f.quality_status = 'verified'"
+        in sql
+    )
+
+
 def test_phase_a_supabase_migration_keeps_chat_tool_payload_columns() -> None:
     sql = migration_sql()
 
