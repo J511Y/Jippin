@@ -92,6 +92,8 @@ def test_floorplan_asset_public_catalog_read_is_select_only() -> None:
     assert "\n  for insert\n" in insert_policy
     assert "\n  for update\n" in update_policy
     assert "\n  for delete\n" in delete_policy
+    assert "and scan_status = 'pending'" in delete_policy
+    assert "u.original_asset_id = public.floorplan_assets.id" in delete_policy
     for mutation_policy in (insert_policy, update_policy, delete_policy):
         assert "owner_user_id = (select auth.uid())" in mutation_policy
         assert "floorplan_id is null" in mutation_policy
@@ -336,6 +338,7 @@ def test_authenticated_asset_writes_cannot_mark_scan_results() -> None:
     sql = migration_sql()
     insert_policy = policy_sql(sql, "floorplan_assets_owner_or_session_insert")
     update_policy = policy_sql(sql, "floorplan_assets_owner_or_session_update")
+    delete_policy = policy_sql(sql, "floorplan_assets_owner_or_session_delete")
 
     assert "scan_status text not null default 'pending'" in sql
     assert (
@@ -348,6 +351,31 @@ def test_authenticated_asset_writes_cannot_mark_scan_results() -> None:
     assert "scan_status = 'clean'" not in update_policy
     assert "scan_status = 'not_required'" not in insert_policy
     assert "scan_status = 'not_required'" not in update_policy
+    assert "and scan_status = 'pending'" in delete_policy
+
+
+def test_referenced_original_asset_invariants_are_client_immutable() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_referenced_original_asset_client_mutation()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_assets_referenced_original_client_guard" in sql
+    assert "u.original_asset_id = old.id" in sql
+    assert "new.kind is distinct from old.kind" in sql
+    assert "new.scan_status is distinct from old.scan_status" in sql
+    assert "new.session_id is distinct from old.session_id" in sql
+    assert "new.owner_user_id is distinct from old.owner_user_id" in sql
+    assert "new.floorplan_upload_id is distinct from old.floorplan_upload_id" in sql
+    assert "new.floorplan_id is distinct from old.floorplan_id" in sql
+    assert "new.kind = 'original'" in sql
+    assert "new.session_id = u.session_id" in sql
+    assert "new.owner_user_id = u.user_id" in sql
+    assert (
+        "authenticated clients cannot mutate referenced original asset invariants"
+        in sql
+    )
 
 
 def test_phase_a_supabase_migration_keeps_chat_tool_payload_columns() -> None:

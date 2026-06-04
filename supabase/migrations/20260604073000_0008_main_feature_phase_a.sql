@@ -749,6 +749,61 @@ create trigger trg_floorplan_uploads_client_service_guard
   for each row
   execute function public.prevent_floorplan_upload_client_service_mutation();
 
+create or replace function public.prevent_referenced_original_asset_client_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role <> 'authenticated' then
+    return new;
+  end if;
+
+  if exists (
+    select 1
+    from public.floorplan_uploads as u
+    where u.original_asset_id = old.id
+  ) then
+    if new.kind is distinct from old.kind
+      or new.scan_status is distinct from old.scan_status
+      or new.session_id is distinct from old.session_id
+      or new.owner_user_id is distinct from old.owner_user_id
+      or new.floorplan_upload_id is distinct from old.floorplan_upload_id
+      or new.floorplan_id is distinct from old.floorplan_id
+    then
+      raise exception 'authenticated clients cannot mutate referenced original asset invariants'
+        using errcode = '42501';
+    end if;
+
+    if not exists (
+      select 1
+      from public.floorplan_uploads as u
+      where u.original_asset_id = old.id
+        and new.kind = 'original'
+        and new.session_id = u.session_id
+        and new.owner_user_id = u.user_id
+    ) then
+      raise exception 'referenced original asset must remain same-session owner original'
+        using errcode = '23514';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_floorplan_assets_referenced_original_client_guard
+  before update of
+    floorplan_id,
+    floorplan_upload_id,
+    session_id,
+    owner_user_id,
+    kind,
+    scan_status
+  on public.floorplan_assets
+  for each row
+  execute function public.prevent_referenced_original_asset_client_mutation();
+
 create or replace function public.enforce_chat_tool_call_message_scope()
 returns trigger
 language plpgsql
@@ -1077,6 +1132,12 @@ create policy floorplan_assets_owner_or_session_delete
   to authenticated
   using (
     owner_user_id = (select auth.uid())
+    and scan_status = 'pending'
+    and not exists (
+      select 1
+      from public.floorplan_uploads as u
+      where u.original_asset_id = public.floorplan_assets.id
+    )
     and (
       floorplan_id is null
       or exists (
