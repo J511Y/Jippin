@@ -1,0 +1,768 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+
+MIGRATION = (
+    Path(__file__).resolve().parents[3]
+    / "supabase"
+    / "migrations"
+    / "20260604073000_0008_main_feature_phase_a.sql"
+)
+
+PHASE_A_TABLES = {
+    "sessions",
+    "session_addresses",
+    "floorplans",
+    "floorplan_uploads",
+    "floorplan_assets",
+    "floorplan_candidates",
+    "chat_messages",
+    "chat_tool_calls",
+}
+
+
+def migration_sql() -> str:
+    return MIGRATION.read_text(encoding="utf-8").lower()
+
+
+def policy_sql(sql: str, policy_name: str) -> str:
+    pattern = (
+        rf"create policy {re.escape(policy_name)}\b"
+        r".*?(?=\ncreate policy |\ncreate trigger |\Z)"
+    )
+    match = re.search(pattern, sql, flags=re.DOTALL)
+    assert match is not None, f"policy {policy_name} not found"
+    return match.group(0)
+
+
+def test_phase_a_supabase_migration_creates_required_tables() -> None:
+    sql = migration_sql()
+
+    for table_name in PHASE_A_TABLES:
+        assert f"create table public.{table_name}" in sql
+
+
+def test_phase_a_supabase_migration_uses_auth_users_ownership() -> None:
+    sql = migration_sql()
+
+    assert "references auth.users (id)" in sql
+    assert (
+        "sessions (\n  id uuid not null default gen_random_uuid(),\n  user_id uuid not null"
+        in sql
+    )
+    assert "floorplan_uploads (\n  id uuid not null default gen_random_uuid()," in sql
+    assert "user_id uuid not null" in sql
+
+
+def test_phase_a_supabase_migration_enables_rls_for_user_owned_tables() -> None:
+    sql = migration_sql()
+
+    for table_name in PHASE_A_TABLES:
+        assert f"alter table public.{table_name} enable row level security;" in sql
+
+    assert "(select auth.uid())" in sql
+
+
+def test_phase_a_supabase_migration_grants_authenticated_api_access() -> None:
+    sql = migration_sql()
+
+    assert "grant usage on schema public to authenticated;" in sql
+    assert "grant select, insert, update, delete" in sql
+    assert "public.sessions" in sql
+    assert "public.session_addresses" in sql
+    assert "public.floorplans" in sql
+    assert "public.floorplan_assets" in sql
+    assert "grant select, insert, update\n  on public.floorplan_uploads" in sql
+    assert "grant select\n  on public.chat_messages" in sql
+    assert "grant insert\n  on public.chat_messages" not in sql
+    assert "grant select\n  on public.floorplan_candidates" in sql
+    assert "public.chat_tool_calls\n  to authenticated" in sql
+    assert "grant insert\n  on public.chat_tool_calls" not in sql
+    assert "grant update\n  on public.chat_tool_calls" not in sql
+
+
+def test_public_catalog_rls_requires_verified_floorplans() -> None:
+    sql = migration_sql()
+
+    assert "visibility = 'public_catalog'\n      and quality_status = 'verified'" in sql
+    assert (
+        "f.visibility = 'public_catalog'\n          and f.quality_status = 'verified'"
+        in sql
+    )
+
+
+def test_floorplan_asset_public_catalog_read_is_select_only() -> None:
+    sql = migration_sql()
+    read_policy = policy_sql(sql, "floorplan_assets_owner_or_session_read")
+    insert_policy = policy_sql(sql, "floorplan_assets_owner_or_session_insert")
+    update_policy = policy_sql(sql, "floorplan_assets_owner_or_session_update")
+    delete_policy = policy_sql(sql, "floorplan_assets_owner_or_session_delete")
+
+    assert "\n  for select\n" in read_policy
+    assert (
+        "f.visibility = 'public_catalog'\n          and f.quality_status = 'verified'"
+        in read_policy
+    )
+    assert "kind in ('thumbnail', 'preview')" in read_policy
+    for unsafe_kind in (
+        "'ocr_debug'",
+        "'segmentation_mask'",
+        "'overlay'",
+        "'report_pdf'",
+        "'report_image'",
+        "'masked'",
+    ):
+        assert unsafe_kind not in read_policy
+    assert "from public.floorplan_uploads as u" in read_policy
+    assert "where u.id = floorplan_upload_id" in read_policy
+    assert "and u.user_id = (select auth.uid())" in read_policy
+    assert "create policy floorplan_assets_owner_or_session_all" not in sql
+
+    assert "\n  for insert\n" in insert_policy
+    assert "\n  for update\n" in update_policy
+    assert "\n  for delete\n" in delete_policy
+    assert "and scan_status = 'pending'" in delete_policy
+    assert "u.original_asset_id = public.floorplan_assets.id" in delete_policy
+    for mutation_policy in (insert_policy, update_policy, delete_policy):
+        assert "owner_user_id = (select auth.uid())" in mutation_policy
+        assert "floorplan_id is null" in mutation_policy
+        assert "floorplan_upload_id is null" in mutation_policy
+        assert "session_id is null" in mutation_policy
+        assert "f.created_by = (select auth.uid())" in mutation_policy
+        assert "f.visibility = 'admin_only'" in mutation_policy
+        assert "u.user_id = (select auth.uid())" in mutation_policy
+        assert "or f.created_by = (select auth.uid())" not in mutation_policy
+        assert "visibility = 'public_catalog'" not in mutation_policy
+        assert "quality_status = 'verified'" not in mutation_policy
+
+
+def test_sessions_reference_pointers_are_guarded_by_trigger() -> None:
+    sql = migration_sql()
+
+    assert "create or replace function public.enforce_session_reference_scope()" in sql
+    assert "create trigger trg_sessions_reference_scope" in sql
+    assert "before insert or update of" in sql
+    assert "sessions must select exactly one floorplan source" in sql
+    assert "sessions entering analysis must select a floorplan source" in sql
+    assert "sa.session_id = new.id" in sql
+    assert "u.session_id = new.id" in sql
+    assert "a.session_id = new.id" in sql
+    assert (
+        "f.visibility = 'public_catalog'\n          and f.quality_status = 'verified'"
+        in sql
+    )
+    assert (
+        "sessions.selected_floorplan_upload_id must reference a same-session upload"
+        in sql
+    )
+    assert (
+        "join public.floorplan_assets as a\n        on a.id = u.original_asset_id"
+        in sql
+    )
+    assert (
+        "u.status in (\n          'ready_for_processing',\n          'processing',\n"
+        in sql
+    )
+    assert "and a.scan_status = 'clean'" in sql
+    assert (
+        "sessions.selected_floorplan_upload_id must reference a clean processable upload for analysis"
+        in sql
+    )
+    assert "and new.address_id is null" in sql
+    assert "sessions entering analysis must reference a same-session address" in sql
+
+
+def test_selected_asset_matches_selected_source() -> None:
+    sql = migration_sql()
+
+    assert "new.selected_floorplan_id is null" in sql
+    assert "or a.floorplan_id = new.selected_floorplan_id" in sql
+    assert "new.selected_floorplan_upload_id is null" in sql
+    assert "or a.floorplan_upload_id = new.selected_floorplan_upload_id" in sql
+    assert "new.selected_floorplan_id is not null" in sql
+    assert "new.selected_floorplan_upload_id is not null" in sql
+    assert "a.session_id = new.id" in sql
+    assert "a.owner_user_id = new.user_id" in sql
+
+
+def test_session_workflow_result_fields_are_service_controlled() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_session_client_service_field_mutation()"
+        in sql
+    )
+    assert "create trigger trg_sessions_service_fields_client_guard" in sql
+    assert "current_role <> 'authenticated'" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.updated_at := new.created_at" in sql
+    assert "new.last_activity_at := new.created_at" in sql
+    assert "new.status <> 'draft'" in sql
+    assert "new.judgment_schema <> '{}'::jsonb" in sql
+    assert "new.completion_decision is not null" in sql
+    assert "new.created_at is distinct from old.created_at" in sql
+    assert "new.updated_at := now()" in sql
+    assert "new.status is distinct from old.status" in sql
+    assert "new.judgment_schema is distinct from old.judgment_schema" in sql
+    assert "new.completion_decision is distinct from old.completion_decision" in sql
+    assert "new.last_activity_at is distinct from old.last_activity_at" in sql
+    assert "authenticated clients cannot change session audit timestamps" in sql
+
+
+def test_completed_session_input_pointers_are_service_controlled() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_completed_session_client_pointer_mutation()"
+        in sql
+    )
+    assert "create trigger trg_sessions_completed_pointer_client_guard" in sql
+    assert "'analyzing'" in sql
+    assert "'awaiting_overlay'" in sql
+    assert "'collecting_info'" in sql
+    assert "'ready_for_rule'" in sql
+    assert "'report_ready'" in sql
+    assert "'handoff'" in sql
+    assert "new.address_id is distinct from old.address_id" in sql
+    assert "new.selected_floorplan_id is distinct from old.selected_floorplan_id" in sql
+    assert (
+        "new.selected_floorplan_upload_id is distinct from old.selected_floorplan_upload_id"
+        in sql
+    )
+    assert (
+        "new.selected_floorplan_asset_id is distinct from old.selected_floorplan_asset_id"
+        in sql
+    )
+    assert (
+        "authenticated clients cannot change session inputs after rule/report readiness"
+        in sql
+    )
+
+
+def test_active_sessions_are_not_browser_hard_deleted() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_active_session_client_delete()"
+        in sql
+    )
+    assert "create trigger trg_sessions_active_delete_client_guard" in sql
+    assert "old.status not in ('draft', 'expired', 'deleted')" in sql
+    assert "authenticated clients cannot hard-delete active sessions" in sql
+
+
+def test_floorplan_catalog_promotion_is_service_owned() -> None:
+    sql = migration_sql()
+    insert_policy = policy_sql(sql, "floorplans_owner_insert")
+    update_policy = policy_sql(sql, "floorplans_owner_update")
+    delete_policy = policy_sql(sql, "floorplans_owner_delete")
+
+    assert (
+        "create or replace function public.prevent_floorplan_client_catalog_promotion()"
+        in sql
+    )
+    assert "create trigger trg_floorplans_client_catalog_promotion_guard" in sql
+    assert "old.source = 'promoted_upload'" in sql
+    assert "old.visibility = 'public_catalog'" in sql
+    assert "old.quality_status = 'verified'" in sql
+    assert "old.promoted_from_upload_id is not null" in sql
+    assert "new.promoted_from_upload_id is not null" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.updated_at := new.created_at" in sql
+    assert "new.created_at is distinct from old.created_at" in sql
+    assert "new.updated_at := now()" in sql
+    assert "authenticated clients cannot change floorplan audit timestamps" in sql
+    assert "authenticated clients cannot promote catalog floorplans" in sql
+
+    for mutation_policy in (insert_policy, update_policy, delete_policy):
+        assert "source in ('internal', 'external_candidate')" in mutation_policy
+        assert "visibility = 'admin_only'" in mutation_policy
+        assert "promoted_from_upload_id is null" in mutation_policy
+        assert "quality_status in ('unverified', 'rejected', 'needs_review')" in (
+            mutation_policy
+        )
+        assert "visibility = 'public_catalog'" not in mutation_policy
+        assert "quality_status = 'verified'" not in mutation_policy
+
+
+def test_session_address_session_and_user_are_client_immutable() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_session_address_client_reparent()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_client_reparent_guard" in sql
+    assert "current_role = 'authenticated'" in sql
+    assert "new.session_id is distinct from old.session_id" in sql
+    assert "new.user_id is distinct from old.user_id" in sql
+
+
+def test_session_address_created_at_is_server_controlled() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_session_address_client_created_at_mutation()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_created_at_client_guard" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.created_at is distinct from old.created_at" in sql
+    assert "authenticated clients cannot change address audit timestamps" in sql
+
+
+def test_session_address_normalized_fields_are_service_controlled() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_session_address_client_normalized_mutation()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_normalized_client_guard" in sql
+    assert "new.building_identity := '{}'::jsonb" in sql
+    assert "new.address_provider := null" in sql
+    assert "new.normalized_at := null" in sql
+    assert "new.building_identity is distinct from old.building_identity" in sql
+    assert "new.address_provider is distinct from old.address_provider" in sql
+    assert "new.normalized_at is distinct from old.normalized_at" in sql
+    assert "authenticated clients cannot change normalized address fields" in sql
+
+
+def test_session_address_raw_input_resets_stale_normalization() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.reset_session_address_client_normalization()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_input_normalization_reset" in sql
+    for column in (
+        "road_address",
+        "jibun_address",
+        "apartment_name",
+        "building_dong",
+        "unit_ho",
+        "floor_no",
+        "exclusive_area_m2",
+        "size_type",
+    ):
+        assert f"new.{column} is distinct from old.{column}" in sql
+    assert "new.building_identity := '{}'::jsonb" in sql
+    assert "new.address_provider := null" in sql
+    assert "new.normalized_at := null" in sql
+
+
+def test_current_address_is_frozen_after_analysis_starts() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_active_session_address_client_mutation()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_active_client_guard" in sql
+    assert "s.address_id = old.id" in sql
+    for status in (
+        "analyzing",
+        "awaiting_overlay",
+        "collecting_info",
+        "ready_for_rule",
+        "report_ready",
+        "handoff",
+    ):
+        assert f"'{status}'" in sql
+    assert (
+        "authenticated clients cannot change current address after analysis starts"
+        in sql
+    )
+
+
+def test_current_or_active_address_delete_is_service_controlled() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_active_session_address_client_delete()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_active_delete_client_guard" in sql
+    assert "s.address_id = old.id" in sql
+    assert "s.id = old.session_id" in sql
+    assert (
+        "authenticated clients cannot delete current or active session addresses" in sql
+    )
+
+
+def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.enforce_floorplan_upload_original_asset_scope()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_uploads_original_asset_scope" in sql
+    assert "original_asset_id,\n    status" in sql
+    assert "a.id = new.original_asset_id" in sql
+    assert "a.floorplan_upload_id = new.id" in sql
+    assert "a.session_id = new.session_id" in sql
+    assert "a.owner_user_id = new.user_id" in sql
+    assert "a.kind = 'original'" in sql
+    assert "new.status in (\n    'scan_pending'," in sql
+    assert "and new.original_asset_id is null" in sql
+    assert "floorplan_uploads queue-visible status requires an original asset" in sql
+    assert "new.status in (\n    'ready_for_processing',\n    'processing',\n" in sql
+    assert "and a.scan_status = 'clean'" in sql
+    assert "floorplan_uploads processing status requires a clean original asset" in sql
+
+
+def test_floorplan_upload_status_is_service_controlled_after_initial_write() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_floorplan_upload_client_service_mutation()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_uploads_client_service_guard" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.updated_at := new.created_at" in sql
+    assert "new.status <> 'uploaded'" in sql
+    assert "new.created_at is distinct from old.created_at" in sql
+    assert "new.updated_at := now()" in sql
+    assert "new.session_id is distinct from old.session_id" in sql
+    assert "authenticated clients cannot move floorplan uploads between sessions" in sql
+    assert "old.status <> 'uploaded'" in sql
+    assert "new.status is distinct from old.status" in sql
+    assert "authenticated clients cannot change upload audit timestamps" in sql
+    assert "authenticated clients cannot mutate service-controlled upload rows" in sql
+    assert "authenticated clients cannot change service-controlled upload status" in sql
+
+
+def test_floorplan_upload_policies_split_read_insert_update_without_delete() -> None:
+    sql = migration_sql()
+    read_policy = policy_sql(sql, "floorplan_uploads_owner_read")
+    insert_policy = policy_sql(sql, "floorplan_uploads_owner_insert")
+    update_policy = policy_sql(sql, "floorplan_uploads_owner_update")
+
+    assert "create policy floorplan_uploads_owner_all" not in sql
+    assert "\n  for select\n" in read_policy
+    assert "\n  for insert\n" in insert_policy
+    assert "\n  for update\n" in update_policy
+    assert "status = 'uploaded'" in insert_policy
+    assert "status = 'uploaded'" in update_policy
+    assert "status in ('uploaded', 'scan_pending')" not in insert_policy
+    assert "status in ('uploaded', 'scan_pending')" not in update_policy
+    upload_policy_modes = re.findall(
+        r"create policy floorplan_uploads_\w+\n"
+        r"  on public\.floorplan_uploads\n"
+        r"  for (\w+)",
+        sql,
+    )
+    assert sorted(upload_policy_modes) == ["insert", "select", "update"]
+
+
+def test_asset_upload_session_comparison_is_outer_row_qualified() -> None:
+    sql = migration_sql()
+
+    assert "or u.session_id = session_id" not in sql
+    assert (
+        "public.floorplan_assets.session_id is null\n            or u.session_id = public.floorplan_assets.session_id"
+        in sql
+    )
+
+
+def test_floorplan_candidates_are_read_only_for_clients() -> None:
+    sql = migration_sql()
+    read_policy = policy_sql(sql, "floorplan_candidates_session_owner_read")
+
+    assert "create policy floorplan_candidates_session_owner_all" not in sql
+    assert "\n  for select\n" in read_policy
+    candidate_policy_names = re.findall(
+        r"create policy (floorplan_candidates_\w+)", sql
+    )
+    assert candidate_policy_names == ["floorplan_candidates_session_owner_read"]
+
+
+def test_floorplan_candidates_preserve_snapshot_when_floorplan_is_deleted() -> None:
+    sql = migration_sql()
+    candidate_fk = sql[
+        sql.index(
+            "constraint fk_floorplan_candidates_floorplan_id_floorplans"
+        ) : sql.index(
+            "constraint uq_floorplan_candidates_session_id_lookup_revision_floorplan_id"
+        )
+    ]
+
+    assert "floorplan_id uuid,\n  rank integer not null" in sql
+    assert "floorplan_snapshot jsonb not null default '{}'::jsonb" in sql
+    assert "on delete set null" in candidate_fk
+    assert "on delete cascade" not in candidate_fk
+
+
+def test_chat_browser_writes_are_limited_to_user_messages() -> None:
+    sql = migration_sql()
+    tool_read_policy = policy_sql(sql, "chat_tool_calls_session_owner_read")
+
+    assert "create policy chat_messages_session_owner_all" not in sql
+    assert "create policy chat_messages_user_insert" not in sql
+    assert "create policy chat_messages_user_update" not in sql
+    assert "create policy chat_tool_calls_session_owner_all" not in sql
+    assert "\n  for select\n" in tool_read_policy
+    assert "create policy chat_tool_calls" in sql
+    chat_policy_names = re.findall(r"create policy (chat_messages_\w+)", sql)
+    assert chat_policy_names == ["chat_messages_session_owner_read"]
+    assert (
+        "create or replace function public.force_chat_message_client_created_at()"
+        in sql
+    )
+    assert "create trigger trg_chat_messages_client_created_at" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.content_redacted := false" in sql
+    assert "new.ui_components := '[]'::jsonb" in sql
+    assert "new.judgment_snapshot := null" in sql
+    assert "new.metadata := '{}'::jsonb" in sql
+    assert not re.search(
+        r"create policy chat_tool_calls_\w+.*?\n  for (insert|update|delete|all)\n",
+        sql,
+        flags=re.DOTALL,
+    )
+
+
+def test_catalog_verification_is_not_user_mutable() -> None:
+    sql = migration_sql()
+    insert_policy = policy_sql(sql, "floorplans_owner_insert")
+    update_policy = policy_sql(sql, "floorplans_owner_update")
+
+    for mutation_policy in (insert_policy, update_policy):
+        assert "created_by = (select auth.uid())" in mutation_policy
+        assert "source in ('internal', 'external_candidate')" in mutation_policy
+        assert "visibility = 'admin_only'" in mutation_policy
+        assert "promoted_from_upload_id is null" in mutation_policy
+        assert "quality_status in ('unverified', 'rejected', 'needs_review')" in (
+            mutation_policy
+        )
+        assert "quality_status = 'verified'" not in mutation_policy
+        assert "visibility = 'public_catalog'" not in mutation_policy
+
+
+def test_selected_floorplan_metadata_is_frozen_after_analysis_starts() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_selected_floorplan_client_mutation()"
+        in sql
+    )
+    assert "create trigger trg_floorplans_selected_client_guard" in sql
+    assert "s.selected_floorplan_id = old.id" in sql
+    assert "metadata" in sql
+    assert (
+        "authenticated clients cannot mutate selected floorplans after analysis starts"
+        in sql
+    )
+
+
+def test_selected_floorplan_delete_is_service_controlled_after_analysis_starts() -> (
+    None
+):
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_selected_floorplan_client_delete()"
+        in sql
+    )
+    assert "create trigger trg_floorplans_selected_delete_client_guard" in sql
+    assert "s.selected_floorplan_id = old.id" in sql
+    assert (
+        "authenticated clients cannot delete selected floorplans after analysis starts"
+        in sql
+    )
+
+
+def test_chat_tool_call_message_is_same_session() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.enforce_chat_tool_call_message_scope()"
+        in sql
+    )
+    assert "create trigger trg_chat_tool_calls_message_scope" in sql
+    assert "from public.chat_messages as m" in sql
+    assert "m.id = new.message_id" in sql
+    assert "m.session_id = new.session_id" in sql
+    assert (
+        "chat_tool_calls.message_id must reference a message in the same session" in sql
+    )
+    assert "parent_tool_call_id" in sql
+    assert "from public.chat_tool_calls as parent" in sql
+    assert "parent.id = new.parent_tool_call_id" in sql
+    assert "parent.session_id = new.session_id" in sql
+    assert (
+        "chat_tool_calls.parent_tool_call_id must reference a tool call in the same session"
+        in sql
+    )
+
+
+def test_authenticated_asset_writes_cannot_mark_scan_results() -> None:
+    sql = migration_sql()
+    insert_policy = policy_sql(sql, "floorplan_assets_owner_or_session_insert")
+    update_policy = policy_sql(sql, "floorplan_assets_owner_or_session_update")
+    delete_policy = policy_sql(sql, "floorplan_assets_owner_or_session_delete")
+
+    assert "scan_status text not null default 'pending'" in sql
+    assert (
+        "scan_status in ('pending', 'clean', 'infected', 'failed', 'not_required')"
+        in sql
+    )
+    assert "and kind = 'original'" in insert_policy
+    assert "and kind = 'original'" in update_policy
+    assert "and kind = 'original'" in delete_policy
+    assert "and scan_status = 'pending'" in insert_policy
+    assert "and scan_status = 'pending'" in update_policy
+    assert "scan_status = 'clean'" not in insert_policy
+    assert "scan_status = 'clean'" not in update_policy
+    assert "scan_status = 'not_required'" not in insert_policy
+    assert "scan_status = 'not_required'" not in update_policy
+    assert "and scan_status = 'pending'" in delete_policy
+
+
+def test_floorplan_asset_timestamps_are_server_controlled() -> None:
+    sql = migration_sql()
+
+    assert "updated_at timestamp with time zone not null default now()" in sql
+    assert (
+        "create or replace function public.prevent_floorplan_asset_client_timestamp_mutation()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_assets_audit_timestamps_client_guard" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.updated_at := new.created_at" in sql
+    assert "new.created_at is distinct from old.created_at" in sql
+    assert "new.updated_at := now()" in sql
+    assert "authenticated clients cannot change asset audit timestamps" in sql
+
+
+def test_floorplan_asset_upload_attach_requires_client_writable_upload() -> None:
+    sql = migration_sql()
+    insert_policy = policy_sql(sql, "floorplan_assets_owner_or_session_insert")
+    update_policy = policy_sql(sql, "floorplan_assets_owner_or_session_update")
+
+    for mutation_policy in (insert_policy, update_policy):
+        assert "from public.floorplan_uploads as u" in mutation_policy
+        assert "where u.id = floorplan_upload_id" in mutation_policy
+        assert "and u.user_id = (select auth.uid())" in mutation_policy
+        assert "and u.status = 'uploaded'" in mutation_policy
+        assert "and u.status in ('uploaded', 'scan_pending')" not in mutation_policy
+
+
+def test_referenced_original_asset_invariants_are_client_immutable() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_referenced_original_asset_client_mutation()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_assets_referenced_original_client_guard" in sql
+    assert "u.original_asset_id = old.id" in sql
+    assert "new.kind is distinct from old.kind" in sql
+    assert "new.scan_status is distinct from old.scan_status" in sql
+    assert "new.session_id is distinct from old.session_id" in sql
+    assert "new.owner_user_id is distinct from old.owner_user_id" in sql
+    assert "new.floorplan_upload_id is distinct from old.floorplan_upload_id" in sql
+    assert "new.floorplan_id is distinct from old.floorplan_id" in sql
+    assert "new.storage_provider is distinct from old.storage_provider" in sql
+    assert "new.bucket is distinct from old.bucket" in sql
+    assert "new.object_key is distinct from old.object_key" in sql
+    assert "new.content_type is distinct from old.content_type" in sql
+    assert "new.byte_size is distinct from old.byte_size" in sql
+    assert "new.sha256_hex is distinct from old.sha256_hex" in sql
+    assert "new.width_px is distinct from old.width_px" in sql
+    assert "new.height_px is distinct from old.height_px" in sql
+    assert "new.page_count is distinct from old.page_count" in sql
+    assert "new.kind = 'original'" in sql
+    assert "new.session_id = u.session_id" in sql
+    assert "new.owner_user_id = u.user_id" in sql
+    assert (
+        "authenticated clients cannot mutate referenced original asset invariants"
+        in sql
+    )
+
+
+def test_selected_asset_metadata_is_frozen_after_analysis_starts() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_selected_asset_client_metadata_mutation()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_assets_selected_metadata_client_guard" in sql
+    assert "s.selected_floorplan_asset_id = old.id" in sql
+    for column in (
+        "floorplan_id",
+        "floorplan_upload_id",
+        "session_id",
+        "owner_user_id",
+        "storage_provider",
+        "bucket",
+        "object_key",
+        "content_type",
+        "byte_size",
+        "sha256_hex",
+        "width_px",
+        "height_px",
+        "page_count",
+        "scan_status",
+    ):
+        assert column in sql
+    assert (
+        "authenticated clients cannot mutate selected asset metadata after analysis starts"
+        in sql
+    )
+
+
+def test_selected_asset_delete_is_service_controlled_after_analysis_starts() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_selected_asset_client_delete()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_assets_selected_delete_client_guard" in sql
+    assert "s.selected_floorplan_asset_id = old.id" in sql
+    assert (
+        "authenticated clients cannot delete selected assets after analysis starts"
+        in sql
+    )
+
+
+def test_asset_catalog_and_upload_session_scopes_are_mutually_exclusive() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_floorplan_asset_mixed_parent_scope()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_assets_mixed_parent_scope_guard" in sql
+    assert "new.floorplan_id is not null" in sql
+    assert "new.floorplan_upload_id is not null" in sql
+    assert "new.session_id is not null" in sql
+    assert (
+        "floorplan_assets cannot mix catalog floorplan scope with upload or session scope"
+        in sql
+    )
+
+
+def test_phase_a_supabase_migration_keeps_chat_tool_payload_columns() -> None:
+    sql = migration_sql()
+
+    assert "input jsonb not null default '{}'::jsonb" in sql
+    assert "output jsonb" in sql
+    assert "duration_ms integer" in sql
+    assert "do not store provider tokens, signed urls, or raw pii" in sql
+
+
+def test_phase_a_supabase_migration_does_not_reintroduce_legacy_auth_tables() -> None:
+    sql = migration_sql()
+
+    assert "create table public.anonymous_users" not in sql
+    assert "create table public.external_sso_accounts" not in sql
+    assert "password_hash" not in sql
+    assert " password " not in sql
