@@ -232,12 +232,19 @@ describe('GET /auth/callback — session cookie preservation', () => {
     );
   });
 
-  it('redirects link callbacks after signed Supabase linkIdentity exchange without backend shim', async () => {
+  it('mints the backend session cookie after a signed Supabase linkIdentity exchange', async () => {
     const flowCookie = signFlowCookie(
       { provider: 'kakao', supabase_provider: 'custom:kakao', intent: 'link' },
       600,
     );
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('{}', {
+        status: 200,
+        headers: {
+          'Set-Cookie': `${BACKEND_SESSION_COOKIE_NAME}=${BACKEND_SESSION_COOKIE_VALUE}; Path=/; HttpOnly; SameSite=Lax`,
+        },
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
     mocks.createServerClient.mockImplementation(() => ({
       auth: {
@@ -258,7 +265,17 @@ describe('GET /auth/callback — session cookie preservation', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('http://localhost:3000/account/security');
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(setCookieValues(response).join('\n')).toContain(BACKEND_SESSION_COOKIE_NAME);
+    expect(fetchMock).toHaveBeenCalledWith('http://api.localhost/auth/supabase/session', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer supabase-access-token',
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ anonymous_user_id: null, requested_provider: 'kakao' }),
+      cache: 'no-store',
+    });
   });
 
   it('fails closed for link callbacks when the signed flow context is missing', async () => {
@@ -288,12 +305,61 @@ describe('GET /auth/callback — session cookie preservation', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('preserves Supabase exchange cookies on successful link callbacks', async () => {
+  it('forwards anonymous_user_id while minting the backend session for link callbacks', async () => {
     const flowCookie = signFlowCookie(
       { provider: 'kakao', supabase_provider: 'custom:kakao', intent: 'link' },
       600,
     );
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('{}', {
+        status: 200,
+        headers: {
+          'Set-Cookie': `${BACKEND_SESSION_COOKIE_NAME}=${BACKEND_SESSION_COOKIE_VALUE}; Path=/; HttpOnly; SameSite=Lax`,
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        exchangeCodeForSession: vi.fn().mockResolvedValue({
+          data: { session: { access_token: 'supabase-access-token' } },
+          error: null,
+        }),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(
+      makeRequest('/auth/callback?code=abc&intent=link&anonymous_user_id=legacy-anon-id', [
+        { name: 'jippin_oauth_provider', value: flowCookie },
+      ]),
+    );
+
+    expect(response.status).toBe(302);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.localhost/auth/supabase/session',
+      expect.objectContaining({
+        body: JSON.stringify({
+          anonymous_user_id: 'legacy-anon-id',
+          requested_provider: 'kakao',
+        }),
+      }),
+    );
+  });
+
+  it('preserves Supabase and backend cookies on successful link callbacks', async () => {
+    const flowCookie = signFlowCookie(
+      { provider: 'kakao', supabase_provider: 'custom:kakao', intent: 'link' },
+      600,
+    );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('{}', {
+        status: 200,
+        headers: {
+          'Set-Cookie': `${BACKEND_SESSION_COOKIE_NAME}=${BACKEND_SESSION_COOKIE_VALUE}; Path=/; HttpOnly; SameSite=Lax`,
+        },
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
     mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
       auth: {
@@ -319,8 +385,47 @@ describe('GET /auth/callback — session cookie preservation', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('http://localhost:3000/account/security');
-    expect(setCookieValues(response).join('\n')).toContain(SESSION_COOKIE_NAME);
-    expect(fetchMock).not.toHaveBeenCalled();
+    const cookies = setCookieValues(response).join('\n');
+    expect(cookies).toContain(SESSION_COOKIE_NAME);
+    expect(cookies).toContain(BACKEND_SESSION_COOKIE_NAME);
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it('fails closed when backend session minting fails after a signed link callback', async () => {
+    const flowCookie = signFlowCookie(
+      { provider: 'kakao', supabase_provider: 'custom:kakao', intent: 'link' },
+      600,
+    );
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
+      auth: {
+        exchangeCodeForSession: vi.fn().mockImplementation(async () => {
+          init.cookies.setAll([
+            {
+              name: SESSION_COOKIE_NAME,
+              value: SESSION_COOKIE_VALUE,
+              options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 3600 },
+            },
+          ]);
+          return { data: { session: { access_token: 'supabase-access-token' } }, error: null };
+        }),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(
+      makeRequest('/auth/callback?code=abc&intent=link&next=/account/security', [
+        { name: 'jippin_oauth_provider', value: flowCookie },
+      ]),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('Location')).toBe('http://localhost:3000/login?error=oauth_callback_failed');
+    const cookies = setCookieValues(response).join('\n');
+    expect(cookies).not.toContain(BACKEND_SESSION_COOKIE_NAME);
+    expect(cookies).not.toContain(SESSION_COOKIE_NAME);
+    expect(fetchMock).toHaveBeenCalled();
   });
 
   it('passes the requested provider from the signed flow cookie into the session bridge', async () => {

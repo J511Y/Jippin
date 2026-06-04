@@ -35,7 +35,7 @@
 
 | 항목 | 결정 |
 |---|---|
-| **세션 1차 소스** | Supabase Auth session (`supabase.auth.getSession()`). 자체 JWT / 자체 메모리 토큰 / 자체 `jippin_session` 쿠키 폐기. |
+| **세션 1차 소스** | Supabase Auth session (`supabase.auth.getSession()`). 자체 JWT / 자체 메모리 토큰은 폐기. `jippin_session` 은 web auth guard 의 SSOT 가 아니며, API compatibility/session bridge cookie 로만 유지한다. |
 | **클라이언트 라이브러리** | `@supabase/supabase-js` + `@supabase/ssr` (Next.js 16 App Router · Edge proxy / Route Handler / Server Component cookie 통합). |
 | **익명 흐름** | `supabase.auth.signInAnonymously()` — 페이지 첫 진입 시 세션이 없으면 1회 호출. Supabase user `id` 가 익명/실명 user 의 단일 키. `localStorage.jippin_anonymous_user_id`, `POST /auth/anonymous-users`, `x-jippin-anon-id`, `anonymous_users.converted_user_id` 는 CMP-604 이후 forward 정본이 아니며 accidental call 은 410/throw 로 실패시킨다. |
 | **전환 시점 CTA** | 익명 세션 존재 시 1) `supabase.auth.linkIdentity({ provider })` 시도 → 2) 실패(provider identity 가 다른 user 에 이미 연결)면 [§4.2.2 fallback ladder](#422-linkidentity-실패-fallback) 진입: 사용자에게 "익명 데이터를 기존 계정으로 이전하시겠습니까?" 명시 confirm → 수락 시 익명 데이터 merge 큐 enqueue + `supabase.auth.signOut()` → `signInWithOAuth`. 익명 세션이 아닌 비로그인 진입은 곧바로 `signInWithOAuth({ provider, options: { redirectTo } })`. 두 경로 모두 Supabase 가 hosted login page / provider redirect 를 owner 로 가진다. |
@@ -65,7 +65,7 @@
 | `apps/web/lib/providers.tsx` | React Query Provider. | **확장.** Supabase Session Provider 를 wrap. |
 | `apps/web/.env.example` | `NEXT_PUBLIC_API_BASE_URL`, success/failure URL, Supabase public env. | **현재 정본.** Supabase env 와 BFF/API base URL 만 유지한다. `AUTH_COOKIE_NAME` 류 자체 session-cookie 가드 변수는 forward auth 정본이 아니다. |
 
-> **API 측 폐기 상태 (CMP-604).** `POST /auth/anonymous-users`, `GET /auth/{provider}/start`, `GET /auth/callback/{provider}`, `POST /auth/sso-accounts/{provider}/link` 는 FastAPI route entrypoint 에서 즉시 `410 AUTH_LEGACY_FLOW_REMOVED` 를 반환한다. Supabase Auth 공식 OAuth / `linkIdentity()` 가 provider redirect 와 identity linking 을 소유한다. Web `/auth/callback` 의 link callback 은 Supabase `exchangeCodeForSession()` 성공과 signed flow context 만 확인하고 backend `/auth/supabase/link` 를 호출하지 않는다. `/auth/logout` 은 backend cookie cleanup 호환 엔드포인트로만 남고, 자체 OAuth/JWT refresh 흐름은 정본이 아니다.
+> **API 측 폐기/호환 상태 (CMP-604).** `POST /auth/anonymous-users`, `GET /auth/{provider}/start`, `GET /auth/callback/{provider}`, `POST /auth/sso-accounts/{provider}/link` 는 FastAPI route entrypoint 에서 즉시 `410 AUTH_LEGACY_FLOW_REMOVED` 를 반환한다. Supabase Auth 공식 OAuth / `linkIdentity()` 가 provider redirect 와 identity linking 을 소유한다. Web `/auth/callback` 의 link callback 은 Supabase `exchangeCodeForSession()` 성공과 signed flow context 를 확인한 뒤 backend `/auth/supabase/session` 을 호출해 API compatibility 용 `jippin_session` cookie 를 mint 한다. 단, backend `/auth/supabase/link` 는 호출하지 않는다. `/auth/logout` 은 backend cookie cleanup 호환 엔드포인트로만 남고, 자체 OAuth/JWT refresh 흐름은 정본이 아니다.
 
 ---
 

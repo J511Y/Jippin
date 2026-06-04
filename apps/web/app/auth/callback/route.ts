@@ -119,6 +119,16 @@ async function mintBackendSession(
   }
 }
 
+function postSessionRedirectTarget(
+  bridge: BackendSessionBridgeResult,
+  next: string,
+  origin: string,
+): string {
+  return bridge.signup_complete === false
+    ? termsRedirectUrl(bridge.redirect_url, next, origin)
+    : new URL(next, origin).toString();
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = request.nextUrl.searchParams.get('code');
   const next = safeRelativeRedirect(request.nextUrl.searchParams.get('next'));
@@ -134,8 +144,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const isLinkCallback = intent === 'link' || context?.intent === 'link';
     if (!error && accessToken && isLinkCallback) {
       if (intent === 'link' && context?.intent === 'link') {
-        response.headers.set('Location', new URL(next, request.nextUrl.origin).toString());
-        return new NextResponse(null, { status: 302, headers: response.headers });
+        const bridge = await mintBackendSession(
+          accessToken,
+          anonymousUserId,
+          context.provider,
+          response,
+        );
+
+        if (bridge) {
+          response.headers.set(
+            'Location',
+            postSessionRedirectTarget(bridge, next, request.nextUrl.origin),
+          );
+          return new NextResponse(null, { status: 302, headers: response.headers });
+        }
       }
       return failureRedirect(request);
     } else if (!error && accessToken) {
@@ -147,10 +169,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       );
 
       if (bridge) {
-        const redirectTarget = bridge.signup_complete === false
-          ? termsRedirectUrl(bridge.redirect_url, next, request.nextUrl.origin)
-          : new URL(next, request.nextUrl.origin).toString();
-        response.headers.set('Location', redirectTarget);
+        response.headers.set(
+          'Location',
+          postSessionRedirectTarget(bridge, next, request.nextUrl.origin),
+        );
         return new NextResponse(null, { status: 302, headers: response.headers });
       }
       return failureRedirect(request);
