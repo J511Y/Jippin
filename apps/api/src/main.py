@@ -63,9 +63,12 @@ def create_app() -> FastAPI:
     app.include_router(healthz_router)
     # Phase A 메인 흐름 (CMP-609 skeleton). DB-backed repository 는 CMP-608
     # migration 이 들어온 뒤 services.main_flow 의 in-memory 구현을 교체한다.
-    app.include_router(sessions_router)
-    app.include_router(floorplans_router)
-    app.include_router(chat_router)
+    # 그전에는 운영 surface 에 in-memory store 가 노출되지 않도록 settings 의
+    # phase_a_skeleton_enabled 플래그가 켜진 환경에서만 라우터를 등록한다.
+    if settings.phase_a_skeleton_enabled:
+        app.include_router(sessions_router)
+        app.include_router(floorplans_router)
+        app.include_router(chat_router)
 
     return app
 

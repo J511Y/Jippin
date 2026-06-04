@@ -70,6 +70,47 @@ def test_create_session_allows_anonymous_supabase_token(monkeypatch):
     assert body["is_anonymous_owner"] is True
 
 
+def test_anonymous_session_has_expires_at_from_ttl_setting(monkeypatch):
+    """익명 사전검토 세션은 ``ANON_SESSION_TTL_DAYS`` 만큼 expires_at 가 잡힌다.
+
+    Phase D cleanup cron 이 만료 익명 artifact 를 정리할 수 있어야 한다.
+    """
+
+    import datetime as datetime_module
+
+    monkeypatch.setenv("ANON_SESSION_TTL_DAYS", "7")
+    get_settings.cache_clear()
+
+    client, pem, kid, _ = _client(monkeypatch)
+    anon_token, _ = helpers.mint_token(pem, kid, is_anonymous=True)
+    perm_token, _ = helpers.mint_token(pem, kid, is_anonymous=False)
+    with client:
+        anon_resp = client.post(
+            "/sessions",
+            headers={"Authorization": f"Bearer {anon_token}"},
+            json={},
+        )
+        perm_resp = client.post(
+            "/sessions",
+            headers={"Authorization": f"Bearer {perm_token}"},
+            json={},
+        )
+    assert anon_resp.status_code == 201
+    assert perm_resp.status_code == 201
+    anon_body = anon_resp.json()
+    perm_body = perm_resp.json()
+
+    # 익명 owner 는 expires_at 가 ttl 만큼 미래로 설정된다.
+    assert anon_body["expires_at"] is not None
+    created = datetime_module.datetime.fromisoformat(anon_body["created_at"])
+    expires = datetime_module.datetime.fromisoformat(anon_body["expires_at"])
+    delta = expires - created
+    assert 7 * 24 * 3600 - 5 <= delta.total_seconds() <= 7 * 24 * 3600 + 5
+
+    # permanent user 의 expiry 정책은 별도 — 본 skeleton 단계에선 null.
+    assert perm_body["expires_at"] is None
+
+
 def test_get_session_owner_only(monkeypatch):
     client, pem, kid, _ = _client(monkeypatch)
     owner_token, _ = helpers.mint_token(pem, kid)

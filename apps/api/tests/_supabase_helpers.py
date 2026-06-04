@@ -109,3 +109,6 @@ def set_supabase_env(monkeypatch) -> None:
     monkeypatch.setenv("SUPABASE_JWT_ISSUER", ISSUER)
     monkeypatch.setenv("SUPABASE_JWKS_URL", JWKS_URL)
     monkeypatch.setenv("AUTH_JWT_SECRET", "test-session-secret")
+    # CMP-609 skeleton 라우터는 settings 의 feature flag 가 켜진 환경에서만
+    # 등록된다 — 테스트는 항상 켠다. 운영 default 는 False (코드 리뷰 P1 가드).
+    monkeypatch.setenv("PHASE_A_SKELETON_ENABLED", "true")

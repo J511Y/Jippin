@@ -28,10 +28,11 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from ..config import get_settings
 from ..errors import ZippinException
 
 
@@ -89,10 +90,20 @@ def create_session(
     is_anonymous_owner: bool,
     judgment_schema_version: str | None,
 ) -> dict[str, Any]:
-    """`sessions` row 생성. 익명 owner 도 허용된다."""
+    """`sessions` row 생성. 익명 owner 도 허용된다.
 
+    익명 owner 가 만든 사전검토 세션은 retention 정책 (``ANON_SESSION_TTL_DAYS``)
+    에 따라 ``expires_at`` 가 설정된다. permanent user 는 별도 expiry policy 가
+    있을 때까지 ``expires_at = None`` 으로 둔다. cleanup cron 은 Phase D 에서
+    이 컬럼을 기준으로 만료 익명 세션을 정리한다.
+    """
+
+    settings = get_settings()
     now = _now()
     session_id = uuid.uuid4()
+    expires_at: datetime | None = None
+    if is_anonymous_owner:
+        expires_at = now + timedelta(days=settings.anon_session_ttl_days)
     row: dict[str, Any] = {
         "id": session_id,
         "user_id": user_id,
@@ -106,7 +117,7 @@ def create_session(
         "judgment_schema_version": judgment_schema_version,
         "completion_decision": None,
         "last_activity_at": now,
-        "expires_at": None,
+        "expires_at": expires_at,
         "created_at": now,
         "updated_at": now,
     }
@@ -219,6 +230,12 @@ def save_floorplan_candidate_snapshot(
 
     같은 ``(session_id, lookup_revision, floorplan_id)`` 또는 ``(..., rank)`` 가
     중복되면 409. 다른 ``lookup_revision`` 끼리는 독립이다.
+
+    ``_store`` 가 in-memory dict 라도 batch 절반만 들어간 partial-save 상태를
+    남기면 후속 재시도가 ``REVISION_CONFLICT`` 로 막혀 복구 불가능해진다.
+    그래서 (1) 모든 item 을 먼저 검증해 charged 된 row 를 만들고,
+    (2) 한 번에 dict.update 로 commit 한다. DB-backed repo 로 교체될 때
+    같은 (validate-then-insert) 패턴을 그대로 쓰면 된다.
     """
 
     now = _now()
@@ -233,9 +250,11 @@ def save_floorplan_candidate_snapshot(
             if sid == session_id and rev == lookup_revision
         }
 
+        # Pass 1 — 모든 item 을 검증하고 staged row 를 만든다. 어떤 row 도
+        # 아직 _store 에 들어가지 않는다.
         seen_ranks: set[int] = set()
         seen_floorplans: set[uuid.UUID] = set()
-        rows: list[dict[str, Any]] = []
+        staged: list[tuple[tuple[uuid.UUID, int, uuid.UUID], dict[str, Any]]] = []
         for item in items:
             floorplan_id = item["floorplan_id"]
             rank = item["rank"]
@@ -266,19 +285,29 @@ def save_floorplan_candidate_snapshot(
                     code="FLOORPLAN_CANDIDATE_REVISION_CONFLICT",
                 )
 
-            row = {
-                "id": uuid.uuid4(),
-                "session_id": session_id,
-                "lookup_revision": lookup_revision,
-                "floorplan_id": floorplan_id,
-                "rank": rank,
-                "confidence": _decimal(item["confidence"]),
-                "match_reasons": list(item.get("match_reasons") or []),
-                "lookup_input": dict(item.get("lookup_input") or {}),
-                "selected_at": None,
-                "rejected_at": None,
-                "created_at": now,
-            }
+            staged.append(
+                (
+                    key,
+                    {
+                        "id": uuid.uuid4(),
+                        "session_id": session_id,
+                        "lookup_revision": lookup_revision,
+                        "floorplan_id": floorplan_id,
+                        "rank": rank,
+                        "confidence": _decimal(item["confidence"]),
+                        "match_reasons": list(item.get("match_reasons") or []),
+                        "lookup_input": dict(item.get("lookup_input") or {}),
+                        "selected_at": None,
+                        "rejected_at": None,
+                        "created_at": now,
+                    },
+                )
+            )
+
+        # Pass 2 — 모든 검증이 끝났으므로 한 번에 commit. lock 안에서
+        # 다른 caller 가 끼어들 수 없으니 부분 저장 위험 없음.
+        rows: list[dict[str, Any]] = []
+        for key, row in staged:
             _store.floorplan_candidates[key] = row
             rows.append(dict(row))
 
@@ -299,28 +328,83 @@ def append_chat_message(
     owner_user_id: uuid.UUID,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    """공개 endpoint 경로 — ``role='user'`` message 만 받는다.
+
+    assistant / system / tool message 는 ``append_internal_chat_message`` 로만
+    만든다. Pydantic schema 가 1차 차단하지만 service 단에서도 ``role`` 을
+    무시하고 항상 user 로 기록한다 (depth-in-defense).
+    """
+
     now = _now()
     with _store.lock:
         session = _store.sessions.get(session_id)
         if session is None or session["user_id"] != owner_user_id:
             raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
 
-        role = payload["role"]
-        # `user` 역할 message 만 owner 를 user_id 로 채운다. assistant/system/tool
-        # message 는 agent/runtime 이 만든 것이라 user_id 가 null 인 게 정상이다.
-        message_user_id = owner_user_id if role == "user" else None
+        message_id = uuid.uuid4()
+        row: dict[str, Any] = {
+            "id": message_id,
+            "session_id": session_id,
+            "user_id": owner_user_id,
+            "role": "user",
+            "content": payload["content"],
+            # user-source content 는 외부 입력 — masking 정책은 별 이슈 (Phase A
+            # PII redaction track) 이지만 기본값은 False 로 둔다.
+            "content_redacted": False,
+            "ui_components": [],
+            "judgment_snapshot": None,
+            "metadata": dict(payload.get("metadata") or {}),
+            "created_at": now,
+        }
+        _store.chat_messages[message_id] = row
+        session["last_activity_at"] = now
+        session["updated_at"] = now
+        return dict(row)
+
+
+def append_internal_chat_message(
+    *,
+    session_id: uuid.UUID,
+    role: str,
+    content: str,
+    ui_components: list[Any] | None = None,
+    judgment_snapshot: dict[str, Any] | None = None,
+    content_redacted: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Runtime/내부 서비스 전용 — HTTP 로 노출하지 않는다.
+
+    agent runtime, FLOW_GUARD evaluator, rule engine 등이 만들어내는
+    assistant/system/tool message 를 ``chat_messages`` 에 기록한다. 외부
+    request 에서는 호출하지 않으며, 호출 권한은 caller (내부 서비스 / Phase B
+    job runner) 가 관리한다. owner check 가 없는 이유는 caller 가 이미 session
+    소유권을 검증한 상태에서 부르기 때문이다.
+    """
+
+    if role not in {"assistant", "system", "tool"}:
+        raise ValueError(
+            "append_internal_chat_message 는 assistant/system/tool 만 허용한다."
+        )
+
+    now = _now()
+    with _store.lock:
+        session = _store.sessions.get(session_id)
+        if session is None:
+            raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
 
         message_id = uuid.uuid4()
         row: dict[str, Any] = {
             "id": message_id,
             "session_id": session_id,
-            "user_id": message_user_id,
+            # assistant/system/tool message 는 agent runtime 이 만든 것이라
+            # user_id 는 null 이 맞다 (DB 설계 문서의 chat_messages 설명).
+            "user_id": None,
             "role": role,
-            "content": payload["content"],
-            "content_redacted": bool(payload.get("content_redacted", False)),
-            "ui_components": list(payload.get("ui_components") or []),
-            "judgment_snapshot": payload.get("judgment_snapshot"),
-            "metadata": dict(payload.get("metadata") or {}),
+            "content": content,
+            "content_redacted": bool(content_redacted),
+            "ui_components": list(ui_components or []),
+            "judgment_snapshot": judgment_snapshot,
+            "metadata": dict(metadata or {}),
             "created_at": now,
         }
         _store.chat_messages[message_id] = row

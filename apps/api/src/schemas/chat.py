@@ -17,6 +17,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 ChatRole = Literal["user", "assistant", "system", "tool"]
+# 공개 endpoint 에 client 가 직접 만들 수 있는 role 만. assistant/system/tool 은
+# agent runtime / 내부 서비스만 ``services.main_flow.append_internal_chat_message``
+# 로 생성한다. ``content_redacted``/``judgment_snapshot``/``ui_components`` 같은
+# 내부 메타 필드도 같은 사유로 internal-only 다.
+ClientChatRole = Literal["user"]
 ToolKind = Literal[
     "retrieval",
     "db_query",
@@ -31,11 +36,16 @@ ToolCallStatus = Literal["started", "succeeded", "failed", "cancelled"]
 
 
 class ChatMessageCreateRequest(BaseModel):
-    role: ChatRole
+    """`POST /sessions/{id}/chat/messages` body — 공개 endpoint.
+
+    Client 가 직접 만들 수 있는 message 는 role=``user`` 만이다. assistant /
+    system / tool message 는 agent runtime 이 ``main_flow`` 내부 함수로 만든다
+    — 공개 endpoint 에서 신뢰할 수 없는 source 가 assistant role 을 흉내내
+    judgment snapshot 이나 UI A2UI payload 를 주입하는 것을 막기 위해서다.
+    """
+
+    role: ClientChatRole = "user"
     content: str
-    content_redacted: bool = False
-    ui_components: list[Any] = Field(default_factory=list)
-    judgment_snapshot: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

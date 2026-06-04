@@ -65,29 +65,79 @@ def test_append_user_chat_message_records_owner(monkeypatch):
     assert body["ui_components"] == []
 
 
-def test_append_assistant_chat_message_with_ui_components(monkeypatch):
-    """``ui_components`` 는 message-level A2UI payload 다 — ``output`` 과 다르다."""
+def test_chat_message_endpoint_rejects_non_user_role(monkeypatch):
+    """공개 endpoint 가 assistant/system/tool role 을 흉내내지 못하게 막는다.
+
+    Client 가 assistant 인 척 ui_components/judgment_snapshot 을 주입하는 회귀.
+    """
 
     client, token, session_id = _bootstrap(monkeypatch)
     components = [
         {"kind": "candidate_picker", "items": [{"id": "fp-1", "label": "84A"}]},
     ]
     with client:
-        response = client.post(
-            f"/sessions/{session_id}/chat/messages",
-            headers={"Authorization": f"Bearer {token}"},
-            json={
-                "role": "assistant",
-                "content": "다음 후보 중 선택해 주세요.",
-                "ui_components": components,
-            },
-        )
-    assert response.status_code == 201
-    body = response.json()
-    assert body["role"] == "assistant"
+        for forbidden_role in ("assistant", "system", "tool"):
+            response = client.post(
+                f"/sessions/{session_id}/chat/messages",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "role": forbidden_role,
+                    "content": "다음 후보 중 선택해 주세요.",
+                    "ui_components": components,
+                },
+            )
+            # Pydantic Literal['user'] 가 422 로 reject.
+            assert response.status_code == 422, forbidden_role
+            assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_internal_assistant_message_records_ui_components(monkeypatch):
+    """``ui_components`` (A2UI payload) 는 internal service 함수로만 기록된다.
+
+    runtime/agent 가 직접 ``main_flow.append_internal_chat_message`` 를 호출한다.
+    """
+
+    import uuid as uuid_module
+
+    client, token, session_id = _bootstrap(monkeypatch)
+    with client:
+        # noop - 위 _bootstrap 이 이미 client 생성/세션 만들기를 끝냈다.
+        pass
+
+    components = [
+        {"kind": "candidate_picker", "items": [{"id": "fp-1", "label": "84A"}]},
+    ]
+    row = main_flow.append_internal_chat_message(
+        session_id=uuid_module.UUID(session_id),
+        role="assistant",
+        content="다음 후보 중 선택해 주세요.",
+        ui_components=components,
+        judgment_snapshot={"step": "candidate_picker"},
+    )
+    assert row["role"] == "assistant"
     # assistant message 는 agent runtime 이 만든 것이므로 user_id 는 null 이 맞다.
-    assert body["user_id"] is None
-    assert body["ui_components"] == components
+    assert row["user_id"] is None
+    assert row["ui_components"] == components
+    assert row["judgment_snapshot"] == {"step": "candidate_picker"}
+
+
+def test_internal_chat_message_rejects_user_role(monkeypatch):
+    """internal 함수는 ``user`` role 을 허용하지 않는다 — depth-in-defense.
+
+    client 입력은 항상 공개 endpoint 경로를 거치게 강제하기 위함.
+    """
+
+    import uuid as uuid_module
+
+    client, token, session_id = _bootstrap(monkeypatch)
+    with client:
+        pass
+    with pytest.raises(ValueError):
+        main_flow.append_internal_chat_message(
+            session_id=uuid_module.UUID(session_id),
+            role="user",
+            content="should be rejected",
+        )
 
 
 def test_tool_call_success_records_output_and_output_summary(monkeypatch):

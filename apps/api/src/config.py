@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     anon_session_ttl_days: int = Field(default=30)
     redis_url: str = Field(default="redis://redis:6379/0")
 
+    # CMP-609 Phase A skeleton 라우터 (sessions/floorplans/chat) 의 운영 노출 가드.
+    # `services.main_flow` 는 in-memory 저장소이므로 컨테이너 재시작/멀티 worker
+    # 환경에서 세션이 유실된다. CMP-608 Phase A migration + DB-backed repository
+    # 가 들어오기 전에는 본 플래그를 끄고 운영 API surface 에서 라우터를 빼야 한다.
+    # 테스트/로컬 dev 만 명시적으로 활성화한다.
+    phase_a_skeleton_enabled: bool = Field(default=False)
+
     oauth_state_redis_url: str | None = Field(default=None)
     auth_oauth_state_ttl_seconds: int = Field(
         default=600,

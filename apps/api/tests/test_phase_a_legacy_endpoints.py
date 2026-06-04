@@ -83,3 +83,36 @@ def test_session_create_bearer_required_returns_supabase_error_code(monkeypatch)
     assert response.status_code == 401
     # 익명 헤더가 인증으로 인식됐다면 다른 code 가 나왔을 것이다.
     assert response.json()["error"]["code"] == "SUPABASE_SESSION_BEARER_REQUIRED"
+
+
+def test_phase_a_routes_absent_when_skeleton_feature_flag_off(monkeypatch):
+    """운영 default — Phase A in-memory skeleton 라우터는 등록되지 않는다.
+
+    CMP-608 Phase A migration + DB-backed repository 가 들어오기 전에는 운영
+    API surface 에 in-memory store 가 노출되면 안 된다. 본 회귀는 feature flag
+    가 꺼진 환경에서 ``POST /sessions`` 등 신규 endpoint 가 부재함을 확인한다.
+    """
+
+    helpers.set_supabase_env(monkeypatch)
+    # 운영 default 를 흉내내기 위해 helper 가 켜둔 flag 를 다시 끈다.
+    monkeypatch.setenv("PHASE_A_SKELETON_ENABLED", "false")
+    get_settings.cache_clear()
+
+    app = create_app()
+    paths = {route.path for route in app.routes}  # type: ignore[attr-defined]
+    for guarded in (
+        "/sessions",
+        "/sessions/{session_id}",
+        "/sessions/{session_id}/address",
+        "/sessions/{session_id}/floorplan-uploads",
+        "/sessions/{session_id}/floorplan-candidates",
+        "/sessions/{session_id}/chat/messages",
+        "/sessions/{session_id}/chat/tool-calls",
+        "/sessions/{session_id}/chat/tool-calls/{tool_call_id}",
+    ):
+        assert guarded not in paths, f"{guarded} leaked into prod-default app"
+
+    client = TestClient(app)
+    with client:
+        response = client.post("/sessions", json={})
+    assert response.status_code == 404
