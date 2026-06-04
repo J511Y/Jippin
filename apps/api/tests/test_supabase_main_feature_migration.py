@@ -133,6 +133,8 @@ def test_selected_asset_matches_selected_source() -> None:
     assert "or a.floorplan_id = new.selected_floorplan_id" in sql
     assert "new.selected_floorplan_upload_id is null" in sql
     assert "or a.floorplan_upload_id = new.selected_floorplan_upload_id" in sql
+    assert "new.selected_floorplan_id is not null" in sql
+    assert "new.selected_floorplan_upload_id is not null" in sql
     assert "a.session_id = new.id" in sql
     assert "a.owner_user_id = new.user_id" in sql
 
@@ -238,6 +240,30 @@ def test_session_address_normalized_fields_are_service_controlled() -> None:
     assert "new.address_provider is distinct from old.address_provider" in sql
     assert "new.normalized_at is distinct from old.normalized_at" in sql
     assert "authenticated clients cannot change normalized address fields" in sql
+
+
+def test_current_address_is_frozen_after_analysis_starts() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_active_session_address_client_mutation()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_active_client_guard" in sql
+    assert "s.address_id = old.id" in sql
+    for status in (
+        "analyzing",
+        "awaiting_overlay",
+        "collecting_info",
+        "ready_for_rule",
+        "report_ready",
+        "handoff",
+    ):
+        assert f"'{status}'" in sql
+    assert (
+        "authenticated clients cannot change current address after analysis starts"
+        in sql
+    )
 
 
 def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
@@ -378,6 +404,14 @@ def test_chat_tool_call_message_is_same_session() -> None:
     assert (
         "chat_tool_calls.message_id must reference a message in the same session" in sql
     )
+    assert "parent_tool_call_id" in sql
+    assert "from public.chat_tool_calls as parent" in sql
+    assert "parent.id = new.parent_tool_call_id" in sql
+    assert "parent.session_id = new.session_id" in sql
+    assert (
+        "chat_tool_calls.parent_tool_call_id must reference a tool call in the same session"
+        in sql
+    )
 
 
 def test_authenticated_asset_writes_cannot_mark_scan_results() -> None:
@@ -391,6 +425,9 @@ def test_authenticated_asset_writes_cannot_mark_scan_results() -> None:
         "scan_status in ('pending', 'clean', 'infected', 'failed', 'not_required')"
         in sql
     )
+    assert "and kind = 'original'" in insert_policy
+    assert "and kind = 'original'" in update_policy
+    assert "and kind = 'original'" in delete_policy
     assert "and scan_status = 'pending'" in insert_policy
     assert "and scan_status = 'pending'" in update_policy
     assert "scan_status = 'clean'" not in insert_policy

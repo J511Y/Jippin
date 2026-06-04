@@ -503,6 +503,11 @@ begin
         or a.floorplan_upload_id = new.selected_floorplan_upload_id
       )
       and (
+        new.selected_floorplan_id is not null
+        or new.selected_floorplan_upload_id is not null
+        or a.session_id = new.id
+      )
+      and (
         (
           a.session_id = new.id
           and (
@@ -701,6 +706,49 @@ create trigger trg_session_addresses_normalized_client_guard
   on public.session_addresses
   for each row
   execute function public.prevent_session_address_client_normalized_mutation();
+
+create or replace function public.prevent_active_session_address_client_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and exists (
+      select 1
+      from public.sessions as s
+      where s.address_id = old.id
+        and s.status in (
+          'analyzing',
+          'awaiting_overlay',
+          'collecting_info',
+          'ready_for_rule',
+          'report_ready',
+          'handoff'
+        )
+    )
+  then
+    raise exception 'authenticated clients cannot change current address after analysis starts'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_session_addresses_active_client_guard
+  before update of
+    road_address,
+    jibun_address,
+    apartment_name,
+    building_dong,
+    unit_ho,
+    floor_no,
+    exclusive_area_m2,
+    size_type
+  on public.session_addresses
+  for each row
+  execute function public.prevent_active_session_address_client_mutation();
 
 create or replace function public.prevent_floorplan_client_catalog_promotion()
 returns trigger
@@ -919,6 +967,16 @@ begin
       using errcode = '23514';
   end if;
 
+  if new.parent_tool_call_id is not null and not exists (
+    select 1
+    from public.chat_tool_calls as parent
+    where parent.id = new.parent_tool_call_id
+      and parent.session_id = new.session_id
+  ) then
+    raise exception 'chat_tool_calls.parent_tool_call_id must reference a tool call in the same session'
+      using errcode = '23514';
+  end if;
+
   return new;
 end;
 $$;
@@ -926,7 +984,8 @@ $$;
 create trigger trg_chat_tool_calls_message_scope
   before insert or update of
     session_id,
-    message_id
+    message_id,
+    parent_tool_call_id
   on public.chat_tool_calls
   for each row
   execute function public.enforce_chat_tool_call_message_scope();
@@ -1113,6 +1172,7 @@ create policy floorplan_assets_owner_or_session_insert
   to authenticated
   with check (
     owner_user_id = (select auth.uid())
+    and kind = 'original'
     and scan_status = 'pending'
     and (
       floorplan_id is null
@@ -1155,6 +1215,7 @@ create policy floorplan_assets_owner_or_session_update
   to authenticated
   using (
     owner_user_id = (select auth.uid())
+    and kind = 'original'
     and scan_status = 'pending'
     and (
       floorplan_id is null
@@ -1192,6 +1253,7 @@ create policy floorplan_assets_owner_or_session_update
   )
   with check (
     owner_user_id = (select auth.uid())
+    and kind = 'original'
     and scan_status = 'pending'
     and (
       floorplan_id is null
@@ -1234,6 +1296,7 @@ create policy floorplan_assets_owner_or_session_delete
   to authenticated
   using (
     owner_user_id = (select auth.uid())
+    and kind = 'original'
     and scan_status = 'pending'
     and not exists (
       select 1
