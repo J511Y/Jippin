@@ -674,6 +674,29 @@ create trigger trg_sessions_completed_pointer_client_guard
   for each row
   execute function public.prevent_completed_session_client_pointer_mutation();
 
+create or replace function public.prevent_active_session_client_delete()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and old.status not in ('draft', 'expired', 'deleted')
+  then
+    raise exception 'authenticated clients cannot hard-delete active sessions'
+      using errcode = '42501';
+  end if;
+
+  return old;
+end;
+$$;
+
+create trigger trg_sessions_active_delete_client_guard
+  before delete
+  on public.sessions
+  for each row
+  execute function public.prevent_active_session_client_delete();
+
 create or replace function public.prevent_session_address_client_reparent()
 returns trigger
 language plpgsql
@@ -907,6 +930,41 @@ create trigger trg_floorplans_selected_client_guard
   for each row
   execute function public.prevent_selected_floorplan_client_mutation();
 
+create or replace function public.prevent_selected_floorplan_client_delete()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and exists (
+      select 1
+      from public.sessions as s
+      where s.selected_floorplan_id = old.id
+        and s.status in (
+          'analyzing',
+          'awaiting_overlay',
+          'collecting_info',
+          'ready_for_rule',
+          'report_ready',
+          'handoff'
+        )
+    )
+  then
+    raise exception 'authenticated clients cannot delete selected floorplans after analysis starts'
+      using errcode = '42501';
+  end if;
+
+  return old;
+end;
+$$;
+
+create trigger trg_floorplans_selected_delete_client_guard
+  before delete
+  on public.floorplans
+  for each row
+  execute function public.prevent_selected_floorplan_client_delete();
+
 create or replace function public.enforce_floorplan_upload_original_asset_scope()
 returns trigger
 language plpgsql
@@ -1105,6 +1163,41 @@ create trigger trg_floorplan_assets_selected_metadata_client_guard
   on public.floorplan_assets
   for each row
   execute function public.prevent_selected_asset_client_metadata_mutation();
+
+create or replace function public.prevent_selected_asset_client_delete()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and exists (
+      select 1
+      from public.sessions as s
+      where s.selected_floorplan_asset_id = old.id
+        and s.status in (
+          'analyzing',
+          'awaiting_overlay',
+          'collecting_info',
+          'ready_for_rule',
+          'report_ready',
+          'handoff'
+        )
+    )
+  then
+    raise exception 'authenticated clients cannot delete selected assets after analysis starts'
+      using errcode = '42501';
+  end if;
+
+  return old;
+end;
+$$;
+
+create trigger trg_floorplan_assets_selected_delete_client_guard
+  before delete
+  on public.floorplan_assets
+  for each row
+  execute function public.prevent_selected_asset_client_delete();
 
 create or replace function public.prevent_floorplan_asset_mixed_parent_scope()
 returns trigger
@@ -1384,6 +1477,7 @@ create policy floorplan_assets_owner_or_session_insert
         from public.floorplan_uploads as u
         where u.id = floorplan_upload_id
           and u.user_id = (select auth.uid())
+          and u.status in ('uploaded', 'scan_pending')
           and (
             public.floorplan_assets.session_id is null
             or u.session_id = public.floorplan_assets.session_id
@@ -1427,6 +1521,7 @@ create policy floorplan_assets_owner_or_session_update
         from public.floorplan_uploads as u
         where u.id = floorplan_upload_id
           and u.user_id = (select auth.uid())
+          and u.status in ('uploaded', 'scan_pending')
           and (
             public.floorplan_assets.session_id is null
             or u.session_id = public.floorplan_assets.session_id
@@ -1465,6 +1560,7 @@ create policy floorplan_assets_owner_or_session_update
         from public.floorplan_uploads as u
         where u.id = floorplan_upload_id
           and u.user_id = (select auth.uid())
+          and u.status in ('uploaded', 'scan_pending')
           and (
             public.floorplan_assets.session_id is null
             or u.session_id = public.floorplan_assets.session_id

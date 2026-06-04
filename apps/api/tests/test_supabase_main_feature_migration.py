@@ -210,6 +210,18 @@ def test_completed_session_input_pointers_are_service_controlled() -> None:
     )
 
 
+def test_active_sessions_are_not_browser_hard_deleted() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_active_session_client_delete()"
+        in sql
+    )
+    assert "create trigger trg_sessions_active_delete_client_guard" in sql
+    assert "old.status not in ('draft', 'expired', 'deleted')" in sql
+    assert "authenticated clients cannot hard-delete active sessions" in sql
+
+
 def test_floorplan_catalog_promotion_is_service_owned() -> None:
     sql = migration_sql()
     insert_policy = policy_sql(sql, "floorplans_owner_insert")
@@ -451,6 +463,23 @@ def test_selected_floorplan_metadata_is_frozen_after_analysis_starts() -> None:
     )
 
 
+def test_selected_floorplan_delete_is_service_controlled_after_analysis_starts() -> (
+    None
+):
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_selected_floorplan_client_delete()"
+        in sql
+    )
+    assert "create trigger trg_floorplans_selected_delete_client_guard" in sql
+    assert "s.selected_floorplan_id = old.id" in sql
+    assert (
+        "authenticated clients cannot delete selected floorplans after analysis starts"
+        in sql
+    )
+
+
 def test_chat_tool_call_message_is_same_session() -> None:
     sql = migration_sql()
 
@@ -496,6 +525,18 @@ def test_authenticated_asset_writes_cannot_mark_scan_results() -> None:
     assert "scan_status = 'not_required'" not in insert_policy
     assert "scan_status = 'not_required'" not in update_policy
     assert "and scan_status = 'pending'" in delete_policy
+
+
+def test_floorplan_asset_upload_attach_requires_client_writable_upload() -> None:
+    sql = migration_sql()
+    insert_policy = policy_sql(sql, "floorplan_assets_owner_or_session_insert")
+    update_policy = policy_sql(sql, "floorplan_assets_owner_or_session_update")
+
+    for mutation_policy in (insert_policy, update_policy):
+        assert "from public.floorplan_uploads as u" in mutation_policy
+        assert "where u.id = floorplan_upload_id" in mutation_policy
+        assert "and u.user_id = (select auth.uid())" in mutation_policy
+        assert "and u.status in ('uploaded', 'scan_pending')" in mutation_policy
 
 
 def test_referenced_original_asset_invariants_are_client_immutable() -> None:
@@ -559,6 +600,21 @@ def test_selected_asset_metadata_is_frozen_after_analysis_starts() -> None:
         assert column in sql
     assert (
         "authenticated clients cannot mutate selected asset metadata after analysis starts"
+        in sql
+    )
+
+
+def test_selected_asset_delete_is_service_controlled_after_analysis_starts() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_selected_asset_client_delete()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_assets_selected_delete_client_guard" in sql
+    assert "s.selected_floorplan_asset_id = old.id" in sql
+    assert (
+        "authenticated clients cannot delete selected assets after analysis starts"
         in sql
     )
 
