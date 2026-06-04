@@ -229,7 +229,7 @@ class FloorplanUpload(TimestampMixin, Base):
     )
 
 
-class FloorplanAsset(CreatedAtMixin, Base):
+class FloorplanAsset(TimestampMixin, Base):
     """R2/S3 object metadata. Signed URLs and tokens are intentionally absent."""
 
     __tablename__ = "floorplan_assets"

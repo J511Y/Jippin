@@ -146,6 +146,19 @@ def test_sessions_reference_pointers_are_guarded_by_trigger() -> None:
         "sessions.selected_floorplan_upload_id must reference a same-session upload"
         in sql
     )
+    assert (
+        "join public.floorplan_assets as a\n        on a.id = u.original_asset_id"
+        in sql
+    )
+    assert (
+        "u.status in (\n          'ready_for_processing',\n          'processing',\n"
+        in sql
+    )
+    assert "and a.scan_status = 'clean'" in sql
+    assert (
+        "sessions.selected_floorplan_upload_id must reference a clean processable upload for analysis"
+        in sql
+    )
     assert "and new.address_id is null" in sql
     assert "sessions entering analysis must reference a same-session address" in sql
 
@@ -245,6 +258,11 @@ def test_floorplan_catalog_promotion_is_service_owned() -> None:
     assert "old.quality_status = 'verified'" in sql
     assert "old.promoted_from_upload_id is not null" in sql
     assert "new.promoted_from_upload_id is not null" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.updated_at := new.created_at" in sql
+    assert "new.created_at is distinct from old.created_at" in sql
+    assert "new.updated_at := now()" in sql
+    assert "authenticated clients cannot change floorplan audit timestamps" in sql
     assert "authenticated clients cannot promote catalog floorplans" in sql
 
     for mutation_policy in (insert_policy, update_policy, delete_policy):
@@ -286,6 +304,30 @@ def test_session_address_normalized_fields_are_service_controlled() -> None:
     assert "new.address_provider is distinct from old.address_provider" in sql
     assert "new.normalized_at is distinct from old.normalized_at" in sql
     assert "authenticated clients cannot change normalized address fields" in sql
+
+
+def test_session_address_raw_input_resets_stale_normalization() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.reset_session_address_client_normalization()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_input_normalization_reset" in sql
+    for column in (
+        "road_address",
+        "jibun_address",
+        "apartment_name",
+        "building_dong",
+        "unit_ho",
+        "floor_no",
+        "exclusive_area_m2",
+        "size_type",
+    ):
+        assert f"new.{column} is distinct from old.{column}" in sql
+    assert "new.building_identity := '{}'::jsonb" in sql
+    assert "new.address_provider := null" in sql
+    assert "new.normalized_at := null" in sql
 
 
 def test_current_address_is_frozen_after_analysis_starts() -> None:
@@ -340,6 +382,9 @@ def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
     assert "a.session_id = new.session_id" in sql
     assert "a.owner_user_id = new.user_id" in sql
     assert "a.kind = 'original'" in sql
+    assert "new.status in (\n    'scan_pending'," in sql
+    assert "and new.original_asset_id is null" in sql
+    assert "floorplan_uploads queue-visible status requires an original asset" in sql
 
 
 def test_floorplan_upload_status_is_service_controlled_after_initial_write() -> None:
@@ -352,12 +397,12 @@ def test_floorplan_upload_status_is_service_controlled_after_initial_write() -> 
     assert "create trigger trg_floorplan_uploads_client_service_guard" in sql
     assert "new.created_at := now()" in sql
     assert "new.updated_at := new.created_at" in sql
-    assert "new.status not in ('uploaded', 'scan_pending')" in sql
+    assert "new.status <> 'uploaded'" in sql
     assert "new.created_at is distinct from old.created_at" in sql
     assert "new.updated_at := now()" in sql
     assert "new.session_id is distinct from old.session_id" in sql
     assert "authenticated clients cannot move floorplan uploads between sessions" in sql
-    assert "old.status not in ('uploaded', 'scan_pending')" in sql
+    assert "old.status <> 'uploaded'" in sql
     assert "new.status is distinct from old.status" in sql
     assert "authenticated clients cannot change upload audit timestamps" in sql
     assert "authenticated clients cannot mutate service-controlled upload rows" in sql
@@ -374,8 +419,10 @@ def test_floorplan_upload_policies_split_read_insert_update_without_delete() -> 
     assert "\n  for select\n" in read_policy
     assert "\n  for insert\n" in insert_policy
     assert "\n  for update\n" in update_policy
-    assert "status in ('uploaded', 'scan_pending')" in insert_policy
-    assert "status in ('uploaded', 'scan_pending')" in update_policy
+    assert "status = 'uploaded'" in insert_policy
+    assert "status = 'uploaded'" in update_policy
+    assert "status in ('uploaded', 'scan_pending')" not in insert_policy
+    assert "status in ('uploaded', 'scan_pending')" not in update_policy
     upload_policy_modes = re.findall(
         r"create policy floorplan_uploads_\w+\n"
         r"  on public\.floorplan_uploads\n"
@@ -555,6 +602,22 @@ def test_authenticated_asset_writes_cannot_mark_scan_results() -> None:
     assert "and scan_status = 'pending'" in delete_policy
 
 
+def test_floorplan_asset_timestamps_are_server_controlled() -> None:
+    sql = migration_sql()
+
+    assert "updated_at timestamp with time zone not null default now()" in sql
+    assert (
+        "create or replace function public.prevent_floorplan_asset_client_timestamp_mutation()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_assets_audit_timestamps_client_guard" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.updated_at := new.created_at" in sql
+    assert "new.created_at is distinct from old.created_at" in sql
+    assert "new.updated_at := now()" in sql
+    assert "authenticated clients cannot change asset audit timestamps" in sql
+
+
 def test_floorplan_asset_upload_attach_requires_client_writable_upload() -> None:
     sql = migration_sql()
     insert_policy = policy_sql(sql, "floorplan_assets_owner_or_session_insert")
@@ -564,7 +627,8 @@ def test_floorplan_asset_upload_attach_requires_client_writable_upload() -> None
         assert "from public.floorplan_uploads as u" in mutation_policy
         assert "where u.id = floorplan_upload_id" in mutation_policy
         assert "and u.user_id = (select auth.uid())" in mutation_policy
-        assert "and u.status in ('uploaded', 'scan_pending')" in mutation_policy
+        assert "and u.status = 'uploaded'" in mutation_policy
+        assert "and u.status in ('uploaded', 'scan_pending')" not in mutation_policy
 
 
 def test_referenced_original_asset_invariants_are_client_immutable() -> None:

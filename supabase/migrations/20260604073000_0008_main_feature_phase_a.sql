@@ -160,6 +160,7 @@ create table public.floorplan_assets (
   page_count integer,
   scan_status text not null default 'pending',
   created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
   constraint pk_floorplan_assets primary key (id),
   constraint ck_floorplan_assets_floorplan_assets_kind_allowed check (
     kind in (
@@ -527,6 +528,40 @@ begin
       using errcode = '23514';
   end if;
 
+  if new.status in (
+    'analyzing',
+    'awaiting_overlay',
+    'collecting_info',
+    'ready_for_rule',
+    'report_ready',
+    'handoff'
+  )
+    and new.selected_floorplan_upload_id is not null
+    and not exists (
+      select 1
+      from public.floorplan_uploads as u
+      join public.floorplan_assets as a
+        on a.id = u.original_asset_id
+      where u.id = new.selected_floorplan_upload_id
+        and u.session_id = new.id
+        and u.user_id = new.user_id
+        and u.status in (
+          'ready_for_processing',
+          'processing',
+          'processed',
+          'promoted_to_catalog'
+        )
+        and a.floorplan_upload_id = u.id
+        and a.session_id = u.session_id
+        and a.owner_user_id = u.user_id
+        and a.kind = 'original'
+        and a.scan_status = 'clean'
+    )
+  then
+    raise exception 'sessions.selected_floorplan_upload_id must reference a clean processable upload for analysis'
+      using errcode = '23514';
+  end if;
+
   if new.selected_floorplan_asset_id is not null and not exists (
     select 1
     from public.floorplan_assets as a
@@ -778,6 +813,47 @@ create trigger trg_session_addresses_normalized_client_guard
   for each row
   execute function public.prevent_session_address_client_normalized_mutation();
 
+create or replace function public.reset_session_address_client_normalization()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and (
+      new.road_address is distinct from old.road_address
+      or new.jibun_address is distinct from old.jibun_address
+      or new.apartment_name is distinct from old.apartment_name
+      or new.building_dong is distinct from old.building_dong
+      or new.unit_ho is distinct from old.unit_ho
+      or new.floor_no is distinct from old.floor_no
+      or new.exclusive_area_m2 is distinct from old.exclusive_area_m2
+      or new.size_type is distinct from old.size_type
+    )
+  then
+    new.building_identity := '{}'::jsonb;
+    new.address_provider := null;
+    new.normalized_at := null;
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_session_addresses_input_normalization_reset
+  before update of
+    road_address,
+    jibun_address,
+    apartment_name,
+    building_dong,
+    unit_ho,
+    floor_no,
+    exclusive_area_m2,
+    size_type
+  on public.session_addresses
+  for each row
+  execute function public.reset_session_address_client_normalization();
+
 create or replace function public.prevent_active_session_address_client_mutation()
 returns trigger
 language plpgsql
@@ -869,6 +945,14 @@ begin
     return new;
   end if;
 
+  if tg_op = 'INSERT' then
+    new.created_at := now();
+    new.updated_at := new.created_at;
+  elsif new.created_at is distinct from old.created_at then
+    raise exception 'authenticated clients cannot change floorplan audit timestamps'
+      using errcode = '42501';
+  end if;
+
   if tg_op = 'UPDATE' and (
     old.source = 'promoted_upload'
     or old.visibility = 'public_catalog'
@@ -888,16 +972,16 @@ begin
       using errcode = '42501';
   end if;
 
+  if tg_op = 'UPDATE' then
+    new.updated_at := now();
+  end if;
+
   return new;
 end;
 $$;
 
 create trigger trg_floorplans_client_catalog_promotion_guard
-  before insert or update of
-    source,
-    visibility,
-    quality_status,
-    promoted_from_upload_id
+  before insert or update
   on public.floorplans
   for each row
   execute function public.prevent_floorplan_client_catalog_promotion();
@@ -990,6 +1074,19 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
+  if new.status in (
+    'scan_pending',
+    'ready_for_processing',
+    'processing',
+    'processed',
+    'promoted_to_catalog'
+  )
+    and new.original_asset_id is null
+  then
+    raise exception 'floorplan_uploads queue-visible status requires an original asset'
+      using errcode = '23514';
+  end if;
+
   if new.original_asset_id is not null and not exists (
     select 1
     from public.floorplan_assets as a
@@ -1030,7 +1127,7 @@ begin
     new.created_at := now();
     new.updated_at := new.created_at;
 
-    if new.status not in ('uploaded', 'scan_pending') then
+    if new.status <> 'uploaded' then
       raise exception 'authenticated clients cannot set service-controlled upload status'
         using errcode = '42501';
     end if;
@@ -1040,7 +1137,7 @@ begin
   elsif new.session_id is distinct from old.session_id then
     raise exception 'authenticated clients cannot move floorplan uploads between sessions'
       using errcode = '42501';
-  elsif old.status not in ('uploaded', 'scan_pending') then
+  elsif old.status <> 'uploaded' then
     raise exception 'authenticated clients cannot mutate service-controlled upload rows'
       using errcode = '42501';
   elsif new.status is distinct from old.status then
@@ -1061,6 +1158,38 @@ create trigger trg_floorplan_uploads_client_service_guard
   on public.floorplan_uploads
   for each row
   execute function public.prevent_floorplan_upload_client_service_mutation();
+
+create or replace function public.prevent_floorplan_asset_client_timestamp_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role <> 'authenticated' then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    new.created_at := now();
+    new.updated_at := new.created_at;
+  elsif new.created_at is distinct from old.created_at then
+    raise exception 'authenticated clients cannot change asset audit timestamps'
+      using errcode = '42501';
+  end if;
+
+  if tg_op = 'UPDATE' then
+    new.updated_at := now();
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_floorplan_assets_audit_timestamps_client_guard
+  before insert or update
+  on public.floorplan_assets
+  for each row
+  execute function public.prevent_floorplan_asset_client_timestamp_mutation();
 
 create or replace function public.prevent_referenced_original_asset_client_mutation()
 returns trigger
@@ -1412,7 +1541,7 @@ create policy floorplan_uploads_owner_insert
   to authenticated
   with check (
     user_id = (select auth.uid())
-    and status in ('uploaded', 'scan_pending')
+    and status = 'uploaded'
     and exists (
       select 1
       from public.sessions as s
@@ -1427,11 +1556,11 @@ create policy floorplan_uploads_owner_update
   to authenticated
   using (
     user_id = (select auth.uid())
-    and status in ('uploaded', 'scan_pending')
+    and status = 'uploaded'
   )
   with check (
     user_id = (select auth.uid())
-    and status in ('uploaded', 'scan_pending')
+    and status = 'uploaded'
     and exists (
       select 1
       from public.sessions as s
@@ -1498,7 +1627,7 @@ create policy floorplan_assets_owner_or_session_insert
         from public.floorplan_uploads as u
         where u.id = floorplan_upload_id
           and u.user_id = (select auth.uid())
-          and u.status in ('uploaded', 'scan_pending')
+          and u.status = 'uploaded'
           and (
             public.floorplan_assets.session_id is null
             or u.session_id = public.floorplan_assets.session_id
@@ -1542,7 +1671,7 @@ create policy floorplan_assets_owner_or_session_update
         from public.floorplan_uploads as u
         where u.id = floorplan_upload_id
           and u.user_id = (select auth.uid())
-          and u.status in ('uploaded', 'scan_pending')
+          and u.status = 'uploaded'
           and (
             public.floorplan_assets.session_id is null
             or u.session_id = public.floorplan_assets.session_id
@@ -1581,7 +1710,7 @@ create policy floorplan_assets_owner_or_session_update
         from public.floorplan_uploads as u
         where u.id = floorplan_upload_id
           and u.user_id = (select auth.uid())
-          and u.status in ('uploaded', 'scan_pending')
+          and u.status = 'uploaded'
           and (
             public.floorplan_assets.session_id is null
             or u.session_id = public.floorplan_assets.session_id

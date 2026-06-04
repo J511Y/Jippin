@@ -71,6 +71,7 @@ def test_floorplan_uploads_and_assets_do_not_shadow_catalog_or_signed_urls() -> 
     )
     assert isinstance(asset_table.c.object_key.type, Text)
     assert isinstance(asset_table.c.byte_size.type, BigInteger)
+    assert "updated_at" in asset_table.c
 
 
 def test_floorplan_candidates_keep_presented_snapshot_contract() -> None:
