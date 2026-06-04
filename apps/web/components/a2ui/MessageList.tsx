@@ -1,51 +1,59 @@
 'use client';
 
-import { clsx } from 'clsx';
+import { Paper, Stack, Text } from '@mantine/core';
+import type { CSSProperties } from 'react';
 import type { ChatMessage } from '@/components/a2ui/types';
 import { DynamicComponent } from '@/components/a2ui/DynamicComponent';
 
 type Props = {
   messages: ChatMessage[];
   className?: string;
+  style?: CSSProperties;
 };
 
-export function MessageList({ messages, className }: Props) {
+export function MessageList({ messages, className, style }: Props) {
   if (messages.length === 0) {
     return (
-      <div
-        className={clsx(
-          'flex h-full items-center justify-center text-sm text-slate-400',
-          className
-        )}
-      >
-        대화를 시작해 주세요.
-      </div>
+      <Stack align="center" className={className} justify="center" mih="100%" style={style}>
+        <Text c="dimmed" size="sm">
+          대화를 시작해 주세요.
+        </Text>
+      </Stack>
     );
   }
 
   return (
-    <ol
-      data-testid="a2ui-message-list"
-      className={clsx('flex flex-col gap-3', className)}
-    >
+    <Stack component="ol" data-testid="a2ui-message-list" gap="sm" className={className} style={style}>
       {messages.map((message) => (
-        <li
+        <Paper
+          component="li"
           key={message.id}
-          className={clsx(
-            'rounded-lg px-3 py-2 text-sm',
-            message.role === 'user'
-              ? 'self-end bg-brand text-brand-fg'
-              : 'self-start bg-slate-100 text-slate-900'
-          )}
+          maw="82%"
+          p="sm"
+          radius="lg"
+          shadow="xs"
+          style={{
+            alignSelf: message.role === 'user' ? 'flex-end' : 'flex-start',
+            background:
+              message.role === 'user'
+                ? 'var(--jippin-brand-primary)'
+                : 'var(--mantine-color-gray-0)',
+            color:
+              message.role === 'user'
+                ? 'var(--jippin-brand-primary-fg)'
+                : 'var(--jippin-brand-ink)'
+          }}
         >
-          <div className="whitespace-pre-wrap">{message.content}</div>
+          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+            {message.content}
+          </Text>
           {message.dynamic ? (
-            <div className="mt-2">
+            <Stack mt="xs">
               <DynamicComponent spec={message.dynamic} />
-            </div>
+            </Stack>
           ) : null}
-        </li>
+        </Paper>
       ))}
-    </ol>
+    </Stack>
   );
 }

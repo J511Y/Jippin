@@ -1,5 +1,6 @@
 'use client';
 
+import { Code, Paper, Stack, Text } from '@mantine/core';
 import type { DynamicComponentSpec } from '@/components/a2ui/types';
 
 /**
@@ -18,15 +19,24 @@ type Props = {
 
 export function DynamicComponent({ spec }: Props) {
   return (
-    <div
+    <Paper
       role="figure"
       aria-label={`동적 컴포넌트: ${spec.kind}`}
-      className="rounded-md border border-dashed border-slate-300 bg-white p-2 text-xs"
+      bg="white"
+      p="sm"
+      radius="md"
+      style={{
+        border: '1px dashed var(--jippin-brand-border)'
+      }}
     >
-      <div className="font-semibold text-slate-700">[A2UI:{spec.kind}]</div>
-      <pre className="overflow-x-auto whitespace-pre-wrap text-[11px] text-slate-500">
-        {JSON.stringify(spec.payload, null, 2)}
-      </pre>
-    </div>
+      <Stack gap={4}>
+        <Text c="var(--jippin-brand-copy)" fw={600} size="xs">
+          [A2UI:{spec.kind}]
+        </Text>
+        <Code block c="dimmed" fz="xs">
+          {JSON.stringify(spec.payload, null, 2)}
+        </Code>
+      </Stack>
+    </Paper>
   );
 }
