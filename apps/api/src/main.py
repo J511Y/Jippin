@@ -14,7 +14,10 @@ from .errors import register_exception_handlers
 from .logging import RequestIDMiddleware, configure_logging, get_logger
 from .middleware.request_log import RequestLogMiddleware
 from .routers.auth import router as auth_router
+from .routers.chat import router as chat_router
+from .routers.floorplans import router as floorplans_router
 from .routers.healthz import router as healthz_router
+from .routers.sessions import router as sessions_router
 
 
 @asynccontextmanager
@@ -58,6 +61,14 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(auth_router)
     app.include_router(healthz_router)
+    # Phase A 메인 흐름 (CMP-609 skeleton). DB-backed repository 는 CMP-608
+    # migration 이 들어온 뒤 services.main_flow 의 in-memory 구현을 교체한다.
+    # 그전에는 운영 surface 에 in-memory store 가 노출되지 않도록 settings 의
+    # phase_a_skeleton_enabled 플래그가 켜진 환경에서만 라우터를 등록한다.
+    if settings.phase_a_skeleton_enabled:
+        app.include_router(sessions_router)
+        app.include_router(floorplans_router)
+        app.include_router(chat_router)
 
     return app
 
