@@ -2,41 +2,57 @@
 
 import { useState } from 'react';
 
-const ANON_USER_ID_KEY = 'jippin_anonymous_user_id';
-const ANON_USER_ID_HEADER = 'x-jippin-anon-id';
+import { DEFAULT_NEXT, resolveSafeNext } from '@/lib/safe-redirect';
+import { createClient } from '@/lib/supabase/client';
 
-const PROVIDERS = [
-  { id: 'kakao', label: '카카오로 로그인' },
-  { id: 'google', label: 'Google 로 로그인' },
-  { id: 'naver', label: '네이버로 로그인' }
-] as const;
+/**
+ * 간편가입 OAuth 시작 버튼 (CMP-557, CMP-564).
+ *
+ * - 자체 가입/아이디 찾기/비밀번호 찾기 UI 는 정책상 존재하지 않는다.
+ * - 흐름: 버튼 클릭 → Web BFF `GET /auth/oauth/start?provider=<id>&intent=<signin|link>&next=<path>` 로
+ *   브라우저를 이동시킨다. BFF 는 Supabase PKCE cookie 를 보존한 뒤 provider authorization URL 로 302 한다.
+ * - `next` 는 lib/safe-redirect 의 `isSafeNext` SSOT 를 거친 상대 경로만 전달한다.
+ */
+
+const PROVIDERS = [{ id: 'kakao', label: '카카오로 시작하기' }] as const;
 
 type ProviderId = (typeof PROVIDERS)[number]['id'];
-
-type OAuthStartResponse = {
-  authorize_url?: string;
-};
-
-function getOrCreateAnonymousUserId(): string {
-  const stored = window.localStorage.getItem(ANON_USER_ID_KEY);
-  if (stored) {
-    return stored;
-  }
-
-  if (!window.crypto?.randomUUID) {
-    throw new Error('이 브라우저에서는 익명 세션을 만들 수 없습니다.');
-  }
-
-  const generated = window.crypto.randomUUID();
-  window.localStorage.setItem(ANON_USER_ID_KEY, generated);
-  return generated;
-}
+type OAuthIntent = 'signin' | 'link';
 
 type LoginButtonsProps = {
-  apiBase: string;
+  nextPath: string | null;
 };
 
-export function LoginButtons({ apiBase }: LoginButtonsProps) {
+function safeNextPath(nextPath: string | null): string | null {
+  return resolveSafeNext(nextPath, DEFAULT_NEXT);
+}
+
+async function resolveOAuthIntent(): Promise<OAuthIntent> {
+  const supabase = createClient();
+  const { data } = await supabase.auth.getSession();
+  const user = data.session?.user as
+    | {
+        is_anonymous?: boolean;
+        app_metadata?: {
+          provider?: string;
+          providers?: string[];
+        };
+      }
+    | undefined;
+  if (user?.is_anonymous === true) {
+    return 'link';
+  }
+  const providers = user?.app_metadata?.providers ?? [];
+  if (
+    user?.app_metadata?.provider === 'anonymous'
+    && providers.every((provider) => provider === 'anonymous')
+  ) {
+    return 'link';
+  }
+  return 'signin';
+}
+
+export function LoginButtons({ nextPath }: LoginButtonsProps) {
   const [pendingProvider, setPendingProvider] = useState<ProviderId | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -45,26 +61,18 @@ export function LoginButtons({ apiBase }: LoginButtonsProps) {
     setErrorMessage(null);
 
     try {
-      const anonymousUserId = getOrCreateAnonymousUserId();
-      const response = await fetch(`${apiBase}/auth/${provider}/start`, {
-        method: 'POST',
-        headers: {
-          [ANON_USER_ID_HEADER]: anonymousUserId
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('로그인 시작 요청에 실패했습니다.');
+      const url = new URL('/auth/oauth/start', window.location.origin);
+      url.searchParams.set('provider', provider);
+      url.searchParams.set('intent', await resolveOAuthIntent());
+      const next = safeNextPath(nextPath);
+      if (next) {
+        url.searchParams.set('next', next);
       }
-
-      const data = (await response.json()) as OAuthStartResponse;
-      if (!data.authorize_url) {
-        throw new Error('로그인 이동 주소를 받지 못했습니다.');
-      }
-
-      window.location.assign(data.authorize_url);
+      window.location.assign(url.toString());
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '로그인을 시작하지 못했습니다.');
+      setErrorMessage(
+        error instanceof Error ? error.message : '로그인을 시작하지 못했습니다.'
+      );
       setPendingProvider(null);
     }
   }

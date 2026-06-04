@@ -1,8 +1,28 @@
 # Runbook — Neon Postgres 브랜치 운영 (APP_ENV ↔ branch 매핑)
 
+> **⚠ ARCHIVE — Neon → Supabase cutover 완료 (CMP-603, 2026-06-02)**
+>
+> 본 런북은 **이력 참조용 archive** 다. Forward DB schema / branching 정본은 [`supabase-branching.md`](supabase-branching.md). CI/CD 측 변경:
+>
+> - `.github/workflows/neon-pr-branch.yml` → `.github/workflows/_archive/neon-pr-branch.yml.archived` (GitHub Actions 가 로드하지 않음).
+> - `.github/workflows/deploy.yml::release-migrate` (Neon `DATABASE_URL` + `alembic upgrade head`) → 제거.
+> - `.github/workflows/ci.yml::migrate-check` → Supabase SQL migration drift 가드로 재정의 (Neon secret 의존 없음).
+>
+> 본 런북을 읽어도 되는 경우:
+> - Neon project 가 잔존하는 동안 본인의 1Password vault 에서 connection string 의 host prefix 를 해석할 때.
+> - 과거 Neon 운영 행위의 audit trail 확인.
+> - Neon 비밀번호 회전 ([`neon-credential-rotation.md`](neon-credential-rotation.md)) — Neon project 가 폐기되기 전까지만 의미 있음.
+>
+> **하지 말 것**:
+> - 본 런북의 절차로 새 Neon branch 를 만들어 forward migration 을 적용. cutover 이후 Neon 은 forward authority 가 아니다.
+> - `.github/workflows/_archive/` 안의 워크플로우를 다시 active 디렉터리로 옮김.
+> - 새 작업 base 로 본 런북을 인용. 신규 작업은 [`supabase-branching.md`](supabase-branching.md) 와 [`supabase-migration-plan.md`](supabase-migration-plan.md) 를 정본으로 한다.
+>
+> Neon project 자체 폐기 + Neon 시크릿/변수 GitHub Settings 일괄 삭제는 사용자 콘솔 작업 (CMP-603 PR 본문 §사용자 작업 체크리스트). 폐기 완료 시점에 본 디렉터리 자체가 `docs/runbooks/_archive/` 로 이동할 수 있다.
+
 - 정본 책임자: **Infrastructure Lead** · **Database Engineer** 리뷰
-- 관련: CMP-536 (Neon 마이그레이션 세팅), CMP-538 (본 문서), CMP-543 (개발환경 구축), CMP-544 (`local` 브랜치 신설), AGENTS.md §4.4
-- 인접 런북: [`neon-credential-rotation.md`](neon-credential-rotation.md) (비밀번호 회전)
+- 관련: CMP-536 (Neon 마이그레이션 세팅), CMP-538 (본 문서), CMP-543 (개발환경 구축), CMP-544 (`local` 브랜치 신설), AGENTS.md §4.4, **CMP-574 / CMP-602 (Supabase 전환 — 본 런북 archive 대상)**
+- 인접 런북: [`neon-credential-rotation.md`](neon-credential-rotation.md) (비밀번호 회전, 한시 잔존), [`supabase-branching.md`](supabase-branching.md) (Supabase 브랜치 운영, **현 정본**)
 - 목표 소요(신규 작업자 자기 `local` fork 생성): **30분 이내**
 
 ---

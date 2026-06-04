@@ -1,0 +1,2 @@
+-- CMP-575 Supabase SQL candidate for Alembic revision 0001_baseline.
+-- Alembic 0001 is an empty baseline; it creates no application schema.

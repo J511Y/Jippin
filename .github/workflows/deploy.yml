@@ -1,11 +1,27 @@
-# 집핀(Jippin) 배포 파이프라인 - CMP-539
+# 집핀(Jippin) 배포 파이프라인 — CMP-603 Supabase cutover.
 #
-# GitHub branch 와 Neon branch 를 명시적으로 맞춘다.
-#   - dev  -> APP_ENV=development -> Neon development branch
-#   - main -> APP_ENV=production  -> Neon production branch
+# GitHub branch ↔ Supabase project branch 매핑 (정본: docs/runbooks/supabase-branching.md §2):
+#   - `dev`  push -> APP_ENV=development -> Supabase `development` branch
+#   - `main` push -> APP_ENV=production  -> Supabase `production` branch
 #
-# 실제 클라우드 배포 대상(Vercel/Fly/Cloud Run/Lightsail 등)은 아직 스텁이며,
-# release-migrate 가 성공한 뒤에만 deploy 단계로 넘어간다.
+# DB 마이그레이션 책임 봉인 (cutover 후).
+#   `supabase/migrations/*.sql` 이 forward DB schema SSOT 이며, **Supabase GitHub
+#   Integration** 이 `dev` / `main` push 를 감지해 매핑된 persistent branch 에
+#   migration 을 적용한다. 따라서 본 워크플로우는 더 이상 release-migrate 잡으로
+#   `alembic upgrade head` 를 돌리지 않는다 (이전 잡은 Neon `DATABASE_URL` +
+#   `alembic` 의존). Alembic 은 historical reference 로만 보존된다 (CMP-575 /
+#   docs/runbooks/supabase-migration-plan.md §Alembic Keep/Remove).
+#
+#   본 워크플로우와 Supabase Integration 이 **동시에 DB migration 을 적용하지
+#   않도록 한다.** 본 워크플로우 안에 `supabase db push` 등 forward migration
+#   잡을 추가하려면 ADR + Supabase Console 의 "deploy migrations" 토글을 OFF 로
+#   먼저 돌려놓아야 한다 (이중 적용 방지). 현재는 Supabase Integration 단독.
+#
+# 본 워크플로우의 책임 (cutover 후 잔존):
+#   1. `build` — apps/api smoke (uv sync). 빌드 깨짐 조기 발견.
+#   2. `deploy` — 클라우드 배포 스텁. 실제 Vercel/Fly/Cloud Run/Lightsail target 은
+#                 후속 이슈에서 채운다. 현재는 어떤 환경에 배포하려는지 명시만 한다.
+#                 DB 마이그레이션은 호출하지 않는다 (위 봉인).
 name: deploy
 
 on:
@@ -16,7 +32,9 @@ on:
   workflow_dispatch: {}
 
 # 같은 대상 브랜치 배포가 연속 들어오면 순서가 꼬이지 않도록 직렬화한다.
-# 마이그레이션 도중 취소는 위험하므로 cancel-in-progress 는 false 로 둔다.
+# 마이그레이션이 본 워크플로우에서 분리되었으므로 cancel-in-progress 를 true
+# 로 둬도 안전하지만, 배포 도중 중단으로 어플리케이션 산출물이 절반만 올라가는
+# 사고를 막기 위해 false 유지.
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
@@ -76,111 +94,25 @@ jobs:
             uv sync
           fi
 
-  release-migrate:
-    name: release migrate (${{ github.ref_name }})
-    needs: build
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/api
-    environment: ${{ github.ref_name == 'main' && 'production' || 'development' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Detect target environment and secret
-        id: detect
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        env:
-          NEON_DEV_DATABASE_URL: ${{ secrets.NEON_DEV_DATABASE_URL }}
-          NEON_PROD_DATABASE_URL: ${{ secrets.NEON_PROD_DATABASE_URL }}
-        run: |
-          set -euo pipefail
-
-          case "${GITHUB_REF_NAME}" in
-            dev)
-              target_env="development"
-              secret_name="NEON_DEV_DATABASE_URL"
-              has_secret="$([[ -n "${NEON_DEV_DATABASE_URL:-}" ]] && echo true || echo false)"
-              ;;
-            main)
-              target_env="production"
-              secret_name="NEON_PROD_DATABASE_URL"
-              has_secret="$([[ -n "${NEON_PROD_DATABASE_URL:-}" ]] && echo true || echo false)"
-              ;;
-            *)
-              echo "::error::Unsupported deploy branch: ${GITHUB_REF_NAME}. Only dev and main are deployable."
-              exit 1
-              ;;
-          esac
-
-          has_alembic="false"
-          if [[ -f apps/api/alembic.ini ]]; then
-            has_alembic="true"
-          fi
-
-          echo "target_env=${target_env}" >> "$GITHUB_OUTPUT"
-          echo "secret_name=${secret_name}" >> "$GITHUB_OUTPUT"
-          echo "has_secret=${has_secret}" >> "$GITHUB_OUTPUT"
-          echo "has_alembic=${has_alembic}" >> "$GITHUB_OUTPUT"
-
-          if [[ "${has_alembic}" != "true" ]]; then
-            echo "::notice::apps/api/alembic.ini 미존재 - release-migrate 는 no-op."
-          fi
-          if [[ "${has_alembic}" == "true" && "${has_secret}" != "true" ]]; then
-            echo "::warning::${secret_name} 시크릿이 설정되지 않았다. ${target_env} release-migrate 를 no-op 처리한다."
-          fi
-
-      - name: Setup Python ${{ env.PYTHON_VERSION }}
-        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Setup uv ${{ env.UV_VERSION }}
-        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true'
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: ${{ env.UV_VERSION }}
-          enable-cache: true
-          cache-dependency-glob: |
-            apps/api/uv.lock
-            apps/api/pyproject.toml
-
-      - name: uv sync
-        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true'
-        shell: bash
-        run: |
-          if [[ -f uv.lock ]]; then
-            uv sync --frozen
-          else
-            uv sync
-          fi
-
-      - name: alembic upgrade head (development)
-        if: steps.detect.outputs.target_env == 'development' && steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true'
-        env:
-          APP_ENV: development
-          DATABASE_URL: ${{ secrets.NEON_DEV_DATABASE_URL }}
-        run: uv run alembic upgrade head
-
-      - name: alembic upgrade head (production)
-        if: steps.detect.outputs.target_env == 'production' && steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true'
-        env:
-          APP_ENV: production
-          DATABASE_URL: ${{ secrets.NEON_PROD_DATABASE_URL }}
-        run: uv run alembic upgrade head
-
   deploy:
     name: deploy stub (${{ github.ref_name }})
-    needs: release-migrate
+    needs: build
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name == 'main' && 'production' || 'development' }}
     steps:
+      - name: Note Supabase migration ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "DB 마이그레이션은 Supabase GitHub Integration 이 적용한다."
+          echo "  - dev push  -> Supabase 'development' branch"
+          echo "  - main push -> Supabase 'production' branch"
+          echo "본 잡은 어플리케이션 배포 target 만 책임진다 (Vercel/Fly/Cloud Run/Lightsail 등)."
+
       - name: Wire real deploy target later
         run: |
           if [[ "${GITHUB_REF_NAME}" == "dev" ]]; then
-            echo "TODO: deploy development target after release-migrate succeeds."
+            echo "TODO: deploy development target."
           else
-            echo "TODO: deploy production target after release-migrate succeeds."
+            echo "TODO: deploy production target."
           fi

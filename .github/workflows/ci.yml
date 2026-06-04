@@ -7,7 +7,11 @@
 #   4. `typecheck-api`     — apps/api mypy 스켈레톤 (의존성 추가 시 자동 활성화)
 #   5. `test-web`          — apps/web pnpm test 스켈레톤 (script 추가 시 자동 활성화)
 #   6. `test-api`          — apps/api uv run pytest 스켈레톤 (의존성 추가 시 자동 활성화)
-#   7. `migrate-check`     — CMP-539: Alembic 모델↔리비전 drift 가드. apps/api/** 변경 PR 에서 활성.
+#   7. `migrate-check`     — CMP-603: Supabase SQL migration drift 가드. `apps/api/src/models/**` 변경 PR 이
+#                            `supabase/migrations/*.sql` 동행 없이 머지되는 사고를 차단한다.
+#                            **Neon / Alembic 의존 없음** — Supabase Automatic Branching 이 forward DB
+#                            migration 적용 책임이고 본 잡은 static diff 가드. 정본:
+#                            docs/runbooks/supabase-branching.md §6.3.2.
 #   8. `ci-status`         — 메타 게이트. 브랜치 보호의 required check 는 본 잡 1개로 충분.
 #
 # 의도적으로 빠진 것 (CMP-531 범위 외):
@@ -249,12 +253,12 @@ jobs:
         run: uv run mypy .
 
   # -------------------------------------------------------------------
-  # 5) apps/web — test 스켈레톤.
-  # 이슈 §3 산출물의 `test-web` 잡. apps/web/package.json 에 `test` 스크립트가
-  # 추가되면 실제 실행되고, 그 전까지는 stub.
+  # 5) apps/web — unit + Storybook component tests.
+  # apps/web/package.json 에 `test` 스크립트가 추가되면 실제 실행되고,
+  # Storybook 설정이 존재하면 stories 기반 component tests 와 static build 도 검증한다.
   # -------------------------------------------------------------------
   test-web:
-    name: web (test — stub)
+    name: web (unit + Storybook tests)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -306,6 +310,18 @@ jobs:
       - name: pnpm test
         if: steps.detect.outputs.exists == 'true'
         run: pnpm test
+
+      - name: Install Playwright Chromium
+        if: steps.detect.outputs.exists == 'true' && hashFiles('apps/web/.storybook/main.ts') != ''
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Storybook component tests
+        if: steps.detect.outputs.exists == 'true' && hashFiles('apps/web/.storybook/main.ts') != ''
+        run: pnpm test:storybook
+
+      - name: Build Storybook
+        if: steps.detect.outputs.exists == 'true' && hashFiles('apps/web/.storybook/main.ts') != ''
+        run: pnpm build-storybook
 
   # -------------------------------------------------------------------
   # 6) apps/api — test 스켈레톤.
@@ -359,117 +375,90 @@ jobs:
         run: uv run pytest
 
   # -------------------------------------------------------------------
-  # 7) apps/api — Alembic 마이그레이션 drift 가드 (CMP-539).
-  # 엔티티(모델) 변경 PR 이 마이그레이션 파일 없이 머지되는 사고를 차단한다.
+  # 7) Supabase SQL migration drift 가드 (CMP-603).
   #
-  # 활성 조건 (모두 만족):
-  #   1) apps/api/alembic.ini 가 존재 (자식 A CMP-537 머지 후)
-  #   2) NEON_TEST_DATABASE_URL 시크릿이 설정됨 (자식 B CMP-538 / 운영 시크릿 발급 후)
+  # 책임: `apps/api/src/models/**/*.py` (SQLAlchemy 모델) 만 바뀌고
+  # `supabase/migrations/*.sql` 이 동행하지 않은 PR 을 차단한다.
   #
-  # 둘 중 하나라도 미충족이면 본 잡은 명시적으로 skip 상태로 통과 — `ci-status` 의
-  # `success || skipped` 규칙에 의해 메타 게이트는 막지 않는다. 시크릿 누락은
-  # `::warning::` 로만 노출(요청 PR 컨텍스트에선 secrets 접근 불가한 fork PR 도 있으므로).
+  # 왜 static 가드인가:
+  #   Supabase Automatic Branching 이 forward DB migration 을 적용하지만,
+  #   SQL 파일이 빠진 모델-only PR 은 preview branch 에 적용할 SQL 자체가 없어
+  #   preview check 가 통과한 채 dev/main 에 머지된다. 그러면 `dev`/`main` push
+  #   시 Supabase 가 development/production DB 에 schema 변경을 누락한다.
+  #   본 잡은 그 미반영 사고를 PR 단계에서 잡는다.
   #
-  # paths 필터로 잡을 분기하지 않고 detect 단계로 정한다. GitHub 의 path-filter 는
-  # job 레벨에 직접 못 걸어서 (workflow-level on.pull_request.paths 만 지원),
-  # 단일 ci.yml 안에서 잡 단위 분기는 detect 패턴으로 통일한다.
+  # 정본 정의: docs/runbooks/supabase-branching.md §6.3.2 (Supabase SQL
+  # migration drift guard — model-only PR 가드).
+  #
+  # Neon / Alembic 의존 없음:
+  #   이전 (CMP-539) 의 `NEON_TEST_DATABASE_URL` + `alembic upgrade head` +
+  #   `alembic check` 흐름은 cutover (CMP-603) 시점에 제거. Alembic 자체는
+  #   historical reference 로만 보존되며 forward authority 가 아니다
+  #   (docs/runbooks/supabase-migration-plan.md §Alembic Keep/Remove).
   # -------------------------------------------------------------------
   migrate-check:
-    name: api (alembic drift check)
+    name: api (supabase migration drift)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/api
     steps:
       - uses: actions/checkout@v4
         with:
-          # paths 비교를 위해 base..head 범위가 필요. PR 이벤트면 fetch-depth 0 으로 충분.
+          # merge-base 기준 비교를 위해 PR 양 끝 SHA + 분기점이 모두 필요.
           fetch-depth: 0
 
-      - name: Detect alembic + secret + path-changed
-        id: detect
+      - name: Detect model vs SQL migration drift
         shell: bash
-        working-directory: ${{ github.workspace }}
-        env:
-          NEON_TEST_DATABASE_URL: ${{ secrets.NEON_TEST_DATABASE_URL }}
         run: |
           set -euo pipefail
-          has_alembic="false"
-          has_secret="false"
-          api_changed="true"  # push to main / workflow_dispatch 는 항상 실행
-          if [[ -f apps/api/alembic.ini ]]; then
-            has_alembic="true"
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "::notice::pull_request 이벤트가 아니므로 drift 가드 skip."
+            exit 0
           fi
-          if [[ -n "${NEON_TEST_DATABASE_URL:-}" ]]; then
-            has_secret="true"
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+
+          # PR-owned diff 만 검사하기 위해 merge-base 기준으로 비교한다.
+          # base.sha 와 head.sha 를 직접 두 점으로 비교하면 base 브랜치가 PR 생성
+          # 이후 앞서간 경우 base-only 변경이 diff 에 섞여 무관한 PR 이 fail 한다.
+          # 따라서 `git merge-base` 로 분기점을 찾고 그 점에서 head 까지만 본다
+          # (= triple-dot `base...head` 의미).
+          if ! merge_base=$(git merge-base "${base_sha}" "${head_sha}"); then
+            echo "::warning::merge-base 산출 실패 — base.sha 로 fallback (base 가 PR 이후 변경되지 않은 경우 의미 동일)."
+            merge_base="${base_sha}"
           fi
-          # PR 이벤트에 한해 apps/api/** 변경 여부로 게이트 — 이슈 §3.1 "paths: ['apps/api/**']" 의도.
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base_sha="${{ github.event.pull_request.base.sha }}"
-            head_sha="${{ github.event.pull_request.head.sha }}"
-            if git diff --name-only "${base_sha}" "${head_sha}" -- 'apps/api/**' | grep -q .; then
-              api_changed="true"
-            else
-              api_changed="false"
-            fi
+          echo "::notice::diff range merge_base=${merge_base} head=${head_sha}"
+
+          # Model 변경 감지: Added / Copied / Deleted / Modified / Renamed 모두 schema-impacting.
+          # 특히 모델 파일 삭제 (D) 도 테이블 제거를 의미할 수 있으므로 반드시 포함한다.
+          model_lines=$(git diff --name-status --diff-filter=ACDMR "${merge_base}" "${head_sha}" -- 'apps/api/src/models/**/*.py' || true)
+
+          # SQL migration 동행 변경 감지: Added / Modified / Renamed 만 — 마이그레이션 파일 삭제는
+          # "새 forward migration 추가" 신호가 아니므로 sql_added 로 인정하지 않는다.
+          # (테이블 DROP 이 필요한 경우 새 DROP TABLE 마이그레이션 SQL 을 추가해야 하며, 그것은
+          # 본 가드에서 Added 로 잡힌다 — 즉 SQL 삭제로 SQL 추가를 대체할 수 없다.)
+          sql_lines=$(git diff --name-only --diff-filter=AMR "${merge_base}" "${head_sha}" -- 'supabase/migrations/**/*.sql' || true)
+
+          model_changed="false"
+          sql_added="false"
+          if [[ -n "${model_lines}" ]]; then
+            model_changed="true"
           fi
-          echo "has_alembic=${has_alembic}" >> "$GITHUB_OUTPUT"
-          echo "has_secret=${has_secret}"   >> "$GITHUB_OUTPUT"
-          echo "api_changed=${api_changed}" >> "$GITHUB_OUTPUT"
-          if [[ "${has_alembic}" != "true" ]]; then
-            echo "::notice::apps/api/alembic.ini 미존재 — 자식 A (CMP-537) 머지 전이므로 본 job 은 no-op."
-          fi
-          if [[ "${api_changed}" != "true" ]]; then
-            echo "::notice::본 PR 은 apps/api/** 변경 없음 — drift 검증 건너뛴다."
-          fi
-          if [[ "${has_alembic}" == "true" && "${api_changed}" == "true" && "${has_secret}" != "true" ]]; then
-            echo "::warning::NEON_TEST_DATABASE_URL 시크릿 미설정 — drift 검증을 건너뛴다. (Settings → Secrets → Actions 에서 발급 후 활성)"
+          if [[ -n "${sql_lines}" ]]; then
+            sql_added="true"
           fi
 
-      - name: Setup Python ${{ env.PYTHON_VERSION }}
-        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true' && steps.detect.outputs.api_changed == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Setup uv ${{ env.UV_VERSION }}
-        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true' && steps.detect.outputs.api_changed == 'true'
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: ${{ env.UV_VERSION }}
-          enable-cache: true
-          cache-dependency-glob: |
-            apps/api/uv.lock
-            apps/api/pyproject.toml
-
-      - name: uv sync
-        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true' && steps.detect.outputs.api_changed == 'true'
-        shell: bash
-        run: |
-          if [[ -f uv.lock ]]; then
-            uv sync --frozen
-          else
-            uv sync
+          if [[ "${model_changed}" == "true" && "${sql_added}" != "true" ]]; then
+            echo "::error::SQLAlchemy 모델이 변경되었으나 supabase/migrations/*.sql 동행 변경이 없습니다."
+            echo "::error::본 PR 의 모델 변경 (status path — D=Deleted 포함):"
+            echo "${model_lines}" | sed 's/^/  - /'
+            echo "::error::DB schema SSOT 는 supabase/migrations/*.sql 입니다 (docs/runbooks/supabase-branching.md §6.3.2)."
+            echo "::error::조치: 같은 PR 에 새 supabase/migrations/<timestamp>_<name>.sql 을 추가하거나 (테이블 삭제도 DROP TABLE 마이그레이션이 필요), 모델 변경이 schema-impacting 이 아니면 PR 본문에 명시적으로 사유를 적어주세요."
+            exit 1
           fi
-
-      # CMP-539 §3.1: 테스트용 Neon 브랜치에 head 까지 적용.
-      # DATABASE_URL 은 non-pooler 가 필수 — Alembic 은 트랜잭션 DDL 을 쓰므로
-      # PgBouncer transaction-pooled 연결로 돌리면 advisory lock 이 깨진다.
-      - name: alembic upgrade head
-        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true' && steps.detect.outputs.api_changed == 'true'
-        env:
-          DATABASE_URL: ${{ secrets.NEON_TEST_DATABASE_URL }}
-          APP_ENV: test
-        run: uv run alembic upgrade head
-
-      # CMP-539 §3.1: 모델 ↔ 최신 리비전 diff 가 0 이 아니면 실패.
-      # `alembic check` 는 autogenerate dry-run 으로 미반영 변경이 있으면 exit != 0.
-      - name: alembic check (drift)
-        if: steps.detect.outputs.has_alembic == 'true' && steps.detect.outputs.has_secret == 'true' && steps.detect.outputs.api_changed == 'true'
-        env:
-          DATABASE_URL: ${{ secrets.NEON_TEST_DATABASE_URL }}
-          APP_ENV: test
-        run: uv run alembic check
+          if [[ "${model_changed}" == "true" && "${sql_added}" == "true" ]]; then
+            echo "::notice::모델 + SQL migration 동행 변경 — drift 없음."
+          elif [[ "${model_changed}" != "true" ]]; then
+            echo "::notice::SQLAlchemy 모델 변경 없음 — drift 가드 통과."
+          fi
 
   # -------------------------------------------------------------------
   # 8) 메타 게이트 — 위 모든 job 통과 시에만 성공.

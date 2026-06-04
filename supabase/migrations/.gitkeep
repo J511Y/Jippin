@@ -1,0 +1,4 @@
+# 본 디렉터리는 Supabase CLI (`supabase db diff` / `supabase migration new`) 가
+# 생성하는 timestamped SQL migration 파일을 보관한다.
+# Alembic → Supabase SQL migration 변환 정본은 CMP-575 트랙이 책임진다.
+# 본 PR 시점에는 비워둔다.

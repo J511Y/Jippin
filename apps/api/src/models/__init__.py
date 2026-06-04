@@ -24,29 +24,39 @@ from .base import (
     utc_now,
 )
 from .auth import (  # noqa: E402
-    EXTERNAL_SSO_PROVIDER_VALUES,
-    AnonymousUser,
-    ExternalSsoAccount,
     TermsConsent,
     User,
-    external_sso_provider_enum,
+)
+from .main_feature import (  # noqa: E402
+    ChatMessage,
+    ChatToolCall,
+    Floorplan,
+    FloorplanAsset,
+    FloorplanCandidate,
+    FloorplanUpload,
+    Session,
+    SessionAddress,
 )
 
 from .request_log import RequestLog  # noqa: E402
 
 __all__ = [
-    "AnonymousUser",
     "AuditMixin",
     "Base",
+    "ChatMessage",
+    "ChatToolCall",
     "CreatedAtMixin",
     "CreatedByMixin",
-    "EXTERNAL_SSO_PROVIDER_VALUES",
-    "ExternalSsoAccount",
+    "Floorplan",
+    "FloorplanAsset",
+    "FloorplanCandidate",
+    "FloorplanUpload",
     "NAMING_CONVENTION",
     "RequestLog",
+    "Session",
+    "SessionAddress",
     "TermsConsent",
     "TimestampMixin",
     "User",
-    "external_sso_provider_enum",
     "utc_now",
 ]

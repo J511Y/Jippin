@@ -12,5 +12,22 @@ body {
 }
 
 body {
-  @apply bg-white text-slate-900 antialiased;
+  margin: 0;
+  background: var(--mantine-color-body);
+  color: var(--mantine-color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body,
+main {
+  min-height: 100%;
+}
+
+a {
+  color: var(--jippin-brand-primary);
+}
+
+.mantine-active:active {
+  transform: translateY(1px);
 }

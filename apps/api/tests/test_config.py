@@ -1,4 +1,4 @@
-"""APP_ENV ↔ Neon branch mapping validation (CMP-538).
+"""APP_ENV sealed enum validation (CMP-538/CMP-574).
 
 Mapping sealed by AGENTS.md §4.4 and src/config.py::ALLOWED_APP_ENVS.
 Any value outside the sealed set must block boot via pydantic ValidationError.
