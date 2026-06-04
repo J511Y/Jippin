@@ -192,7 +192,7 @@ def test_supabase_session_bridge_sets_backend_cookie_and_forwards_anonymous_id(
             headers={"Authorization": "Bearer supabase-access-token"},
             json={
                 "anonymous_user_id": str(anonymous_user_id),
-                "requested_provider": "naver",
+                "requested_provider": "kakao",
             },
         )
 
@@ -202,7 +202,7 @@ def test_supabase_session_bridge_sets_backend_cookie_and_forwards_anonymous_id(
         "missing_required_terms": [],
         "redirect_url": None,
     }
-    assert calls == [("supabase-access-token", str(anonymous_user_id), "naver")]
+    assert calls == [("supabase-access-token", str(anonymous_user_id), "kakao")]
     assert "jippin_session=" in response.headers["set-cookie"]
 
 
@@ -227,7 +227,7 @@ def test_supabase_session_bridge_routes_incomplete_signup_to_terms(
     async def fake_complete_supabase_session(
         *, access_token, anonymous_user_id, requested_provider
     ):
-        assert requested_provider is None
+        assert requested_provider == "kakao"
         return SupabaseSessionBridgeResult(
             user_id=user_id,
             pending_anonymous_user_id=uuid.UUID(anonymous_user_id),
@@ -243,7 +243,10 @@ def test_supabase_session_bridge_routes_incomplete_signup_to_terms(
         response = client.post(
             "/auth/supabase/session",
             headers={"Authorization": "Bearer supabase-access-token"},
-            json={"anonymous_user_id": str(anonymous_user_id)},
+            json={
+                "anonymous_user_id": str(anonymous_user_id),
+                "requested_provider": "kakao",
+            },
         )
 
     assert response.status_code == 200

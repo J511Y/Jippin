@@ -65,7 +65,7 @@
 | `apps/web/lib/providers.tsx` | React Query Provider. | **확장.** Supabase Session Provider 를 wrap. |
 | `apps/web/.env.example` | `NEXT_PUBLIC_API_BASE_URL`, success/failure URL, `AUTH_COOKIE_NAME`. | **확장.** Supabase env 추가 (§3). `AUTH_COOKIE_NAME` 은 Supabase 의 자체 쿠키 이름 정책으로 대체되며 표기 변경. |
 
-> **API 측 폐기 상태 (CMP-604).** `POST /auth/anonymous-users`, `GET /auth/{provider}/start`, `GET /auth/callback/{provider}`, `POST /auth/sso-accounts/{provider}/link` 는 FastAPI route entrypoint 에서 즉시 `410 AUTH_LEGACY_FLOW_REMOVED` 를 반환한다. Supabase Auth 공식 OAuth / `linkIdentity()` 가 provider redirect 와 identity linking 을 소유한다. `/auth/logout` 은 backend cookie cleanup 호환 엔드포인트로만 남고, 자체 OAuth/JWT refresh 흐름은 정본이 아니다.
+> **API 측 폐기 상태 (CMP-604).** `POST /auth/anonymous-users`, `GET /auth/{provider}/start`, `GET /auth/callback/{provider}`, `POST /auth/sso-accounts/{provider}/link` 는 FastAPI route entrypoint 에서 즉시 `410 AUTH_LEGACY_FLOW_REMOVED` 를 반환한다. Supabase Auth 공식 OAuth / `linkIdentity()` 가 provider redirect 와 identity linking 을 소유한다. Web `/auth/callback` 의 link callback 은 Supabase `exchangeCodeForSession()` 성공과 signed flow context 만 확인하고 backend `/auth/supabase/link` 를 호출하지 않는다. `/auth/logout` 은 backend cookie cleanup 호환 엔드포인트로만 남고, 자체 OAuth/JWT refresh 흐름은 정본이 아니다.
 
 ---
 

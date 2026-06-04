@@ -5,7 +5,7 @@
 봉인 (반드시 준수):
 
 - 단일 호스트 1대 가정. k8s / ECS 매니페스트 금지.
-- Postgres 컨테이너 금지 — 외부 managed Postgres (`DATABASE_URL` / `DATABASE_POOL_URL`) 직결. SSOT 는 **Supabase project** (CMP-603 CI/CD cutover 완료; ADR-0004 Proposed).
+- Postgres 컨테이너 금지 — 외부 managed Postgres (`DATABASE_URL` / `DATABASE_POOL_URL`) 직결. SSOT 는 **Supabase project** (CMP-603 CI/CD cutover 완료; ADR-0004 Proposed). `docker compose up` 은 DB migration 을 실행하지 않는다.
 - 모델 가중치 / 대용량 바이너리는 이미지에 포함하지 않는다 (런타임 볼륨 마운트).
 - 시크릿은 `infra/compose/.env` 로컬에서만 읽고 커밋 금지 (AGENTS.md §4.4).
 
@@ -60,9 +60,11 @@ $EDITOR infra/compose/.env       # DATABASE_URL, DATABASE_POOL_URL, NEXT_PUBLIC_
 | 단일 서비스 로그 | `make logs SVC=api` | `... logs -f --tail=200 api` |
 | 컨테이너 상태 | `make ps` | `... ps` |
 | 단일 서비스 재기동 | `make restart SVC=web` | `... restart web` |
-| 컨테이너 내부 명령 | `make exec SVC=api CMD="alembic upgrade head"` | `... exec api sh -lc "alembic upgrade head"` |
+| 컨테이너 내부 명령 | `make exec SVC=api CMD="python -m src.main"` | `... exec api sh -lc "python -m src.main"` |
 | 파싱 검증 | `make config` | `... config --quiet` |
 | 사전 점검 | `make doctor` | (없음 — Makefile 전용) |
+
+DB migration 은 `supabase/migrations/*.sql` + Supabase GitHub Integration 이 담당한다. Alembic sidecar 는 compose 에서 제거되었고, 로컬 `up` 경로에서 `alembic upgrade head` 를 실행하지 않는다.
 
 원시 명령에서 `[-f ... override.yml]` 은 그 파일이 존재할 때만 붙인다 (§4 참조).
 

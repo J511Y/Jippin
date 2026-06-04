@@ -50,6 +50,7 @@ from ..services.auth import (
 from ..services.supabase_session import (
     parse_bearer_token,
     resolve_jippin_user_for_supabase,
+    validate_supabase_provider_claims,
     verify_supabase_access_token,
 )
 
@@ -175,7 +176,7 @@ async def complete_supabase_session(
     *,
     access_token: str,
     anonymous_user_id: str | None,  # noqa: ARG001 - legacy field ignored.
-    requested_provider: str | None = None,  # noqa: ARG001 - provider is verified by link writer.
+    requested_provider: str | None = None,
 ) -> SupabaseSessionBridgeResult:
     settings = get_settings()
     async with httpx.AsyncClient(timeout=10.0) as http_client:
@@ -184,6 +185,10 @@ async def complete_supabase_session(
             http_client=http_client,
             settings=settings,
         )
+    validate_supabase_provider_claims(
+        claims=claims,
+        requested_provider=requested_provider,
+    )
 
     email_claim_raw = claims.get("email")
     email_claim = (

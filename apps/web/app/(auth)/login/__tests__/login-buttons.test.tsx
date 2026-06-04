@@ -1,6 +1,18 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const mocks = vi.hoisted(() => ({
+  getSession: vi.fn(),
+}));
+
+vi.mock('@/lib/supabase/client', () => ({
+  createClient: () => ({
+    auth: {
+      getSession: mocks.getSession,
+    },
+  }),
+}));
+
 import { LoginButtons } from '../login-buttons';
 
 afterEach(() => {
@@ -45,6 +57,7 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
   const origLocation = window.location;
 
   beforeEach(() => {
+    mocks.getSession.mockResolvedValue({ data: { session: null }, error: null });
     assignSpy = vi.fn();
     Object.defineProperty(window, 'location', {
       writable: true,
@@ -58,6 +71,7 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
   });
 
   afterEach(() => {
+    mocks.getSession.mockReset();
     Object.defineProperty(window, 'location', {
       writable: true,
       configurable: true,
@@ -94,4 +108,54 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
       expect(navigatedTo).not.toMatch(/localhost:8000/);
     }
   );
+
+  it('uses link intent when the current Supabase session is anonymous', async () => {
+    mocks.getSession.mockResolvedValue({
+      data: {
+        session: {
+          user: {
+            id: 'anonymous-user-id',
+            is_anonymous: true,
+            app_metadata: { provider: 'anonymous', providers: ['anonymous'] },
+          },
+        },
+      },
+      error: null,
+    });
+
+    render(<LoginButtons nextPath="/reports/preview" />);
+    fireEvent.click(screen.getByText('카카오로 시작하기'));
+
+    await waitFor(() => {
+      expect(assignSpy).toHaveBeenCalledTimes(1);
+    });
+    const url = new URL(String(assignSpy.mock.calls[0]?.[0]));
+    expect(url.searchParams.get('intent')).toBe('link');
+    expect(url.searchParams.get('next')).toBe('/reports/preview');
+  });
+
+  it('keeps signin intent for an existing permanent Supabase user', async () => {
+    mocks.getSession.mockResolvedValue({
+      data: {
+        session: {
+          user: {
+            id: 'permanent-user-id',
+            is_anonymous: false,
+            app_metadata: { provider: 'kakao', providers: ['kakao'] },
+          },
+        },
+      },
+      error: null,
+    });
+
+    render(<LoginButtons nextPath="/account" />);
+    fireEvent.click(screen.getByText('카카오로 시작하기'));
+
+    await waitFor(() => {
+      expect(assignSpy).toHaveBeenCalledTimes(1);
+    });
+    const url = new URL(String(assignSpy.mock.calls[0]?.[0]));
+    expect(url.searchParams.get('intent')).toBe('signin');
+    expect(url.searchParams.get('next')).toBe('/account');
+  });
 });

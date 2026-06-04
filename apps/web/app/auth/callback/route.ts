@@ -119,33 +119,6 @@ async function mintBackendSession(
   }
 }
 
-async function linkBackendAccount(
-  accessToken: string,
-  requestedProvider: UiProvider,
-  request: NextRequest,
-): Promise<boolean> {
-  try {
-    const cookie = request.headers.get('cookie');
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    };
-    if (cookie) {
-      headers.Cookie = cookie;
-    }
-    const link = await fetch(`${serverApiBaseUrl()}/auth/supabase/link`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ requested_provider: requestedProvider }),
-      cache: 'no-store',
-    });
-    return link.ok;
-  } catch {
-    return false;
-  }
-}
-
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = request.nextUrl.searchParams.get('code');
   const next = safeRelativeRedirect(request.nextUrl.searchParams.get('next'));
@@ -160,11 +133,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const accessToken = data.session?.access_token;
     const isLinkCallback = intent === 'link' || context?.intent === 'link';
     if (!error && accessToken && isLinkCallback) {
-      if (
-        intent === 'link'
-        && context?.intent === 'link'
-        && await linkBackendAccount(accessToken, context.provider, request)
-      ) {
+      if (intent === 'link' && context?.intent === 'link') {
         response.headers.set('Location', new URL(next, request.nextUrl.origin).toString());
         return new NextResponse(null, { status: 302, headers: response.headers });
       }

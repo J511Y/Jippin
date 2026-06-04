@@ -65,7 +65,7 @@ apps/api/
 ├── pyproject.toml
 ├── .python-version           # 3.13
 ├── Dockerfile                # multi-stage (uv builder → non-root runtime)
-├── alembic.ini               # Alembic 설정 (CMP-537)
+├── alembic.ini               # Historical reference only; forward SSOT is supabase/migrations
 ├── .env.example
 ├── src/
 │   ├── main.py               # create_app() + lifespan + CORS + GZip + middleware
@@ -76,7 +76,7 @@ apps/api/
 │   ├── models/__init__.py    # Base = DeclarativeBase + naming convention (CMP-537)
 │   └── routers/
 │       └── healthz.py        # GET /healthz
-├── migrations/               # Alembic 스크립트 (CMP-537)
+├── migrations/               # Historical Alembic scripts; do not add forward revisions
 │   ├── env.py                # sync psycopg3, Settings.database_url 만 사용
 │   ├── script.py.mako
 │   └── versions/             # 리비전 파일 (YYYYMMDD_HHMM_rev_slug.py)
@@ -90,7 +90,7 @@ apps/api/
 
 Forward schema source of truth is `supabase/migrations/*.sql`. Supabase GitHub Integration applies migrations on `dev` and `main` pushes. Do not create new Alembic revisions for forward schema changes; `apps/api/migrations/` is historical reference only.
 
-DB 스키마 변경은 **autogenerate → 사람 리뷰 → upgrade** 3-step 으로 진행한다. 컨테이너 ENTRYPOINT 에 묶지 않고 `infra/compose/docker-compose.yml` 의 `migrate` 사이드카로 분리해 돌린다 (multi-replica 경합/롤백 회피).
+`docker compose up` does not run database migrations. Local compose only starts application services against the already-migrated Supabase branch selected by `DATABASE_URL` / `DATABASE_POOL_URL`.
 
 ```bash
 # 새 forward migration 생성

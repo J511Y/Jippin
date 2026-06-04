@@ -27,6 +27,7 @@ from src.services import supabase_session as bridge_service
 _ISSUER = "https://example-project.supabase.co/auth/v1"
 _AUDIENCE = "authenticated"
 _JWKS_URL = "https://example-project.supabase.co/auth/v1/.well-known/jwks.json"
+_KAKAO_APP_METADATA = {"provider": "kakao", "providers": ["kakao"]}
 
 
 @pytest.fixture(autouse=True)
@@ -138,7 +139,7 @@ def _install_identity_lookup(monkeypatch, *, user_id: uuid.UUID | None) -> None:
             display_name=None,
             profile_image_url=None,
             role="user",
-            providers=["google"],
+            providers=["kakao"],
             missing_required_terms=[],
         )
 
@@ -168,13 +169,18 @@ def test_supabase_session_valid_token_mints_cookie(supabase_env, monkeypatch):
     user_id = uuid.uuid4()
     _install_identity_lookup(monkeypatch, user_id=user_id)
 
-    token = _mint_token(pem, jwk["kid"])
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": _KAKAO_APP_METADATA},
+    )
 
     app = create_app()
     with TestClient(app) as client:
         response = client.post(
             "/auth/supabase/session",
             headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
         )
 
     assert response.status_code == 200
@@ -193,14 +199,21 @@ def test_supabase_session_ignores_legacy_anonymous_id_after_completed_signin(
     user_id = uuid.uuid4()
     anonymous_user_id = uuid.uuid4()
     _install_identity_lookup(monkeypatch, user_id=user_id)
-    token = _mint_token(pem, jwk["kid"])
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": _KAKAO_APP_METADATA},
+    )
 
     app = create_app()
     with TestClient(app) as client:
         response = client.post(
             "/auth/supabase/session",
             headers={"Authorization": f"Bearer {token}"},
-            json={"anonymous_user_id": str(anonymous_user_id)},
+            json={
+                "anonymous_user_id": str(anonymous_user_id),
+                "requested_provider": "kakao",
+            },
         )
 
     assert response.status_code == 200
@@ -245,7 +258,7 @@ def test_supabase_session_accepts_converted_token_with_anonymous_metadata(
             "is_anonymous": False,
             "app_metadata": {
                 "provider": "anonymous",
-                "providers": ["anonymous", "google"],
+                "providers": ["anonymous", "kakao"],
             },
         },
     )
@@ -255,6 +268,7 @@ def test_supabase_session_accepts_converted_token_with_anonymous_metadata(
         response = client.post(
             "/auth/supabase/session",
             headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
         )
 
     assert response.status_code == 200
@@ -282,6 +296,127 @@ def test_supabase_session_expired_token_returns_401(supabase_env, monkeypatch):
     assert response.json()["error"]["code"] == "AUTH_EXPIRED_TOKEN"
 
 
+def test_supabase_session_requires_signed_provider_context(supabase_env, monkeypatch):
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    _install_identity_lookup(monkeypatch, user_id=uuid.uuid4())
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": _KAKAO_APP_METADATA},
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_PROVIDER_REQUIRED"
+
+
+def test_supabase_session_rejects_non_enabled_provider_before_profile_upsert(
+    supabase_env, monkeypatch
+):
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": {"provider": "google", "providers": ["google"]}},
+    )
+    called = False
+
+    async def fake_resolve(*, supabase_subject, email_claim):  # noqa: ARG001
+        nonlocal called
+        called = True
+        return bridge_service.SupabaseBridgeResult(user_id=uuid.uuid4())
+
+    monkeypatch.setattr(
+        "src.routers.auth.resolve_jippin_user_for_supabase",
+        fake_resolve,
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "google"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "AUTH_PROVIDER_NOT_ALLOWED"
+    assert called is False
+
+
+def test_supabase_session_rejects_provider_mismatch_before_profile_upsert(
+    supabase_env, monkeypatch
+):
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": {"provider": "email", "providers": ["email"]}},
+    )
+    called = False
+
+    async def fake_resolve(*, supabase_subject, email_claim):  # noqa: ARG001
+        nonlocal called
+        called = True
+        return bridge_service.SupabaseBridgeResult(user_id=uuid.uuid4())
+
+    monkeypatch.setattr(
+        "src.routers.auth.resolve_jippin_user_for_supabase",
+        fake_resolve,
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_PROVIDER_MISMATCH"
+    assert called is False
+
+
+def test_supabase_session_accepts_custom_kakao_provider_alias(
+    supabase_env, monkeypatch
+):
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    user_id = uuid.uuid4()
+    _install_identity_lookup(monkeypatch, user_id=user_id)
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={
+            "app_metadata": {
+                "provider": "anonymous",
+                "providers": ["anonymous", "custom:kakao"],
+            }
+        },
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["signup_complete"] is True
+
+
 def test_supabase_session_wrong_signature_returns_401(supabase_env, monkeypatch):
     _, advertised_jwk = _rsa_keypair()
     # JWKS advertises one key, but the token was signed by a foreign key.
@@ -306,13 +441,18 @@ def test_supabase_session_missing_mapping_returns_401(supabase_env, monkeypatch)
     _install_jwks(monkeypatch, {"keys": [jwk]})
     _install_identity_lookup(monkeypatch, user_id=None)
 
-    token = _mint_token(pem, jwk["kid"])
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": _KAKAO_APP_METADATA},
+    )
 
     app = create_app()
     with TestClient(app) as client:
         response = client.post(
             "/auth/supabase/session",
             headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
         )
 
     assert response.status_code == 401

@@ -23,6 +23,11 @@ from ..errors import ZippinException
 from ..models import User
 
 _SUPPORTED_ALGORITHMS: tuple[str, ...] = ("RS256", "ES256")
+_ALLOWED_SUPABASE_UI_PROVIDERS: frozenset[str] = frozenset({"kakao"})
+_PROVIDER_ALIASES: dict[str, str] = {
+    "custom:kakao": "kakao",
+    "custom:naver": "naver",
+}
 
 
 @dataclass(frozen=True)
@@ -109,6 +114,33 @@ async def verify_supabase_access_token(
     return claims
 
 
+def validate_supabase_provider_claims(
+    *,
+    claims: dict[str, object],
+    requested_provider: str | None,
+) -> None:
+    if requested_provider is None:
+        raise ZippinException(
+            "Signed OAuth provider context is required.",
+            code="AUTH_PROVIDER_REQUIRED",
+            http_status=401,
+        )
+    if requested_provider not in _ALLOWED_SUPABASE_UI_PROVIDERS:
+        raise ZippinException(
+            "This Supabase provider is not enabled for Jippin sign-in.",
+            code="AUTH_PROVIDER_NOT_ALLOWED",
+            http_status=403,
+        )
+
+    token_providers = _supabase_token_providers(claims)
+    if requested_provider not in token_providers:
+        raise ZippinException(
+            "Supabase token provider does not match the requested OAuth provider.",
+            code="AUTH_PROVIDER_MISMATCH",
+            http_status=401,
+        )
+
+
 async def resolve_jippin_user_for_supabase(
     *,
     supabase_subject: str,
@@ -144,6 +176,39 @@ async def resolve_jippin_user_for_supabase(
 
 def _is_anonymous_supabase_claims(claims: dict[str, object]) -> bool:
     return claims.get("is_anonymous") is True
+
+
+def _supabase_token_providers(claims: dict[str, object]) -> set[str]:
+    providers: set[str] = set()
+    app_metadata = claims.get("app_metadata")
+    if isinstance(app_metadata, dict):
+        providers.update(_provider_values(app_metadata.get("provider")))
+        providers.update(_provider_values(app_metadata.get("providers")))
+    providers.update(_provider_values(claims.get("provider")))
+    providers.update(_provider_values(claims.get("providers")))
+    return providers
+
+
+def _provider_values(value: object) -> set[str]:
+    if isinstance(value, str):
+        normalized = _normalize_provider(value)
+        return {normalized} if normalized else set()
+    if isinstance(value, list):
+        values: set[str] = set()
+        for item in value:
+            if isinstance(item, str):
+                normalized = _normalize_provider(item)
+                if normalized:
+                    values.add(normalized)
+        return values
+    return set()
+
+
+def _normalize_provider(value: str) -> str | None:
+    provider = value.strip().lower()
+    if not provider:
+        return None
+    return _PROVIDER_ALIASES.get(provider, provider)
 
 
 def _invalid_token(message: str) -> ZippinException:
