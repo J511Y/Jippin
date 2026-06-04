@@ -75,7 +75,8 @@ def test_phase_a_supabase_migration_grants_authenticated_api_access() -> None:
     assert "public.floorplans" in sql
     assert "public.floorplan_assets" in sql
     assert "grant select, insert, update\n  on public.floorplan_uploads" in sql
-    assert "grant select, insert\n  on public.chat_messages" in sql
+    assert "grant select\n  on public.chat_messages" in sql
+    assert "grant insert\n  on public.chat_messages" not in sql
     assert "grant select\n  on public.floorplan_candidates" in sql
     assert "public.chat_tool_calls\n  to authenticated" in sql
     assert "grant insert\n  on public.chat_tool_calls" not in sql
@@ -289,6 +290,19 @@ def test_session_address_session_and_user_are_client_immutable() -> None:
     assert "new.user_id is distinct from old.user_id" in sql
 
 
+def test_session_address_created_at_is_server_controlled() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_session_address_client_created_at_mutation()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_created_at_client_guard" in sql
+    assert "new.created_at := now()" in sql
+    assert "new.created_at is distinct from old.created_at" in sql
+    assert "authenticated clients cannot change address audit timestamps" in sql
+
+
 def test_session_address_normalized_fields_are_service_controlled() -> None:
     sql = migration_sql()
 
@@ -377,6 +391,7 @@ def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
         in sql
     )
     assert "create trigger trg_floorplan_uploads_original_asset_scope" in sql
+    assert "original_asset_id,\n    status" in sql
     assert "a.id = new.original_asset_id" in sql
     assert "a.floorplan_upload_id = new.id" in sql
     assert "a.session_id = new.session_id" in sql
@@ -472,22 +487,16 @@ def test_floorplan_candidates_preserve_snapshot_when_floorplan_is_deleted() -> N
 
 def test_chat_browser_writes_are_limited_to_user_messages() -> None:
     sql = migration_sql()
-    insert_policy = policy_sql(sql, "chat_messages_user_insert")
     tool_read_policy = policy_sql(sql, "chat_tool_calls_session_owner_read")
 
     assert "create policy chat_messages_session_owner_all" not in sql
+    assert "create policy chat_messages_user_insert" not in sql
     assert "create policy chat_messages_user_update" not in sql
     assert "create policy chat_tool_calls_session_owner_all" not in sql
-    assert "\n  for insert\n" in insert_policy
-    assert "role = 'user'" in insert_policy
-    assert "user_id = (select auth.uid())" in insert_policy
     assert "\n  for select\n" in tool_read_policy
     assert "create policy chat_tool_calls" in sql
     chat_policy_names = re.findall(r"create policy (chat_messages_\w+)", sql)
-    assert sorted(chat_policy_names) == [
-        "chat_messages_session_owner_read",
-        "chat_messages_user_insert",
-    ]
+    assert chat_policy_names == ["chat_messages_session_owner_read"]
     assert (
         "create or replace function public.force_chat_message_client_created_at()"
         in sql

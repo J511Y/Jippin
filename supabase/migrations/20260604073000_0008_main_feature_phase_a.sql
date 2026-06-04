@@ -778,6 +778,34 @@ create trigger trg_session_addresses_client_reparent_guard
   for each row
   execute function public.prevent_session_address_client_reparent();
 
+create or replace function public.prevent_session_address_client_created_at_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role <> 'authenticated' then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    new.created_at := now();
+  elsif new.created_at is distinct from old.created_at then
+    raise exception 'authenticated clients cannot change address audit timestamps'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_session_addresses_created_at_client_guard
+  before insert or update of
+    created_at
+  on public.session_addresses
+  for each row
+  execute function public.prevent_session_address_client_created_at_mutation();
+
 create or replace function public.prevent_session_address_client_normalized_mutation()
 returns trigger
 language plpgsql
@@ -1108,7 +1136,8 @@ create trigger trg_floorplan_uploads_original_asset_scope
   before insert or update of
     session_id,
     user_id,
-    original_asset_id
+    original_asset_id,
+    status
   on public.floorplan_uploads
   for each row
   execute function public.enforce_floorplan_upload_original_asset_scope();
@@ -1802,21 +1831,6 @@ create policy chat_messages_session_owner_read
     )
   );
 
-create policy chat_messages_user_insert
-  on public.chat_messages
-  for insert
-  to authenticated
-  with check (
-    role = 'user'
-    and user_id = (select auth.uid())
-    and exists (
-      select 1
-      from public.sessions as s
-      where s.id = session_id
-        and s.user_id = (select auth.uid())
-    )
-  );
-
 create policy chat_tool_calls_session_owner_read
   on public.chat_tool_calls
   for select
@@ -1843,7 +1857,7 @@ grant select, insert, update
   on public.floorplan_uploads
   to authenticated;
 
-grant select, insert
+grant select
   on public.chat_messages
   to authenticated;
 
