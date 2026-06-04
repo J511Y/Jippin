@@ -822,6 +822,8 @@ CHAT/A2UI 에이전트 또는 backend agent 가 세션 중 실행한 tool call �
 주요 인덱스:
 
 - unique `(session_id, id)`
+- foreign key `(session_id, report_id)` references `reports(session_id, id)` with delete behavior that clears only `report_id`, or an equivalent same-session trigger/check function
+- foreign key `(report_id, estimate_item_id)` references `estimate_items(report_id, id)` with delete behavior that clears only `estimate_item_id`, or an equivalent same-report trigger/check function
 - `(user_id, created_at desc)`
 - `(session_id, created_at desc)`
 - `(report_id)`
@@ -834,6 +836,7 @@ CHAT/A2UI 에이전트 또는 backend agent 가 세션 중 실행한 tool call �
 
 - conversion-only 테이블이다. 익명 Supabase token 으로 생성하면 안 된다.
 - phone/email 원문을 JSONB 로 저장하지 않는다. 암호화 payload + 최소 요약만 둔다.
+- `user_id` 는 `sessions.user_id` 와 같아야 한다. conversion insert 는 `auth.uid() = sessions.user_id = leads.user_id` 를 서버 guard 와 DB trigger/check function 으로 함께 확인한다.
 - `report_id` 와 `estimate_item_id` 는 같은 `session_id` 범위만 참조한다. 권장 DDL 은 `reports(session_id, id)` 와 `estimate_items(report_id, id)` 또는 `estimate_items(session_id, id)` 를 unique 로 보강한 뒤 복합 FK 를 둔다. 문서 단계에서는 최소한 same-session trigger/check function 으로 다른 세션의 report/estimate 연결을 차단한다고 봉인한다.
 
 ## 연동/운영 테이블
