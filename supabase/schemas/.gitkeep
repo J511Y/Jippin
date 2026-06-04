@@ -1,0 +1,3 @@
+# Supabase declarative schema (`supabase db diff --schema public --use-pg-schema`)
+# 파일이 들어가는 디렉터리. config.toml `[db.migrations].schema_paths` 에서 참조.
+# CMP-575 트랙이 정본 SQL 을 채운다. 본 PR 시점에는 비워둔다.

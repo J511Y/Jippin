@@ -1,7 +1,13 @@
 # Runbook — Neon Postgres 자격증명 회전
 
+> **⚠ ARCHIVE — Neon → Supabase cutover 완료 (CMP-603, 2026-06-02)**
+>
+> 본 런북은 **Neon project 가 잔존하는 동안만** 유효하다. CMP-603 cutover 이후 Neon 은 forward DB authority 가 아니며 (`.github/workflows/neon-pr-branch.yml` archive, `deploy.yml::release-migrate` 제거, `ci.yml::migrate-check` Supabase drift 가드로 교체), 본 런북은 이력 참조용 + Neon project 가 폐기되기 전 마지막 sign-off 회전 용도로만 남는다. Neon project 폐기 시점에 본 런북은 `docs/runbooks/_archive/` 로 이동한다.
+>
+> Supabase project 의 service role key / DB password 회전은 별도 Supabase 회전 런북 (후속 이슈 — DevOps Lead) 에서 다룬다. 본 런북을 Supabase 에 그대로 적용하지 말 것. 단, **시크릿 노출·이탈자 대응의 일반 절차**(§0 사전 체크리스트, 코드/이슈/PR 본문 스캐닝, 사고 코멘트) 는 그대로 참조 가능하다.
+
 - 정본 책임자: **Security Lead** (1차) · **Database Engineer / CEO** (실행 권한 보유자)
-- 관련: CEO 브리프 §5.1·§8 R1, AGENTS.md §4.4, ADR-0001 §4, CMP-533
+- 관련: CEO 브리프 §5.1·§8 R1, AGENTS.md §4.4, ADR-0001 §4 (ADR-0004 부분 supersede 진행 중), CMP-533, **CMP-602 (Supabase 전환 — 본 런북 한시 잔존)**
 - 목표 소요: **30분 이내** (콘솔 작업 5분 + 환경 전파 15분 + 검증 10분)
 - 트리거:
   1. **즉시 회전 (R1)** — CEO 브리프 §5.1 의 평문 노출된 Neon 비밀번호 (`npg_CNDw…` 접두; 정본은 CEO 브리프 참조) 회전. **본 작업이 본 런북의 첫 적용 케이스**.

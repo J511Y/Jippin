@@ -1,8 +1,35 @@
-# 집핀(Jippin) Neon preview branch — CMP-539
+# ⚠ ARCHIVED — Neon → Supabase cutover (CMP-603, 2026-06-02).
+#
+# 본 파일은 **활성 워크플로우가 아니다**. `.github/workflows/_archive/` 하위에
+# `.yml.archived` 확장자로 보관되어 GitHub Actions 가 로드하지 않는다 (Actions 는
+# `.github/workflows/*.yml|*.yaml` 만 워크플로우로 인식). 새 PR 에서 본 잡이
+# 실행되지 않으며, 콘솔에서 다시 한 번 확인할 필요도 없다.
+#
+# 이력 참조용으로만 보존한다. 다시 활성화하지 말 것 — Neon project 자체가
+# cutover 이후 폐기 대상이며 Supabase Automatic Branching 이 PR preview 책임을
+# 대체했다 (docs/runbooks/supabase-branching.md §6 단계 3). NEON_API_KEY /
+# NEON_PROJECT_ID / NEON_DEV_PARENT_BRANCH / NEON_BRANCH_CAP 등 본 잡이 의존하던
+# secrets / variables 는 본 PR 머지 후 사용자가 GitHub Settings 에서 일괄 삭제한다
+# (CMP-603 PR 본문 §사용자 작업 체크리스트 참고).
+#
+# 원래 책임 (Neon GitHub integration 시절):
+# 집핀(Jippin) Neon preview branch — CMP-539. **ARCHIVED (CMP-603)**.
 #
 # Neon GitHub integration 권장 흐름에 맞춰 PR 별 preview branch 를 생성/삭제한다.
 #
-# 동작:
+# 전환 상태 (ADR-0004 Proposed / CMP-574 Supabase Automatic Branching):
+#   본 워크플로우는 Neon GitHub integration 이 정본일 때의 PR preview 생성을
+#   담당한다. **Supabase 전환 완료 시 본 워크플로우는 폐기 후보** — Supabase
+#   Automatic Branching 이 콘솔 토글 1회 설정으로 같은 역할 (PR 별 preview
+#   branch 생성·삭제, `supabase/**` 변경 PR 한정 트리거) 을 수행한다.
+#   세부 절차: docs/runbooks/supabase-branching.md §0 + §6 (CI 대체 순서).
+#
+#   cutover 시점에 NEON_API_KEY / NEON_PROJECT_ID / NEON_DEV_PARENT_BRANCH /
+#   NEON_BRANCH_CAP 시크릿 + 변수 일괄 제거. **본 워크플로우 자체도 archive
+#   (`.github/workflows/_archive/` 또는 PR-삭제) 후보** — DevOps Lead 후속
+#   이슈에서 처리한다.
+#
+# 동작 (cutover 전 한시 정본):
 #   - PR opened/reopened/synchronize: `preview/pr-<PR번호>-<head branch>` 브랜치 생성/갱신.
 #   - PR base 가 dev 이면 NEON_DEV_PARENT_BRANCH(권장: branch id) 에서,
 #     main 이면 Neon production 에서 preview 를 딴다.
@@ -10,7 +37,7 @@
 #   - PR closed: 같은 이름의 preview branch 삭제.
 #   - branch 는 14일 만료(expires_at)를 가진다.
 #
-# GitHub 설정:
+# GitHub 설정 (cutover 전 한시):
 #   - Repository variable: `NEON_PROJECT_ID`
 #   - Repository secret:   `NEON_API_KEY`
 #
@@ -104,8 +131,48 @@ jobs:
         shell: bash
         run: echo "EXPIRES_AT=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
 
-      - name: Create Neon Branch
+      - name: Pre-flight Neon capacity check
         if: steps.guard.outputs.skip == 'false'
+        id: capacity
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+          # Neon free-tier hard cap is 10 branches. Override via repo variable
+          # `NEON_BRANCH_CAP` when on a paid plan with a higher limit.
+          NEON_BRANCH_CAP: ${{ vars.NEON_BRANCH_CAP }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cap="${NEON_BRANCH_CAP:-10}"
+          # `jq` is preinstalled on ubuntu-latest runners.
+          branches_json=$(curl -fsS \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            -H "Accept: application/json" \
+            "https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}/branches")
+          count=$(echo "${branches_json}" | jq '.branches | length')
+          current_branch="preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}"
+          existing=$(echo "${branches_json}" | jq --arg name "${current_branch}" '[.branches[] | select(.name == $name)] | length')
+          echo "branch_count=${count}" >> "$GITHUB_OUTPUT"
+          echo "branch_cap=${cap}" >> "$GITHUB_OUTPUT"
+          echo "existing_preview_branch=${existing}" >> "$GITHUB_OUTPUT"
+          if [[ "${count}" -ge "${cap}" && "${existing}" -eq 0 ]]; then
+            echo "::warning::Neon project at branch capacity (${count} of ${cap}) and this PR has no existing preview branch. Skipping preview branch creation until a slot frees up or the plan is upgraded."
+            echo "at_capacity=true" >> "$GITHUB_OUTPUT"
+          else
+            if [[ "${count}" -ge "${cap}" && "${existing}" -gt 0 ]]; then
+              echo "::notice::Neon branch usage is at capacity (${count}/${cap}), but ${current_branch} already exists; create-branch-action can reuse it and return outputs for migration validation."
+            else
+              echo "::notice::Neon branch usage: ${count}/${cap}."
+            fi
+            echo "at_capacity=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Neon Branch
+        # CMP-594/CMP-572 follow-up: call create-branch-action when the project
+        # is below its branch cap, or when this PR's preview branch already
+        # exists. The action reuses an existing branch_name and returns db_url
+        # outputs, so synchronize events keep running Alembic at capacity.
+        if: steps.guard.outputs.skip == 'false' && steps.capacity.outputs.at_capacity == 'false'
         id: create_neon_branch
         uses: neondatabase/create-branch-action@v6
         with:
@@ -131,13 +198,13 @@ jobs:
           fi
 
       - name: Setup Python ${{ env.PYTHON_VERSION }}
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Setup uv ${{ env.UV_VERSION }}
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         uses: astral-sh/setup-uv@v3
         with:
           version: ${{ env.UV_VERSION }}
@@ -147,7 +214,7 @@ jobs:
             apps/api/pyproject.toml
 
       - name: uv sync
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         shell: bash
         working-directory: apps/api
         run: |
@@ -158,7 +225,7 @@ jobs:
           fi
 
       - name: alembic upgrade head (preview)
-        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true'
+        if: steps.guard.outputs.skip == 'false' && steps.detect.outputs.has_alembic == 'true' && steps.create_neon_branch.outputs.db_url != ''
         working-directory: apps/api
         env:
           APP_ENV: test
@@ -166,7 +233,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Comment preview branch on PR
-        if: steps.guard.outputs.skip == 'false' && github.event.action != 'synchronize'
+        if: steps.guard.outputs.skip == 'false' && github.event.action != 'synchronize' && steps.create_neon_branch.outputs.db_url != ''
         uses: actions/github-script@v7
         env:
           PREVIEW_BRANCH: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}

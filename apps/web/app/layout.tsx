@@ -2,6 +2,9 @@ import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import { LegalNotice } from '@/components/LegalNotice';
 import { Providers } from '@/lib/providers';
+import '@mantine/core/styles.css';
+import '@mantine/notifications/styles.css';
+import '@mantine/dates/styles.css';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -22,9 +25,9 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="ko">
-      <body className="flex min-h-full flex-col">
+      <body>
         <Providers>
-          <main className="flex-1">{children}</main>
+          <main>{children}</main>
           <LegalNotice />
         </Providers>
       </body>

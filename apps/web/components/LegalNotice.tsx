@@ -1,4 +1,4 @@
-import { clsx } from 'clsx';
+import { Box, Text } from '@mantine/core';
 
 /**
  * AGENTS.md §4.6 — 모든 리포트 화면·다운로드 산출물에 노출되어야 하는 법적 고지.
@@ -14,18 +14,23 @@ type LegalNoticeProps = {
 
 export function LegalNotice({ className, variant = 'footer' }: LegalNoticeProps) {
   return (
-    <aside
+    <Box
+      component="aside"
       role="note"
       aria-label="법적 고지"
       data-testid="legal-notice"
-      className={clsx(
-        'text-xs leading-relaxed text-slate-500',
-        variant === 'footer' && 'border-t border-slate-200 px-6 py-4',
-        variant === 'inline' && 'rounded-md bg-slate-50 px-3 py-2',
-        className
-      )}
+      className={className}
+      px={variant === 'footer' ? 'lg' : 'sm'}
+      py={variant === 'footer' ? 'md' : 'xs'}
+      style={{
+        background: variant === 'inline' ? 'var(--mantine-color-gray-0)' : 'transparent',
+        borderTop: variant === 'footer' ? '1px solid var(--jippin-brand-border)' : undefined,
+        borderRadius: variant === 'inline' ? 'var(--mantine-radius-md)' : undefined
+      }}
     >
-      {LEGAL_NOTICE_TEXT}
-    </aside>
+      <Text c="var(--jippin-notice-legal)" lh="1.25rem" size="xs">
+        {LEGAL_NOTICE_TEXT}
+      </Text>
+    </Box>
   );
 }

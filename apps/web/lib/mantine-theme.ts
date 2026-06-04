@@ -1,0 +1,178 @@
+import {
+  createTheme,
+  type CSSVariablesResolver,
+  type MantineColorsTuple
+} from '@mantine/core';
+
+const jippin: MantineColorsTuple = [
+  '#E7F5F4',
+  '#D0ECE9',
+  '#A8D8D4',
+  '#7FC1BC',
+  '#4EA49E',
+  '#2D8F87',
+  '#147A73',
+  '#0F5F59',
+  '#0B4844',
+  '#073532'
+];
+
+const blueprint: MantineColorsTuple = [
+  '#E8F0F7',
+  '#D3E1EC',
+  '#A9C2D6',
+  '#7DA0BD',
+  '#547FA3',
+  '#33638A',
+  '#153B5C',
+  '#102F49',
+  '#0C2338',
+  '#071826'
+];
+
+const coral: MantineColorsTuple = [
+  '#FFF0EC',
+  '#FFE0D8',
+  '#FFC1B1',
+  '#FFA087',
+  '#FF8060',
+  '#F26B4F',
+  '#D85338',
+  '#B8422B',
+  '#943321',
+  '#6F2619'
+];
+
+const success: MantineColorsTuple = [
+  '#E8F5EE',
+  '#D1EBDD',
+  '#A8D8BC',
+  '#80C49C',
+  '#58AD7B',
+  '#31965D',
+  '#1B7F46',
+  '#156637',
+  '#104D2A',
+  '#0B351D'
+];
+
+const danger: MantineColorsTuple = [
+  '#FBEAE8',
+  '#F6D5D1',
+  '#EDABA3',
+  '#E17F74',
+  '#D6584C',
+  '#C0392B',
+  '#A52F24',
+  '#84261D',
+  '#661D16',
+  '#48140F'
+];
+
+const warning: MantineColorsTuple = [
+  '#FFF3E0',
+  '#FFE6BF',
+  '#FFCF80',
+  '#F5B247',
+  '#D99015',
+  '#B97600',
+  '#995D00',
+  '#7A4A00',
+  '#5C3800',
+  '#3D2500'
+];
+
+const info: MantineColorsTuple = [
+  '#E8F1F5',
+  '#D1E3EA',
+  '#A7CBD7',
+  '#7DB1C3',
+  '#5599B0',
+  '#337F98',
+  '#1F6F8B',
+  '#18576D',
+  '#124252',
+  '#0C2C37'
+];
+
+export const jippinTokens = {
+  brand: {
+    primary: '#147A73',
+    primaryFg: '#FFFFFF',
+    ink: '#0D1B2A',
+    copy: '#48606A',
+    surface: '#F7FBFA',
+    surfaceAlt: '#FFFFFF',
+    border: '#D9E3E1',
+    cta: '#F26B4F',
+    ctaFg: '#1A0F0B',
+    professional: '#153B5C',
+    professionalFg: '#FFFFFF'
+  },
+  status: {
+    success: '#1B7F46',
+    successSurface: '#E8F5EE',
+    danger: '#C0392B',
+    dangerSurface: '#FBEAE8',
+    warning: '#995D00',
+    warningSurface: '#FFF3E0',
+    info: '#1F6F8B',
+    infoSurface: '#E8F1F5'
+  },
+  notice: {
+    legal: '#48606A'
+  }
+} as const;
+
+export const jippinTheme = createTheme({
+  activeClassName: 'mantine-active',
+  black: jippinTokens.brand.ink,
+  colors: {
+    blueprint,
+    coral,
+    danger,
+    info,
+    jippin,
+    success,
+    warning
+  },
+  defaultRadius: 'md',
+  fontFamily:
+    "'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', system-ui, 'Segoe UI', Roboto, sans-serif",
+  fontFamilyMonospace:
+    "ui-monospace, SFMono-Regular, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace",
+  headings: {
+    fontFamily: 'inherit',
+    fontWeight: '600',
+    sizes: {
+      h1: { fontSize: '1.375rem', lineHeight: '1.875rem' },
+      h2: { fontSize: '1.125rem', lineHeight: '1.625rem' },
+      h3: { fontSize: '1rem', lineHeight: '1.5rem' }
+    }
+  },
+  primaryColor: 'jippin',
+  primaryShade: { light: 6, dark: 6 },
+  white: '#FFFFFF'
+});
+
+export const jippinCssVariablesResolver: CSSVariablesResolver = () => ({
+  variables: {
+    '--jippin-brand-primary': jippinTokens.brand.primary,
+    '--jippin-brand-primary-fg': jippinTokens.brand.primaryFg,
+    '--jippin-brand-ink': jippinTokens.brand.ink,
+    '--jippin-brand-copy': jippinTokens.brand.copy,
+    '--jippin-brand-surface': jippinTokens.brand.surface,
+    '--jippin-brand-surface-alt': jippinTokens.brand.surfaceAlt,
+    '--jippin-brand-border': jippinTokens.brand.border,
+    '--jippin-brand-cta': jippinTokens.brand.cta,
+    '--jippin-brand-cta-fg': jippinTokens.brand.ctaFg,
+    '--jippin-brand-professional': jippinTokens.brand.professional,
+    '--jippin-notice-legal': jippinTokens.notice.legal
+  },
+  light: {
+    '--mantine-color-body': jippinTokens.brand.surface,
+    '--mantine-color-text': jippinTokens.brand.ink,
+    '--mantine-color-dimmed': jippinTokens.brand.copy
+  },
+  dark: {}
+});
