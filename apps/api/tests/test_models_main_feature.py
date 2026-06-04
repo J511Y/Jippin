@@ -89,9 +89,10 @@ def test_sessions_keep_anonymous_user_ownership_and_completion_contract() -> Non
     assert isinstance(table.c.status.type, Text)
     assert table.c.status.server_default is not None
     assert "draft" in checks["ck_sessions_sessions_status_allowed"]
-    assert "REQUEST_OVERLAY_REVIEW" in checks[
-        "ck_sessions_sessions_completion_decision_allowed"
-    ]
+    assert (
+        "REQUEST_OVERLAY_REVIEW"
+        in checks["ck_sessions_sessions_completion_decision_allowed"]
+    )
     assert isinstance(table.c.judgment_schema.type, postgresql.JSONB)
     assert "ix_sessions_expires_at_active" in _index_columns(Session)
 
