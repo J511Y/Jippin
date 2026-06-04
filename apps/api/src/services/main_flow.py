@@ -79,6 +79,49 @@ def _conflict(message: str, code: str) -> ZippinException:
     return ZippinException(message, code=code, http_status=409)
 
 
+def _unprocessable(message: str, code: str) -> ZippinException:
+    return ZippinException(message, code=code, http_status=422)
+
+
+# Address sufficiency 기준 — `address_ready` 로 status 를 전이시키려면 본
+# heuristic 을 통과해야 한다. road/jibun 주소 문자열 또는 의미 있는
+# building_identity (PNU 등) 중 하나 이상이 있어야 한다.
+def _address_is_sufficient(row: dict[str, Any]) -> bool:
+    if (row.get("road_address") or "").strip():
+        return True
+    if (row.get("jibun_address") or "").strip():
+        return True
+    identity = row.get("building_identity") or {}
+    return bool(identity)
+
+
+def _resolve_owner_session(
+    session_id: uuid.UUID,
+    *,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool,
+) -> dict[str, Any]:
+    """Owner-gated session lookup + identity-link conversion side effect.
+
+    Caller MUST hold ``_store.lock``. Returns the live ``_store`` row (mutable
+    reference, not a copy) so callers can apply further updates.
+
+    Supabase ``linkIdentity()`` 는 같은 ``auth.users.id`` 를 permanent user 로
+    승격한다. 같은 owner UUID 가 non-anonymous token 으로 다시 접근하면 이
+    헬퍼가 ``is_anonymous_owner=False``, ``expires_at=None`` 으로 정리한다
+    (board P2-5). 그래야 가입 완료 사용자의 사전검토 artifact 가 익명 TTL
+    cleanup 으로 삭제되지 않는다.
+    """
+
+    row = _store.sessions.get(session_id)
+    if row is None or row["user_id"] != owner_user_id:
+        raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
+    if row["is_anonymous_owner"] and not owner_is_anonymous:
+        row["is_anonymous_owner"] = False
+        row["expires_at"] = None
+    return row
+
+
 # ---------------------------------------------------------------------------
 # sessions / session_addresses
 # ---------------------------------------------------------------------------
@@ -127,15 +170,40 @@ def create_session(
 
 
 def get_owned_session(
-    session_id: uuid.UUID, *, owner_user_id: uuid.UUID
+    session_id: uuid.UUID,
+    *,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
 ) -> dict[str, Any]:
-    """Owner 가 본인인 session row 만 반환. 아니면 404 (열거 누수 방지)."""
+    """Owner 가 본인인 session row 만 반환. 아니면 404 (열거 누수 방지).
+
+    같은 user_id 가 non-anonymous token 으로 다시 GET 하면 anon-conversion
+    side-effect 가 한 번 발생한다 (``_resolve_owner_session`` 참조).
+    """
 
     with _store.lock:
-        row = _store.sessions.get(session_id)
-        if row is None or row["user_id"] != owner_user_id:
-            raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
+        row = _resolve_owner_session(
+            session_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
         return dict(row)
+
+
+# session_addresses 컬럼 — partial upsert 가 기존 값을 덮어쓰지 않도록 본 화이트리스트
+# 안에 있는 key 만 payload 에서 받아 row 에 적용한다.
+_ADDRESS_FIELDS: tuple[str, ...] = (
+    "road_address",
+    "jibun_address",
+    "apartment_name",
+    "building_dong",
+    "unit_ho",
+    "floor_no",
+    "exclusive_area_m2",
+    "size_type",
+    "building_identity",
+    "address_provider",
+)
 
 
 def upsert_session_address(
@@ -143,39 +211,80 @@ def upsert_session_address(
     session_id: uuid.UUID,
     owner_user_id: uuid.UUID,
     payload: dict[str, Any],
+    owner_is_anonymous: bool = False,
 ) -> dict[str, Any]:
-    """`session_addresses` row 를 upsert 한다 (1 session = 1 address)."""
+    """`session_addresses` row 를 partial-upsert 한다 (1 session = 1 address).
+
+    Router 는 ``model_dump(exclude_unset=True)`` 로 client 가 명시한 key 만
+    payload 로 넘긴다. 본 함수는 그 key 만 row 에 적용해 누락 필드를 보존한다
+    (board P2-1). road/jibun/building_identity 중 최소 한 가지가 없으면
+    ``INSUFFICIENT_ADDRESS_DATA`` 로 거절하고 status 도 전이하지 않는다
+    (board P2-2).
+    """
 
     now = _now()
     with _store.lock:
-        session = _store.sessions.get(session_id)
-        if session is None or session["user_id"] != owner_user_id:
-            raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
+        session = _resolve_owner_session(
+            session_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
 
-        address_id = session["address_id"] or uuid.uuid4()
-        row: dict[str, Any] = {
-            "id": address_id,
-            "session_id": session_id,
-            "user_id": owner_user_id,
-            "road_address": payload.get("road_address"),
-            "jibun_address": payload.get("jibun_address"),
-            "apartment_name": payload.get("apartment_name"),
-            "building_dong": payload.get("building_dong"),
-            "unit_ho": payload.get("unit_ho"),
-            "floor_no": payload.get("floor_no"),
-            "exclusive_area_m2": _decimal(payload.get("exclusive_area_m2")),
-            "size_type": payload.get("size_type"),
-            "building_identity": dict(payload.get("building_identity") or {}),
-            "address_provider": payload.get("address_provider"),
-            "normalized_at": None,
-            "created_at": (
-                _store.session_addresses[address_id]["created_at"]
-                if address_id in _store.session_addresses
-                else now
-            ),
-        }
-        _store.session_addresses[address_id] = row
-        session["address_id"] = address_id
+        existing_address_id: uuid.UUID | None = session["address_id"]
+        existing_row: dict[str, Any] | None = (
+            _store.session_addresses.get(existing_address_id)
+            if existing_address_id is not None
+            else None
+        )
+
+        if existing_row is not None:
+            row: dict[str, Any] = dict(existing_row)
+        else:
+            row = {
+                "id": uuid.uuid4(),
+                "session_id": session_id,
+                "user_id": owner_user_id,
+                "road_address": None,
+                "jibun_address": None,
+                "apartment_name": None,
+                "building_dong": None,
+                "unit_ho": None,
+                "floor_no": None,
+                "exclusive_area_m2": None,
+                "size_type": None,
+                "building_identity": {},
+                "address_provider": None,
+                "normalized_at": None,
+                "created_at": now,
+            }
+
+        # 명시된 field 만 덮어쓴다 — 나머지는 기존 값을 유지.
+        for field in _ADDRESS_FIELDS:
+            if field not in payload:
+                continue
+            value = payload[field]
+            if field == "exclusive_area_m2":
+                row[field] = _decimal(value)
+            elif field == "building_identity":
+                # explicit None 으로 비우려는 의도가 없으므로 None 은 무시,
+                # dict 만 받는다. 빈 dict 는 sufficiency 체크에서 자연 reject.
+                if value is None:
+                    continue
+                row[field] = dict(value)
+            else:
+                row[field] = value
+
+        if not _address_is_sufficient(row):
+            raise _unprocessable(
+                (
+                    "Address payload must include road_address, jibun_address, "
+                    "or a non-empty building_identity."
+                ),
+                code="INSUFFICIENT_ADDRESS_DATA",
+            )
+
+        _store.session_addresses[row["id"]] = row
+        session["address_id"] = row["id"]
         if session["status"] == "draft":
             session["status"] = "address_ready"
         session["last_activity_at"] = now
@@ -193,12 +302,15 @@ def create_floorplan_upload(
     session_id: uuid.UUID,
     owner_user_id: uuid.UUID,
     payload: dict[str, Any],
+    owner_is_anonymous: bool = False,
 ) -> dict[str, Any]:
     now = _now()
     with _store.lock:
-        session = _store.sessions.get(session_id)
-        if session is None or session["user_id"] != owner_user_id:
-            raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
+        session = _resolve_owner_session(
+            session_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
 
         upload_id = uuid.uuid4()
         row: dict[str, Any] = {
@@ -226,7 +338,11 @@ def save_floorplan_candidate_snapshot(
     lookup_revision: int,
     items: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """후보 snapshot 저장.
+    """후보 snapshot 저장 — **internal/runtime-only**.
+
+    Public HTTP route 가 없다. 백엔드 검색/매칭 서비스 (Phase B agent runtime)
+    가 직접 호출하며, owner_user_id 는 호출 측이 미리 검증한 session owner 다
+    (board P2-3: client-writable 화면에서 후보 snapshot 을 받지 않는다).
 
     같은 ``(session_id, lookup_revision, floorplan_id)`` 또는 ``(..., rank)`` 가
     중복되면 409. 다른 ``lookup_revision`` 끼리는 독립이다.
@@ -327,6 +443,7 @@ def append_chat_message(
     session_id: uuid.UUID,
     owner_user_id: uuid.UUID,
     payload: dict[str, Any],
+    owner_is_anonymous: bool = False,
 ) -> dict[str, Any]:
     """공개 endpoint 경로 — ``role='user'`` message 만 받는다.
 
@@ -337,9 +454,11 @@ def append_chat_message(
 
     now = _now()
     with _store.lock:
-        session = _store.sessions.get(session_id)
-        if session is None or session["user_id"] != owner_user_id:
-            raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
+        session = _resolve_owner_session(
+            session_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
 
         message_id = uuid.uuid4()
         row: dict[str, Any] = {
@@ -419,6 +538,14 @@ def start_chat_tool_call(
     owner_user_id: uuid.UUID,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    """`chat_tool_calls` row 생성 — **internal/runtime-only**.
+
+    Phase A skeleton 의 public 라우터는 본 함수를 호출하지 않는다 (board P2-4).
+    agent runtime / rule engine / 내부 평가 서비스가 owner_user_id 를 직접
+    명시해 호출한다. owner check 는 호출 측이 이미 마쳤지만 service 단에서도
+    한 번 더 확인해 다른 owner 의 session 에 row 가 새지 않게 한다.
+    """
+
     now = _now()
     with _store.lock:
         session = _store.sessions.get(session_id)
@@ -476,6 +603,13 @@ def complete_chat_tool_call(
     owner_user_id: uuid.UUID,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    """`chat_tool_calls` 라이프사이클 완료 — **internal/runtime-only**.
+
+    public 라우터는 본 함수를 호출하지 않는다 (board P2-4). 외부 client 가
+    임의 ``output`` / ``status`` 를 주입해 agent-internal 결과를 위조하는 것을
+    막기 위함.
+    """
+
     now = _now()
     with _store.lock:
         session = _store.sessions.get(session_id)

@@ -49,7 +49,11 @@ async def get_session(
     session_id: uuid.UUID = Path(...),
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> SessionResponse:
-    row = main_flow.get_owned_session(session_id, owner_user_id=requester.user_id)
+    row = main_flow.get_owned_session(
+        session_id,
+        owner_user_id=requester.user_id,
+        owner_is_anonymous=requester.is_anonymous,
+    )
     return SessionResponse.model_validate(row)
 
 
@@ -63,10 +67,14 @@ async def upsert_session_address(
     session_id: uuid.UUID = Path(...),
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> SessionAddressResponse:
+    # ``exclude_unset=True`` 로 client 가 명시한 key 만 service 단으로 넘겨
+    # partial upsert 가 기존 ``session_addresses`` row 의 값을 ``None`` 으로
+    # 덮어쓰지 않게 한다 (board P2-1).
     row = main_flow.upsert_session_address(
         session_id=session_id,
         owner_user_id=requester.user_id,
-        payload=payload.model_dump(),
+        payload=payload.model_dump(exclude_unset=True),
+        owner_is_anonymous=requester.is_anonymous,
     )
     logger.info(
         "session_address_upserted",

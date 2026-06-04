@@ -37,9 +37,11 @@ def _clear_state(monkeypatch):
 
 
 def test_phase_a_routes_are_all_under_sessions_prefix():
-    """Phase A 라우터의 모든 경로가 /sessions 아래에 있는지 확인.
+    """Phase A public 라우터의 모든 경로가 /sessions 아래에 있는지 확인.
 
     legacy ``/anonymous`` / ``/anon`` prefix 가 재등장하면 즉시 잡힌다.
+    또한 board P2-3 / P2-4 회귀: candidate snapshot 과 tool-call lifecycle
+    endpoint 는 public 라우터에 mount 되지 않는다.
     """
 
     app = create_app()
@@ -50,13 +52,21 @@ def test_phase_a_routes_are_all_under_sessions_prefix():
         "/sessions/{session_id}",
         "/sessions/{session_id}/address",
         "/sessions/{session_id}/floorplan-uploads",
-        "/sessions/{session_id}/floorplan-candidates",
         "/sessions/{session_id}/chat/messages",
-        "/sessions/{session_id}/chat/tool-calls",
-        "/sessions/{session_id}/chat/tool-calls/{tool_call_id}",
     }
     missing = expected - paths
     assert not missing, f"missing Phase A routes: {missing}"
+
+    # board P2-3 / P2-4 — internal-only routes must NOT be public.
+    forbidden = {
+        "/sessions/{session_id}/floorplan-candidates",
+        "/sessions/{session_id}/chat/tool-calls",
+        "/sessions/{session_id}/chat/tool-calls/{tool_call_id}",
+    }
+    leaked_internal = forbidden & paths
+    assert (
+        not leaked_internal
+    ), f"internal-only Phase A routes leaked into public router: {leaked_internal}"
 
     forbidden_prefixes = ("/anonymous-sessions", "/anonymous", "/anon")
     leaked = {p for p in paths if p.startswith(forbidden_prefixes)}
@@ -105,10 +115,7 @@ def test_phase_a_routes_absent_when_skeleton_feature_flag_off(monkeypatch):
         "/sessions/{session_id}",
         "/sessions/{session_id}/address",
         "/sessions/{session_id}/floorplan-uploads",
-        "/sessions/{session_id}/floorplan-candidates",
         "/sessions/{session_id}/chat/messages",
-        "/sessions/{session_id}/chat/tool-calls",
-        "/sessions/{session_id}/chat/tool-calls/{tool_call_id}",
     ):
         assert guarded not in paths, f"{guarded} leaked into prod-default app"
 

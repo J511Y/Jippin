@@ -42,7 +42,13 @@ class SessionCreateRequest(BaseModel):
 
 
 class SessionAddressInput(BaseModel):
-    """`PUT /sessions/{id}/address` body — `session_addresses` row 본문."""
+    """`PUT /sessions/{id}/address` body — `session_addresses` row 본문.
+
+    모든 필드가 optional 이지만 partial upsert 시멘틱이 다르다 — 라우터는
+    ``model_dump(exclude_unset=True)`` 를 써서 client 가 명시한 key 만 service
+    레이어로 넘긴다. 두 번째 upsert 가 ``unit_ho`` 만 보내도 이미 저장된
+    ``road_address`` 가 ``None`` 으로 덮이지 않는다 (board P2-1 회귀 가드).
+    """
 
     road_address: str | None = None
     jibun_address: str | None = None
@@ -52,7 +58,7 @@ class SessionAddressInput(BaseModel):
     floor_no: int | None = None
     exclusive_area_m2: Decimal | None = None
     size_type: str | None = None
-    building_identity: dict[str, Any] = Field(default_factory=dict)
+    building_identity: dict[str, Any] | None = None
     address_provider: str | None = None
 
 

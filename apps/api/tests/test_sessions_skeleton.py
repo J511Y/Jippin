@@ -169,13 +169,22 @@ def test_put_session_address_transitions_to_address_ready(monkeypatch):
         assert addr["exclusive_area_m2"] == "84.99"
 
         # 같은 endpoint 를 다시 호출하면 address_id 가 유지되며 idempotent 다.
+        # board P2-1 회귀: 두 번째 PUT 이 ``unit_ho`` 만 보내도 이미 저장된
+        # ``road_address`` / ``apartment_name`` 등은 그대로 보존되어야 한다.
         upsert2 = client.put(
             f"/sessions/{session_id}/address",
             headers={"Authorization": f"Bearer {token}"},
-            json={"apartment_name": "예시아파트2"},
+            json={"unit_ho": "1503호"},
         )
         assert upsert2.status_code == 200
-        assert upsert2.json()["id"] == addr["id"]
+        merged = upsert2.json()
+        assert merged["id"] == addr["id"]
+        assert merged["road_address"] == "서울 강남구 테헤란로 1"
+        assert merged["apartment_name"] == "예시아파트"
+        assert merged["building_dong"] == "101동"
+        assert merged["exclusive_area_m2"] == "84.99"
+        assert merged["size_type"] == "84A"
+        assert merged["unit_ho"] == "1503호"
 
         # 세션 status 가 address_ready 로 전이.
         after = client.get(
@@ -184,6 +193,122 @@ def test_put_session_address_transitions_to_address_ready(monkeypatch):
         ).json()
         assert after["address_id"] == addr["id"]
         assert after["status"] == "address_ready"
+
+
+def test_put_session_address_rejects_empty_payload(monkeypatch):
+    """빈 payload 로는 ``address_ready`` 전이를 허용하지 않는다 (board P2-2)."""
+
+    client, pem, kid, _ = _client(monkeypatch)
+    token, _ = helpers.mint_token(pem, kid)
+    with client:
+        created = client.post(
+            "/sessions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+        ).json()
+        session_id = created["id"]
+
+        rejected = client.put(
+            f"/sessions/{session_id}/address",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+        )
+        assert rejected.status_code == 422
+        assert rejected.json()["error"]["code"] == "INSUFFICIENT_ADDRESS_DATA"
+
+        # status 는 여전히 draft 그대로.
+        after = client.get(
+            f"/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()
+        assert after["status"] == "draft"
+        assert after["address_id"] is None
+
+
+def test_put_session_address_rejects_non_identifying_metadata(monkeypatch):
+    """``apartment_name`` 단독은 식별력이 없어 reject."""
+
+    client, pem, kid, _ = _client(monkeypatch)
+    token, _ = helpers.mint_token(pem, kid)
+    with client:
+        created = client.post(
+            "/sessions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+        ).json()
+        session_id = created["id"]
+
+        rejected = client.put(
+            f"/sessions/{session_id}/address",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"apartment_name": "예시아파트"},
+        )
+        assert rejected.status_code == 422
+        assert rejected.json()["error"]["code"] == "INSUFFICIENT_ADDRESS_DATA"
+
+
+def test_put_session_address_accepts_building_identity_only(monkeypatch):
+    """PNU / building_identity 만으로도 sufficient — road/jibun 없이 통과."""
+
+    client, pem, kid, _ = _client(monkeypatch)
+    token, _ = helpers.mint_token(pem, kid)
+    with client:
+        created = client.post(
+            "/sessions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+        ).json()
+        session_id = created["id"]
+
+        ok = client.put(
+            f"/sessions/{session_id}/address",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"building_identity": {"pnu": "1100012300100001"}},
+        )
+        assert ok.status_code == 200
+        assert ok.json()["building_identity"] == {"pnu": "1100012300100001"}
+
+        after = client.get(
+            f"/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()
+        assert after["status"] == "address_ready"
+
+
+def test_non_anonymous_access_clears_anon_owner_and_expires_at(monkeypatch):
+    """``linkIdentity()`` conversion 회귀 (board P2-5).
+
+    같은 ``auth.users.id`` 가 익명 token 으로 세션을 만들고, 이후 동일 UUID 가
+    permanent token 으로 다시 접근하면 ``is_anonymous_owner`` 와
+    ``expires_at`` 이 정리되어야 한다. 그래야 가입 완료 사용자의 사전검토
+    artifact 가 익명 TTL cleanup 으로 삭제되지 않는다.
+    """
+
+    client, pem, kid, _ = _client(monkeypatch)
+    anon_token, subject = helpers.mint_token(pem, kid, is_anonymous=True)
+    with client:
+        created = client.post(
+            "/sessions",
+            headers={"Authorization": f"Bearer {anon_token}"},
+            json={},
+        ).json()
+        assert created["is_anonymous_owner"] is True
+        assert created["expires_at"] is not None
+        session_id = created["id"]
+
+        # 같은 sub UUID 로 발급된 non-anonymous token (Supabase linkIdentity 시뮬).
+        perm_token, perm_subject = helpers.mint_token(
+            pem, kid, sub=str(subject), is_anonymous=False
+        )
+        assert perm_subject == subject
+        promoted = client.get(
+            f"/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {perm_token}"},
+        ).json()
+
+    assert promoted["is_anonymous_owner"] is False
+    assert promoted["expires_at"] is None
+    assert promoted["user_id"] == str(subject)
 
 
 def test_legacy_anonymous_header_is_ignored(monkeypatch):

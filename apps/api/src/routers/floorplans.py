@@ -1,9 +1,13 @@
-"""Phase A 도면 후보/업로드 라우터 skeleton (CMP-609).
+"""Phase A 도면 업로드 라우터 skeleton (CMP-609).
 
-엔드포인트는 ``/sessions/{session_id}`` 아래에 둔다:
+공개 엔드포인트:
 
 - ``POST /sessions/{id}/floorplan-uploads`` → 사용자 업로드 metadata row 생성
-- ``POST /sessions/{id}/floorplan-candidates`` → catalog 후보 snapshot 저장
+
+후보 snapshot 저장 (``floorplan_candidates``) 은 사용자-facing route 가 아니다.
+백엔드 검색/매칭 서비스 (Phase B agent runtime) 가
+``services.main_flow.save_floorplan_candidate_snapshot`` 을 직접 호출한다 —
+board P2-3: 사용자가 catalog 후보를 임의로 persist 하지 못하게 막는다.
 
 자세한 contract 는 ``schemas/floorplans.py`` 와 ``services/main_flow.py`` 참조.
 """
@@ -17,9 +21,6 @@ from fastapi import APIRouter, Depends, Path
 from ..auth.request_token import RequestUser, require_supabase_request_user
 from ..logging import get_logger
 from ..schemas.floorplans import (
-    FloorplanCandidateResponse,
-    FloorplanCandidateSnapshotRequest,
-    FloorplanCandidateSnapshotResponse,
     FloorplanUploadCreateRequest,
     FloorplanUploadResponse,
 )
@@ -43,6 +44,7 @@ async def create_floorplan_upload(
         session_id=session_id,
         owner_user_id=requester.user_id,
         payload=payload.model_dump(),
+        owner_is_anonymous=requester.is_anonymous,
     )
     logger.info(
         "floorplan_upload_created",
@@ -50,32 +52,3 @@ async def create_floorplan_upload(
         upload_id=str(row["id"]),
     )
     return FloorplanUploadResponse.model_validate(row)
-
-
-@router.post(
-    "/{session_id}/floorplan-candidates",
-    response_model=FloorplanCandidateSnapshotResponse,
-    status_code=201,
-)
-async def save_floorplan_candidate_snapshot(
-    payload: FloorplanCandidateSnapshotRequest,
-    session_id: uuid.UUID = Path(...),
-    requester: RequestUser = Depends(require_supabase_request_user),
-) -> FloorplanCandidateSnapshotResponse:
-    rows = main_flow.save_floorplan_candidate_snapshot(
-        session_id=session_id,
-        owner_user_id=requester.user_id,
-        lookup_revision=payload.lookup_revision,
-        items=[item.model_dump() for item in payload.items],
-    )
-    logger.info(
-        "floorplan_candidate_snapshot_saved",
-        session_id=str(session_id),
-        lookup_revision=payload.lookup_revision,
-        candidate_count=len(rows),
-    )
-    return FloorplanCandidateSnapshotResponse(
-        session_id=session_id,
-        lookup_revision=payload.lookup_revision,
-        candidates=[FloorplanCandidateResponse.model_validate(r) for r in rows],
-    )
