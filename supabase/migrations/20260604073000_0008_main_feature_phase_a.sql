@@ -549,6 +549,85 @@ create trigger trg_sessions_reference_scope
   for each row
   execute function public.enforce_session_reference_scope();
 
+create or replace function public.prevent_session_client_service_field_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role <> 'authenticated' then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    if new.status <> 'draft'
+      or new.judgment_schema <> '{}'::jsonb
+      or new.judgment_schema_version is not null
+      or new.completion_decision is not null
+      or new.expires_at is not null
+    then
+      raise exception 'authenticated clients cannot set service-controlled session fields'
+        using errcode = '42501';
+    end if;
+  elsif new.status is distinct from old.status
+    or new.judgment_schema is distinct from old.judgment_schema
+    or new.judgment_schema_version is distinct from old.judgment_schema_version
+    or new.completion_decision is distinct from old.completion_decision
+    or new.last_activity_at is distinct from old.last_activity_at
+    or new.expires_at is distinct from old.expires_at
+  then
+    raise exception 'authenticated clients cannot change service-controlled session fields'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_sessions_service_fields_client_guard
+  before insert or update of
+    status,
+    judgment_schema,
+    judgment_schema_version,
+    completion_decision,
+    last_activity_at,
+    expires_at
+  on public.sessions
+  for each row
+  execute function public.prevent_session_client_service_field_mutation();
+
+create or replace function public.enforce_floorplan_upload_original_asset_scope()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.original_asset_id is not null and not exists (
+    select 1
+    from public.floorplan_assets as a
+    where a.id = new.original_asset_id
+      and a.session_id = new.session_id
+      and a.owner_user_id = new.user_id
+      and a.kind = 'original'
+  ) then
+    raise exception 'floorplan_uploads.original_asset_id must reference a same-session owner original asset'
+      using errcode = '23514';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_floorplan_uploads_original_asset_scope
+  before insert or update of
+    session_id,
+    user_id,
+    original_asset_id
+  on public.floorplan_uploads
+  for each row
+  execute function public.enforce_floorplan_upload_original_asset_scope();
+
 alter table public.sessions enable row level security;
 alter table public.session_addresses enable row level security;
 alter table public.floorplans enable row level security;
@@ -666,6 +745,7 @@ create policy floorplan_assets_owner_or_session_insert
   to authenticated
   with check (
     owner_user_id = (select auth.uid())
+    and scan_status = 'pending'
     and (
       floorplan_id is null
       or exists (
@@ -707,6 +787,7 @@ create policy floorplan_assets_owner_or_session_update
   to authenticated
   using (
     owner_user_id = (select auth.uid())
+    and scan_status = 'pending'
     and (
       floorplan_id is null
       or exists (
@@ -743,6 +824,7 @@ create policy floorplan_assets_owner_or_session_update
   )
   with check (
     owner_user_id = (select auth.uid())
+    and scan_status = 'pending'
     and (
       floorplan_id is null
       or exists (
@@ -819,19 +901,11 @@ create policy floorplan_assets_owner_or_session_delete
     )
   );
 
-create policy floorplan_candidates_session_owner_all
+create policy floorplan_candidates_session_owner_read
   on public.floorplan_candidates
-  for all
+  for select
   to authenticated
   using (
-    exists (
-      select 1
-      from public.sessions as s
-      where s.id = session_id
-        and s.user_id = (select auth.uid())
-    )
-  )
-  with check (
     exists (
       select 1
       from public.sessions as s

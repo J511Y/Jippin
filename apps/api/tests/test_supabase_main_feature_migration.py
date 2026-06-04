@@ -124,6 +124,49 @@ def test_sessions_reference_pointers_are_guarded_by_trigger() -> None:
     )
 
 
+def test_session_workflow_result_fields_are_service_controlled() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_session_client_service_field_mutation()"
+        in sql
+    )
+    assert "create trigger trg_sessions_service_fields_client_guard" in sql
+    assert "current_role <> 'authenticated'" in sql
+    assert "new.status <> 'draft'" in sql
+    assert "new.judgment_schema <> '{}'::jsonb" in sql
+    assert "new.completion_decision is not null" in sql
+    assert "new.status is distinct from old.status" in sql
+    assert "new.judgment_schema is distinct from old.judgment_schema" in sql
+    assert "new.completion_decision is distinct from old.completion_decision" in sql
+
+
+def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.enforce_floorplan_upload_original_asset_scope()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_uploads_original_asset_scope" in sql
+    assert "a.id = new.original_asset_id" in sql
+    assert "a.session_id = new.session_id" in sql
+    assert "a.owner_user_id = new.user_id" in sql
+    assert "a.kind = 'original'" in sql
+
+
+def test_floorplan_candidates_are_read_only_for_clients() -> None:
+    sql = migration_sql()
+    read_policy = policy_sql(sql, "floorplan_candidates_session_owner_read")
+
+    assert "create policy floorplan_candidates_session_owner_all" not in sql
+    assert "\n  for select\n" in read_policy
+    candidate_policy_names = re.findall(
+        r"create policy (floorplan_candidates_\w+)", sql
+    )
+    assert candidate_policy_names == ["floorplan_candidates_session_owner_read"]
+
+
 def test_chat_browser_writes_are_limited_to_user_messages() -> None:
     sql = migration_sql()
     insert_policy = policy_sql(sql, "chat_messages_user_insert")
@@ -160,6 +203,24 @@ def test_catalog_verification_is_not_user_mutable() -> None:
         )
         assert "quality_status = 'verified'" not in mutation_policy
         assert "visibility = 'public_catalog'" not in mutation_policy
+
+
+def test_authenticated_asset_writes_cannot_mark_scan_results() -> None:
+    sql = migration_sql()
+    insert_policy = policy_sql(sql, "floorplan_assets_owner_or_session_insert")
+    update_policy = policy_sql(sql, "floorplan_assets_owner_or_session_update")
+
+    assert "scan_status text not null default 'pending'" in sql
+    assert (
+        "scan_status in ('pending', 'clean', 'infected', 'failed', 'not_required')"
+        in sql
+    )
+    assert "and scan_status = 'pending'" in insert_policy
+    assert "and scan_status = 'pending'" in update_policy
+    assert "scan_status = 'clean'" not in insert_policy
+    assert "scan_status = 'clean'" not in update_policy
+    assert "scan_status = 'not_required'" not in insert_policy
+    assert "scan_status = 'not_required'" not in update_policy
 
 
 def test_phase_a_supabase_migration_keeps_chat_tool_payload_columns() -> None:
