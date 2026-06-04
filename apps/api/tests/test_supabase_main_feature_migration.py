@@ -124,6 +124,17 @@ def test_sessions_reference_pointers_are_guarded_by_trigger() -> None:
     )
 
 
+def test_selected_asset_matches_selected_source() -> None:
+    sql = migration_sql()
+
+    assert "new.selected_floorplan_id is null" in sql
+    assert "or a.floorplan_id = new.selected_floorplan_id" in sql
+    assert "new.selected_floorplan_upload_id is null" in sql
+    assert "or a.floorplan_upload_id = new.selected_floorplan_upload_id" in sql
+    assert "a.session_id = new.id" in sql
+    assert "a.owner_user_id = new.user_id" in sql
+
+
 def test_session_workflow_result_fields_are_service_controlled() -> None:
     sql = migration_sql()
 
@@ -141,6 +152,19 @@ def test_session_workflow_result_fields_are_service_controlled() -> None:
     assert "new.completion_decision is distinct from old.completion_decision" in sql
 
 
+def test_session_address_session_and_user_are_client_immutable() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_session_address_client_reparent()"
+        in sql
+    )
+    assert "create trigger trg_session_addresses_client_reparent_guard" in sql
+    assert "current_role = 'authenticated'" in sql
+    assert "new.session_id is distinct from old.session_id" in sql
+    assert "new.user_id is distinct from old.user_id" in sql
+
+
 def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
     sql = migration_sql()
 
@@ -153,6 +177,29 @@ def test_floorplan_upload_original_asset_is_same_owner_original() -> None:
     assert "a.session_id = new.session_id" in sql
     assert "a.owner_user_id = new.user_id" in sql
     assert "a.kind = 'original'" in sql
+
+
+def test_floorplan_upload_status_is_service_controlled_after_initial_write() -> None:
+    sql = migration_sql()
+
+    assert (
+        "create or replace function public.prevent_floorplan_upload_client_status_mutation()"
+        in sql
+    )
+    assert "create trigger trg_floorplan_uploads_status_client_guard" in sql
+    assert "new.status not in ('uploaded', 'scan_pending')" in sql
+    assert "new.status is distinct from old.status" in sql
+    assert "authenticated clients cannot change service-controlled upload status" in sql
+
+
+def test_asset_upload_session_comparison_is_outer_row_qualified() -> None:
+    sql = migration_sql()
+
+    assert "or u.session_id = session_id" not in sql
+    assert (
+        "public.floorplan_assets.session_id is null\n            or u.session_id = public.floorplan_assets.session_id"
+        in sql
+    )
 
 
 def test_floorplan_candidates_are_read_only_for_clients() -> None:
@@ -170,19 +217,21 @@ def test_floorplan_candidates_are_read_only_for_clients() -> None:
 def test_chat_browser_writes_are_limited_to_user_messages() -> None:
     sql = migration_sql()
     insert_policy = policy_sql(sql, "chat_messages_user_insert")
-    update_policy = policy_sql(sql, "chat_messages_user_update")
     tool_read_policy = policy_sql(sql, "chat_tool_calls_session_owner_read")
 
     assert "create policy chat_messages_session_owner_all" not in sql
+    assert "create policy chat_messages_user_update" not in sql
     assert "create policy chat_tool_calls_session_owner_all" not in sql
     assert "\n  for insert\n" in insert_policy
-    assert "\n  for update\n" in update_policy
     assert "role = 'user'" in insert_policy
-    assert "role = 'user'" in update_policy
     assert "user_id = (select auth.uid())" in insert_policy
-    assert "user_id = (select auth.uid())" in update_policy
     assert "\n  for select\n" in tool_read_policy
     assert "create policy chat_tool_calls" in sql
+    chat_policy_names = re.findall(r"create policy (chat_messages_\w+)", sql)
+    assert sorted(chat_policy_names) == [
+        "chat_messages_session_owner_read",
+        "chat_messages_user_insert",
+    ]
     assert not re.search(
         r"create policy chat_tool_calls_\w+.*?\n  for (insert|update|delete|all)\n",
         sql,

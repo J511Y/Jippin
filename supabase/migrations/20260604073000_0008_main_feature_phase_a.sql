@@ -495,6 +495,14 @@ begin
     from public.floorplan_assets as a
     where a.id = new.selected_floorplan_asset_id
       and (
+        new.selected_floorplan_id is null
+        or a.floorplan_id = new.selected_floorplan_id
+      )
+      and (
+        new.selected_floorplan_upload_id is null
+        or a.floorplan_upload_id = new.selected_floorplan_upload_id
+      )
+      and (
         (
           a.session_id = new.id
           and (
@@ -596,6 +604,34 @@ create trigger trg_sessions_service_fields_client_guard
   for each row
   execute function public.prevent_session_client_service_field_mutation();
 
+create or replace function public.prevent_session_address_client_reparent()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role = 'authenticated'
+    and (
+      new.session_id is distinct from old.session_id
+      or new.user_id is distinct from old.user_id
+    )
+  then
+    raise exception 'authenticated clients cannot move session address ownership'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_session_addresses_client_reparent_guard
+  before update of
+    session_id,
+    user_id
+  on public.session_addresses
+  for each row
+  execute function public.prevent_session_address_client_reparent();
+
 create or replace function public.enforce_floorplan_upload_original_asset_scope()
 returns trigger
 language plpgsql
@@ -627,6 +663,36 @@ create trigger trg_floorplan_uploads_original_asset_scope
   on public.floorplan_uploads
   for each row
   execute function public.enforce_floorplan_upload_original_asset_scope();
+
+create or replace function public.prevent_floorplan_upload_client_status_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role <> 'authenticated' then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    if new.status not in ('uploaded', 'scan_pending') then
+      raise exception 'authenticated clients cannot set service-controlled upload status'
+        using errcode = '42501';
+    end if;
+  elsif new.status is distinct from old.status then
+    raise exception 'authenticated clients cannot change service-controlled upload status'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_floorplan_uploads_status_client_guard
+  before insert or update of status
+  on public.floorplan_uploads
+  for each row
+  execute function public.prevent_floorplan_upload_client_status_mutation();
 
 alter table public.sessions enable row level security;
 alter table public.session_addresses enable row level security;
@@ -765,8 +831,8 @@ create policy floorplan_assets_owner_or_session_insert
         where u.id = floorplan_upload_id
           and u.user_id = (select auth.uid())
           and (
-            session_id is null
-            or u.session_id = session_id
+            public.floorplan_assets.session_id is null
+            or u.session_id = public.floorplan_assets.session_id
           )
       )
     )
@@ -807,8 +873,8 @@ create policy floorplan_assets_owner_or_session_update
         where u.id = floorplan_upload_id
           and u.user_id = (select auth.uid())
           and (
-            session_id is null
-            or u.session_id = session_id
+            public.floorplan_assets.session_id is null
+            or u.session_id = public.floorplan_assets.session_id
           )
       )
     )
@@ -844,8 +910,8 @@ create policy floorplan_assets_owner_or_session_update
         where u.id = floorplan_upload_id
           and u.user_id = (select auth.uid())
           and (
-            session_id is null
-            or u.session_id = session_id
+            public.floorplan_assets.session_id is null
+            or u.session_id = public.floorplan_assets.session_id
           )
         )
     )
@@ -885,8 +951,8 @@ create policy floorplan_assets_owner_or_session_delete
         where u.id = floorplan_upload_id
           and u.user_id = (select auth.uid())
           and (
-            session_id is null
-            or u.session_id = session_id
+            public.floorplan_assets.session_id is null
+            or u.session_id = public.floorplan_assets.session_id
           )
       )
     )
@@ -931,31 +997,6 @@ create policy chat_messages_user_insert
   on public.chat_messages
   for insert
   to authenticated
-  with check (
-    role = 'user'
-    and user_id = (select auth.uid())
-    and exists (
-      select 1
-      from public.sessions as s
-      where s.id = session_id
-        and s.user_id = (select auth.uid())
-    )
-  );
-
-create policy chat_messages_user_update
-  on public.chat_messages
-  for update
-  to authenticated
-  using (
-    role = 'user'
-    and user_id = (select auth.uid())
-    and exists (
-      select 1
-      from public.sessions as s
-      where s.id = session_id
-        and s.user_id = (select auth.uid())
-    )
-  )
   with check (
     role = 'user'
     and user_id = (select auth.uid())
