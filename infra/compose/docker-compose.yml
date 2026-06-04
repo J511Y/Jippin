@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 # 봉인:
 #   - 단일 호스트 1대 가정. k8s/ECS 매니페스트 금지.
-#   - Postgres 컨테이너 금지 — 외부 managed Postgres (Supabase/Neon, transitional)
+#   - Postgres 컨테이너 금지 — 외부 managed Postgres (Supabase)
 #     의 DATABASE_URL / DATABASE_POOL_URL 직결. 현 SSOT 는 Supabase (ADR-0004 Proposed).
 #   - 모델 가중치/대용량 바이너리는 이미지에 포함하지 않는다.
 #   - 시크릿은 infra/compose/.env (로컬, .gitignore 차단). 자리표시자는 .env.example.
@@ -13,7 +13,7 @@
 #   docker compose -f infra/compose/docker-compose.yml up --build
 #
 # 참조: ADR-0001 §5 (컨테이너 런타임), §9 (이미지 봉인) / ADR-0004 (Supabase 전환)
-#       AGENTS.md §4.4 (env), §5.9 (CI 마이그레이션, transitional)
+#       AGENTS.md §4.4 (env), §5.9 (Supabase Integration migration ownership)
 # =============================================================================
 
 name: jippin
@@ -64,32 +64,7 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # migrate — Alembic 사이드카 (CMP-537 / parent: CMP-536). **TRANSITIONAL**.
-  # api 가 기동되기 전 한 번 실행되고 service_completed_successfully 로 종료된다.
-  # ENTRYPOINT 와 분리해 multi-replica 경합/롤백 어려움을 피한다 (CTO ADR).
-  #
-  # 전환 상태 (ADR-0004 / CMP-575):
-  #   Alembic 이 현 schema SSOT. cutover PR 머지 시점에 Supabase SQL
-  #   (supabase/migrations/*.sql) + Supabase CLI / GitHub integration 으로 대체.
-  # ---------------------------------------------------------------------------
-  migrate:
-    image: jippin-api:local
-    build:
-      context: ../../apps/api
-      dockerfile: Dockerfile
-    container_name: jippin-migrate
-    command: ["alembic", "upgrade", "head"]
-    environment:
-      # Alembic 은 non-pooler URL 에서만 동작한다 (DDL/Prepared-statement 호환성).
-      # Supabase 의 direct port 5432 또는 Neon non-pooler 호스트 사용.
-      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set (non-pooler / direct port)}"
-      PYTHONUNBUFFERED: "1"
-    restart: "no"
-    networks:
-      - jippin
-
-  # ---------------------------------------------------------------------------
-  # api — FastAPI 백엔드. 외부 managed Postgres (Supabase/Neon, transitional)
+  # api — FastAPI 백엔드. 외부 managed Postgres (Supabase)
   # 의 non-pooler + pooler 두 URL 에 직결.
   # 컨테이너 내부에서 /healthz 가 SELECT 1 으로 DB 응답을 확인.
   # ---------------------------------------------------------------------------
@@ -102,7 +77,7 @@ services:
     restart: unless-stopped
     environment:
       # 외부 DB — 두 호스트 모두 부재 시 부팅 차단 (`:?` 가드).
-      # Supabase: direct port 5432 (non-pooler) + pooler port 6543. Neon: -pooler 호스트.
+      # Supabase: direct port 5432 (non-pooler) + pooler port 6543.
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set (non-pooler / direct port)}"
       DATABASE_POOL_URL: "${DATABASE_POOL_URL:?DATABASE_POOL_URL must be set (pooler)}"
       # Redis — 컨테이너 네트워크 이름으로 경유.
@@ -138,8 +113,6 @@ services:
       SUPABASE_JWT_ISSUER: "${SUPABASE_JWT_ISSUER:?SUPABASE_JWT_ISSUER must be set}"
       SUPABASE_JWT_SECRET: "${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET must be set}"
       SUPABASE_JWT_AUDIENCE: "${SUPABASE_JWT_AUDIENCE:-authenticated}"
-      ANON_SESSION_HEADER: "${ANON_SESSION_HEADER:-x-jippin-anon-id}"
-      ANON_SESSION_TTL_DAYS: "${ANON_SESSION_TTL_DAYS:-30}"
       FRONTEND_AUTH_SUCCESS_URL: "${FRONTEND_AUTH_SUCCESS_URL:-http://localhost:3000/auth/success}"
       FRONTEND_AUTH_FAILURE_URL: "${FRONTEND_AUTH_FAILURE_URL:-http://localhost:3000/auth/failure}"
       FRONTEND_AUTH_TERMS_URL: "${FRONTEND_AUTH_TERMS_URL:-http://localhost:3000/auth/terms}"
@@ -148,8 +121,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     networks:
       - jippin
     healthcheck:

@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 class AnonymousUserCreateRequest(BaseModel):
     existing_anonymous_user_id: str | None = Field(
         default=None,
-        description="Client-stored localStorage.jippin_anonymous_user_id value.",
+        description="Deprecated legacy anonymous id. Supabase anonymous sign-in is SSOT.",
     )
 
 
@@ -44,7 +44,7 @@ class AuthLogoutResponse(BaseModel):
 class SupabaseSessionBridgeRequest(BaseModel):
     anonymous_user_id: uuid.UUID | None = Field(
         default=None,
-        description="Client-stored localStorage.jippin_anonymous_user_id value.",
+        description="Deprecated legacy anonymous id. Ignored after CMP-604.",
     )
     requested_provider: Literal["google", "kakao", "naver"] | None = Field(
         default=None,

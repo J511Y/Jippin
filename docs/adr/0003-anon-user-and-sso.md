@@ -1,14 +1,14 @@
 # ADR 0003 — 익명 사용자 + 소셜 SSO 간편가입 모델
 
-- 상태: **Accepted (2026-05-29)** — CEO 정책 (CMP-557) 확정 후 본 트랙 A (CMP-558) 가 문서 정본을 발행. **§2.1·§2.2·§2.3 일부는 [`ADR-0004`](0004-supabase-transition.md) (Proposed, 2026-05-29~) 가 부분 supersede 진행 중**.
+- 상태: **Accepted (2026-05-29)** — CEO 정책 (CMP-557) 확정 후 본 트랙 A (CMP-558) 가 문서 정본을 발행. **§2.1·§2.2·§2.3 일부는 [`ADR-0004`](0004-supabase-transition.md) 와 CMP-604 post-cutover cleanup 으로 forward auth 경로에서 부분 supersede 완료**.
 - 제안자: Backend Lead (`1e359a75`)
 - 승인 권자: CEO (CMP-557 본문에서 정책 결정), CTO 검토
 - 인계 출처: CMP-557 본문 (CEO 정책 결정) · `docs/명세서/02·03·04` (기존 명세서 가정)
 - 관련 이슈: **CMP-557** (정책 분할 모이슈) · **CMP-558** (트랙 A — 본 ADR + AGENTS.md + .env 초안) · CMP-557-B/C/D (각 모델·핸들러·UX 트랙) · **CMP-573 / CMP-572** (ADR-0004 + Supabase 전환 트랙)
 - 슈퍼시드: 없음. 기존 명세서 4종의 “소셜 OAuth 로그인 필수 / 비회원 사전검토 불가” 가정을 본 ADR 이 supersede (모순 트래킹: `docs/명세서-모순.md` CFLT-001).
-- **부분 supersede 받음 (2026-05-29 / Proposed)**: [`ADR-0004`](0004-supabase-transition.md) 가 본 ADR §2.1 (`anonymous_users` / `external_sso_accounts` 테이블) · §2.2 (자체 `/auth/{provider}/start` · `/auth/callback/{provider}` 라우트, 자체 OAuth state Redis store, 자체 JWT 발급) 를 Supabase Auth (`auth.users` + `auth.identities` + Anonymous Sign-In + `linkIdentity()`) 로 부분 supersede 진행 중. **봉인 보존 (ADR-0004 가 그대로 유지)**: §2.3 #9 자동 병합 금지 (CEO 2026-06-01 재확정), 자체 비밀번호 영구 금지, OAuth provider 3종 (Google/Naver/Kakao) 고정, 약관 분리 저장 (`internal_signup` / `kakao_sync`). Naver Custom OAuth PoC 실패 fallback 시 §2.2 Redis state store 는 한시 보존 (ADR-0004 §2.5).
+- **부분 supersede 받음 (CMP-604 / 2026-06-04 기준)**: [`ADR-0004`](0004-supabase-transition.md) 와 CMP-604 가 본 ADR §2.1 (`anonymous_users` / `external_sso_accounts` 테이블) · §2.2 (자체 `/auth/{provider}/start` · `/auth/callback/{provider}` 라우트, 자체 OAuth state Redis store, 자체 JWT 발급) 를 forward auth 경로에서 Supabase Auth (`auth.users` + `auth.identities` + Anonymous Sign-In + `linkIdentity()`) 로 supersede 했다. 아래 legacy table/route 서술은 historical context 이며 신규 구현 지시가 아니다. **봉인 보존 (ADR-0004 가 그대로 유지)**: §2.3 #9 자동 병합 금지 (CEO 2026-06-01 재확정), 자체 비밀번호 영구 금지, OAuth provider 3종 (Google/Naver/Kakao) 고정, 약관 분리 저장 (`internal_signup` / `kakao_sync`). Naver Custom OAuth PoC 실패 fallback 시 §2.2 Redis state store 는 ADR-0004 §2.5 의 historical fallback context 로만 남긴다.
 - 강한 제약 (변경 금지 — ADR-0001 / ADR-0002 / CEO 브리프 봉인 상속):
-  - 단일 인스턴스 + `docker-compose`. 외부 의존 (Postgres managed [Neon→Supabase 전환 중, ADR-0004] / Redis 컨테이너 / Cloudflare R2 / OpenAI) 그대로.
+  - 단일 인스턴스 + `docker-compose`. 외부 의존 (Postgres managed [Supabase 전환 완료, ADR-0004/CMP-603/CMP-604] / Redis 컨테이너 / Cloudflare R2 / OpenAI) 그대로.
   - 결과 화면 법적 고지 (`AGENTS.md §4.6`) 누락 금지.
 
 ---

@@ -1,11 +1,9 @@
 """Supabase session bridge service.
 
 Verifies a Supabase Auth access token (RS256/ES256 via Supabase JWKS) and
-resolves the jippin user to mint a backend session cookie for. The link-writer
-side (CMP-579 / CMP-583 link ladder) is responsible for populating
-``auth_identities`` rows; this service is read-only and raises
-``ZippinException`` for every off-happy-path branch so the router can convert
-them into the canonical AGENTS.md §4.5 error envelope.
+resolves it directly to the Jippin application profile keyed by
+``auth.users.id``. CMP-604 removed the legacy ``auth_identities`` bridge table;
+Supabase Auth is the identity SSOT and ``public.users`` is only a profile table.
 """
 
 from __future__ import annotations
@@ -15,16 +13,21 @@ from dataclasses import dataclass
 
 import httpx
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from jose import ExpiredSignatureError, JWTError, jwt
 
 from ..auth.jwks import get_supabase_jwks
 from ..config import Settings, get_settings
 from ..db import get_engine
 from ..errors import ZippinException
-from ..models import AuthIdentity, User
+from ..models import User
 
-SUPABASE_PROVIDER = "supabase"
 _SUPPORTED_ALGORITHMS: tuple[str, ...] = ("RS256", "ES256")
+_ALLOWED_SUPABASE_UI_PROVIDERS: frozenset[str] = frozenset({"kakao"})
+_PROVIDER_ALIASES: dict[str, str] = {
+    "custom:kakao": "kakao",
+    "custom:naver": "naver",
+}
 
 
 @dataclass(frozen=True)
@@ -111,18 +114,52 @@ async def verify_supabase_access_token(
     return claims
 
 
+def validate_supabase_provider_claims(
+    *,
+    claims: dict[str, object],
+    requested_provider: str | None,
+) -> None:
+    if requested_provider is None:
+        raise ZippinException(
+            "Signed OAuth provider context is required.",
+            code="AUTH_PROVIDER_REQUIRED",
+            http_status=401,
+        )
+    if requested_provider not in _ALLOWED_SUPABASE_UI_PROVIDERS:
+        raise ZippinException(
+            "This Supabase provider is not enabled for Jippin sign-in.",
+            code="AUTH_PROVIDER_NOT_ALLOWED",
+            http_status=403,
+        )
+
+    token_providers = _supabase_token_providers(claims)
+    if requested_provider not in token_providers:
+        raise ZippinException(
+            "Supabase token provider does not match the requested OAuth provider.",
+            code="AUTH_PROVIDER_MISMATCH",
+            http_status=401,
+        )
+
+
 async def resolve_jippin_user_for_supabase(
     *,
     supabase_subject: str,
-    email_claim: str | None,
+    email_claim: str | None,  # noqa: ARG001 - email is not stored in public.users.
 ) -> SupabaseBridgeResult:
-    async with get_engine().connect() as conn:
+    try:
+        supabase_user_id = uuid.UUID(supabase_subject)
+    except ValueError as exc:
+        raise _invalid_token("Supabase access token subject must be a UUID.") from exc
+
+    async with get_engine().begin() as conn:
+        await conn.execute(
+            pg_insert(User)
+            .values(id=supabase_user_id)
+            .on_conflict_do_nothing(index_elements=[User.id])
+        )
         row = await conn.execute(
-            sa.select(AuthIdentity.user_id)
-            .join(User, User.id == AuthIdentity.user_id)
-            .where(
-                AuthIdentity.provider == SUPABASE_PROVIDER,
-                AuthIdentity.external_id == supabase_subject,
+            sa.select(User.id).where(
+                User.id == supabase_user_id,
                 User.status == "active",
             )
         )
@@ -130,26 +167,8 @@ async def resolve_jippin_user_for_supabase(
         if user_id is not None:
             return SupabaseBridgeResult(user_id=user_id)
 
-        if email_claim:
-            normalized_email = email_claim.strip().lower()
-            email_row = await conn.execute(
-                sa.select(User.id)
-                .where(
-                    User.email.is_not(None),
-                    User.status == "active",
-                    sa.func.lower(User.email) == normalized_email,
-                )
-                .limit(1)
-            )
-            if email_row.scalar_one_or_none() is not None:
-                raise ZippinException(
-                    "Supabase identity is not linked to a jippin account.",
-                    code="AUTH_IDENTITY_NOT_LINKED",
-                    http_status=401,
-                )
-
     raise ZippinException(
-        "No jippin account exists for this Supabase identity. Sign up first.",
+        "No active Jippin profile exists for this Supabase user.",
         code="AUTH_SIGNUP_REQUIRED",
         http_status=401,
     )
@@ -157,6 +176,39 @@ async def resolve_jippin_user_for_supabase(
 
 def _is_anonymous_supabase_claims(claims: dict[str, object]) -> bool:
     return claims.get("is_anonymous") is True
+
+
+def _supabase_token_providers(claims: dict[str, object]) -> set[str]:
+    providers: set[str] = set()
+    app_metadata = claims.get("app_metadata")
+    if isinstance(app_metadata, dict):
+        providers.update(_provider_values(app_metadata.get("provider")))
+        providers.update(_provider_values(app_metadata.get("providers")))
+    providers.update(_provider_values(claims.get("provider")))
+    providers.update(_provider_values(claims.get("providers")))
+    return providers
+
+
+def _provider_values(value: object) -> set[str]:
+    if isinstance(value, str):
+        normalized = _normalize_provider(value)
+        return {normalized} if normalized else set()
+    if isinstance(value, list):
+        values: set[str] = set()
+        for item in value:
+            if isinstance(item, str):
+                normalized = _normalize_provider(item)
+                if normalized:
+                    values.add(normalized)
+        return values
+    return set()
+
+
+def _normalize_provider(value: str) -> str | None:
+    provider = value.strip().lower()
+    if not provider:
+        return None
+    return _PROVIDER_ALIASES.get(provider, provider)
 
 
 def _invalid_token(message: str) -> ZippinException:

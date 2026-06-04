@@ -75,6 +75,16 @@ describe('GET /auth/callback — session cookie preservation', () => {
     );
   });
 
+  function kakaoSigninCookie(): { name: string; value: string } {
+    return {
+      name: 'jippin_oauth_provider',
+      value: signFlowCookie(
+        { provider: 'kakao', supabase_provider: 'custom:kakao', intent: 'signin' },
+        600,
+      ),
+    };
+  }
+
   it('flushes every exchangeCodeForSession cookie onto the final redirect response', async () => {
     mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
       auth: {
@@ -92,7 +102,9 @@ describe('GET /auth/callback — session cookie preservation', () => {
     }));
 
     const { GET } = await import('./route');
-    const response = await GET(makeRequest('/auth/callback?code=abc&next=/app/reports/1'));
+    const response = await GET(
+      makeRequest('/auth/callback?code=abc&next=/app/reports/1', [kakaoSigninCookie()]),
+    );
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('http://localhost:3000/app/reports/1');
@@ -108,7 +120,7 @@ describe('GET /auth/callback — session cookie preservation', () => {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ anonymous_user_id: null, requested_provider: null }),
+      body: JSON.stringify({ anonymous_user_id: null, requested_provider: 'kakao' }),
       cache: 'no-store',
     });
   });
@@ -124,14 +136,18 @@ describe('GET /auth/callback — session cookie preservation', () => {
     }));
 
     const { GET } = await import('./route');
-    await GET(makeRequest('/auth/callback?code=abc&anonymous_user_id=legacy-anon-id'));
+    await GET(
+      makeRequest('/auth/callback?code=abc&anonymous_user_id=legacy-anon-id', [
+        kakaoSigninCookie(),
+      ]),
+    );
 
     expect(fetch).toHaveBeenCalledWith(
       'http://api.localhost/auth/supabase/session',
       expect.objectContaining({
         body: JSON.stringify({
           anonymous_user_id: 'legacy-anon-id',
-          requested_provider: null,
+          requested_provider: 'kakao',
         }),
       }),
     );
@@ -166,7 +182,9 @@ describe('GET /auth/callback — session cookie preservation', () => {
     }));
 
     const { GET } = await import('./route');
-    const response = await GET(makeRequest('/auth/callback?code=abc&next=/app/reports/1'));
+    const response = await GET(
+      makeRequest('/auth/callback?code=abc&next=/app/reports/1', [kakaoSigninCookie()]),
+    );
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe(
@@ -204,7 +222,9 @@ describe('GET /auth/callback — session cookie preservation', () => {
     }));
 
     const { GET } = await import('./route');
-    const response = await GET(makeRequest('/auth/callback?code=abc&next=/app/reports/1'));
+    const response = await GET(
+      makeRequest('/auth/callback?code=abc&next=/app/reports/1', [kakaoSigninCookie()]),
+    );
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe(
@@ -212,12 +232,19 @@ describe('GET /auth/callback — session cookie preservation', () => {
     );
   });
 
-  it('routes link callbacks through backend account linking with the current session cookie', async () => {
+  it('mints the backend session cookie after a signed Supabase linkIdentity exchange', async () => {
     const flowCookie = signFlowCookie(
-      { provider: 'google', supabase_provider: 'google', intent: 'link' },
+      { provider: 'kakao', supabase_provider: 'custom:kakao', intent: 'link' },
       600,
     );
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('{}', {
+        status: 200,
+        headers: {
+          'Set-Cookie': `${BACKEND_SESSION_COOKIE_NAME}=${BACKEND_SESSION_COOKIE_VALUE}; Path=/; HttpOnly; SameSite=Lax`,
+        },
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
     mocks.createServerClient.mockImplementation(() => ({
       auth: {
@@ -238,16 +265,15 @@ describe('GET /auth/callback — session cookie preservation', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('http://localhost:3000/account/security');
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock).toHaveBeenCalledWith('http://api.localhost/auth/supabase/link', {
+    expect(setCookieValues(response).join('\n')).toContain(BACKEND_SESSION_COOKIE_NAME);
+    expect(fetchMock).toHaveBeenCalledWith('http://api.localhost/auth/supabase/session', {
       method: 'POST',
       headers: {
         Authorization: 'Bearer supabase-access-token',
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        Cookie: expect.stringContaining(`${BACKEND_SESSION_COOKIE_NAME}=current-backend-session`),
       },
-      body: JSON.stringify({ requested_provider: 'google' }),
+      body: JSON.stringify({ anonymous_user_id: null, requested_provider: 'kakao' }),
       cache: 'no-store',
     });
   });
@@ -279,12 +305,99 @@ describe('GET /auth/callback — session cookie preservation', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('drops Supabase cookies when backend account linking fails after exchange', async () => {
+  it('forwards anonymous_user_id while minting the backend session for link callbacks', async () => {
     const flowCookie = signFlowCookie(
-      { provider: 'google', supabase_provider: 'google', intent: 'link' },
+      { provider: 'kakao', supabase_provider: 'custom:kakao', intent: 'link' },
       600,
     );
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 409 })));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('{}', {
+        status: 200,
+        headers: {
+          'Set-Cookie': `${BACKEND_SESSION_COOKIE_NAME}=${BACKEND_SESSION_COOKIE_VALUE}; Path=/; HttpOnly; SameSite=Lax`,
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    mocks.createServerClient.mockImplementation(() => ({
+      auth: {
+        exchangeCodeForSession: vi.fn().mockResolvedValue({
+          data: { session: { access_token: 'supabase-access-token' } },
+          error: null,
+        }),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(
+      makeRequest('/auth/callback?code=abc&intent=link&anonymous_user_id=legacy-anon-id', [
+        { name: 'jippin_oauth_provider', value: flowCookie },
+      ]),
+    );
+
+    expect(response.status).toBe(302);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.localhost/auth/supabase/session',
+      expect.objectContaining({
+        body: JSON.stringify({
+          anonymous_user_id: 'legacy-anon-id',
+          requested_provider: 'kakao',
+        }),
+      }),
+    );
+  });
+
+  it('preserves Supabase and backend cookies on successful link callbacks', async () => {
+    const flowCookie = signFlowCookie(
+      { provider: 'kakao', supabase_provider: 'custom:kakao', intent: 'link' },
+      600,
+    );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('{}', {
+        status: 200,
+        headers: {
+          'Set-Cookie': `${BACKEND_SESSION_COOKIE_NAME}=${BACKEND_SESSION_COOKIE_VALUE}; Path=/; HttpOnly; SameSite=Lax`,
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
+      auth: {
+        exchangeCodeForSession: vi.fn().mockImplementation(async () => {
+          init.cookies.setAll([
+            {
+              name: SESSION_COOKIE_NAME,
+              value: SESSION_COOKIE_VALUE,
+              options: { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 3600 },
+            },
+          ]);
+          return { data: { session: { access_token: 'supabase-access-token' } }, error: null };
+        }),
+      },
+    }));
+
+    const { GET } = await import('./route');
+    const response = await GET(
+      makeRequest('/auth/callback?code=abc&intent=link&next=/account/security', [
+        { name: 'jippin_oauth_provider', value: flowCookie },
+      ]),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('Location')).toBe('http://localhost:3000/account/security');
+    const cookies = setCookieValues(response).join('\n');
+    expect(cookies).toContain(SESSION_COOKIE_NAME);
+    expect(cookies).toContain(BACKEND_SESSION_COOKIE_NAME);
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it('fails closed when backend session minting fails after a signed link callback', async () => {
+    const flowCookie = signFlowCookie(
+      { provider: 'kakao', supabase_provider: 'custom:kakao', intent: 'link' },
+      600,
+    );
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
     mocks.createServerClient.mockImplementation((_url: string, _key: string, init: ServerClientInit) => ({
       auth: {
         exchangeCodeForSession: vi.fn().mockImplementation(async () => {
@@ -309,12 +422,15 @@ describe('GET /auth/callback — session cookie preservation', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('http://localhost:3000/login?error=oauth_callback_failed');
-    expect(setCookieValues(response).join('\n')).not.toContain(SESSION_COOKIE_NAME);
+    const cookies = setCookieValues(response).join('\n');
+    expect(cookies).not.toContain(BACKEND_SESSION_COOKIE_NAME);
+    expect(cookies).not.toContain(SESSION_COOKIE_NAME);
+    expect(fetchMock).toHaveBeenCalled();
   });
 
   it('passes the requested provider from the signed flow cookie into the session bridge', async () => {
     const flowCookie = signFlowCookie(
-      { provider: 'naver', supabase_provider: 'custom:naver', intent: 'signin' },
+      { provider: 'kakao', supabase_provider: 'custom:kakao', intent: 'signin' },
       600,
     );
     mocks.createServerClient.mockImplementation(() => ({
@@ -338,7 +454,7 @@ describe('GET /auth/callback — session cookie preservation', () => {
       expect.objectContaining({
         body: JSON.stringify({
           anonymous_user_id: null,
-          requested_provider: 'naver',
+          requested_provider: 'kakao',
         }),
       }),
     );
@@ -361,7 +477,9 @@ describe('GET /auth/callback — session cookie preservation', () => {
     }));
 
     const { GET } = await import('./route');
-    const response = await GET(makeRequest('/auth/callback?code=abc&next=/\\evil.com'));
+    const response = await GET(
+      makeRequest('/auth/callback?code=abc&next=/\\evil.com', [kakaoSigninCookie()]),
+    );
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('http://localhost:3000/');
@@ -388,7 +506,9 @@ describe('GET /auth/callback — session cookie preservation', () => {
     }));
 
     const { GET } = await import('./route');
-    const response = await GET(makeRequest('/auth/callback?code=abc&next=/app/reports/1'));
+    const response = await GET(
+      makeRequest('/auth/callback?code=abc&next=/app/reports/1', [kakaoSigninCookie()]),
+    );
 
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('http://localhost:3000/login?error=oauth_callback_failed');

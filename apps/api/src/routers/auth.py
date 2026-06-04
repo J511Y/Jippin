@@ -40,7 +40,6 @@ from ..services.auth import (
     OAuthLoginResult,
     SupabaseSessionBridgeResult,
     accept_required_terms,
-    _claim_anonymous_user as claim_anonymous_user,
     complete_oauth_login,
     create_or_reuse_anonymous_user,
     get_current_user_context,
@@ -51,11 +50,20 @@ from ..services.auth import (
 from ..services.supabase_session import (
     parse_bearer_token,
     resolve_jippin_user_for_supabase,
+    validate_supabase_provider_claims,
     verify_supabase_access_token,
 )
 
 logger = get_logger("zippin.auth")
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _legacy_oauth_flow_removed() -> ZippinException:
+    return ZippinException(
+        "Legacy OAuth routes were removed after Supabase Auth cutover.",
+        code="AUTH_LEGACY_FLOW_REMOVED",
+        http_status=410,
+    )
 
 
 @dataclass(frozen=True)
@@ -167,8 +175,8 @@ async def logout() -> JSONResponse:
 async def complete_supabase_session(
     *,
     access_token: str,
-    anonymous_user_id: str | None,
-    requested_provider: str | None = None,  # noqa: ARG001 - provider is verified by link writer.
+    anonymous_user_id: str | None,  # noqa: ARG001 - legacy field ignored.
+    requested_provider: str | None = None,
 ) -> SupabaseSessionBridgeResult:
     settings = get_settings()
     async with httpx.AsyncClient(timeout=10.0) as http_client:
@@ -177,6 +185,10 @@ async def complete_supabase_session(
             http_client=http_client,
             settings=settings,
         )
+    validate_supabase_provider_claims(
+        claims=claims,
+        requested_provider=requested_provider,
+    )
 
     email_claim_raw = claims.get("email")
     email_claim = (
@@ -184,23 +196,14 @@ async def complete_supabase_session(
         if isinstance(email_claim_raw, str) and email_claim_raw.strip()
         else None
     )
-    parsed_anonymous_user_id = parse_existing_anonymous_user_id(anonymous_user_id)
     result = await resolve_jippin_user_for_supabase(
         supabase_subject=str(claims["sub"]),
         email_claim=email_claim,
     )
     context = await get_current_user_context(result.user_id)
-    pending_anonymous_user_id = (
-        parsed_anonymous_user_id if context.missing_required_terms else None
-    )
-    if parsed_anonymous_user_id is not None and not context.missing_required_terms:
-        await claim_anonymous_user(
-            user_id=result.user_id,
-            anonymous_user_id=parsed_anonymous_user_id,
-        )
     return SupabaseSessionBridgeResult(
         user_id=result.user_id,
-        pending_anonymous_user_id=pending_anonymous_user_id,
+        pending_anonymous_user_id=None,
         missing_required_terms=context.missing_required_terms,
     )
 
@@ -354,6 +357,7 @@ async def link_sso_account(
     return_url: str | None = Query(default=None),
     mode: Literal["redirect", "json"] = Query(default="redirect"),
 ) -> OAuthStartResponse | RedirectResponse:
+    raise _legacy_oauth_flow_removed()
     claims = read_session_claims(request)
     settings = get_settings()
     provider_settings = _provider_settings(provider, settings)
@@ -419,6 +423,7 @@ async def start_oauth(
     return_url: str | None = Query(default=None),
     mode: Literal["redirect", "json"] = Query(default="redirect"),
 ) -> OAuthStartResponse | RedirectResponse:
+    raise _legacy_oauth_flow_removed()
     settings = get_settings()
     provider_settings = _provider_settings(provider, settings)
     if not provider_settings.client_id or not provider_settings.redirect_uri:
@@ -497,6 +502,7 @@ async def oauth_callback(
     state: str = Query(...),
     id_token: str | None = Query(default=None),
 ) -> RedirectResponse:
+    raise _legacy_oauth_flow_removed()
     settings = get_settings()
     provider_settings = _provider_settings(provider, settings)
     if not provider_settings.client_id or not provider_settings.redirect_uri:

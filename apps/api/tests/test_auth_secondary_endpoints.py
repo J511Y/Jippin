@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
 
-from src.auth.providers import OAuthProvider, OAuthTokens, ProviderProfile, google
 from src.auth.session import create_session_token
 from src.auth.state_store import OAuthStatePayload
 from src.config import get_settings
@@ -194,7 +192,7 @@ def test_supabase_session_bridge_sets_backend_cookie_and_forwards_anonymous_id(
             headers={"Authorization": "Bearer supabase-access-token"},
             json={
                 "anonymous_user_id": str(anonymous_user_id),
-                "requested_provider": "naver",
+                "requested_provider": "kakao",
             },
         )
 
@@ -204,7 +202,7 @@ def test_supabase_session_bridge_sets_backend_cookie_and_forwards_anonymous_id(
         "missing_required_terms": [],
         "redirect_url": None,
     }
-    assert calls == [("supabase-access-token", str(anonymous_user_id), "naver")]
+    assert calls == [("supabase-access-token", str(anonymous_user_id), "kakao")]
     assert "jippin_session=" in response.headers["set-cookie"]
 
 
@@ -229,7 +227,7 @@ def test_supabase_session_bridge_routes_incomplete_signup_to_terms(
     async def fake_complete_supabase_session(
         *, access_token, anonymous_user_id, requested_provider
     ):
-        assert requested_provider is None
+        assert requested_provider == "kakao"
         return SupabaseSessionBridgeResult(
             user_id=user_id,
             pending_anonymous_user_id=uuid.UUID(anonymous_user_id),
@@ -245,7 +243,10 @@ def test_supabase_session_bridge_routes_incomplete_signup_to_terms(
         response = client.post(
             "/auth/supabase/session",
             headers={"Authorization": "Bearer supabase-access-token"},
-            json={"anonymous_user_id": str(anonymous_user_id)},
+            json={
+                "anonymous_user_id": str(anonymous_user_id),
+                "requested_provider": "kakao",
+            },
         )
 
     assert response.status_code == 200
@@ -304,261 +305,29 @@ def test_supabase_account_link_uses_current_session_user(monkeypatch, auth_env):
 
 
 @pytest.mark.asyncio
-async def test_complete_supabase_session_preserves_provider_subject_and_kakao_terms(
-    monkeypatch, auth_env
-):
-    user_id = uuid.uuid4()
-    captured = {}
-
-    def fake_decode(*args, **kwargs):
-        return {
-            "sub": "supabase-user-id",
-            "aud": "authenticated",
-            "email": "kakao@example.com",
-            "app_metadata": {"provider": "kakao"},
-            "user_metadata": {
-                "provider_id": "kakao-provider-subject",
-                "name": "Kakao User",
-                "avatar_url": "https://cdn.example/kakao.png",
-                "agreed_terms_tags": ["service_terms", "privacy_policy"],
-            },
-        }
-
-    async def fake_complete_oauth_login(*, provider, profile, anonymous_user_id):
-        captured["provider"] = provider
-        captured["profile"] = profile
-        captured["anonymous_user_id"] = anonymous_user_id
-        return auth_service.OAuthLoginResult(
-            user_id=user_id,
-            signup_completed=True,
-            claimed_anonymous_user_id=anonymous_user_id,
+async def test_service_level_supabase_session_bridge_is_not_execution_path(auth_env):
+    with pytest.raises(ZippinException) as exc_info:
+        await auth_service.complete_supabase_session(
+            access_token="supabase-access-token",
+            anonymous_user_id=str(uuid.uuid4()),
+            requested_provider="google",
         )
 
-    async def fake_get_current_user_context(seen_user_id):
-        assert seen_user_id == user_id
-        return CurrentUserContext(
-            user_id=user_id,
-            email="kakao@example.com",
-            display_name="Kakao User",
-            profile_image_url="https://cdn.example/kakao.png",
-            role="user",
-            providers=["kakao"],
-            missing_required_terms=[],
-        )
-
-    monkeypatch.setattr(auth_service.jwt, "decode", fake_decode)
-    monkeypatch.setattr(auth_service, "complete_oauth_login", fake_complete_oauth_login)
-    monkeypatch.setattr(
-        auth_service, "get_current_user_context", fake_get_current_user_context
-    )
-
-    result = await auth_service.complete_supabase_session(
-        access_token="supabase-access-token",
-        anonymous_user_id=str(uuid.uuid4()),
-    )
-
-    profile = captured["profile"]
-    assert result.missing_required_terms == []
-    assert captured["provider"] == OAuthProvider.KAKAO
-    assert profile.provider_subject == "kakao-provider-subject"
-    assert profile.email == "kakao@example.com"
-    assert profile.display_name == "Kakao User"
-    assert profile.profile_image_url == "https://cdn.example/kakao.png"
-    assert profile.agreed_terms_tags == ("service_terms", "privacy_policy")
+    assert exc_info.value.code == "AUTH_SESSION_INTERNAL_ERROR"
 
 
-@pytest.mark.asyncio
-async def test_complete_supabase_session_uses_requested_provider_to_disambiguate(
-    monkeypatch, auth_env
-):
-    user_id = uuid.uuid4()
-    captured = {}
-
-    def fake_decode(*args, **kwargs):
-        return {
-            "sub": "supabase-user-id",
-            "aud": "authenticated",
-            "email": "naver@example.com",
-            "app_metadata": {"provider": "google", "providers": ["google", "naver"]},
-            "user_metadata": {
-                "provider_id": "google-provider-subject",
-                "identities": [
-                    {
-                        "provider": "google",
-                        "identity_data": {"sub": "google-provider-subject"},
-                    },
-                    {
-                        "provider": "naver",
-                        "identity_data": {"sub": "naver-provider-subject"},
-                    },
-                ],
-            },
-        }
-
-    async def fake_complete_oauth_login(*, provider, profile, anonymous_user_id):
-        captured["provider"] = provider
-        captured["profile"] = profile
-        return auth_service.OAuthLoginResult(
-            user_id=user_id,
-            signup_completed=False,
-            claimed_anonymous_user_id=None,
-        )
-
-    async def fake_get_current_user_context(seen_user_id):
-        return CurrentUserContext(
-            user_id=seen_user_id,
-            email="naver@example.com",
-            display_name=None,
-            profile_image_url=None,
-            role="user",
-            providers=["naver"],
-            missing_required_terms=["service_terms"],
-        )
-
-    monkeypatch.setattr(auth_service.jwt, "decode", fake_decode)
-    monkeypatch.setattr(auth_service, "complete_oauth_login", fake_complete_oauth_login)
-    monkeypatch.setattr(
-        auth_service, "get_current_user_context", fake_get_current_user_context
-    )
-
-    await auth_service.complete_supabase_session(
-        access_token="supabase-access-token",
-        anonymous_user_id=None,
-        requested_provider="naver",
-    )
-
-    assert captured["provider"] == OAuthProvider.NAVER
-    assert captured["profile"].provider_subject == "naver-provider-subject"
-
-
-@pytest.mark.asyncio
-async def test_complete_supabase_session_prefers_provider_specific_metadata_subject(
-    monkeypatch, auth_env
-):
-    user_id = uuid.uuid4()
-    captured = {}
-
-    def fake_decode(*args, **kwargs):
-        return {
-            "sub": "supabase-user-id",
-            "aud": "authenticated",
-            "email": "naver@example.com",
-            "app_metadata": {"provider": "google", "providers": ["google", "naver"]},
-            "user_metadata": {
-                "provider_id": "generic-google-provider-subject",
-                "naver_id": "naver-provider-subject",
-            },
-        }
-
-    async def fake_complete_oauth_login(*, provider, profile, anonymous_user_id):
-        captured["provider"] = provider
-        captured["profile"] = profile
-        return auth_service.OAuthLoginResult(
-            user_id=user_id,
-            signup_completed=False,
-            claimed_anonymous_user_id=None,
-        )
-
-    async def fake_get_current_user_context(seen_user_id):
-        return CurrentUserContext(
-            user_id=seen_user_id,
-            email="naver@example.com",
-            display_name=None,
-            profile_image_url=None,
-            role="user",
-            providers=["naver"],
-            missing_required_terms=["service_terms"],
-        )
-
-    monkeypatch.setattr(auth_service.jwt, "decode", fake_decode)
-    monkeypatch.setattr(auth_service, "complete_oauth_login", fake_complete_oauth_login)
-    monkeypatch.setattr(
-        auth_service, "get_current_user_context", fake_get_current_user_context
-    )
-
-    await auth_service.complete_supabase_session(
-        access_token="supabase-access-token",
-        anonymous_user_id=None,
-        requested_provider="naver",
-    )
-
-    assert captured["provider"] == OAuthProvider.NAVER
-    assert captured["profile"].provider_subject == "naver-provider-subject"
-
-
-@pytest.mark.asyncio
-async def test_complete_supabase_session_claims_anonymous_for_returning_user(
-    monkeypatch, auth_env
-):
-    user_id = uuid.uuid4()
-    anonymous_user_id = uuid.uuid4()
-    claim_calls = []
-
-    def fake_decode(*args, **kwargs):
-        return {
-            "sub": "supabase-user-id",
-            "aud": "authenticated",
-            "email": "returning@example.com",
-            "app_metadata": {"provider": "google"},
-            "user_metadata": {
-                "provider_id": "google-provider-subject",
-                "name": "Returning User",
-            },
-        }
-
-    async def fake_complete_oauth_login(*, provider, profile, anonymous_user_id):
-        return auth_service.OAuthLoginResult(
-            user_id=user_id,
-            signup_completed=False,
-            claimed_anonymous_user_id=None,
-        )
-
-    async def fake_get_current_user_context(seen_user_id):
-        return CurrentUserContext(
-            user_id=seen_user_id,
-            email="returning@example.com",
-            display_name="Returning User",
-            profile_image_url=None,
-            role="user",
-            providers=["google"],
-            missing_required_terms=[],
-        )
-
-    async def fake_claim_anonymous_user(*, user_id, anonymous_user_id):
-        claim_calls.append((user_id, anonymous_user_id))
-
-    monkeypatch.setattr(auth_service.jwt, "decode", fake_decode)
-    monkeypatch.setattr(auth_service, "complete_oauth_login", fake_complete_oauth_login)
-    monkeypatch.setattr(
-        auth_service, "get_current_user_context", fake_get_current_user_context
-    )
-    monkeypatch.setattr(
-        auth_service, "_claim_anonymous_user", fake_claim_anonymous_user
-    )
-
-    result = await auth_service.complete_supabase_session(
-        access_token="supabase-access-token",
-        anonymous_user_id=str(anonymous_user_id),
-        requested_provider="google",
-    )
-
-    assert result.pending_anonymous_user_id is None
-    assert result.missing_required_terms == []
-    assert claim_calls == [(user_id, anonymous_user_id)]
-
-
-def test_sso_link_start_requires_login(auth_env):
+def test_sso_link_start_removed_before_session_lookup(auth_env):
     app = create_app()
     with TestClient(app) as client:
         response = client.post(
             "/auth/sso-accounts/google/link", params={"mode": "json"}
         )
 
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "AUTH_UNAUTHENTICATED"
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
 
 
-def test_sso_link_start_stores_linking_user_id(monkeypatch, auth_env):
+def test_sso_link_start_removed_without_state_write(monkeypatch, auth_env):
     user_id = uuid.uuid4()
     store = _FakeStateStore()
     monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: store)
@@ -574,23 +343,12 @@ def test_sso_link_start_stores_linking_user_id(monkeypatch, auth_env):
             },
         )
 
-    assert response.status_code == 200
-    authorization_url = response.json()["authorization_url"]
-    parsed = urlparse(authorization_url)
-    query = parse_qs(parsed.query)
-    assert (
-        f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        == google.AUTHORIZATION_ENDPOINT
-    )
-    assert query["state"] == [store.put_calls[0][0]]
-    assert store.put_calls[0][1].linking_user_id == user_id
-    assert store.put_calls[0][1].anonymous_user_id is None
-    assert store.put_calls[0][1].return_url == (
-        "http://localhost:3000/auth/success?linked=1"
-    )
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
+    assert store.put_calls == []
 
 
-def test_link_callback_links_account_without_creating_user(monkeypatch, auth_env):
+def test_link_callback_route_removed_without_provider_exchange(monkeypatch, auth_env):
     user_id = uuid.uuid4()
     payload = OAuthStatePayload(
         anonymous_user_id=None,
@@ -602,29 +360,13 @@ def test_link_callback_links_account_without_creating_user(monkeypatch, auth_env
     )
     store = _FakeStateStore(payload)
     monkeypatch.setattr(auth_router, "get_oauth_state_store", lambda: store)
-    provider_module = auth_router.PROVIDER_MODULES[OAuthProvider.GOOGLE]
-    linked_calls = []
-
-    async def fake_exchange_code(code, *, http_client, settings):
-        assert code == "oauth-code"
-        return OAuthTokens(access_token="provider-access-token")
-
-    async def fake_fetch_userinfo(tokens, *, http_client, settings, **kwargs):
-        assert kwargs == {"expected_nonce": "nonce-value"}
-        return ProviderProfile(
-            provider_subject="google-subject",
-            email="google@example.com",
-            display_name="Google User",
-        )
 
     async def fake_link_oauth_account(*, linking_user_id, provider, profile):
-        linked_calls.append((linking_user_id, provider, profile.provider_subject))
+        raise AssertionError("legacy link callback must not call link_oauth_account")
 
     async def fail_complete_oauth_login(**kwargs):
         raise AssertionError("link callback must not create or login a user")
 
-    monkeypatch.setattr(provider_module, "exchange_code", fake_exchange_code)
-    monkeypatch.setattr(provider_module, "fetch_userinfo", fake_fetch_userinfo)
     monkeypatch.setattr(auth_router, "link_oauth_account", fake_link_oauth_account)
     monkeypatch.setattr(auth_router, "complete_oauth_login", fail_complete_oauth_login)
 
@@ -635,12 +377,12 @@ def test_link_callback_links_account_without_creating_user(monkeypatch, auth_env
             params={"code": "oauth-code", "state": "state-value"},
         )
 
-    assert response.status_code == 302
-    assert response.headers["location"] == "http://localhost:3000/auth/success?linked=1"
-    assert linked_calls == [(user_id, OAuthProvider.GOOGLE, "google-subject")]
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
+    assert store.consume_calls == []
 
 
-def test_link_callback_returns_409_for_other_user_link(monkeypatch, auth_env):
+def test_link_callback_removed_before_link_conflict(monkeypatch, auth_env):
     payload = OAuthStatePayload(
         anonymous_user_id=None,
         provider="google",
@@ -652,13 +394,6 @@ def test_link_callback_returns_409_for_other_user_link(monkeypatch, auth_env):
     monkeypatch.setattr(
         auth_router, "get_oauth_state_store", lambda: _FakeStateStore(payload)
     )
-    provider_module = auth_router.PROVIDER_MODULES[OAuthProvider.GOOGLE]
-
-    async def fake_exchange_code(code, *, http_client, settings):
-        return OAuthTokens(access_token="provider-access-token")
-
-    async def fake_fetch_userinfo(tokens, *, http_client, settings, **kwargs):
-        return ProviderProfile(provider_subject="google-subject")
 
     async def fake_link_oauth_account(*, linking_user_id, provider, profile):
         raise ZippinException(
@@ -667,8 +402,6 @@ def test_link_callback_returns_409_for_other_user_link(monkeypatch, auth_env):
             http_status=409,
         )
 
-    monkeypatch.setattr(provider_module, "exchange_code", fake_exchange_code)
-    monkeypatch.setattr(provider_module, "fetch_userinfo", fake_fetch_userinfo)
     monkeypatch.setattr(auth_router, "link_oauth_account", fake_link_oauth_account)
 
     app = create_app()
@@ -678,8 +411,8 @@ def test_link_callback_returns_409_for_other_user_link(monkeypatch, auth_env):
             params={"code": "oauth-code", "state": "state-value"},
         )
 
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "SSO_ALREADY_LINKED_TO_OTHER_USER"
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "AUTH_LEGACY_FLOW_REMOVED"
 
 
 def test_terms_accept_requires_login(auth_env):
@@ -720,7 +453,7 @@ def test_terms_accept_returns_422_with_missing_terms(monkeypatch, auth_env):
     assert response.json()["detail"] == {"missing_required_terms": ["privacy_policy"]}
 
 
-def test_terms_accept_completes_signup_and_claims_pending_anonymous_user(
+def test_terms_accept_completes_signup_without_legacy_anonymous_claim(
     monkeypatch,
     auth_env,
 ):
@@ -733,7 +466,7 @@ def test_terms_accept_completes_signup_and_claims_pending_anonymous_user(
         return TermsAcceptResult(
             signup_complete=True,
             missing_required_terms=[],
-            claimed_anonymous_user=True,
+            claimed_anonymous_user=False,
         )
 
     monkeypatch.setattr(auth_router, "accept_required_terms", fake_accept_terms)
@@ -759,7 +492,7 @@ def test_terms_accept_completes_signup_and_claims_pending_anonymous_user(
     assert response.json() == {
         "signup_complete": True,
         "missing_required_terms": [],
-        "claimed_anonymous_user": True,
+        "claimed_anonymous_user": False,
     }
     assert calls == [
         (
@@ -817,13 +550,11 @@ class _FakeConnection:
             return _FakeResult(self.user_id)
         if statement_text.startswith("SELECT terms_consents.term_id"):
             return _FakeResult(values=["service_terms", "privacy_policy"])
-        if statement_text.startswith("UPDATE anonymous_users"):
-            return _FakeResult(self.anonymous_user_id)
         return _FakeResult()
 
 
 @pytest.mark.asyncio
-async def test_accept_required_terms_upserts_rows_and_claims_anonymous(
+async def test_accept_required_terms_upserts_rows_without_legacy_anonymous_claim(
     monkeypatch, auth_env
 ):
     user_id = uuid.uuid4()
@@ -841,12 +572,12 @@ async def test_accept_required_terms_upserts_rows_and_claims_anonymous(
     assert result == TermsAcceptResult(
         signup_complete=True,
         missing_required_terms=[],
-        claimed_anonymous_user=True,
+        claimed_anonymous_user=False,
     )
     assert "INSERT INTO terms_consents" in combined_sql
     assert "(user_id, term_id, version, source" in combined_sql
     assert "ON CONFLICT (user_id, term_id, version) DO UPDATE" in combined_sql
-    assert "UPDATE anonymous_users" in combined_sql
+    assert "UPDATE anonymous_users" not in combined_sql
 
 
 def test_kakao_sync_audit_stub_accepts_payload_with_bearer_header(auth_env):

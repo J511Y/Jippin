@@ -1,10 +1,8 @@
-"""Regression tests for POST /auth/supabase/session (CMP-595).
+"""Regression tests for POST /auth/supabase/session.
 
-The bridge verifies a Supabase access token via JWKS, looks up the jippin
-``auth_identities`` mapping, and mints the existing ``jippin_session`` cookie
-when the mapping exists. We mock the JWKS fetcher and the DB lookup so the
-test suite stays hermetic — sealing the four documented regression cases
-(valid / expired / wrong-signature / missing-mapping).
+The bridge verifies a Supabase access token via JWKS, resolves ``sub`` directly
+to ``public.users.id``, and mints the existing ``jippin_session`` cookie when an
+active profile exists.
 """
 
 from __future__ import annotations
@@ -29,6 +27,7 @@ from src.services import supabase_session as bridge_service
 _ISSUER = "https://example-project.supabase.co/auth/v1"
 _AUDIENCE = "authenticated"
 _JWKS_URL = "https://example-project.supabase.co/auth/v1/.well-known/jwks.json"
+_KAKAO_APP_METADATA = {"provider": "kakao", "providers": ["kakao"]}
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +78,7 @@ def _mint_token(
     private_pem: str,
     kid: str,
     *,
-    sub: str = "supabase-user-uuid",
+    sub: str | None = None,
     email: str | None = "user@example.com",
     issuer: str = _ISSUER,
     expires_in: timedelta = timedelta(hours=1),
@@ -87,7 +86,7 @@ def _mint_token(
 ) -> str:
     now = datetime.now(UTC)
     claims = {
-        "sub": sub,
+        "sub": sub or str(uuid.uuid4()),
         "aud": _AUDIENCE,
         "iss": issuer,
         "iat": int(now.timestamp()),
@@ -114,24 +113,14 @@ def _install_jwks(monkeypatch, jwks: dict[str, Any]) -> None:
     monkeypatch.setattr(bridge_service, "get_supabase_jwks", fake_get_supabase_jwks)
 
 
-def _install_identity_lookup(
-    monkeypatch, *, user_id: uuid.UUID | None, email_user_exists: bool = False
-) -> None:
+def _install_identity_lookup(monkeypatch, *, user_id: uuid.UUID | None) -> None:
     """Bypass the DB by patching the service-layer resolver directly."""
 
     async def fake_resolve(*, supabase_subject, email_claim):  # noqa: ARG001
         if user_id is not None:
             return bridge_service.SupabaseBridgeResult(user_id=user_id)
-        from src.errors import ZippinException
-
-        if email_user_exists:
-            raise ZippinException(
-                "Supabase identity is not linked to a jippin account.",
-                code="AUTH_IDENTITY_NOT_LINKED",
-                http_status=401,
-            )
         raise ZippinException(
-            "No jippin account exists for this Supabase identity. Sign up first.",
+            "No active Jippin profile exists for this Supabase user.",
             code="AUTH_SIGNUP_REQUIRED",
             http_status=401,
         )
@@ -150,7 +139,7 @@ def _install_identity_lookup(
             display_name=None,
             profile_image_url=None,
             role="user",
-            providers=["google"],
+            providers=["kakao"],
             missing_required_terms=[],
         )
 
@@ -180,13 +169,18 @@ def test_supabase_session_valid_token_mints_cookie(supabase_env, monkeypatch):
     user_id = uuid.uuid4()
     _install_identity_lookup(monkeypatch, user_id=user_id)
 
-    token = _mint_token(pem, jwk["kid"])
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": _KAKAO_APP_METADATA},
+    )
 
     app = create_app()
     with TestClient(app) as client:
         response = client.post(
             "/auth/supabase/session",
             headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
         )
 
     assert response.status_code == 200
@@ -197,36 +191,33 @@ def test_supabase_session_valid_token_mints_cookie(supabase_env, monkeypatch):
     assert "SameSite=lax" in set_cookie.lower() or "samesite=lax" in set_cookie.lower()
 
 
-def test_supabase_session_claims_anonymous_work_after_completed_signin(
+def test_supabase_session_ignores_legacy_anonymous_id_after_completed_signin(
     supabase_env, monkeypatch
 ):
     pem, jwk = _rsa_keypair()
     _install_jwks(monkeypatch, {"keys": [jwk]})
     user_id = uuid.uuid4()
     anonymous_user_id = uuid.uuid4()
-    claim_calls = []
     _install_identity_lookup(monkeypatch, user_id=user_id)
-
-    async def fake_claim_anonymous_user(*, user_id, anonymous_user_id):
-        claim_calls.append((user_id, anonymous_user_id))
-
-    monkeypatch.setattr(
-        "src.routers.auth.claim_anonymous_user",
-        fake_claim_anonymous_user,
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": _KAKAO_APP_METADATA},
     )
-    token = _mint_token(pem, jwk["kid"])
 
     app = create_app()
     with TestClient(app) as client:
         response = client.post(
             "/auth/supabase/session",
             headers={"Authorization": f"Bearer {token}"},
-            json={"anonymous_user_id": str(anonymous_user_id)},
+            json={
+                "anonymous_user_id": str(anonymous_user_id),
+                "requested_provider": "kakao",
+            },
         )
 
     assert response.status_code == 200
     assert response.json()["signup_complete"] is True
-    assert claim_calls == [(user_id, anonymous_user_id)]
 
 
 def test_supabase_session_rejects_anonymous_supabase_token(supabase_env, monkeypatch):
@@ -267,7 +258,7 @@ def test_supabase_session_accepts_converted_token_with_anonymous_metadata(
             "is_anonymous": False,
             "app_metadata": {
                 "provider": "anonymous",
-                "providers": ["anonymous", "google"],
+                "providers": ["anonymous", "kakao"],
             },
         },
     )
@@ -277,6 +268,7 @@ def test_supabase_session_accepts_converted_token_with_anonymous_metadata(
         response = client.post(
             "/auth/supabase/session",
             headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
         )
 
     assert response.status_code == 200
@@ -304,6 +296,127 @@ def test_supabase_session_expired_token_returns_401(supabase_env, monkeypatch):
     assert response.json()["error"]["code"] == "AUTH_EXPIRED_TOKEN"
 
 
+def test_supabase_session_requires_signed_provider_context(supabase_env, monkeypatch):
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    _install_identity_lookup(monkeypatch, user_id=uuid.uuid4())
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": _KAKAO_APP_METADATA},
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_PROVIDER_REQUIRED"
+
+
+def test_supabase_session_rejects_non_enabled_provider_before_profile_upsert(
+    supabase_env, monkeypatch
+):
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": {"provider": "google", "providers": ["google"]}},
+    )
+    called = False
+
+    async def fake_resolve(*, supabase_subject, email_claim):  # noqa: ARG001
+        nonlocal called
+        called = True
+        return bridge_service.SupabaseBridgeResult(user_id=uuid.uuid4())
+
+    monkeypatch.setattr(
+        "src.routers.auth.resolve_jippin_user_for_supabase",
+        fake_resolve,
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "google"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "AUTH_PROVIDER_NOT_ALLOWED"
+    assert called is False
+
+
+def test_supabase_session_rejects_provider_mismatch_before_profile_upsert(
+    supabase_env, monkeypatch
+):
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": {"provider": "email", "providers": ["email"]}},
+    )
+    called = False
+
+    async def fake_resolve(*, supabase_subject, email_claim):  # noqa: ARG001
+        nonlocal called
+        called = True
+        return bridge_service.SupabaseBridgeResult(user_id=uuid.uuid4())
+
+    monkeypatch.setattr(
+        "src.routers.auth.resolve_jippin_user_for_supabase",
+        fake_resolve,
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_PROVIDER_MISMATCH"
+    assert called is False
+
+
+def test_supabase_session_accepts_custom_kakao_provider_alias(
+    supabase_env, monkeypatch
+):
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    user_id = uuid.uuid4()
+    _install_identity_lookup(monkeypatch, user_id=user_id)
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={
+            "app_metadata": {
+                "provider": "anonymous",
+                "providers": ["anonymous", "custom:kakao"],
+            }
+        },
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["signup_complete"] is True
+
+
 def test_supabase_session_wrong_signature_returns_401(supabase_env, monkeypatch):
     _, advertised_jwk = _rsa_keypair()
     # JWKS advertises one key, but the token was signed by a foreign key.
@@ -326,39 +439,24 @@ def test_supabase_session_wrong_signature_returns_401(supabase_env, monkeypatch)
 def test_supabase_session_missing_mapping_returns_401(supabase_env, monkeypatch):
     pem, jwk = _rsa_keypair()
     _install_jwks(monkeypatch, {"keys": [jwk]})
-    _install_identity_lookup(monkeypatch, user_id=None, email_user_exists=False)
+    _install_identity_lookup(monkeypatch, user_id=None)
 
-    token = _mint_token(pem, jwk["kid"])
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": _KAKAO_APP_METADATA},
+    )
 
     app = create_app()
     with TestClient(app) as client:
         response = client.post(
             "/auth/supabase/session",
             headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
         )
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "AUTH_SIGNUP_REQUIRED"
-
-
-def test_supabase_session_unlinked_existing_user_returns_identity_not_linked(
-    supabase_env, monkeypatch
-):
-    pem, jwk = _rsa_keypair()
-    _install_jwks(monkeypatch, {"keys": [jwk]})
-    _install_identity_lookup(monkeypatch, user_id=None, email_user_exists=True)
-
-    token = _mint_token(pem, jwk["kid"])
-
-    app = create_app()
-    with TestClient(app) as client:
-        response = client.post(
-            "/auth/supabase/session",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "AUTH_IDENTITY_NOT_LINKED"
 
 
 class _FakeScalarResult:
@@ -369,7 +467,7 @@ class _FakeScalarResult:
         return self.value
 
 
-class _FakeConnect:
+class _FakeBegin:
     def __init__(self, conn):
         self.conn = conn
 
@@ -384,37 +482,56 @@ class _FakeEngine:
     def __init__(self, conn):
         self.conn = conn
 
-    def connect(self):
-        return _FakeConnect(self.conn)
+    def begin(self):
+        return _FakeBegin(self.conn)
 
 
-class _FakeDuplicateEmailConnection:
-    def __init__(self):
+class _FakeProfileConnection:
+    def __init__(self, value):
+        self.value = value
         self.statements: list[str] = []
 
     async def execute(self, statement):
         sql = str(statement)
         self.statements.append(sql)
-        if "FROM auth_identities" in sql:
+        assert "auth_identities" not in sql
+        assert "lower(users.email)" not in sql
+        if sql.startswith("INSERT INTO users"):
+            assert "ON CONFLICT (id) DO NOTHING" in sql
             return _FakeScalarResult(None)
-        if "FROM users" in sql:
-            assert "lower(users.email)" in sql
-            assert "LIMIT" in sql
-            return _FakeScalarResult(uuid.uuid4())
-        return _FakeScalarResult(None)
+        assert "FROM users" in sql
+        assert "users.id =" in sql
+        assert "users.status" in sql
+        return _FakeScalarResult(self.value)
 
 
 @pytest.mark.asyncio
-async def test_supabase_identity_lookup_handles_duplicate_casefolded_emails(
-    monkeypatch,
-):
-    conn = _FakeDuplicateEmailConnection()
+async def test_supabase_identity_lookup_upserts_profile_from_subject_uuid(monkeypatch):
+    user_id = uuid.uuid4()
+    conn = _FakeProfileConnection(user_id)
+    monkeypatch.setattr(bridge_service, "get_engine", lambda: _FakeEngine(conn))
+
+    result = await bridge_service.resolve_jippin_user_for_supabase(
+        supabase_subject=str(user_id),
+        email_claim="USER@EXAMPLE.COM",
+    )
+
+    assert result.user_id == user_id
+    assert len(conn.statements) == 2
+    assert conn.statements[0].startswith("INSERT INTO users")
+    assert conn.statements[1].startswith("SELECT users.id")
+
+
+@pytest.mark.asyncio
+async def test_supabase_identity_lookup_rejects_non_uuid_subject(monkeypatch):
+    conn = _FakeProfileConnection(None)
     monkeypatch.setattr(bridge_service, "get_engine", lambda: _FakeEngine(conn))
 
     with pytest.raises(ZippinException) as exc_info:
         await bridge_service.resolve_jippin_user_for_supabase(
-            supabase_subject="supabase-subject",
-            email_claim="USER@EXAMPLE.COM",
+            supabase_subject="not-a-uuid",
+            email_claim=None,
         )
 
-    assert exc_info.value.code == "AUTH_IDENTITY_NOT_LINKED"
+    assert exc_info.value.code == "AUTH_INVALID_TOKEN"
+    assert conn.statements == []

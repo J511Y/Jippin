@@ -65,10 +65,10 @@
 
 | 데이터 | 분류 | 저장 방식 | 위치 |
 |---|---|---|---|
-| `users.email` | identifier (OAuth 발급) | 평문 (인덱스 필요) | Neon `users` |
-| `users.kakao_id` / `google_id` / `naver_id` | identifier | 평문 | Neon `users` |
-| `leads.contact_info` (전화·이메일·메모) | **민감 PII** | **AES-256-GCM 암호화** | Neon `leads` |
-| `chat_messages.content` | 일반 + 잠재 PII | 평문 + 저장 전 PII 마스킹 | Neon `chat_messages` |
+| Supabase Auth email / provider subject | identifier (OAuth 발급) | Supabase Auth managed | `auth.users` / `auth.identities` |
+| `public.users.id` | identifier / RBAC profile key | Supabase Auth user UUID 참조 | Supabase `public.users` |
+| `leads.contact_info` (전화·이메일·메모) | **민감 PII** | **AES-256-GCM 암호화** | Supabase `leads` |
+| `chat_messages.content` | 일반 + 잠재 PII | 평문 + 저장 전 PII 마스킹 | Supabase `chat_messages` |
 | 도면 원본 | 자산 (사용자 소유물) | R2 `jippin-floorplans-raw`, 7 일 후 라이프사이클 삭제 | Cloudflare R2 |
 | 도면 마스킹본 | 비밀번호와 동급 보호 불요 | R2 `jippin-floorplans-masked` | R2 |
 
@@ -129,7 +129,8 @@
 
 ### 4.3 회전
 
-- Neon 자격증명: `docs/runbooks/neon-credential-rotation.md`.
+- Supabase DB/Auth 자격증명: Supabase Dashboard + `docs/runbooks/supabase-branching.md`.
+- Neon 자격증명: archive reference only (`docs/runbooks/neon-credential-rotation.md`).
 - 그 외 (OpenAI / AWS / Slack / GitHub) 키는 본 문서 §6 의 회전 절차 표를 따른다.
 
 ### 4.4 저장
@@ -154,7 +155,7 @@
 
 | 종류 | 보유처 | 회전 주기 | 회전 트리거 | Owner |
 |---|---|---|---|---|
-| Neon `neondb_owner` password | Neon Console | 90 일 | 노출 / 이탈 / 사고 | CEO / DBA |
+| Supabase DB password / access token | Supabase Dashboard | 90 일 | 노출 / 이탈 / 사고 | CEO / DBA |
 | OpenAI API key (`OPENAI_API_KEY`) | OpenAI Platform | 90 일 | 노출 / 사고 / quota 분리 | Backend Lead |
 | Cloudflare R2 access key | Cloudflare Dashboard | 180 일 | 노출 / 이탈 | Cloud Engineer |
 | GitHub Actions `GITHUB_TOKEN` | 자동 (per run) | 자동 | — | — |

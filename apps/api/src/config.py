@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Sealed APP_ENV ↔ Neon branch mapping (CMP-538 / AGENTS.md §4.4).
+# Sealed APP_ENV enum; DB branch selection comes from environment URLs.
 # Any other value is treated as a human error signal and blocks boot.
 ALLOWED_APP_ENVS: frozenset[str] = frozenset(
     {"development", "test", "staging", "production"}
