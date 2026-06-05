@@ -29,15 +29,25 @@ type FloorplanConfirmPayload = {
   confidence?: number | string;
 };
 
+/**
+ * `confidence` 는 0~1 사이 확률값. 범위를 벗어나면 (예: 91 또는 1.2) `9100%`/`120%` 같은
+ * 의미없는 값이 화면에 노출되므로 reject 한다. 검증 실패는 null 로 반환해 JSON fallback
+ * 으로 떨어뜨려 디버깅 가시성을 유지한다.
+ */
 function coerceConfidence(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === 'string' && value.trim() !== '') {
+  let n: number | null = null;
+  if (typeof value === 'number') {
+    n = value;
+  } else if (typeof value === 'string' && value.trim() !== '') {
     const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
+    if (Number.isFinite(parsed)) {
+      n = parsed;
+    }
   }
-  return null;
+  if (n === null || !Number.isFinite(n) || n < 0 || n > 1) {
+    return null;
+  }
+  return n;
 }
 
 function formatConfidence(value: number): string {
@@ -60,6 +70,14 @@ function isFloorplanConfirmPayload(payload: unknown): payload is FloorplanConfir
   if (!isPlainObject(payload)) {
     return false;
   }
+  const hasId = typeof payload.selectedRegionId === 'string' && payload.selectedRegionId.length > 0;
+  const hasConfidence = payload.confidence !== undefined && coerceConfidence(payload.confidence) !== null;
+  // 두 필드 모두 optional 이지만, *유효한 필드가 하나도 없다면* 친화적 카드가 보여줄
+  // 내용이 없다. 이런 경우 JSON fallback 으로 떨어뜨려 디버깅 가시성을 유지한다.
+  if (!hasId && !hasConfidence) {
+    return false;
+  }
+  // 존재하는 필드는 각각 형태 검증.
   const idOk = payload.selectedRegionId === undefined || typeof payload.selectedRegionId === 'string';
   const confidenceOk = payload.confidence === undefined || coerceConfidence(payload.confidence) !== null;
   return idOk && confidenceOk;
