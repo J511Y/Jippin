@@ -22,8 +22,23 @@ type Props = {
 
 type FloorplanConfirmPayload = {
   selectedRegionId?: string;
-  confidence?: number;
+  /**
+   * 0~1 사이 신뢰도. 백엔드 `floorplans.py` 스키마가 `Decimal` 이라 JSON 직렬화 시
+   * 문자열("0.91") 로도 전달될 수 있어 number | string 둘 다 허용한다.
+   */
+  confidence?: number | string;
 };
+
+function coerceConfidence(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
 
 function formatConfidence(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -33,6 +48,8 @@ function formatConfidence(value: number): string {
  * Codex P2 (2026-06-05): payload 가 LLM/서버에서 오므로 런타임 형태가 임의일 수 있다.
  * - `payload` 자체가 null·undefined·array·primitive 일 수 있으니 *object* 인지 먼저 좁힌다.
  * - 그 다음 각 필드 (`selectedRegionId` / `confidence`) 의 타입을 개별 검증한다.
+ * - `confidence` 는 백엔드 Decimal 직렬화로 문자열도 올 수 있어 숫자형 문자열은
+ *   유효한 값으로 인정한다 (apps/api/src/schemas/floorplans.py 참고).
  * 검증 실패 시 registry 가 `null` 을 반환하고, 호출 측에서 JSON fallback 으로 떨어뜨린다.
  */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -44,11 +61,12 @@ function isFloorplanConfirmPayload(payload: unknown): payload is FloorplanConfir
     return false;
   }
   const idOk = payload.selectedRegionId === undefined || typeof payload.selectedRegionId === 'string';
-  const confidenceOk = payload.confidence === undefined || typeof payload.confidence === 'number';
+  const confidenceOk = payload.confidence === undefined || coerceConfidence(payload.confidence) !== null;
   return idOk && confidenceOk;
 }
 
 function FloorplanConfirmCard({ payload }: { payload: FloorplanConfirmPayload }) {
+  const confidence = coerceConfidence(payload.confidence);
   return (
     <Stack gap={6}>
       <Group gap="xs">
@@ -60,10 +78,10 @@ function FloorplanConfirmCard({ payload }: { payload: FloorplanConfirmPayload })
           선택 영역: <Text component="span" fw={600}>{payload.selectedRegionId}</Text>
         </Text>
       ) : null}
-      {typeof payload.confidence === 'number' ? (
+      {confidence !== null ? (
         <Group gap="xs">
           <Text c="var(--jippin-brand-copy)" size="sm">분석 신뢰도</Text>
-          <Badge color="blueprint" variant="light">{formatConfidence(payload.confidence)}</Badge>
+          <Badge color="blueprint" variant="light">{formatConfidence(confidence)}</Badge>
         </Group>
       ) : null}
     </Stack>
