@@ -122,10 +122,11 @@
 
 ## 5. OAuth / Supabase 콜백 URL 갱신 (외부 콘솔)
 
-도메인이 바뀌므로 각 provider·Supabase 콘솔에서 redirect 를 새 도메인으로 등록:
+**OAuth dance 의 SSOT 는 Supabase Auth** (`apps/web/app/auth/oauth/start/route.ts` 가 `supabase.auth.signInWithOAuth`/`linkIdentity` 사용). 따라서 provider 가 돌려보내는 곳은 **api.jippin.ai 가 아니라 Supabase 콜백**이다. 흐름: 브라우저 → Supabase `/authorize` → Kakao 인증 → **Kakao→Supabase 콜백** → Supabase 가 code 교환·세션 → `redirectTo`(앱 `jippin.ai/auth/callback`).
 
-- [ ] **Supabase Auth** → URL Configuration → Site URL `https://jippin.ai`, Redirect allow-list 에 `https://jippin.ai/**` 추가
-- [ ] **Kakao / Google / Naver** 개발자 콘솔 → Redirect URI 를 `https://api.jippin.ai/...` (또는 Supabase callback) 으로 갱신
+- [ ] **Kakao / Google / Naver 개발자 콘솔** → Redirect URI = **`https://<ref>.supabase.co/auth/v1/callback`** (production ref `ywtfmiawlramqqcfwsiv`). `api.jippin.ai` 아님. (`KAKAO_REDIRECT_URI` 등 api 측 변수는 ADR-0004 §2.5 레거시 self-OAuth fallback 용이며 Supabase 흐름엔 미사용.)
+- [ ] **provider Client ID/Secret** → **Supabase 대시보드** Authentication → Providers (콘솔이 단독 보유, [`apps/web/.env.example`](../../apps/web/.env.example) 봉인). api/Fly 에 넣지 않는다.
+- [ ] **Supabase Auth → URL Configuration** → Site URL `https://jippin.ai` + Redirect allow-list `https://jippin.ai/**` (앱 `redirectTo` 허용). ← 앱 복귀 경로는 여기서 허용.
 - [ ] `NEXT_PUBLIC_SUPABASE_URL` 기반 open-redirect allow-list 가 새 origin 포함하는지 확인 ([`infra/compose/.env.example`](../../infra/compose/.env.example) Supabase OAuth handoff 절)
 
 ---
