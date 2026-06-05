@@ -96,4 +96,89 @@ describe('proxy — Supabase Set-Cookie flush invariant', () => {
       new RegExp(`(?:^|\\n)${ROTATED_COOKIE_NAME}=${ROTATED_COOKIE_VALUE}`),
     );
   });
+
+  // CMP-618: 모바일 IA 도입으로 추가된 root-level conversion route 의 인증 가드.
+  it('redirects /leads/new without backend session to /login with next preserved', async () => {
+    mockGetUser();
+    const { proxy } = await import('./proxy');
+    const response = await proxy(
+      new NextRequest('http://localhost:3000/leads/new?fromSession=demo-1'),
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('Location')).toBe(
+      'http://localhost:3000/login?next=%2Fleads%2Fnew%3FfromSession%3Ddemo-1',
+    );
+    expect(mocks.createServerClient).not.toHaveBeenCalled();
+    expect(setCookieValues(response)).toHaveLength(0);
+  });
+
+  it('refreshes Supabase cookies on /leads/new when backend session cookie is present', async () => {
+    mockGetUser();
+    const { proxy } = await import('./proxy');
+    const response = await proxy(
+      new NextRequest('http://localhost:3000/leads/new', {
+        headers: { Cookie: 'jippin_session=backend-session' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(setCookieValues(response).join('\n')).toMatch(
+      new RegExp(`(?:^|\\n)${ROTATED_COOKIE_NAME}=${ROTATED_COOKIE_VALUE}`),
+    );
+  });
+
+  it('also redirects bare /leads index without backend session', async () => {
+    mockGetUser();
+    const { proxy } = await import('./proxy');
+    const response = await proxy(new NextRequest('http://localhost:3000/leads'));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('Location')).toBe(
+      'http://localhost:3000/login?next=%2Fleads',
+    );
+  });
+
+  // CMP-618 round 3: /contacts root prefix — 이미 생성된 상담의 진행 관리 / 개인 데이터 확인 영역.
+  it('redirects /contacts index without backend session to /login?next=%2Fcontacts', async () => {
+    mockGetUser();
+    const { proxy } = await import('./proxy');
+    const response = await proxy(new NextRequest('http://localhost:3000/contacts'));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('Location')).toBe(
+      'http://localhost:3000/login?next=%2Fcontacts',
+    );
+    expect(mocks.createServerClient).not.toHaveBeenCalled();
+    expect(setCookieValues(response)).toHaveLength(0);
+  });
+
+  it('redirects /contacts/:contactId with query preserving next search', async () => {
+    mockGetUser();
+    const { proxy } = await import('./proxy');
+    const response = await proxy(
+      new NextRequest('http://localhost:3000/contacts/demo-contact-1?tab=files'),
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('Location')).toBe(
+      'http://localhost:3000/login?next=%2Fcontacts%2Fdemo-contact-1%3Ftab%3Dfiles',
+    );
+    expect(mocks.createServerClient).not.toHaveBeenCalled();
+  });
+
+  it('refreshes Supabase cookies on /contacts/:contactId when backend session cookie is present', async () => {
+    mockGetUser();
+    const { proxy } = await import('./proxy');
+    const response = await proxy(
+      new NextRequest('http://localhost:3000/contacts/demo-contact-1', {
+        headers: { Cookie: 'jippin_session=backend-session' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(setCookieValues(response).join('\n')).toMatch(
+      new RegExp(`(?:^|\\n)${ROTATED_COOKIE_NAME}=${ROTATED_COOKIE_VALUE}`),
+    );
+  });
 });

@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { updateSession } from '@/lib/supabase/proxy';
 
 /**
- * 보호 경로 미인증 가드 (CMP-529, CMP-557, CMP-564, CMP-571).
+ * 보호 경로 미인증 가드 (CMP-529, CMP-557, CMP-564, CMP-571, CMP-618).
  *
  * CMP-571: Next.js 16 의 `middleware` 파일 컨벤션이 deprecated 되어 본 파일은
  * `proxy.ts` 로 이동되고 export 함수명도 `proxy` 로 변경되었다. matcher 와
@@ -15,6 +15,11 @@ import { updateSession } from '@/lib/supabase/proxy';
  *   - 상담 전환 · 리드 생성 · 리포트 저장 등 "전환 시점" 경로는 쿠키 기반으로 보호한다.
  *   - 본 가드는 쿠키 존재 여부만 확인한다. 실제 검증(서명, 만료)은 백엔드(`apps/api`) 책임이며,
  *     보호 경로 진입 후 백엔드 호출이 401 을 돌려주면 클라이언트가 로그인으로 유도한다.
+ *
+ * CMP-618: 모바일 IA 가 `/leads`, `/leads/new` 등 root-level conversion route 를
+ * 도입함에 따라 보호 prefix 범위를 root 경로까지 확장한다. AGENTS.md §4.4 의
+ * conversion-only 라우트 (상담 / 리드 / 리포트) 정책상 리드 생성 진입은 OAuth
+ * 전환 시점이므로 미인증 사용자는 `/login?next=...` 로 유도해야 한다.
  *
  * 인증 쿠키 이름은 백엔드 AUTH 모듈과 합의된 `jippin_session` 을 가정한다
  * (env `AUTH_COOKIE_NAME` 으로 override 가능).
@@ -40,11 +45,28 @@ const PROTECTED_APP_PREFIXES = [
   '/app/reports'
 ] as const;
 
+/**
+ * CMP-618: 모바일 IA 가 도입한 root-level conversion route 보호 prefix.
+ * - `/leads`, `/leads/new`: 새 상담 요청 생성/전환 지점 — §4.4 conversion-only 정책상 미인증 차단.
+ * - `/contacts`, `/contacts/:contactId`: 이미 생성된 상담의 진행 관리/개인 데이터 확인 영역 —
+ *   per-user 데이터 노출 방지 차원에서 미인증 차단. 모바일 하단 탭의 "상담" 진입점.
+ * - prefix 매칭은 정확한 경로 일치 또는 `<prefix>/` 시작만 인정해 `/leads-foo` 같은
+ *   인접 경로 오매칭을 방지한다.
+ */
+const PROTECTED_ROOT_PREFIXES = ['/leads', '/contacts'] as const;
+
 function isAnonymousAllowed(pathname: string): boolean {
   return ANONYMOUS_ALLOWED_APP_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
+function matchesRootPrefix(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
 function isProtected(pathname: string): boolean {
+  if (PROTECTED_ROOT_PREFIXES.some((prefix) => matchesRootPrefix(pathname, prefix))) {
+    return true;
+  }
   if (!pathname.startsWith('/app')) {
     return false;
   }
@@ -78,5 +100,11 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/app/:path*', '/auth/:path*', '/login']
+  matcher: [
+    '/app/:path*',
+    '/auth/:path*',
+    '/login',
+    '/leads/:path*',
+    '/contacts/:path*'
+  ]
 };
