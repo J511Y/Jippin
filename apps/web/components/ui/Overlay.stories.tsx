@@ -6,6 +6,12 @@ import type { Meta, StoryObj } from '@storybook/nextjs-vite';
 const meta = {
   title: 'UI/Overlay',
   parameters: {
+    docs: {
+      description: {
+        component:
+          'Overlay 데모의 트리거 색은 *진입할 영역의 의미*를 따른다. Drawer 는 일반 인터랙션(jippin), Modal 은 "리포트 다운로드" 같은 전문 영역(blueprint) 에서 사용한다. 동일한 의미 영역에서는 같은 색으로 통일한다.'
+      }
+    },
     layout: 'centered'
   },
   tags: ['autodocs']

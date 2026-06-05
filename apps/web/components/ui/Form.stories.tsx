@@ -54,6 +54,13 @@ function MantineFormDemo() {
         />
         <Checkbox
           label="사전검토 결과가 최종 행위허가 판단을 대신하지 않는다는 점을 확인했습니다."
+          // 한국어 어절 보존: 법적 동의 문구가 어절 중간에서 끊기지 않도록 한다.
+          styles={{
+            label: {
+              wordBreak: 'keep-all',
+              overflowWrap: 'break-word'
+            }
+          }}
           {...form.getInputProps('agreed', { type: 'checkbox' })}
         />
         <Group justify="flex-end">

@@ -36,6 +36,7 @@ export const ToastActions: Story = {
     <Group>
       <Button
         color="success"
+        leftSection={<IconCircleCheck size={16} aria-hidden />}
         onClick={() =>
           notifications.show({
             color: 'success',
@@ -49,6 +50,7 @@ export const ToastActions: Story = {
       </Button>
       <Button
         color="warning"
+        leftSection={<IconAlertTriangle size={16} aria-hidden />}
         onClick={() =>
           notifications.show({
             color: 'warning',
