@@ -9,6 +9,29 @@
 
 ---
 
+## ✅ 배포 완료 — 검증된 운영 값 (2026-06-05)
+
+초기 production 배포가 끝났다. `https://jippin.ai/api/healthz` → 200 `{"db":{"ok":true}}` (Vercel 프록시 → Fly → Supabase 체인 검증). 아래는 일반 런북과 **다르게 확정된 실제 값**:
+
+| 항목 | 확정 값 |
+|---|---|
+| Fly 앱 이름 | **`jippin`** (별도 `jippin-api` 아님 — 기존 launch 앱 재사용) |
+| 리전 | `nrt` (Tokyo) |
+| VM | shared-cpu-1x / 1GB / 1 cpu |
+| Fly IP (고정, 재배포 불변) | IPv4 `66.241.125.194` (shared) · IPv6 `2a09:8280:1::120:ab1:0` (dedicated) |
+| `api.jippin.ai` DNS | **CNAME → `8x986rn.jippin.fly.dev`** (Gabia 가 AAAA 미지원 → CNAME 채택). TLS = Let's Encrypt 자동 |
+| Supabase Main | ref `ywtfmiawlramqqcfwsiv`, 리전 **서울(ap-northeast-2)**, PG 17.6 |
+| **DB 접속** | **session pooler** `aws-1-ap-northeast-2.pooler.supabase.com:5432`, user `postgres.<ref>`. transaction pooler(6543)는 psycopg+ORM prepared-statement 충돌 위험이라 **session(5432) 채택** (db.py 미수정 기준) |
+| Redis | 도쿄, `auth:oauth_state:` 키 접두사라 `REDIS_URL`=`OAUTH_STATE_REDIS_URL` 동일 URL |
+| 배포 명령 | 워크트리 `apps/api` 에서 `fly deploy --ha=false` (단일 머신) |
+
+**아직 남은 것** (로그인 실제 동작에 필요):
+- Supabase 콘솔 Site URL = `https://jippin.ai` + redirect allow-list (§5)
+- OAuth provider(kakao/google/naver) redirect URI 갱신 (§5)
+- (선택) Vercel Node 버전 24.x → 22.x (engines `<23` 정합)
+
+---
+
 ## 0. 사전 준비물 (계정·도구)
 
 - [ ] Fly.io 계정 생성 + 결제 카드 등록 (무료 티어 종료됨, 사용량 청구)
