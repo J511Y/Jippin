@@ -31,10 +31,18 @@ function formatConfidence(value: number): string {
 
 /**
  * Codex P2 (2026-06-05): payload 가 LLM/서버에서 오므로 런타임 형태가 임의일 수 있다.
- * `selectedRegionId` 가 객체·배열·null 일 때 React 가 throw 하지 않도록 type guard 로 검증한다.
+ * - `payload` 자체가 null·undefined·array·primitive 일 수 있으니 *object* 인지 먼저 좁힌다.
+ * - 그 다음 각 필드 (`selectedRegionId` / `confidence`) 의 타입을 개별 검증한다.
  * 검증 실패 시 registry 가 `null` 을 반환하고, 호출 측에서 JSON fallback 으로 떨어뜨린다.
  */
-function isFloorplanConfirmPayload(payload: Record<string, unknown>): payload is FloorplanConfirmPayload {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFloorplanConfirmPayload(payload: unknown): payload is FloorplanConfirmPayload {
+  if (!isPlainObject(payload)) {
+    return false;
+  }
   const idOk = payload.selectedRegionId === undefined || typeof payload.selectedRegionId === 'string';
   const confidenceOk = payload.confidence === undefined || typeof payload.confidence === 'number';
   return idOk && confidenceOk;
@@ -66,11 +74,16 @@ function FloorplanConfirmCard({ payload }: { payload: FloorplanConfirmPayload })
  * 동적 컴포넌트 레지스트리. `kind` 별 친화적 view 를 매핑한다.
  * 미등록 키 또는 payload 형태가 어긋난 경우 `null` 을 반환하고, 호출 측이 JSON fallback 으로 떨어뜨려
  * 디버깅 가시성을 유지하면서도 잘못된 입력으로 화면이 죽지 않도록 한다.
+ *
+ * Codex P2 (2026-06-05): 일반 `Record` 는 prototype chain 을 통해 `__proto__`,
+ * `constructor` 등이 truthy 로 잡혀 prototype pollution 으로 임의 함수가 호출될
+ * 수 있다. null-prototype object 로 정의해 own property 만 lookup 되도록 한다.
  */
-const registry: Record<string, (payload: Record<string, unknown>) => ReactNode | null> = {
-  'floorplan-confirm': (payload) =>
+type Renderer = (payload: unknown) => ReactNode | null;
+const registry: Record<string, Renderer> = Object.assign(Object.create(null) as Record<string, Renderer>, {
+  'floorplan-confirm': (payload: unknown) =>
     isFloorplanConfirmPayload(payload) ? <FloorplanConfirmCard payload={payload} /> : null
-};
+});
 
 function FallbackJson({ spec }: { spec: DynamicComponentSpec }) {
   return (
@@ -86,7 +99,9 @@ function FallbackJson({ spec }: { spec: DynamicComponentSpec }) {
 }
 
 export function DynamicComponent({ spec }: Props) {
-  const renderer = registry[spec.kind];
+  // Codex P2: `Object.hasOwn` 으로 own-property 만 인정한다. registry 는 null-prototype 이라
+  // 이중 보호이지만, 후속 코드에서 prototype 객체로 바뀌어도 안전하도록 hasOwn 도 함께 둔다.
+  const renderer = Object.hasOwn(registry, spec.kind) ? registry[spec.kind] : undefined;
   // renderer 가 null 을 반환하면 (payload 형태 mismatch) JSON fallback 으로 떨어진다.
   const rendered = renderer ? renderer(spec.payload) : null;
 
