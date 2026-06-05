@@ -119,7 +119,7 @@ ADR-0002 Lightsail $84 대비 약 1/3. 단 HF Inference Endpoint 가 always-on d
 
 ## 4. 운영 모델
 
-- **배포**: web = Vercel git integration(`dev`/`main` push → 자동). api = `fly deploy`(GitHub Action 자동화 권고, §실행 런북). DB 마이그레이션은 [`DEPLOYMENT.md`](../../DEPLOYMENT.md) §1 의 기존 GitHub Action(`deploy.yml`) 경로 유지 — 본 ADR 과 독립.
+- **배포**: web = Vercel git integration(`dev`/`main` push → 자동). api = `fly deploy`(GitHub Action 자동화 권고, §실행 런북). DB 마이그레이션은 본 ADR 과 독립이며 **Supabase GitHub Integration**(`supabase/migrations/*.sql`, `dev`→development / `main`→production 자동 적용)이 forward SSOT 다. `.github/workflows/deploy.yml` 은 빌드/배포 스텁이며 **마이그레이션을 실행하지 않는다**(CMP-603 cutover). Alembic 은 historical reference.
 - **시크릿**: web = Vercel Project env. api = `fly secrets`. 로컬 = `infra/compose/.env` (불변, AGENTS.md §4.4).
 - **모니터링**: Vercel Analytics(web) + Fly metrics/logs(api) + Upstash 콘솔(redis) + Supabase 대시보드(db). 4면 분산은 트레이드오프(§5).
 - **무중단 배포**: Fly rolling deploy 기본. Redis·VM SPOF 가 제거되어 api 재배포가 상태 손실 없이 진행.

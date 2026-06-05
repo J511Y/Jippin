@@ -114,6 +114,7 @@
   - ☞ [`apps/web/next.config.mjs`](../../apps/web/next.config.mjs) L40-48 의 `rewrites()` 가 `/api/:path*` → `${API_INTERNAL_BASE_URL}/:path*` 로 프록시. 즉 브라우저는 same-origin `/api/*` 만 호출하고 `jippin_session` 쿠키 scope 가 유지된다. **CORS 설정·쿠키 SameSite 변경 불필요.**
 - [ ] `NEXT_PUBLIC_API_BASE_URL=/api` 유지 (브라우저는 same-origin)
 - [ ] `NEXT_PUBLIC_SUPABASE_*`, `SUPABASE_FLOW_COOKIE_SECRET` 등 web 측 env 도 Vercel 에 세팅
+- [ ] **Kakao 가 Supabase 에 Custom OIDC 로 등록된 경우** `NEXT_PUBLIC_SUPABASE_KAKAO_PROVIDER_ID=custom:kakao` 도 Vercel 에 설정 — 미설정 시 [`apps/web/lib/oauth-providers.ts`](../../apps/web/lib/oauth-providers.ts) 가 `kakao` 로 fallback 해 콘솔 등록 id 와 불일치 → `/auth/oauth/start` 가 `provider_not_enabled` 로 실패 (`.env.example` §4.2.3). native provider 로 등록했으면 생략(기본 `kakao`).
 
 ---
 
@@ -130,8 +131,8 @@
 
 ## 6. 배포 자동화 (선택, 권장)
 
-- [ ] api: `.github/workflows/` 에 `fly deploy --remote-only` 스텝 추가 (`FLY_API_TOKEN` = repo secret, `fly tokens create deploy`)
-- [ ] 기존 [`DEPLOYMENT.md`](../../DEPLOYMENT.md) §1 의 Neon/Supabase 마이그레이션 Action 과 **분리 유지** — 본 배포는 앱 런타임만, 마이그레이션은 기존 경로.
+- [ ] api: `.github/workflows/` 에 fly deploy 스텝 추가 — **반드시 `apps/api` 기준으로 실행** (fly.toml·Dockerfile 위치). step 에 `working-directory: apps/api` + `fly deploy --remote-only`, **또는** repo root 면 `fly deploy --remote-only --config apps/api/fly.toml`. (`FLY_API_TOKEN` = repo secret, `fly tokens create deploy`)
+- [ ] 본 배포는 **앱 런타임만**. DB 마이그레이션은 건드리지 않는다 — forward SSOT 는 **Supabase GitHub Integration**(`supabase/migrations/*.sql`, `dev`/`main` push 자동)이고 `deploy.yml` 은 마이그레이션 미실행(빌드/스텁, CMP-603).
 - [ ] web: Vercel 은 git integration 으로 `dev`/`main` push 시 자동 — 별도 Action 불필요.
 
 ---
