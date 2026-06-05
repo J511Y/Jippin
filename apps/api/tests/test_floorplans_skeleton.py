@@ -118,6 +118,10 @@ def test_candidate_snapshot_service_distinguishes_lookup_revisions(monkeypatch):
                 "confidence": "0.91",
                 "match_reasons": ["apartment_name+size_type"],
                 "lookup_input": {"apartment_name": "예시아파트"},
+                "floorplan_snapshot": {
+                    "display_label": "84A 표준 평면",
+                    "size_type": "84A",
+                },
             },
             {
                 "floorplan_id": fp_b,
@@ -125,6 +129,7 @@ def test_candidate_snapshot_service_distinguishes_lookup_revisions(monkeypatch):
                 "confidence": "0.73",
                 "match_reasons": ["apartment_name"],
                 "lookup_input": {"apartment_name": "예시아파트"},
+                "floorplan_snapshot": {"display_label": "84B 표준 평면"},
             },
         ],
     )
@@ -141,6 +146,7 @@ def test_candidate_snapshot_service_distinguishes_lookup_revisions(monkeypatch):
                     "floorplan_id": fp_a,
                     "rank": 3,
                     "confidence": "0.6",
+                    "floorplan_snapshot": {"display_label": "84A 표준 평면"},
                 }
             ],
         )
@@ -157,6 +163,7 @@ def test_candidate_snapshot_service_distinguishes_lookup_revisions(monkeypatch):
                 "floorplan_id": fp_a,
                 "rank": 1,
                 "confidence": "0.95",
+                "floorplan_snapshot": {"display_label": "84A 재검색 결과"},
             }
         ],
     )
@@ -172,8 +179,18 @@ def test_candidate_snapshot_service_rejects_in_batch_duplicate_rank(monkeypatch)
             owner_user_id=subject,
             lookup_revision=1,
             items=[
-                {"floorplan_id": uuid.uuid4(), "rank": 1, "confidence": "0.9"},
-                {"floorplan_id": uuid.uuid4(), "rank": 1, "confidence": "0.8"},
+                {
+                    "floorplan_id": uuid.uuid4(),
+                    "rank": 1,
+                    "confidence": "0.9",
+                    "floorplan_snapshot": {"display_label": "A"},
+                },
+                {
+                    "floorplan_id": uuid.uuid4(),
+                    "rank": 1,
+                    "confidence": "0.8",
+                    "floorplan_snapshot": {"display_label": "B"},
+                },
             ],
         )
     assert conflict.value.code == "FLOORPLAN_CANDIDATE_DUPLICATE_RANK"
@@ -193,7 +210,72 @@ def test_candidate_snapshot_service_blocks_non_owner(monkeypatch):
                     "floorplan_id": uuid.uuid4(),
                     "rank": 1,
                     "confidence": "0.9",
+                    "floorplan_snapshot": {"display_label": "A"},
                 }
             ],
         )
     assert not_found.value.code == "SESSION_NOT_FOUND"
+
+
+def test_candidate_snapshot_service_requires_non_empty_snapshot(monkeypatch):
+    """board round-3 #4 회귀: 빈 ``floorplan_snapshot`` 은 422 로 거절된다.
+
+    DB ``floorplan_candidates.floorplan_snapshot`` JSONB NOT NULL DEFAULT '{}' 가
+    있지만 default 값으로 들어가면 사용자가 본 후보 표시값이 영구 손실된다.
+    Service 단에서 caller 가 명시적으로 snapshot 을 제공하도록 강제한다.
+    """
+
+    _client_, _token, session_id, subject = _bootstrap_session(monkeypatch)
+    sid = uuid.UUID(session_id)
+    for empty_snapshot in (None, {}):
+        with pytest.raises(ZippinException) as rejected:
+            main_flow.save_floorplan_candidate_snapshot(
+                session_id=sid,
+                owner_user_id=subject,
+                lookup_revision=1,
+                items=[
+                    {
+                        "floorplan_id": uuid.uuid4(),
+                        "rank": 1,
+                        "confidence": "0.9",
+                        "floorplan_snapshot": empty_snapshot,
+                    }
+                ],
+            )
+        assert rejected.value.code == "FLOORPLAN_CANDIDATE_SNAPSHOT_REQUIRED"
+        assert rejected.value.http_status == 422
+
+
+def test_candidate_snapshot_service_preserves_snapshot_in_response(monkeypatch):
+    """board round-3 #4 회귀: 저장된 ``floorplan_snapshot`` 이 그대로 반환된다.
+
+    이후 ``floorplans`` catalog row 가 ``ON DELETE SET NULL`` 로 사라져도
+    사용자가 본 후보 화면 (label / type / thumbnail) 이 재현 가능해야 한다.
+    """
+
+    _client_, _token, session_id, subject = _bootstrap_session(monkeypatch)
+    sid = uuid.UUID(session_id)
+    snapshot = {
+        "display_label": "84A 표준 평면",
+        "size_type": "84A",
+        "thumbnail_url": "r2://floorplans/abc.png",
+        "match_score": 0.91,
+    }
+    saved = main_flow.save_floorplan_candidate_snapshot(
+        session_id=sid,
+        owner_user_id=subject,
+        lookup_revision=1,
+        items=[
+            {
+                "floorplan_id": uuid.uuid4(),
+                "rank": 1,
+                "confidence": "0.91",
+                "floorplan_snapshot": snapshot,
+            }
+        ],
+    )
+    assert saved[0]["floorplan_snapshot"] == snapshot
+    # 호출자가 dict 를 mutate 해도 저장된 row 는 영향받지 않아야 한다 — 라이브
+    # 참조가 새지 않도록 ``dict(...)`` 로 복사해 저장한다.
+    snapshot["display_label"] = "MUTATED"
+    assert saved[0]["floorplan_snapshot"]["display_label"] == "84A 표준 평면"

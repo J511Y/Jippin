@@ -29,12 +29,22 @@ pnpm start
 apps/web/
 ├── .storybook/                # Storybook 설정
 ├── app/
+│   ├── (app)/                 # CMP-618: 모바일 IA shell (MobileShell + 하단 탭)
+│   │   ├── layout.tsx
+│   │   ├── page.tsx           # / (랜딩)
+│   │   ├── sessions/          # /sessions, /sessions/new, /sessions/[sessionId], …/report
+│   │   ├── leads/             # /leads, /leads/new
+│   │   ├── contacts/          # /contacts, /contacts/[contactId]
+│   │   ├── prices/
+│   │   ├── terms/
+│   │   └── privacy/
 │   ├── api/healthz/route.ts   # Next.js BFF 헬스 핸들러
+│   ├── auth/                  # /auth/callback 등 Supabase OAuth 라우트 (모바일 shell 밖)
 │   ├── layout.tsx             # 루트 레이아웃 + LegalNotice 강제 노출 (AGENTS.md §4.6)
-│   ├── page.tsx
 │   └── globals.css
 ├── components/
 │   ├── LegalNotice.tsx
+│   ├── MobileShell.tsx        # CMP-618: 모바일 퍼스트 shell + 하단 탭
 │   ├── a2ui/                  # 채팅·동적 컴포넌트 placeholder (SDD §6.2 CHAT)
 │   └── ui/                    # Mantine 기본 컴포넌트 re-export + Storybook 예시
 ├── lib/
@@ -50,6 +60,32 @@ apps/web/
 ├── Dockerfile                 # Node 22 alpine multi-stage
 └── package.json
 ```
+
+## 정보구조 (IA) / 라우트
+
+CMP-618 이후 모바일 퍼스트 IA 가 `app/(app)` route group 으로 봉인되어 있습니다. 하단 탭은 홈 / 검토 / 상담 / 가격 네 칸이며, `/leads/new` 는 탭에 직접 들어가지 않고 CTA 로만 진입합니다. `/auth/*` 는 shell 바깥 (root layout) 에 위치해 OAuth 콜백/익명 가입 흐름과 충돌하지 않습니다.
+
+| Route | 역할 | 하단 탭 |
+|---|---|---|
+| `/` | 랜딩. 서비스 이해 + 사전검토 시작 CTA. | 홈 |
+| `/sessions` | 사전검토 세션 목록 + 새 세션 진입. | 검토 |
+| `/sessions/new` | 주소/도면 입력 시작. | 검토 |
+| `/sessions/:sessionId` | 사전검토 진행 화면. | 검토 |
+| `/sessions/:sessionId/report` | AI 판단 결과 + inline `LegalNotice` + 상담 전환 CTA. | 검토 |
+| `/leads` | 사전검토 없이 상담 신청 진입. | 상담 |
+| `/leads/new` | 상담 신청 폼 (탭에는 노출하지 않음). | — |
+| `/contacts` | 신청한 상담의 진행 상태 목록. | 상담 |
+| `/contacts/:contactId` | 상담 상세 (진행 단계, 메모, 첨부). | 상담 |
+| `/prices` | 가격/상품 소개. | 가격 |
+| `/terms`, `/privacy` | 약관 / 개인정보처리방침 placeholder. | — |
+| `/auth/callback` | Supabase OAuth callback. **모바일 shell 밖** — 변경 금지. | — |
+
+세부 제품 판단:
+
+- `/leads` 와 `/contacts` 는 분리됩니다. `/leads` 는 신규 상담 요청 생성, `/contacts` 는 생성된 상담의 진행 관리.
+- `/sessions/:sessionId/report` 는 AI 사전검토 → 상담 전환의 중심이므로 항상 inline `LegalNotice` 를 노출합니다. (AGENTS.md §4.6 정본 문구)
+- 모든 모바일 shell 화면은 `(app)/layout.tsx` 가 `MobileShell` 로 감쌉니다. shell 은 하단 탭 높이 + `env(safe-area-inset-bottom)` 만큼 본문/footer 를 밀어내므로 root 의 `LegalNotice` 가 탭 위로 노출됩니다.
+- 실제 세션/리드/상담 API 와 Supabase Auth 정책 변경은 후속 이슈에서 수행됩니다 — 현재는 mock 데이터와 disabled 컨트롤만 있는 placeholder 입니다.
 
 ## 인증 전략 (Supabase Auth SSOT)
 

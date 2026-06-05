@@ -14,7 +14,9 @@ const brandTokens = [
 
 const statusTokens = [
   ['status.success', 'success.6', jippinTokens.status.success, '가능 / 충족'],
-  ['status.danger', 'danger.5', jippinTokens.status.danger, '불가 / 제한'],
+  // danger 만 .5 를 사용한다. .6 (#A52F24) 은 너무 어두워 흰 라벨이 무겁게 보였다.
+  // .5 (#C0392B) 위 #FFFFFF 라벨은 WCAG AA (~4.6:1) 를 통과한다. COLOR_SYSTEM §6 의 대비표 참고.
+  ['status.danger', 'danger.5', jippinTokens.status.danger, '불가 / 제한 (danger.5 사용 — 흰 라벨 가독성)'],
   ['status.warning', 'warning.6', jippinTokens.status.warning, '보류 / 추가 확인'],
   ['status.info', 'info.6', jippinTokens.status.info, '중립 정보']
 ] as const;
