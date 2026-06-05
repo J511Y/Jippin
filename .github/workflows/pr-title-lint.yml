@@ -3,6 +3,7 @@
 # 책임:
 #   PR 제목이 다음 두 조건을 모두 만족하는지 검증한다.
 #     1. 본문 어딘가에 `CMP-<숫자>` 이슈 식별자 포함 (AGENTS.md §4.3 / docs/CONTRIBUTING.md §3)
+#        - 단, Paperclip 보드 이슈 없이 사람과의 직접 대화로 수행한 작업은 `CMP-DIRECT` 를 사용한다.
 #     2. 첫 글자가 gitmoji prefix 정규식과 호환 — 즉 PR 을 squash 머지했을 때
 #        그대로 commit subject 가 되어 `gitmoji-validate` 를 통과할 수 있는 형식
 #        (^(✨|🐛|📝|♻️|✅|🔧|🚀|🔒|🚧) (feat|fix|docs|refactor|test|chore|perf|security|wip)\(([a-z0-9][a-z0-9-]*)\): .+)
@@ -15,6 +16,7 @@
 # 통과 예:
 #   "✨ feat(auth): 카카오 콜백 (CMP-528)"
 #   "🔧 chore(cmp-531): CI 스켈레톤 추가 (Refs: CMP-531)"
+#   "📝 docs(infra): 배포 토폴로지 (CMP-DIRECT)"   ← 보드 이슈 없는 직접 대화 작업
 #
 # 본 job 은 push/머지 후가 아니라 PR 이벤트에만 동작한다 (제목 검증의 본질).
 name: pr-title-lint
@@ -55,10 +57,10 @@ jobs:
 
           fail=0
 
-          # 1) CMP-### 식별자 포함 (대소문자 무시).
-          if ! [[ "${title}" =~ [Cc][Mm][Pp]-[0-9]+ ]]; then
-            echo "::error::PR 제목에 'CMP-<숫자>' 이슈 식별자가 없습니다 (AGENTS.md §4.3)."
-            echo "::error::예) '✨ feat(auth): 카카오 콜백 (CMP-528)'"
+          # 1) CMP-### 식별자 포함 (대소문자 무시). 보드 이슈 없는 직접 대화 작업은 CMP-DIRECT.
+          if ! [[ "${title}" =~ [Cc][Mm][Pp]-([0-9]+|[Dd][Ii][Rr][Ee][Cc][Tt]) ]]; then
+            echo "::error::PR 제목에 'CMP-<숫자>' (또는 보드 이슈 없는 직접 작업이면 'CMP-DIRECT') 식별자가 없습니다 (AGENTS.md §4.3)."
+            echo "::error::예) '✨ feat(auth): 카카오 콜백 (CMP-528)' / '📝 docs(infra): 배포 (CMP-DIRECT)'"
             fail=1
           fi
 
