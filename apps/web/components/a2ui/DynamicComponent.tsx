@@ -29,6 +29,17 @@ function formatConfidence(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
+/**
+ * Codex P2 (2026-06-05): payload 가 LLM/서버에서 오므로 런타임 형태가 임의일 수 있다.
+ * `selectedRegionId` 가 객체·배열·null 일 때 React 가 throw 하지 않도록 type guard 로 검증한다.
+ * 검증 실패 시 registry 가 `null` 을 반환하고, 호출 측에서 JSON fallback 으로 떨어뜨린다.
+ */
+function isFloorplanConfirmPayload(payload: Record<string, unknown>): payload is FloorplanConfirmPayload {
+  const idOk = payload.selectedRegionId === undefined || typeof payload.selectedRegionId === 'string';
+  const confidenceOk = payload.confidence === undefined || typeof payload.confidence === 'number';
+  return idOk && confidenceOk;
+}
+
 function FloorplanConfirmCard({ payload }: { payload: FloorplanConfirmPayload }) {
   return (
     <Stack gap={6}>
@@ -53,10 +64,12 @@ function FloorplanConfirmCard({ payload }: { payload: FloorplanConfirmPayload })
 
 /**
  * 동적 컴포넌트 레지스트리. `kind` 별 친화적 view 를 매핑한다.
- * 미등록 키는 JSON fallback 으로 떨어뜨려 디버깅 가시성을 유지한다.
+ * 미등록 키 또는 payload 형태가 어긋난 경우 `null` 을 반환하고, 호출 측이 JSON fallback 으로 떨어뜨려
+ * 디버깅 가시성을 유지하면서도 잘못된 입력으로 화면이 죽지 않도록 한다.
  */
-const registry: Record<string, (payload: Record<string, unknown>) => ReactNode> = {
-  'floorplan-confirm': (payload) => <FloorplanConfirmCard payload={payload as FloorplanConfirmPayload} />
+const registry: Record<string, (payload: Record<string, unknown>) => ReactNode | null> = {
+  'floorplan-confirm': (payload) =>
+    isFloorplanConfirmPayload(payload) ? <FloorplanConfirmCard payload={payload} /> : null
 };
 
 function FallbackJson({ spec }: { spec: DynamicComponentSpec }) {
@@ -74,6 +87,8 @@ function FallbackJson({ spec }: { spec: DynamicComponentSpec }) {
 
 export function DynamicComponent({ spec }: Props) {
   const renderer = registry[spec.kind];
+  // renderer 가 null 을 반환하면 (payload 형태 mismatch) JSON fallback 으로 떨어진다.
+  const rendered = renderer ? renderer(spec.payload) : null;
 
   return (
     <Paper
@@ -86,7 +101,7 @@ export function DynamicComponent({ spec }: Props) {
         border: '1px solid var(--jippin-brand-border)'
       }}
     >
-      {renderer ? renderer(spec.payload) : <FallbackJson spec={spec} />}
+      {rendered ?? <FallbackJson spec={spec} />}
     </Paper>
   );
 }
