@@ -71,7 +71,10 @@ font-family: ui-monospace, SFMono-Regular, 'Cascadia Code',
   1. **판정(display)** — 가능/불가/보류 + 한 줄 사유.
   2. **근거(body)** — 법령·고시 조항 1~3개, 각 1줄 인용.
   3. **다음 행동(body / button)** — 사용자가 지금 할 수 있는 일.
-  4. **법적 고지(legal)** — `notice.legal` 색·`legal` 크기.
+  4. **법적 고지** — `notice.legal` 색.
+     - 결과 카드 *인라인* 면책은 `caption` 크기 (13/20) 를 사용한다. 카드 본문과 함께 읽혀야 하므로 footer fine print 크기는 좁다.
+     - 페이지 *footer* fine print 는 `legal` 크기 (12/20) 를 유지한다. 항시 노출되는 정적 텍스트이며 시각 우선순위가 가장 낮다.
+     - 두 경우 모두 정본 문구를 그대로 쓰고 이미지가 아닌 선택 가능한 텍스트로 노출한다 (`AGENTS.md §4.6`).
 - 표는 모바일에서 2열을 초과하지 않는다. 표가 더 필요하면 카드 분할 또는 토글로 접는다.
 
 ---

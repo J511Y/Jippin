@@ -37,7 +37,7 @@ export const Buttons: Story = {
         <Button color="blueprint" leftSection={<IconFileReport size={16} aria-hidden />}>
           리포트 보기
         </Button>
-        <Button color="gray" variant="subtle">
+        <Button color="gray" td="underline" variant="subtle">
           나중에 하기
         </Button>
         <Button color="jippin" loading>
