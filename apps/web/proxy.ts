@@ -47,11 +47,13 @@ const PROTECTED_APP_PREFIXES = [
 
 /**
  * CMP-618: 모바일 IA 가 도입한 root-level conversion route 보호 prefix.
- * - `/leads`, `/leads/new` 등 리드 생성 진입은 §4.4 conversion-only 정책상 미인증 차단.
+ * - `/leads`, `/leads/new`: 새 상담 요청 생성/전환 지점 — §4.4 conversion-only 정책상 미인증 차단.
+ * - `/contacts`, `/contacts/:contactId`: 이미 생성된 상담의 진행 관리/개인 데이터 확인 영역 —
+ *   per-user 데이터 노출 방지 차원에서 미인증 차단. 모바일 하단 탭의 "상담" 진입점.
  * - prefix 매칭은 정확한 경로 일치 또는 `<prefix>/` 시작만 인정해 `/leads-foo` 같은
  *   인접 경로 오매칭을 방지한다.
  */
-const PROTECTED_ROOT_PREFIXES = ['/leads'] as const;
+const PROTECTED_ROOT_PREFIXES = ['/leads', '/contacts'] as const;
 
 function isAnonymousAllowed(pathname: string): boolean {
   return ANONYMOUS_ALLOWED_APP_PREFIXES.some((prefix) => pathname.startsWith(prefix));
@@ -98,5 +100,11 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/app/:path*', '/auth/:path*', '/login', '/leads/:path*']
+  matcher: [
+    '/app/:path*',
+    '/auth/:path*',
+    '/login',
+    '/leads/:path*',
+    '/contacts/:path*'
+  ]
 };
