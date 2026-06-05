@@ -56,11 +56,18 @@ class FloorplanUploadResponse(BaseModel):
 
 
 class FloorplanCandidateItemInput(BaseModel):
-    """Single candidate inside a snapshot batch.
+    """Single candidate inside a snapshot batch — **internal-only** contract.
 
-    Phase A skeleton 은 후보 catalog (``floorplans`` table) 의 사전 존재를
-    검증하지 않는다 — caller (검색/매칭 서비스) 가 floorplan_id 가
-    유효한지 보장한다. 실 FK enforcement 는 migration PR 에서 들어온다.
+    Public route was removed in round-2 (board P2-3); only the agent runtime /
+    검색·매칭 서비스가 ``services.main_flow.save_floorplan_candidate_snapshot``
+    를 호출한다. Caller 가 catalog FK 와 owner 를 직접 검증한다.
+
+    ``floorplan_snapshot`` 은 사용자가 실제 본 후보 표시값 (display label,
+    type/thumbnail, ranking metadata 등) 을 영구 보존하기 위해 **필수**이며 빈
+    object 를 허용하지 않는다. 후속 ``floorplans`` catalog row 가 삭제되어
+    ``floorplan_id`` 가 NULL 이 되어도 사용자가 본 후보 화면이 재현 가능해야
+    하기 때문이다 (board round-3 #4 + DB ``floorplan_candidates.floorplan_snapshot``
+    JSONB NOT NULL).
     """
 
     floorplan_id: uuid.UUID
@@ -68,6 +75,7 @@ class FloorplanCandidateItemInput(BaseModel):
     confidence: Decimal = Field(ge=0, le=1)
     match_reasons: list[Any] = Field(default_factory=list)
     lookup_input: dict[str, Any] = Field(default_factory=dict)
+    floorplan_snapshot: dict[str, Any] = Field(min_length=1)
 
 
 class FloorplanCandidateSnapshotRequest(BaseModel):
@@ -83,16 +91,25 @@ class FloorplanCandidateSnapshotRequest(BaseModel):
 
 
 class FloorplanCandidateResponse(BaseModel):
+    """DB-shaped ``floorplan_candidates`` row.
+
+    ``floorplan_id`` 는 nullable 이다 — DB 는 ``ON DELETE SET NULL`` 로 catalog
+    row 삭제 시 후보 snapshot 자체는 보존한다 (board round-3 #3). 사용자가 본
+    후보 화면은 ``floorplan_snapshot`` 에 보존되므로 catalog 삭제 후에도 응답이
+    가능하다.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     session_id: uuid.UUID
     lookup_revision: int
-    floorplan_id: uuid.UUID
+    floorplan_id: uuid.UUID | None
     rank: int
     confidence: Decimal
     match_reasons: list[Any]
     lookup_input: dict[str, Any]
+    floorplan_snapshot: dict[str, Any]
     selected_at: datetime | None
     rejected_at: datetime | None
     created_at: datetime

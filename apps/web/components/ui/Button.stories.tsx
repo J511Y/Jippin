@@ -41,7 +41,13 @@ export const Variants: Story = {
       <Button color="blueprint" leftSection={<IconFileReport size={16} aria-hidden />}>
         리포트 보기
       </Button>
-      <Button color="gray" variant="subtle">나중에 하기</Button>
+      {/*
+        텍스트 전용 tertiary 버튼은 색만으로는 클릭 가능 여부가 모호하다.
+        디지털 친숙도가 낮은 사용자를 위해 underline 으로 affordance 를 노출한다.
+      */}
+      <Button color="gray" td="underline" variant="subtle">
+        나중에 하기
+      </Button>
     </Group>
   )
 };

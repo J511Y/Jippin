@@ -34,6 +34,12 @@ const preview: Preview = {
       }
     },
     docs: {
+      // docs page 의 각 story preview 가 콘텐츠 높이에 맞춰 늘어나도록 한다.
+      // 고정 높이일 때 긴 폼/카드가 잘리고 docs 본문 스크롤이 끊겨 보이는 문제를 막는다.
+      story: {
+        inline: true,
+        iframeHeight: 'auto'
+      },
       toc: true
     },
     layout: 'centered',

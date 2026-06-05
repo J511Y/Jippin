@@ -37,7 +37,15 @@ export const FormControls: Story = {
         label="철거 위치"
         placeholder="위치를 선택해 주세요"
       />
-      <NumberInput label="예상 공사 면적" min={0} suffix=" m²" />
+      <NumberInput
+        // 단위는 입력 전에도 항상 노출한다. `suffix` 는 값이 있을 때만 보이므로
+        // `description` 으로 단위를 명시하고, placeholder 에도 ㎡ 힌트를 둔다.
+        description="단위: ㎡ (제곱미터)"
+        label="예상 공사 면적"
+        min={0}
+        placeholder="예: 12"
+        suffix=" ㎡"
+      />
       <Textarea autosize label="추가 설명" minRows={3} placeholder="도면이나 철거 위치를 설명해 주세요." />
       <Checkbox label="사전검토 결과가 최종 행위허가 판단을 대신하지 않는다는 점을 확인했습니다." />
       <Button color="jippin">검토 요청</Button>

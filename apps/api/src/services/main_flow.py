@@ -352,6 +352,11 @@ def save_floorplan_candidate_snapshot(
     그래서 (1) 모든 item 을 먼저 검증해 charged 된 row 를 만들고,
     (2) 한 번에 dict.update 로 commit 한다. DB-backed repo 로 교체될 때
     같은 (validate-then-insert) 패턴을 그대로 쓰면 된다.
+
+    각 item 은 사용자가 본 후보 표시값을 영구 보존하기 위해
+    ``floorplan_snapshot`` (비어 있지 않은 dict) 을 반드시 포함한다.
+    ``floorplans`` catalog row 가 ``ON DELETE SET NULL`` 로 사라져도 후보 화면
+    재현이 가능해야 한다 (board round-3 #4).
     """
 
     now = _now()
@@ -401,6 +406,17 @@ def save_floorplan_candidate_snapshot(
                     code="FLOORPLAN_CANDIDATE_REVISION_CONFLICT",
                 )
 
+            snapshot_raw = item.get("floorplan_snapshot")
+            if not isinstance(snapshot_raw, dict) or not snapshot_raw:
+                raise _unprocessable(
+                    (
+                        "Candidate item must include a non-empty floorplan_snapshot "
+                        "(display label, type, thumbnail metadata) so deleted "
+                        "catalog rows do not erase user-visible history."
+                    ),
+                    code="FLOORPLAN_CANDIDATE_SNAPSHOT_REQUIRED",
+                )
+
             staged.append(
                 (
                     key,
@@ -413,6 +429,7 @@ def save_floorplan_candidate_snapshot(
                         "confidence": _decimal(item["confidence"]),
                         "match_reasons": list(item.get("match_reasons") or []),
                         "lookup_input": dict(item.get("lookup_input") or {}),
+                        "floorplan_snapshot": dict(snapshot_raw),
                         "selected_at": None,
                         "rejected_at": None,
                         "created_at": now,
