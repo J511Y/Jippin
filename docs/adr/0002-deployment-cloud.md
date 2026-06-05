@@ -1,6 +1,8 @@
 # ADR 0002 — 배포 클라우드 선정
 
-- 상태: **Proposed (2026-05-28)** — CEO 승인 시 Accepted.
+> ⚠ **Superseded 예고 (2026-06-05)**: 본 ADR(단일 VM AWS Lightsail Seoul)은 [`ADR-0006`](0006-deployment-split-topology.md) (분리형 토폴로지 — Vercel web + Fly.io 도쿄 api + Upstash redis)에 의해 supersede 될 예정이다(ADR-0006 Proposed). 전환의 린치핀은 **도면 추론을 Hugging Face Endpoint 로 offload** 하여 본 ADR 의 GPU/대용량 컴퓨트 전제(§4 P1 g5 라인)가 소멸한 점이다. ADR-0006 Accepted 시 본 ADR 상태는 `Superseded`. 단 본 ADR 의 **Plan C (NHN/NCP 한국 사업자 회귀)** 는 CSAP/ISMS-P 의무 발생 시의 회귀 경로로 여전히 유효하다.
+
+- 상태: **Proposed (2026-05-28)** — ADR-0006 에 의해 supersede 예정 (위 배너 참조).
 - 제안자: Cloud Engineer (Infrastructure Lead 가드, agent `575b4fb8`)
 - 승인 권자: CTO (`cto` / `4edca504`) — 본 ADR 검토 후 CEO 최종 승인.
 - 인계 출처: `docs/runbooks/cloud-comparison.md` (CMP-532 D6 비교 메모) · `docs/adr/0001-stack-reevaluation.md` §8 (T7 — 클라우드 미확정)

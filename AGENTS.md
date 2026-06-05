@@ -63,7 +63,7 @@ jippin/
 > - DB = **Supabase Postgres** (외부 managed, 로컬 DB 컨테이너 없음). ADR-0004 cutover 완료 (CMP-603). 운영 DB URL 은 Supabase project 가 발급한 connection string. Forward migration SSOT 는 `supabase/migrations/*.sql` + Supabase GitHub Integration. Alembic 은 historical reference 만. 캐시 = **Redis 7.4-alpine** 컨테이너.
 > - 객체 스토리지 = **Cloudflare R2** (S3 호환, zero-egress).
 > - LLM 오케스트레이션 = **LangChain v0.3+**. VLM 기본 = OpenAI `gpt-4.1-mini` / 정밀 = `gpt-4o`.
-> - 클라우드 MVP = **AWS Lightsail Seoul (`ap-northeast-2`)** — ADR-0002 Accepted 후 확정.
+> - 클라우드 MVP = **분리형 토폴로지 (제안 중)**: web=**Vercel** · api=**Fly.io 도쿄(`nrt`)** · redis=**Upstash 도쿄** · postgres=Supabase · 도면 추론=**Hugging Face Endpoint**. [`ADR-0006`](docs/adr/0006-deployment-split-topology.md) (Proposed) 가 [`ADR-0002`](docs/adr/0002-deployment-cloud.md) (단일 VM Lightsail Seoul) 를 supersede. 실행: [`docs/runbooks/fly-api-deploy.md`](docs/runbooks/fly-api-deploy.md). **로컬 개발은 `infra/compose/docker-compose.yml` 3-컨테이너 그대로** (production 토폴로지만 분리).
 
 ---
 
@@ -120,13 +120,13 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - 작업 브랜치는 `dev` 에서 분기한다. 명명: `<type>/<scope>-<short>` (예: `feat/auth-kakao-callback`, `docs/cmp-557a-auth-policy`, `fix/auth-jwt-leak`, `refactor/api-audit-mixin`).
 - 흐름: `main` ← (release PR) ← `dev` ← (작업 PR) ← `feature/* | fix/* | docs/* | refactor/* | chore/* | perf/* | test/* | security/*`.
 - **PR base 기본값 = `dev`.** `main` 으로의 PR 은 운영 release 컷 또는 핫픽스에 한정하며 CTO/DevOps 승인 필요.
-- PR 본문에는 관련 Paperclip 이슈 식별자(`CMP-###`)와 영향 모듈을 표기한다.
+- PR 본문·제목에는 관련 Paperclip 이슈 식별자(`CMP-###`)와 영향 모듈을 표기한다. **보드 이슈 없이 사람과의 직접 대화로 수행한 작업은 `CMP-DIRECT`** 를 식별자로 쓴다 (pr-title-lint 가 허용).
 - 머지 방식: **Squash and merge** (gitmoji prefix 유지).
 - `dev` → `main` 승급 자동화는 `.github/workflows/` 의 release 워크플로우(CMP-539 가드 적용)에 따른다.
 
 ### 4.3 PR 체크리스트
 
-- [ ] 관련 이슈 식별자 명시
+- [ ] 관련 이슈 식별자 명시 (보드 이슈 없는 직접 대화 작업은 `CMP-DIRECT`)
 - [ ] 영향 모듈 명시 (`AUTH` / `INPUT` / …)
 - [ ] 공통 컨트랙트(`packages/contracts/`) 변경 시 schema_version bump
 - [ ] 비밀번호·키·도면 등 민감 자료 미포함

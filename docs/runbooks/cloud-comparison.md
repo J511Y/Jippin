@@ -1,5 +1,7 @@
 # 클라우드 후보 비교 메모 (D6)
 
+> ⚠ **후속 갱신 (2026-06-05)**: 본 메모는 "**단일 VM 1대에 web+api+redis**" 전제로 8개 SKU 를 비교했다. 그 전제는 [`ADR-0006`](../adr/0006-deployment-split-topology.md) 에서 **분리형 토폴로지**(web=Vercel · api=Fly.io 도쿄 · redis=Upstash 도쿄 · 추론=HF Endpoint)로 폐기되었다. 본 메모의 §2 비교표·§3 노트·§4 순위는 단일 VM 가정 하의 역사적 자료로 보존한다. 특히 §3.8 의 Fly.io 컷 사유(GPU EOL·단일 VM 결제 비정합)는 ADR-0006 §2.3 에서 재검토되어 무효화되었다(추론 HF offload + Fly 에 api 단일 서비스만 배포).
+
 - 작성자: Cloud Engineer (Infrastructure Lead 가드, agent `575b4fb8`)
 - 작성일: 2026-05-28
 - 관련 이슈: **CMP-532** (`[Infra] 클라우드 후보 비용·리전 비교 메모 (D6) — 비교 전용`)
