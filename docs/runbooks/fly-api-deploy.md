@@ -28,7 +28,7 @@
 **아직 남은 것** (로그인 실제 동작에 필요):
 - Supabase 콘솔 Site URL = `https://jippin.ai` + redirect allow-list (§5)
 - OAuth provider(kakao/google/naver) redirect URI 갱신 (§5)
-- (선택) Vercel Node 버전 24.x → 22.x (engines `<23` 정합)
+- Vercel Node: 빌드는 `engines.node`(`>=22.6 <23`)가 대시보드 24.x 를 오버라이드해 **이미 22.x 로 빌드됨**(빌드 로그 검증) → `.npmrc engine-strict=true` 통과, 빌드 안전. 대시보드 라벨 24.x 는 무시되는 표시(cosmetic). 라벨 정합 원하면 Settings → Node.js Version → 22.x.
 
 ---
 
@@ -75,21 +75,18 @@
 
 > 값은 Supabase·Upstash·OAuth 콘솔에서 복사. 절대 echo/커밋 금지.
 
-- [ ] DB (Supabase, sslmode=require):
-  - `fly secrets set DATABASE_URL="postgresql://...:5432/postgres?sslmode=require"` (non-pooler/direct)
-  - `fly secrets set DATABASE_POOL_URL="postgresql://...pooler...:6543/postgres?sslmode=require"`
-- [ ] Redis (Upstash 도쿄):
-  - `fly secrets set REDIS_URL="rediss://default:****@xxx.upstash.io:6379"`
-  - `fly secrets set OAUTH_STATE_REDIS_URL="rediss://..."` (§1 의 A/B 안에 맞춰)
-- [ ] Supabase Auth (정본, ADR-0004 §2.3):
-  - `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_AUDIENCE`
-- [ ] APP_ENV:
-  - `fly secrets set APP_ENV="production"` (또는 staging — `config.py::ALLOWED_APP_ENVS`)
-- [ ] FRONTEND_AUTH_*_URL — **Vercel 도메인 기준으로 갱신** (localhost 아님):
-  - `FRONTEND_AUTH_SUCCESS_URL=https://jippin.ai/auth/success`, `_FAILURE_URL`, `_TERMS_URL`
-- [ ] OAuth provider (Naver fallback 잔존 시, ADR-0004 §2.5): KAKAO/GOOGLE/NAVER 키 + **REDIRECT_URI 를 `https://api.jippin.ai/...` 로 갱신**
-- [ ] `AUTH_JWT_*` (필요 시)
-- [ ] 전체 목록은 [`infra/compose/.env.example`](../../infra/compose/.env.example) 대조. `:?` 가드 변수가 빠지면 부팅 차단됨.
+- [ ] DB (Supabase, sslmode=require) — **session pooler 5432 채택** (검증값 표 참조). transaction pooler 6543 은 psycopg/ORM prepared-statement 충돌 위험이라 회피. `get_engine()` ([`apps/api/src/db.py`](../../apps/api/src/db.py)) 이 `DATABASE_POOL_URL` 을 런타임 쿼리에 우선 사용:
+  - `fly secrets set DATABASE_POOL_URL="postgresql://postgres.<ref>:****@aws-1-<region>.pooler.supabase.com:5432/postgres?sslmode=require"` (session pooler, 런타임)
+  - `fly secrets set DATABASE_URL="...:5432..."` (동일 session pooler 가능 — migration engine 폴백용)
+- [ ] Redis (managed 도쿄):
+  - `fly secrets set REDIS_URL="rediss://default:****@<host>:<port>"`
+  - `fly secrets set OAUTH_STATE_REDIS_URL="<same url>"` (코드가 `auth:oauth_state:` 접두사 사용 → 동일 URL 로 충분, §1)
+- [ ] Supabase Auth (정본, ADR-0004 §2.3): `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE` (JWKS 비대칭 검증 — `SUPABASE_JWT_SECRET` HS256 은 미사용)
+- [ ] **`AUTH_JWT_SECRET` (필수)** — Supabase 세션 브릿지(`apps/api/src/services/supabase_session.py::_require_settings`)가 없으면 `/auth/supabase/session` 을 **503 으로 막아 `jippin_session` 쿠키를 못 만든다**(OAuth 는 끝나도 로그인 실패). 강한 랜덤값: `python -c "import secrets;print(secrets.token_hex(32))"`. (`AUTH_JWT_ALG` 기본 HS256.)
+- [ ] APP_ENV: `fly secrets set APP_ENV="production"` (또는 staging — `config.py::ALLOWED_APP_ENVS`)
+- [ ] FRONTEND_AUTH_*_URL — **Vercel 도메인 기준** (localhost 아님): `FRONTEND_AUTH_SUCCESS_URL=https://jippin.ai/auth/success`, `_FAILURE_URL`, `_TERMS_URL`
+- [ ] **OAuth provider 키·redirect 는 Fly 에 넣지 않는다.** Supabase Auth 가 OAuth SSOT — provider Client ID/Secret 은 Supabase 콘솔 단독 보유, provider redirect 는 Supabase 콜백으로 간다(§5). api 측 self-OAuth(`KAKAO_REDIRECT_URI` 등)는 라우트가 `_legacy_oauth_flow_removed()` 로 제거되어 미사용.
+- [ ] 전체 목록은 [`infra/compose/.env.example`](../../infra/compose/.env.example) 대조.
 
 ---
 
@@ -126,7 +123,7 @@
 
 - [ ] **Kakao / Google / Naver 개발자 콘솔** → Redirect URI = **`https://<ref>.supabase.co/auth/v1/callback`** (production ref `ywtfmiawlramqqcfwsiv`). `api.jippin.ai` 아님. (`KAKAO_REDIRECT_URI` 등 api 측 변수는 ADR-0004 §2.5 레거시 self-OAuth fallback 용이며 Supabase 흐름엔 미사용.)
 - [ ] **provider Client ID/Secret** → **Supabase 대시보드** Authentication → Providers (콘솔이 단독 보유, [`apps/web/.env.example`](../../apps/web/.env.example) 봉인). api/Fly 에 넣지 않는다.
-- [ ] **Supabase Auth → URL Configuration** → Site URL `https://jippin.ai` + Redirect allow-list `https://jippin.ai/**` (앱 `redirectTo` 허용). ← 앱 복귀 경로는 여기서 허용.
+- [ ] **Supabase Auth → URL Configuration** → Site URL `https://jippin.ai` + Redirect allow-list `https://jippin.ai/**` **및 `https://www.jippin.ai/**`** (www 도 served 도메인이고 `redirectTo` 가 `request.nextUrl.origin` 기반이라 www 진입 OAuth 도 허용돼야 함). 로컬은 `http://localhost:3000/**`.
 - [ ] `NEXT_PUBLIC_SUPABASE_URL` 기반 open-redirect allow-list 가 새 origin 포함하는지 확인 ([`infra/compose/.env.example`](../../infra/compose/.env.example) Supabase OAuth handoff 절)
 
 ---

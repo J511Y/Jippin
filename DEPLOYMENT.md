@@ -2,7 +2,9 @@
 
 이 문서는 집핀의 클라우드 배포 방식, Neon 브랜치 전략, 마이그레이션 검증 절차를 누적 기록하는 운영 문서다. 실제 배포 대상(Vercel, Fly.io, Cloud Run, Lightsail 등)이 확정되면 이 파일에 runbook 을 추가한다.
 
-> **배포 토폴로지 (제안 중, 2026-06-05)**: [`docs/adr/0006-deployment-split-topology.md`](docs/adr/0006-deployment-split-topology.md) (Proposed) 가 **분리형 토폴로지** — web=Vercel · api=Fly.io 도쿄(`nrt`) · redis=Upstash 도쿄 · postgres=Supabase · 도면 추론=Hugging Face Endpoint — 를 제안하며 [`ADR-0002`](docs/adr/0002-deployment-cloud.md) (단일 VM Lightsail Seoul) 를 supersede 한다. 실행 체크리스트: [`docs/runbooks/fly-api-deploy.md`](docs/runbooks/fly-api-deploy.md). 아래 §1 의 Git branch ↔ DB 마이그레이션 흐름은 토폴로지와 무관하게 그대로 유효하다.
+> **배포 토폴로지 (제안 중, 2026-06-05)**: [`docs/adr/0006-deployment-split-topology.md`](docs/adr/0006-deployment-split-topology.md) (Proposed) 가 **분리형 토폴로지** — web=Vercel · api=Fly.io 도쿄(`nrt`) · redis=managed(도쿄) · postgres=Supabase · 도면 추론=Hugging Face Endpoint — 를 제안하며 [`ADR-0002`](docs/adr/0002-deployment-cloud.md) (단일 VM Lightsail Seoul) 를 supersede 한다. 실행 체크리스트: [`docs/runbooks/fly-api-deploy.md`](docs/runbooks/fly-api-deploy.md).
+>
+> ⚠ **DB 마이그레이션 SSOT 는 Supabase** (`supabase/migrations/*.sql` + Supabase GitHub Integration — `AGENTS.md` 최상단 / `docs/runbooks/supabase-*`). 아래 **§1~§4 의 Neon · `neon-pr-branch.yml` · Alembic · `NEON_*` 서술은 Supabase cutover (CMP-603) 이전의 역사적 기록**이며 forward 정본이 아니다 — 새 토폴로지 배포에 Neon 흐름을 적용하지 말 것. (Git branch ↔ APP_ENV ↔ DB 브랜치 매핑 개념만 Supabase 로 치환해 유효.)
 
 ## 1. 현재 배포 모델
 
