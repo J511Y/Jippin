@@ -21,7 +21,7 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
         "secret",
         "token",
         "x_api_key",
-        # 상담 리드 PII (CMP-DIRECT) — 요청 로그 본문에 평문 저장 방지.
+        # 상담 리드 PII (CMP-DIRECT) — 요청 로그 본문/쿼리에 평문 저장 방지.
         "applicant_name",
         "applicant_phone",
         "message",
@@ -29,6 +29,9 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
         "road_addr_part2",
         "road_addr_detail",
         "expansion_location",
+        # GET /leads/address/search 의 검색어(정확한 주소/건물명 = PII)도 쿼리스트링으로
+        # request_logs.parameter 에 남으므로 레닥션 대상에 포함.
+        "keyword",
     }
 )
 

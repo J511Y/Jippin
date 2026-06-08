@@ -27,7 +27,7 @@ import {
   type OwnershipStatus
 } from '@/lib/leads/api';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
-import { uploadFloorplan } from '@/lib/leads/upload';
+import { deleteFloorplan, uploadFloorplan, type UploadedAttachment } from '@/lib/leads/upload';
 import { normalizeKoreanPhone, validateKoreanPhone, validateRequiredText } from '@/lib/leads/validation';
 
 interface FullLeadValues {
@@ -125,10 +125,14 @@ export function ConsultationLeadForm() {
 
   const handleSubmit = form.onSubmit(async (values) => {
     setSubmitting(true);
+    let uploaded: UploadedAttachment | null = null;
     try {
       // 세션 보장: 업로드 라우트가 쿠키로 uid 를 읽고, apiClient 가 Bearer 를 부착한다.
       await ensureAnonymousSession();
-      const attachments = file ? [await uploadFloorplan(file)] : [];
+      if (file) {
+        uploaded = await uploadFloorplan(file);
+      }
+      const attachments = uploaded ? [uploaded] : [];
       await createLead({
         source_form: 'lead_page',
         applicant_kind: values.applicant_kind,
@@ -154,6 +158,11 @@ export function ConsultationLeadForm() {
       setFile(null);
       setKeyword('');
     } catch (error) {
+      // 업로드는 성공했는데 리드 생성이 실패하면 orphan 평면도(연결 row 없는 PII)가
+      // 남는다 — best-effort 로 정리한다(클라이언트엔 삭제 권한이 없어 서버 경로 사용).
+      if (uploaded) {
+        await deleteFloorplan(uploaded.object_path);
+      }
       notifications.show({
         color: 'red',
         title: '상담 신청에 실패했어요',

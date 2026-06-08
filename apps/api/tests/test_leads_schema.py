@@ -80,6 +80,26 @@ def test_invalid_enum_values_are_rejected() -> None:
         )
 
 
+def test_oversized_message_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        LeadCreateRequest(
+            source_form="main_page",
+            applicant_name="홍길동",
+            applicant_phone="01012345678",
+            message="x" * 5001,
+        )
+
+
+def test_too_many_attachments_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        LeadCreateRequest(
+            source_form="main_page",
+            applicant_name="홍길동",
+            applicant_phone="01012345678",
+            attachments=[{"object_path": f"u/{i}.png"} for i in range(6)],
+        )
+
+
 def test_construction_period_reversed_is_rejected() -> None:
     from datetime import date
 

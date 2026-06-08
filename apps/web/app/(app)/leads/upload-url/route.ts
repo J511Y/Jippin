@@ -13,7 +13,7 @@
  * `/api/*` 는 next.config 가 FastAPI 로 rewrite 하므로 본 라우트는 `/leads` 하위에 둔다.
  */
 
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NextResponse, type NextRequest } from 'next/server';
 import { buildLeadObjectPath, validateUploadRequest } from '@/lib/leads/upload-policy';
@@ -90,4 +90,54 @@ export async function POST(request: NextRequest) {
     json.cookies.set(cookie);
   }
   return json;
+}
+
+/**
+ * 업로드된 평면도 정리(best-effort). 리드 생성(POST /leads)이 실패하면 클라이언트가
+ * 방금 올린 object 를 지워 orphan(연결 row 없는 PII 파일)을 남기지 않는다. 스토리지
+ * 버킷엔 client DELETE 정책이 없으므로 서버 S3 자격증명으로만 삭제한다. 소유 폴더가
+ * 세션 uid 와 일치하는 object 만 삭제한다.
+ */
+export async function DELETE(request: NextRequest) {
+  const cookieResponse = new NextResponse(null);
+  const supabase = createRouteHandlerClient({ request, response: cookieResponse });
+  const {
+    data: { user },
+    error: authError
+  } = await supabase.auth.getUser();
+  if (authError || !user) {
+    return jsonError('UNAUTHENTICATED', '세션이 필요합니다.', 401);
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    body = null;
+  }
+  const objectPath =
+    body && typeof body === 'object' && typeof (body as { object_path?: unknown }).object_path === 'string'
+      ? (body as { object_path: string }).object_path
+      : '';
+  if (!objectPath) {
+    return jsonError('INVALID_OBJECT_PATH', 'object_path 가 필요합니다.', 422);
+  }
+  // owner-folder 규약: 첫 세그먼트가 세션 uid 여야 한다.
+  if (objectPath.split('/')[0] !== user.id) {
+    return jsonError('OBJECT_OWNER_MISMATCH', '본인 폴더의 object 만 삭제할 수 있습니다.', 403);
+  }
+
+  const bucket = process.env.LEAD_FLOORPLAN_BUCKET ?? DEFAULT_BUCKET;
+  try {
+    await createS3Client().send(new DeleteObjectCommand({ Bucket: bucket, Key: objectPath }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '삭제에 실패했습니다.';
+    return jsonError('DELETE_FAILED', message, 500);
+  }
+
+  const ok = new NextResponse(null, { status: 204 });
+  for (const cookie of cookieResponse.cookies.getAll()) {
+    ok.cookies.set(cookie);
+  }
+  return ok;
 }

@@ -67,3 +67,19 @@ export async function uploadFloorplan(file: File): Promise<UploadedAttachment> {
     byte_size: file.size
   };
 }
+
+/**
+ * 업로드된 평면도를 정리한다(best-effort). 리드 생성 실패 시 orphan PII 파일을 남기지
+ * 않기 위해 호출한다. 실패해도 throw 하지 않는다(원래 에러 흐름을 가리지 않도록).
+ */
+export async function deleteFloorplan(objectPath: string): Promise<void> {
+  try {
+    await fetch('/leads/upload-url', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ object_path: objectPath })
+    });
+  } catch {
+    // 정리는 best-effort — 서버측 cleanup 잡이 최종 안전망.
+  }
+}

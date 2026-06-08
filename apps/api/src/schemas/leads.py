@@ -56,13 +56,19 @@ def normalize_korean_phone(raw: str) -> str:
     )
 
 
+# 익명 제출도 허용되므로 무제한 입력으로 DB/처리 자원을 소모하지 못하게 상한을 둔다.
+_MAX_MESSAGE_LEN = 5000
+_MAX_TEXT_LEN = 255
+_MAX_ATTACHMENTS = 5
+
+
 class LeadAttachmentInput(BaseModel):
     """리드 첨부 한 건 — 프론트가 Supabase Storage 업로드 후 넘기는 object metadata."""
 
-    object_path: str = Field(min_length=1)
-    bucket: str | None = None
-    file_name: str | None = None
-    content_type: str | None = None
+    object_path: str = Field(min_length=1, max_length=1024)
+    bucket: str | None = Field(default=None, max_length=255)
+    file_name: str | None = Field(default=None, max_length=255)
+    content_type: str | None = Field(default=None, max_length=255)
     byte_size: int | None = Field(default=None, ge=0)
 
 
@@ -77,16 +83,18 @@ class LeadCreateRequest(BaseModel):
     applicant_kind: ApplicantKind = "individual"
     applicant_name: str = Field(min_length=1, max_length=100)
     applicant_phone: str = Field(min_length=1, max_length=40)
-    road_addr_part1: str | None = None
-    road_addr_part2: str | None = None
-    road_addr_detail: str | None = None
-    expansion_location: str | None = None
+    road_addr_part1: str | None = Field(default=None, max_length=_MAX_TEXT_LEN)
+    road_addr_part2: str | None = Field(default=None, max_length=_MAX_TEXT_LEN)
+    road_addr_detail: str | None = Field(default=None, max_length=_MAX_TEXT_LEN)
+    expansion_location: str | None = Field(default=None, max_length=_MAX_TEXT_LEN)
     ownership_status: OwnershipStatus | None = None
     construction_start_date: date | None = None
     construction_end_date: date | None = None
     inflow_source: InflowSource | None = None
-    message: str | None = None
-    attachments: list[LeadAttachmentInput] = Field(default_factory=list)
+    message: str | None = Field(default=None, max_length=_MAX_MESSAGE_LEN)
+    attachments: list[LeadAttachmentInput] = Field(
+        default_factory=list, max_length=_MAX_ATTACHMENTS
+    )
 
     @field_validator("applicant_name", "applicant_phone", mode="before")
     @classmethod

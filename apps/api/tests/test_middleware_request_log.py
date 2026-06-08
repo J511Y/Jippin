@@ -195,6 +195,40 @@ def test_request_log_redacts_expanded_sensitive_keys_in_params_and_body(monkeypa
         assert leaked not in serialized
 
 
+def test_request_log_redacts_lead_pii_and_address_keyword(monkeypatch):
+    """상담 리드 PII(이름/연락처/주소/내용)와 주소검색 keyword 가 로그에서 가려진다."""
+    records = []
+    monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
+
+    app = create_app()
+
+    @app.post("/_lead")
+    async def _lead(request: Request):
+        return {"received": await request.json()}
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/_lead",
+            params={"keyword": "서울 강남구 테헤란로 1 아무아파트"},
+            json={
+                "applicant_name": "홍길동",
+                "applicant_phone": "010-1234-5678",
+                "road_addr_detail": "101동 1001호",
+                "message": "벽 철거 가능한지 궁금합니다",
+            },
+        )
+
+    assert response.status_code == 200
+    record = records[0]
+    assert record["parameter"]["keyword"] == REDACTED_VALUE
+    for key in ("applicant_name", "applicant_phone", "road_addr_detail", "message"):
+        assert record["body"][key] == REDACTED_VALUE
+
+    serialized = _serialized(record["parameter"]) + _serialized(record["body"])
+    for leaked in ("홍길동", "010-1234-5678", "101동", "테헤란로", "철거"):
+        assert leaked not in serialized
+
+
 def test_request_log_does_not_persist_sensitive_header_names_or_values(monkeypatch):
     records = []
     monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
