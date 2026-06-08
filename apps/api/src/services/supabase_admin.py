@@ -84,6 +84,44 @@ async def find_emails_by_phone(phone: str) -> list[dict[str, str]]:
     ]
 
 
+async def get_email_by_user_id(user_id: uuid.UUID) -> str | None:
+    query = sa.text("select email from auth.users where id = :id limit 1")
+    async with get_engine().begin() as conn:
+        row = (await conn.execute(query, {"id": str(user_id)})).first()
+    return row.email if row is not None and row.email else None
+
+
+async def verify_password(
+    *,
+    email: str,
+    password: str,
+    http_client: httpx.AsyncClient | None = None,
+    settings: Settings | None = None,
+) -> bool:
+    """GoTrue password grant 로 현재 비밀번호가 맞는지 확인한다(세션은 버린다)."""
+
+    settings = settings or get_settings()
+    if not settings.supabase_publishable_key:
+        raise ZippinException(
+            "비밀번호 확인이 설정되지 않았습니다.",
+            code="AUTH_ADMIN_NOT_CONFIGURED",
+            http_status=503,
+        )
+    url = f"{_admin_base(settings)}/token?grant_type=password"
+    headers = {
+        "apikey": settings.supabase_publishable_key,
+        "Content-Type": "application/json",
+    }
+
+    async def _run(client: httpx.AsyncClient) -> httpx.Response:
+        return await client.post(
+            url, json={"email": email, "password": password}, headers=headers
+        )
+
+    response = await _send(_run, http_client)
+    return response.status_code == 200
+
+
 async def find_user_id_by_email_and_phone(email: str, phone: str) -> uuid.UUID | None:
     """이메일 + 휴대폰이 같은 계정에 속하는지 확인하고 user id 를 반환한다."""
 

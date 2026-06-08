@@ -234,6 +234,63 @@ def test_reset_password_404_when_no_match(monkeypatch, store) -> None:
     assert resp.json()["error"]["code"] == "ACCOUNT_NOT_FOUND"
 
 
+def test_change_password_succeeds(monkeypatch) -> None:
+    pem, jwk = helpers.rsa_keypair()
+    helpers.install_jwks(monkeypatch, {"keys": [jwk]})
+    token, subject = helpers.mint_token(pem, "test-key-1", is_anonymous=False)
+
+    updated: dict[str, object] = {}
+
+    async def fake_email(user_id):
+        return "hong@example.com"
+
+    async def fake_verify(*, email, password):
+        return password == "oldpw123"
+
+    async def fake_update(**kwargs):
+        updated.update(kwargs)
+
+    monkeypatch.setattr("src.services.supabase_admin.get_email_by_user_id", fake_email)
+    monkeypatch.setattr("src.services.supabase_admin.verify_password", fake_verify)
+    monkeypatch.setattr("src.services.supabase_admin.update_user_password", fake_update)
+
+    client = TestClient(create_app())
+    with client:
+        resp = client.post(
+            "/auth/change-password",
+            headers={"authorization": f"Bearer {token}"},
+            json={"current_password": "oldpw123", "new_password": "newpw123"},
+        )
+    assert resp.status_code == 200
+    assert updated["user_id"] == subject
+    assert updated["password"] == "newpw123"
+
+
+def test_change_password_rejects_wrong_current(monkeypatch) -> None:
+    pem, jwk = helpers.rsa_keypair()
+    helpers.install_jwks(monkeypatch, {"keys": [jwk]})
+    token, _subject = helpers.mint_token(pem, "test-key-1", is_anonymous=False)
+
+    async def fake_email(user_id):
+        return "hong@example.com"
+
+    async def fake_verify(*, email, password):
+        return False
+
+    monkeypatch.setattr("src.services.supabase_admin.get_email_by_user_id", fake_email)
+    monkeypatch.setattr("src.services.supabase_admin.verify_password", fake_verify)
+
+    client = TestClient(create_app())
+    with client:
+        resp = client.post(
+            "/auth/change-password",
+            headers={"authorization": f"Bearer {token}"},
+            json={"current_password": "wrong1", "new_password": "newpw123"},
+        )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "CURRENT_PASSWORD_MISMATCH"
+
+
 def test_delete_account_requires_permanent_user(monkeypatch) -> None:
     pem, jwk = helpers.rsa_keypair()
     helpers.install_jwks(monkeypatch, {"keys": [jwk]})

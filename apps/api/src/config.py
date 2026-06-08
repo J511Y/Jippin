@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     # admin base 는 supabase_jwt_issuer(=https://<ref>.supabase.co/auth/v1)에서 파생한다.
     supabase_url: str | None = Field(default=None)
     supabase_service_role_key: str | None = Field(default=None)
+    # 비밀번호 변경 시 현재 비밀번호 검증(GoTrue password grant)용 anon/publishable 키.
+    supabase_publishable_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY"
+        ),
+    )
     # 회원가입 비밀번호 정책 (Supabase 콘솔 설정과 정합: 최소 6자, 영문+숫자).
     signup_min_password_length: int = Field(default=6)
 

@@ -156,5 +156,19 @@ class ResetPasswordResponse(BaseModel):
     ok: bool = True
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)
+    new_password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)
+
+    @field_validator("new_password")
+    @classmethod
+    def _check_password(cls, value: str) -> str:
+        return validate_password_policy(value)
+
+
+class ChangePasswordResponse(BaseModel):
+    ok: bool = True
+
+
 class DeleteAccountResponse(BaseModel):
     ok: bool = True

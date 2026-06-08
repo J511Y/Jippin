@@ -20,6 +20,8 @@ from ..auth.request_token import RequestUser, require_supabase_request_user
 from ..errors import ZippinException
 from ..logging import get_logger
 from ..schemas.account import (
+    ChangePasswordRequest,
+    ChangePasswordResponse,
     DeleteAccountResponse,
     FindEmailRequest,
     FindEmailResponse,
@@ -114,6 +116,39 @@ async def reset_password(payload: ResetPasswordRequest) -> ResetPasswordResponse
     )
     logger.info("password_reset_completed", user_id=str(user_id))
     return ResetPasswordResponse()
+
+
+@router.post("/change-password", response_model=ChangePasswordResponse)
+async def change_password(
+    payload: ChangePasswordRequest,
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> ChangePasswordResponse:
+    if requester.is_anonymous:
+        raise ZippinException(
+            "비밀번호 변경은 로그인한 회원만 가능합니다.",
+            code="AUTH_ANONYMOUS_TOKEN_NOT_ALLOWED",
+            http_status=403,
+        )
+    email = await supabase_admin.get_email_by_user_id(requester.user_id)
+    if email is None:
+        raise ZippinException(
+            "이메일 계정이 아니어서 비밀번호를 변경할 수 없습니다.",
+            code="ACCOUNT_NOT_EMAIL_USER",
+            http_status=400,
+        )
+    if not await supabase_admin.verify_password(
+        email=email, password=payload.current_password
+    ):
+        raise ZippinException(
+            "현재 비밀번호가 일치하지 않습니다.",
+            code="CURRENT_PASSWORD_MISMATCH",
+            http_status=400,
+        )
+    await supabase_admin.update_user_password(
+        user_id=requester.user_id, password=payload.new_password
+    )
+    logger.info("password_changed", user_id=str(requester.user_id))
+    return ChangePasswordResponse()
 
 
 @router.delete("/account", response_model=DeleteAccountResponse)
