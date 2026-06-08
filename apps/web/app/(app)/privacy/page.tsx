@@ -14,7 +14,8 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
 export const metadata: Metadata = {
-  title: '개인정보처리방침'
+  title: '개인정보처리방침',
+  alternates: { canonical: '/privacy' }
 };
 
 const EFFECTIVE_DATE = '2026년 6월 8일';

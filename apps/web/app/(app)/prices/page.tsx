@@ -14,8 +14,20 @@ import {
 import { IconArrowRight, IconCheck } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 
+import { SITE_OG_IMAGE } from '@/lib/site';
+
 export const metadata: Metadata = {
-  title: '가격'
+  title: '가격 — AI 사전검토·행위허가 대행',
+  description:
+    '베란다 확장·가벽철거 AI 사전검토는 무료. 전문가 1:1 상담과 입주민 동의서·행위허가 신청 대행까지, 집핀 서비스 단계별 가격을 확인하세요.',
+  keywords: ['베란다 확장 비용', '행위허가 대행 비용', '사전검토 가격', '발코니 확장 견적'],
+  alternates: { canonical: '/prices' },
+  openGraph: {
+    title: '집핀 가격 — AI 사전검토·행위허가 대행',
+    description: '발코니 확장·가벽철거 AI 사전검토 무료. 상담·동의서·행위허가 대행 단계별 가격.',
+    url: '/prices',
+    images: [{ url: SITE_OG_IMAGE }]
+  }
 };
 
 type Plan = {
