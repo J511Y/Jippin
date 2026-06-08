@@ -2,6 +2,7 @@ import { ColorSchemeScript, mantineHtmlProps } from '@mantine/core';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import { LegalNotice } from '@/components/LegalNotice';
+import { WebVitals } from '@/components/WebVitals';
 import { Providers } from '@/lib/providers';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
@@ -46,6 +47,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <main style={{ flex: '1 0 auto' }}>{children}</main>
           <LegalNotice />
         </Providers>
+        <WebVitals />
       </body>
     </html>
   );
