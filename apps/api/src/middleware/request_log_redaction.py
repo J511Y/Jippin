@@ -21,6 +21,14 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
         "secret",
         "token",
         "x_api_key",
+        # 상담 리드 PII (CMP-DIRECT) — 요청 로그 본문에 평문 저장 방지.
+        "applicant_name",
+        "applicant_phone",
+        "message",
+        "road_addr_part1",
+        "road_addr_part2",
+        "road_addr_detail",
+        "expansion_location",
     }
 )
 

@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     anon_session_ttl_days: int = Field(default=30)
     redis_url: str = Field(default="redis://redis:6379/0")
 
+    # 상담 리드(consultation leads) — CMP-DIRECT.
+    # 도로명주소 API 승인키(business.juso.go.kr). 미설정 시 주소 검색 endpoint 가 503.
+    juso_confm_key: str | None = Field(default=None)
+    juso_api_url: str = Field(
+        default="https://business.juso.go.kr/addrlink/addrLinkApi.do"
+    )
+    # 평면도 첨부 Supabase Storage 버킷명 (migration 0009 와 정합).
+    lead_floorplan_bucket: str = Field(default="lead-floorplans")
+
     # CMP-609 Phase A skeleton 라우터 (sessions/floorplans/chat) 의 운영 노출 가드.
     # `services.main_flow` 는 in-memory 저장소이므로 컨테이너 재시작/멀티 worker
     # 환경에서 세션이 유실된다. CMP-608 Phase A migration + DB-backed repository

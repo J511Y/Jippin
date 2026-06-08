@@ -8,6 +8,7 @@ import {
   Card,
   Container,
   Group,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Text,
@@ -24,6 +25,10 @@ import {
   IconUserCheck
 } from '@tabler/icons-react';
 import { useState, type FormEvent } from 'react';
+import { parseApiError } from '@/lib/api/error';
+import { createLead, type ApplicantKind } from '@/lib/leads/api';
+import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
+import { normalizeKoreanPhone } from '@/lib/leads/validation';
 
 const POINTS = [
   { icon: IconClockHour4, label: '영업일 1일 내 연락' },
@@ -32,32 +37,58 @@ const POINTS = [
 ];
 
 /**
- * 메인 랜딩의 "빠른 상담" CTA 섹션. 비회원도 이름·연락처만으로 즉시 상담을 신청할 수 있다.
- * 디자인 단계: 실제 리드 생성 API 연결 전이라 제출 시 접수 알림만 표시한다.
+ * 메인 랜딩의 "빠른 상담" CTA 섹션. 비회원(익명 Supabase 세션)도 신청 구분·이름·연락처·
+ * 메모만으로 즉시 상담을 신청할 수 있다 (POST /leads, source_form='main_page', CMP-DIRECT).
  */
 export function QuickConsultSection() {
+  const [kind, setKind] = useState<ApplicantKind>('individual');
   const [name, setName] = useState('');
   const [contact, setContact] = useState('');
   const [memo, setMemo] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim() || !contact.trim()) {
+    const phone = normalizeKoreanPhone(contact);
+    if (!name.trim() || !phone) {
       notifications.show({
         color: 'red',
         title: '입력을 확인해 주세요',
-        message: '이름과 연락처는 필수입니다.'
+        message: !name.trim()
+          ? '이름을 입력해 주세요.'
+          : '연락처 형식을 확인해 주세요. 예: 010-1234-5678'
       });
       return;
     }
-    notifications.show({
-      color: 'teal',
-      title: '상담 신청이 접수되었어요',
-      message: `${name.trim()}님, 영업일 기준 1일 이내에 연락드릴게요.`
-    });
-    setName('');
-    setContact('');
-    setMemo('');
+    setSubmitting(true);
+    try {
+      // 비로그인도 가능: 익명 세션 보장 후 리드 생성.
+      await ensureAnonymousSession();
+      await createLead({
+        source_form: 'main_page',
+        applicant_kind: kind,
+        applicant_name: name.trim(),
+        applicant_phone: phone,
+        message: memo.trim() || null
+      });
+      notifications.show({
+        color: 'teal',
+        title: '상담 신청이 접수되었어요',
+        message: `${name.trim()}님, 영업일 기준 1일 이내에 연락드릴게요.`
+      });
+      setKind('individual');
+      setName('');
+      setContact('');
+      setMemo('');
+    } catch (error) {
+      notifications.show({
+        color: 'red',
+        title: '상담 신청에 실패했어요',
+        message: parseApiError(error).message
+      });
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -117,6 +148,18 @@ export function QuickConsultSection() {
             onSubmit={handleSubmit}
           >
             <Stack gap="md">
+              <SegmentedControl
+                fullWidth
+                radius="md"
+                size="md"
+                value={kind}
+                onChange={(value) => setKind(value as ApplicantKind)}
+                data={[
+                  { value: 'individual', label: '개인' },
+                  { value: 'company', label: '업체' }
+                ]}
+                aria-label="신청 구분"
+              />
               <TextInput
                 label="이름"
                 placeholder="예: 홍길동"
@@ -128,7 +171,8 @@ export function QuickConsultSection() {
               />
               <TextInput
                 label="연락처"
-                placeholder="010-0000-0000 또는 이메일"
+                placeholder="010-0000-0000"
+                inputMode="tel"
                 radius="md"
                 size="md"
                 withAsterisk
@@ -151,6 +195,7 @@ export function QuickConsultSection() {
                 color="coral"
                 radius="md"
                 fullWidth
+                loading={submitting}
                 rightSection={<IconArrowRight size={18} />}
               >
                 상담 신청하기

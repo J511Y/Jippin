@@ -27,6 +27,10 @@ from .auth import (  # noqa: E402
     TermsConsent,
     User,
 )
+from .consultation_lead import (  # noqa: E402
+    ConsultationLead,
+    ConsultationLeadAttachment,
+)
 from .main_feature import (  # noqa: E402
     ChatMessage,
     ChatToolCall,
@@ -45,6 +49,8 @@ __all__ = [
     "Base",
     "ChatMessage",
     "ChatToolCall",
+    "ConsultationLead",
+    "ConsultationLeadAttachment",
     "CreatedAtMixin",
     "CreatedByMixin",
     "Floorplan",
