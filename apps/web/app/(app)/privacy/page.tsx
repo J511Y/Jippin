@@ -96,6 +96,13 @@ const ENTRUSTMENT_ROWS: EntrustmentRow[] = [
     transfer: '미국 / 사전검토 요청 시점 / 네트워크를 통한 전송',
     items: '도면 파일 및 분석에 필요한 대상 정보',
     retention: '분석 처리 완료 후 즉시(별도 보관하지 않음)'
+  },
+  {
+    trustee: 'Vercel',
+    task: '웹 서비스 호스팅 및 이용 통계·성능 분석(Web Analytics·Speed Insights)',
+    transfer: '미국 / 서비스 이용 시점 / 네트워크를 통한 전송',
+    items: '접속 로그, 기기·브라우저 정보, 방문 페이지 경로, IP 기반 추정 지역',
+    retention: '위탁 계약 종료 또는 보유 목적 달성 시까지'
   }
 ];
 
