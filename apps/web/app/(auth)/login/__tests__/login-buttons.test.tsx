@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -13,36 +13,7 @@ vi.mock('@/lib/supabase/client', () => ({
   }),
 }));
 
-import { MantineProvider } from '@mantine/core';
-import type { ReactElement, ReactNode } from 'react';
-
 import { LoginButtons } from '../login-buttons';
-
-// jsdom 에는 matchMedia 가 없어 MantineProvider(색상 스킴 감지)가 throw 한다 — mock 주입.
-if (typeof window.matchMedia !== 'function') {
-  Object.defineProperty(window, 'matchMedia', {
-    writable: true,
-    value: (query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    }),
-  });
-}
-
-// LoginButtons 가 Mantine 컴포넌트(Button/Stack/Text)를 쓰므로 MantineProvider 로 감싼다.
-function renderWithMantine(ui: ReactElement) {
-  return render(ui, {
-    wrapper: ({ children }: { children: ReactNode }) => (
-      <MantineProvider>{children}</MantineProvider>
-    ),
-  });
-}
 
 afterEach(() => {
   cleanup();
@@ -50,7 +21,7 @@ afterEach(() => {
 
 describe('LoginButtons — provider whitelist UI seal', () => {
   it('renders exactly 1 OAuth provider button (Kakao only)', () => {
-    renderWithMantine(<LoginButtons nextPath={null} />);
+    render(<LoginButtons nextPath={null} />);
     const buttons = screen.getAllByRole('button');
     expect(buttons).toHaveLength(1);
     expect(screen.getByText('카카오로 시작하기')).toBeDefined();
@@ -59,7 +30,7 @@ describe('LoginButtons — provider whitelist UI seal', () => {
   });
 
   it('does not render any email / password / OTP / magic-link input field', () => {
-    const { container } = renderWithMantine(<LoginButtons nextPath={null} />);
+    const { container } = render(<LoginButtons nextPath={null} />);
     const inputs = container.querySelectorAll('input');
     expect(inputs.length).toBe(0);
     for (const inputType of ['email', 'password', 'tel', 'text']) {
@@ -71,7 +42,7 @@ describe('LoginButtons — provider whitelist UI seal', () => {
   });
 
   it('does not render passwordless / magic-link / OTP CTA text', () => {
-    renderWithMantine(<LoginButtons nextPath={null} />);
+    render(<LoginButtons nextPath={null} />);
     expect(screen.queryByText(/이메일.*로그인/i)).toBeNull();
     expect(screen.queryByText(/비밀번호/i)).toBeNull();
     expect(screen.queryByText(/매직 ?링크/i)).toBeNull();
@@ -115,7 +86,7 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
         kakao: '카카오로 시작하기',
       } as const;
 
-      renderWithMantine(<LoginButtons nextPath="/dashboard" />);
+      render(<LoginButtons nextPath="/dashboard" />);
       fireEvent.click(screen.getByText(labels[provider]));
 
       await waitFor(() => {
@@ -152,7 +123,7 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
       error: null,
     });
 
-    renderWithMantine(<LoginButtons nextPath="/reports/preview" />);
+    render(<LoginButtons nextPath="/reports/preview" />);
     fireEvent.click(screen.getByText('카카오로 시작하기'));
 
     await waitFor(() => {
@@ -177,7 +148,7 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
       error: null,
     });
 
-    renderWithMantine(<LoginButtons nextPath="/account" />);
+    render(<LoginButtons nextPath="/account" />);
     fireEvent.click(screen.getByText('카카오로 시작하기'));
 
     await waitFor(() => {
