@@ -27,6 +27,8 @@ import {
 } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 
+import { Reveal } from '@/components/landing/Reveal';
+import { StatBand } from '@/components/landing/StatBand';
 import { QuickConsultSection } from '@/components/QuickConsultSection';
 
 export const metadata: Metadata = {
@@ -89,12 +91,6 @@ const FEATURES = [
   }
 ];
 
-const STATS = [
-  { value: '20년+', label: '업력 (2007~)' },
-  { value: '25,000+', label: '누적 건수' },
-  { value: '1분', label: 'AI 사전검토 완료' }
-];
-
 export default function HomePage() {
   return (
     <Box>
@@ -113,10 +109,12 @@ export default function HomePage() {
             paddingBottom: 'clamp(3rem, 7vw, 6rem)'
           }}
         >
+          <Reveal immediate stagger={0.14} style={{ display: 'contents' }}>
           <SimpleGrid cols={{ base: 1, md: 2 }} spacing={48} verticalSpacing={48}>
             <Stack gap="lg" justify="center">
               <Title
                 order={1}
+                data-reveal
                 style={{
                   fontSize: 'clamp(2rem, 4.5vw, 3.25rem)',
                   lineHeight: 1.12,
@@ -139,12 +137,13 @@ export default function HomePage() {
                 size="lg"
                 c="dimmed"
                 maw={520}
+                data-reveal
                 style={{ wordBreak: 'keep-all', lineHeight: 1.6 }}
               >
                 인테리어로 집 안의 벽을 트거나 옮기고 싶을 때, 헐어도 되는 벽인지
                 도면과 주소만으로 미리 확인해 드려요.
               </Text>
-              <Group gap="sm" mt="xs">
+              <Group gap="sm" mt="xs" data-reveal>
                 <Button
                   component="a"
                   href="/sessions/new"
@@ -168,7 +167,7 @@ export default function HomePage() {
             </Stack>
 
             {/* 리포트 목업 */}
-            <Box visibleFrom="md" style={{ position: 'relative' }}>
+            <Box visibleFrom="md" data-reveal style={{ position: 'relative' }}>
               <Card
                 shadow="xl"
                 radius="lg"
@@ -223,6 +222,7 @@ export default function HomePage() {
               </Card>
             </Box>
           </SimpleGrid>
+          </Reveal>
         </Container>
       </Box>
 
@@ -249,6 +249,7 @@ export default function HomePage() {
             도면 한 장으로, 1분 사전검토
           </Title>
         </Stack>
+        <Reveal>
         {/* 데스크탑·태블릿: 연결 스텝퍼 */}
         <Box visibleFrom="sm" style={{ position: 'relative' }}>
           {/* 연결 레일 (데스크탑) — 4단계가 한 흐름으로 읽히도록 */}
@@ -272,7 +273,7 @@ export default function HomePage() {
             style={{ position: 'relative', zIndex: 1 }}
           >
             {STEPS.map((step, i) => (
-              <Stack key={step.title} gap="sm" align="center" ta="center">
+              <Stack key={step.title} data-reveal gap="sm" align="center" ta="center">
                 <ThemeIcon
                   size={54}
                   radius="xl"
@@ -315,6 +316,7 @@ export default function HomePage() {
           {STEPS.map((step, i) => (
             <Card
               key={step.title}
+              data-reveal
               withBorder
               radius="lg"
               padding="lg"
@@ -336,6 +338,7 @@ export default function HomePage() {
             </Card>
           ))}
         </Box>
+        </Reveal>
       </Container>
 
       {/* ── FEATURES ─────────────────────────────────────────── */}
@@ -366,47 +369,13 @@ export default function HomePage() {
               사전검토부터 허가·시공까지 끝까지 책임집니다.
             </Text>
           </Stack>
-          {/* 큰 숫자 스탯 밴드 — 한눈에 들어오는 신뢰 앵커 */}
-          <Box
-            mb="xl"
-            p="xl"
-            style={{
-              borderRadius: 'var(--mantine-radius-lg)',
-              background:
-                'linear-gradient(135deg, #0F5F59 0%, #147A73 60%, #2D8F87 100%)'
-            }}
-          >
-            <SimpleGrid cols={3} spacing="md">
-              {STATS.map((s) => (
-                <Stack key={s.label} gap={2} align="center" ta="center">
-                  <Text
-                    fw={800}
-                    c="#FFFFFF"
-                    style={{
-                      fontSize: 'clamp(1.5rem, 4.5vw, 2.5rem)',
-                      lineHeight: 1.1,
-                      letterSpacing: '-0.02em'
-                    }}
-                  >
-                    {s.value}
-                  </Text>
-                  <Text
-                    size="sm"
-                    style={{
-                      color: 'rgba(255,255,255,0.85)',
-                      wordBreak: 'keep-all'
-                    }}
-                  >
-                    {s.label}
-                  </Text>
-                </Stack>
-              ))}
-            </SimpleGrid>
-          </Box>
+          {/* 큰 숫자 스탯 밴드 — 한눈에 들어오는 신뢰 앵커 (뷰포트 진입 시 카운트업) */}
+          <StatBand />
 
+          <Reveal stagger={0.08}>
           <SimpleGrid visibleFrom="sm" cols={{ sm: 2, md: 3 }} spacing="lg">
             {FEATURES.map((f) => (
-              <Card key={f.title} withBorder radius="lg" padding="lg">
+              <Card key={f.title} data-reveal withBorder radius="lg" padding="lg">
                 <Stack gap="sm">
                   <ThemeIcon size={48} radius="md" variant="light" color="jippin">
                     <f.icon size={26} />
@@ -437,6 +406,7 @@ export default function HomePage() {
             {FEATURES.map((f) => (
               <Card
                 key={f.title}
+                data-reveal
                 withBorder
                 radius="lg"
                 padding="lg"
@@ -456,6 +426,7 @@ export default function HomePage() {
               </Card>
             ))}
           </Box>
+          </Reveal>
         </Container>
       </Box>
 
