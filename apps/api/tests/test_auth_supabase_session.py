@@ -148,6 +148,16 @@ def _install_identity_lookup(monkeypatch, *, user_id: uuid.UUID | None) -> None:
         fake_current_user_context,
     )
 
+    # Kakao 브리지 경로는 record_kakao_sync_consent 로 동의를 기록하고 잔여 누락을
+    # 반환한다. 기본 mock 은 누락 없음([]) — 내부 약관 화면으로 빠지지 않는다.
+    async def fake_record_kakao_sync_consent(user_id: uuid.UUID):  # noqa: ARG001
+        return []
+
+    monkeypatch.setattr(
+        "src.routers.auth.record_kakao_sync_consent",
+        fake_record_kakao_sync_consent,
+    )
+
 
 def test_supabase_session_missing_authorization_header_returns_401(
     supabase_env, monkeypatch
@@ -535,3 +545,101 @@ async def test_supabase_identity_lookup_rejects_non_uuid_subject(monkeypatch):
 
     assert exc_info.value.code == "AUTH_INVALID_TOKEN"
     assert conn.statements == []
+
+
+def test_supabase_session_kakao_records_sync_consent_and_skips_internal_terms(
+    supabase_env, monkeypatch
+):
+    """Kakao Sync 로그인은 source='kakao_sync' 동의를 기록하고 /auth/terms 로 보내지 않는다.
+
+    회귀: 브리지가 동의를 기록하지 않아 missing_required_terms 가 채워지면 Kakao
+    사용자가 내부 약관 화면으로 잘못 유도된다 (AGENTS §4.7 #5 위반).
+    """
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    user_id = uuid.uuid4()
+
+    async def fake_resolve(*, supabase_subject, email_claim):  # noqa: ARG001
+        return bridge_service.SupabaseBridgeResult(user_id=user_id)
+
+    monkeypatch.setattr(
+        "src.routers.auth.resolve_jippin_user_for_supabase", fake_resolve
+    )
+
+    recorded: dict[str, Any] = {}
+
+    async def fake_record(consenting_user_id: uuid.UUID):
+        recorded["user_id"] = consenting_user_id
+        return []
+
+    monkeypatch.setattr("src.routers.auth.record_kakao_sync_consent", fake_record)
+
+    async def fail_context(_user_id: uuid.UUID):
+        raise AssertionError("get_current_user_context must not run on the kakao path")
+
+    monkeypatch.setattr("src.routers.auth.get_current_user_context", fail_context)
+
+    token = _mint_token(
+        pem, jwk["kid"], extra_claims={"app_metadata": _KAKAO_APP_METADATA}
+    )
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "kakao"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["signup_complete"] is True
+    assert body["missing_required_terms"] == []
+    assert body["redirect_url"] is None
+    assert recorded["user_id"] == user_id
+
+
+class _FakeScalars:
+    def __init__(self, values):
+        self._values = list(values)
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return list(self._values)
+
+
+class _FakeKakaoConsentConn:
+    def __init__(self, agreed_after_insert):
+        self.agreed = agreed_after_insert
+        self.statements: list[str] = []
+
+    async def execute(self, statement, *args):  # noqa: ARG002
+        sql = str(statement)
+        self.statements.append(sql)
+        if sql.startswith("INSERT INTO terms_consents"):
+            return None
+        return _FakeScalars(self.agreed)
+
+
+@pytest.mark.asyncio
+async def test_record_kakao_sync_consent_inserts_kakao_source_and_returns_missing(
+    supabase_env, monkeypatch
+):
+    from src.services import auth as auth_service
+
+    user_id = uuid.uuid4()
+    # insert 직후 select 에서 모든 필수 태그가 동의됨으로 보이게 → missing 없음.
+    conn = _FakeKakaoConsentConn(
+        agreed_after_insert=["service_terms", "privacy_policy"]
+    )
+    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
+
+    missing = await auth_service.record_kakao_sync_consent(user_id)
+
+    assert missing == []
+    insert_sql = next(
+        s for s in conn.statements if s.startswith("INSERT INTO terms_consents")
+    )
+    assert "ON CONFLICT" in insert_sql
+    assert "DO NOTHING" in insert_sql
