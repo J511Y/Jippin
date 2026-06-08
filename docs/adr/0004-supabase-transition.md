@@ -83,7 +83,7 @@ CMP-573 에서 사용자(CEO 권한 행사) 가 **Neon Postgres + 자체 OAuth/J
 | **Auth (`auth.users` + provider 콜백 + 익명 + identity linking)** | ✅ 채택 — 인증 SSOT | RLS 활용은 §4.3 |
 | **Realtime** | 🟡 보류 — 후속 이슈에서 채팅 / OVERLAY 실시간성 재평가 시 결정 | 본 ADR 범위 외 |
 | **Edge Functions** | 🟡 보류 — FastAPI 가 정본 API. Edge Function 은 webhook 정합용 옵션. | 본 ADR 범위 외 |
-| **Storage** | ❌ 채택 안 함 — Cloudflare R2 유지 (ADR-0001 §6 보존) | 별도 ADR 필요 시 발행 |
+| **Storage** | ❌ 전면 채택 안 함 — Cloudflare R2 유지 (ADR-0001 §6 보존). **단, 상담 리드 첨부(평면도) 한정으로 Supabase Storage 도입 — ADR-0007 (2026-06-08)** | ADR-0007 발행 |
 | **Auth Hooks (Custom Access Token / Send SMS 등)** | 🟡 보류 — Naver Custom OAuth PoC 결과에 따라 결정 | 본 ADR §4.5 PoC |
 | **Vault / Secrets** | ❌ 채택 안 함 — 시크릿은 운영 매니저 (현 정책) 유지 | — |
 

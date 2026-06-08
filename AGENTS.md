@@ -181,7 +181,7 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 1. **비회원 사전검토 허용.** 도면 업로드·마스킹·1차 AI 판단·리포트 미리보기까지는 익명 세션으로 진행 가능하다. 로그인 게이트로 사전검토 흐름을 끊지 않는다.
 2. **전환 시점 OAuth 간편가입 의무.** 다음 전환 지점에서만 OAuth 로그인을 강제한다.
    - (a) **상담 전환** — 사업자 연결·견적·연락 요청 시점.
-   - (b) **리드 생성** — 사업자 측 리드 풀에 사용자 식별이 필요한 시점.
+   - (b) **리드 생성** — 사업자 측 리드 풀에 사용자 식별이 필요한 시점. **(override — `docs/adr/0007` / CMP-DIRECT, 2026-06-08)**: 운영자 결정으로 **상담 신청/리드 생성은 비회원(익명 Supabase 토큰)도 허용**한다. `POST /leads` 는 익명 OK 인증을 쓰고 `consultation_leads.is_anonymous` 로 익명 여부를 보존한다. 리드 테이블은 PostgREST 미노출 + RLS client grant 없음(백엔드 전용, PII 보호).
    - (c) **리포트 저장 / 공유** — 익명 세션 만료 이후에도 리포트 다시 보기·공유 링크 발급이 필요한 시점.
 3. **자체 비밀번호 가입 금지.** `users` 또는 어떤 인증 테이블에도 password / hash / salt 컬럼을 두지 않는다. 모델 메타데이터 단위 테스트(`tests/auth/test_no_password_columns.py` 권고)로 가드한다.
 4. **OAuth provider 정책은 `google` · `naver` · `kakao` 기준.** Supabase Auth provider / `auth.identities` 가 identity 를 관리한다. 신규 provider 추가 시 ADR + Supabase provider 설정 + 필요 public schema migration 이 필요하다.

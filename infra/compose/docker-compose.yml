@@ -49,6 +49,14 @@ services:
       NEXT_PUBLIC_SUPABASE_URL: "${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL must be set}"
       NEXT_PUBLIC_SUPABASE_ANON_KEY: "${NEXT_PUBLIC_SUPABASE_ANON_KEY:?NEXT_PUBLIC_SUPABASE_ANON_KEY must be set}"
       SUPABASE_FLOW_COOKIE_SECRET: "${SUPABASE_FLOW_COOKIE_SECRET:?SUPABASE_FLOW_COOKIE_SECRET must be set}"
+      # 상담 리드 평면도 업로드 — /leads/upload-url Route Handler 가 presigned PUT URL
+      # 발급에 사용하는 Supabase Storage S3 자격증명 (server-only, CMP-DIRECT/ADR-0007).
+      # 미설정이면 첨부 포함 제출이 PRESIGN_FAILED 로 떨어진다.
+      S3_ENDPOINT: "${S3_ENDPOINT:-}"
+      S3_REGION: "${S3_REGION:-}"
+      S3_ACCESS_KEY: "${S3_ACCESS_KEY:-}"
+      S3_SECRET_KEY: "${S3_SECRET_KEY:-}"
+      LEAD_FLOORPLAN_BUCKET: "${LEAD_FLOORPLAN_BUCKET:-lead-floorplans}"
     ports:
       - "3000:3000"
     depends_on:

@@ -14,6 +14,11 @@ from ..models import TermsConsent, User
 INTERNAL_TERMS_SOURCE = "internal_signup"
 INTERNAL_TERMS_VERSION = "internal_signup"
 
+# Kakao Sync 동의는 우리 내부 약관 동의와 source/version 으로 분리 저장한다
+# (AGENTS §4.7 #5 봉인 / terms_consents.source CHECK 의 'kakao_sync').
+KAKAO_SYNC_TERMS_SOURCE = "kakao_sync"
+KAKAO_SYNC_TERMS_VERSION = "kakao_sync"
+
 
 @dataclass(frozen=True)
 class AnonymousUserResult:
@@ -223,6 +228,53 @@ async def accept_required_terms(
         missing_required_terms=missing_terms,
         claimed_anonymous_user=False,
     )
+
+
+async def record_kakao_sync_consent(user_id: uuid.UUID) -> list[str]:
+    """Kakao Sync 로 가입한 사용자의 필수 약관 동의를 ``source='kakao_sync'`` 로 기록.
+
+    AGENTS §4.7 #5: Kakao 는 자체 동의 화면(Kakao Sync)에서 필수 약관 동의를 받으므로,
+    우리 내부 약관 화면(``/auth/terms``)을 중복 노출하지 않고 Kakao 동의를 별도 source
+    로 저장한다. 따라서 Supabase Kakao 브리지 로그인 시 필수 태그(``kakao_sync_required_
+    term_tags``)에 대한 동의 row 를 upsert 한 뒤 잔여 누락 약관을 반환한다.
+
+    한계(후속 트랙): 사용자가 Kakao 측에서 *어떤* 태그에 동의했는지의 정밀 검증은
+    Kakao ``/v2/user/service_terms`` API + 관리자 키로만 가능하다(ADR-0004 rev8 reconciliation
+    / ``POST /auth/terms/kakao-sync`` 감사 스텁). 본 함수는 필수 태그 동의를 baseline 으로
+    기록하고, 태그 단위 정합/불일치 audit 은 그 트랙이 담당한다.
+
+    이미 ``internal_signup`` 으로 받은 동의가 있어도 version 이 다르므로 충돌 없이 공존하며,
+    재호출은 ``on_conflict_do_nothing`` 으로 idempotent 하다.
+    """
+
+    settings = get_settings()
+    required_terms = _required_term_ids(settings)
+    async with get_engine().begin() as conn:
+        if required_terms:
+            consent_rows = [
+                {
+                    "user_id": user_id,
+                    "term_id": term_id,
+                    "version": KAKAO_SYNC_TERMS_VERSION,
+                    "source": KAKAO_SYNC_TERMS_SOURCE,
+                    "agreed_at": sa.func.now(),
+                    "updated_at": sa.func.now(),
+                }
+                for term_id in required_terms
+            ]
+            await conn.execute(
+                pg_insert(TermsConsent)
+                .values(consent_rows)
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        TermsConsent.user_id,
+                        TermsConsent.term_id,
+                        TermsConsent.version,
+                    ],
+                )
+            )
+        missing_terms = await _missing_required_terms(conn, user_id, settings)
+    return missing_terms
 
 
 async def _missing_required_terms(conn, user_id: uuid.UUID, settings) -> list[str]:
