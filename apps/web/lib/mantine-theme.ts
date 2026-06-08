@@ -1,5 +1,6 @@
 import {
   createTheme,
+  InputWrapper,
   type CSSVariablesResolver,
   type MantineColorsTuple
 } from '@mantine/core';
@@ -150,6 +151,19 @@ export const jippinTheme = createTheme({
       h3: { fontSize: '1rem', lineHeight: '1.5rem' }
     }
   },
+  components: {
+    // 입력 label–input 간격/크기 보정. Mantine 기본은 label margin 0 + 다소 큰 폰트라
+    // 답답해 보인다. TextInput·Textarea·Select 등은 내부적으로 InputWrapper 로 label 을
+    // 렌더하므로 본 오버라이드가 모든 입력에 전역 적용된다.
+    InputWrapper: InputWrapper.extend({
+      styles: {
+        label: {
+          marginBottom: '0.375rem',
+          fontSize: '0.875rem'
+        }
+      }
+    })
+  },
   primaryColor: 'jippin',
   primaryShade: { light: 6, dark: 6 },
   white: '#FFFFFF'
@@ -170,7 +184,8 @@ export const jippinCssVariablesResolver: CSSVariablesResolver = () => ({
     '--jippin-notice-legal': jippinTokens.notice.legal
   },
   light: {
-    '--mantine-color-body': jippinTokens.brand.surface,
+    // 앱 배경은 중립 라이트 그레이 (브랜드 틸 틴트 제거). 표면(카드)은 화이트로 대비.
+    '--mantine-color-body': '#F8F9FA',
     '--mantine-color-text': jippinTokens.brand.ink,
     '--mantine-color-dimmed': jippinTokens.brand.copy
   },
