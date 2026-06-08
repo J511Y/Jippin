@@ -106,9 +106,7 @@ class PhoneVerificationStore:
                 )
 
             code = self._generate_code()
-            await self._redis.set(
-                f"{_OTP_KEY}{phone}", code, ex=self._ttl_seconds
-            )
+            await self._redis.set(f"{_OTP_KEY}{phone}", code, ex=self._ttl_seconds)
             await self._redis.set(
                 f"{_OTP_ATTEMPTS_KEY}{phone}", "0", ex=self._ttl_seconds
             )
@@ -178,9 +176,9 @@ class PhoneVerificationStore:
 def assert_token_phone_match(token_phone: str | None, requested_phone: str) -> str:
     """consume_token 결과가 요청 휴대폰과 일치하는지 검증한다."""
 
-    if token_phone is None or normalize_korean_phone(token_phone) != normalize_korean_phone(
-        requested_phone
-    ):
+    if token_phone is None or normalize_korean_phone(
+        token_phone
+    ) != normalize_korean_phone(requested_phone):
         raise ZippinException(
             "휴대폰 인증이 만료되었거나 일치하지 않습니다. 다시 인증해 주세요.",
             code="PHONE_TOKEN_INVALID",

@@ -79,8 +79,7 @@ async def find_emails_by_phone(phone: str) -> list[dict[str, str]]:
     async with get_engine().begin() as conn:
         rows = (await conn.execute(query, {"phone": phone})).all()
     return [
-        {"email": row.email, "created_at": row.created_at.isoformat()}
-        for row in rows
+        {"email": row.email, "created_at": row.created_at.isoformat()} for row in rows
     ]
 
 

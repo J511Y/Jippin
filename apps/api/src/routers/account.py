@@ -90,7 +90,9 @@ async def find_email(payload: FindEmailRequest) -> FindEmailResponse:
     rows = await supabase_admin.find_emails_by_phone(payload.phone)
     return FindEmailResponse(
         emails=[
-            FoundEmail(email_masked=_mask_email(row["email"]), created_at=row["created_at"])
+            FoundEmail(
+                email_masked=_mask_email(row["email"]), created_at=row["created_at"]
+            )
             for row in rows
         ]
     )

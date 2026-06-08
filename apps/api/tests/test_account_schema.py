@@ -20,10 +20,10 @@ def test_password_policy_accepts_valid(pw: str) -> None:
 @pytest.mark.parametrize(
     "pw",
     [
-        "abcde",       # 6자 미만
-        "123456",      # 영문 없음
-        "abcdef",      # 숫자 없음
-        "ab1",         # 6자 미만
+        "abcde",  # 6자 미만
+        "123456",  # 영문 없음
+        "abcdef",  # 숫자 없음
+        "ab1",  # 6자 미만
         "a" * 72 + "1",  # 72자 초과(73자)
     ],
 )

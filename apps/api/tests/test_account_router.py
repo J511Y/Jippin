@@ -162,7 +162,9 @@ def test_signup_rejects_expired_phone_token(store) -> None:
 def test_find_email_returns_masked(monkeypatch, store) -> None:
     async def fake_find(phone: str):
         assert phone == NORMALIZED_PHONE
-        return [{"email": "hong@example.com", "created_at": "2026-06-01T00:00:00+00:00"}]
+        return [
+            {"email": "hong@example.com", "created_at": "2026-06-01T00:00:00+00:00"}
+        ]
 
     monkeypatch.setattr("src.services.supabase_admin.find_emails_by_phone", fake_find)
 
@@ -190,9 +192,7 @@ def test_reset_password_updates_when_account_matches(monkeypatch, store) -> None
     monkeypatch.setattr(
         "src.services.supabase_admin.find_user_id_by_email_and_phone", fake_find
     )
-    monkeypatch.setattr(
-        "src.services.supabase_admin.update_user_password", fake_update
-    )
+    monkeypatch.setattr("src.services.supabase_admin.update_user_password", fake_update)
 
     client = TestClient(create_app())
     with client:

@@ -116,9 +116,7 @@ class Settings(BaseSettings):
     # 비밀번호 변경 시 현재 비밀번호 검증(GoTrue password grant)용 anon/publishable 키.
     supabase_publishable_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY"
-        ),
+        validation_alias=AliasChoices("SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY"),
     )
     # 회원가입 비밀번호 정책 (Supabase 콘솔 설정과 정합: 최소 6자, 영문+숫자).
     signup_min_password_length: int = Field(default=6)
