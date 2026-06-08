@@ -54,7 +54,7 @@ export default async function SessionDetailPage({ params }: SessionPageProps) {
         </Stack>
       </Card>
 
-      <Card withBorder radius="md" padding="md" bg="var(--jippin-brand-surface)">
+      <Card withBorder radius="md" padding="md">
         <Text size="sm" c="dimmed">
           placeholder 화면입니다. 실제 분석 상태/WebSocket 갱신은 후속 이슈에서
           연결됩니다.

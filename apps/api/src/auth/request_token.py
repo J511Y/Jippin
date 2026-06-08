@@ -127,14 +127,24 @@ async def require_supabase_request_user(request: Request) -> RequestUser:
     """FastAPI dependency that resolves the Supabase request principal.
 
     Allows both Supabase anonymous and non-anonymous tokens. Use this for
-    Phase A main-flow endpoints (sessions/addresses/floorplans/chat). For
-    conversion-only endpoints (lead, report share, etc.) use the existing
-    ``verify_supabase_access_token`` path instead — it rejects anonymous.
+    Phase A main-flow endpoints (sessions/addresses/floorplans/chat) and for
+    consultation lead creation (``POST /leads``), which intentionally accepts
+    anonymous submitters (CMP-DIRECT / ADR-0007; AGENTS §4.7 정정). Conversion
+    endpoints that still require a permanent user (report share, payment, …)
+    use the ``verify_supabase_access_token`` path instead — it rejects anonymous.
     """
 
     access_token = parse_bearer_token(request.headers.get("authorization"))
     async with httpx.AsyncClient(timeout=10.0) as http_client:
-        return await verify_supabase_request_token(
+        principal = await verify_supabase_request_token(
             access_token,
             http_client=http_client,
         )
+    # ``RequestLogMiddleware.extract_user_id`` 는 ``request.state.user`` 만 읽는다.
+    # 인증된 Supabase principal 을 노출해 lead/Phase-A 요청이 request_logs 에
+    # ``user_id=null`` 로 남지 않도록 한다(특히 PII 가 담긴 상담 리드 제출의 audit).
+    request.state.user = {
+        "id": str(principal.user_id),
+        "is_anonymous": principal.is_anonymous,
+    }
+    return principal

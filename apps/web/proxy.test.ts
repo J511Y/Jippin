@@ -97,23 +97,21 @@ describe('proxy — Supabase Set-Cookie flush invariant', () => {
     );
   });
 
-  // CMP-618: 모바일 IA 도입으로 추가된 root-level conversion route 의 인증 가드.
-  it('redirects /leads/new without backend session to /login with next preserved', async () => {
+  // CMP-DIRECT 정책 조정: /leads(상담 신청)는 비회원 전환 유입의 핵심 진입점이므로
+  // 비로그인 허용한다(미인증 차단 시 퍼널이 끊김). /contacts(상담 조회)만 로그인 전용.
+  it('allows /leads/new without backend session (public conversion entry)', async () => {
     mockGetUser();
     const { proxy } = await import('./proxy');
     const response = await proxy(
       new NextRequest('http://localhost:3000/leads/new?fromSession=demo-1'),
     );
 
-    expect(response.status).toBe(307);
-    expect(response.headers.get('Location')).toBe(
-      'http://localhost:3000/login?next=%2Fleads%2Fnew%3FfromSession%3Ddemo-1',
-    );
+    expect(response.status).toBe(200);
     expect(mocks.createServerClient).not.toHaveBeenCalled();
     expect(setCookieValues(response)).toHaveLength(0);
   });
 
-  it('refreshes Supabase cookies on /leads/new when backend session cookie is present', async () => {
+  it('does not run Supabase refresh on /leads/new even with backend session cookie (public route)', async () => {
     mockGetUser();
     const { proxy } = await import('./proxy');
     const response = await proxy(
@@ -123,20 +121,17 @@ describe('proxy — Supabase Set-Cookie flush invariant', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(setCookieValues(response).join('\n')).toMatch(
-      new RegExp(`(?:^|\\n)${ROTATED_COOKIE_NAME}=${ROTATED_COOKIE_VALUE}`),
-    );
+    expect(mocks.createServerClient).not.toHaveBeenCalled();
+    expect(setCookieValues(response)).toHaveLength(0);
   });
 
-  it('also redirects bare /leads index without backend session', async () => {
+  it('allows bare /leads index without backend session (public)', async () => {
     mockGetUser();
     const { proxy } = await import('./proxy');
     const response = await proxy(new NextRequest('http://localhost:3000/leads'));
 
-    expect(response.status).toBe(307);
-    expect(response.headers.get('Location')).toBe(
-      'http://localhost:3000/login?next=%2Fleads',
-    );
+    expect(response.status).toBe(200);
+    expect(mocks.createServerClient).not.toHaveBeenCalled();
   });
 
   // CMP-618 round 3: /contacts root prefix — 이미 생성된 상담의 진행 관리 / 개인 데이터 확인 영역.

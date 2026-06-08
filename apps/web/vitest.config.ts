@@ -25,6 +25,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           environment: 'jsdom',
+          setupFiles: ['./test-setup.ts'],
           include: ['**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts'],
           exclude: ['node_modules/**', '.next/**', 'storybook-static/**'],
           pool: 'forks'

@@ -17,6 +17,7 @@ from .routers.auth import router as auth_router
 from .routers.chat import router as chat_router
 from .routers.floorplans import router as floorplans_router
 from .routers.healthz import router as healthz_router
+from .routers.leads import router as leads_router
 from .routers.sessions import router as sessions_router
 
 
@@ -61,6 +62,9 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(auth_router)
     app.include_router(healthz_router)
+    # 상담 리드(consultation leads) — DB-backed 실 기능이므로 phase_a 플래그와 무관하게
+    # 항상 등록한다. 비회원(익명 Supabase 토큰)도 신청 가능(CMP-DIRECT).
+    app.include_router(leads_router)
     # Phase A 메인 흐름 (CMP-609 skeleton). DB-backed repository 는 CMP-608
     # migration 이 들어온 뒤 services.main_flow 의 in-memory 구현을 교체한다.
     # 그전에는 운영 surface 에 in-memory store 가 노출되지 않도록 settings 의

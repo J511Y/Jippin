@@ -1,5 +1,6 @@
 'use client';
 
+import { Button, Stack, Text } from '@mantine/core';
 import { useState } from 'react';
 
 import { DEFAULT_NEXT, resolveSafeNext } from '@/lib/safe-redirect';
@@ -15,6 +16,28 @@ import { createClient } from '@/lib/supabase/client';
  */
 
 const PROVIDERS = [{ id: 'kakao', label: '카카오로 시작하기' }] as const;
+
+/**
+ * 카카오 공식 심볼(채팅 말풍선). 디자인 가이드(developers.kakao.com)상 노란 버튼 위
+ * 검은색(#191919) 심볼로 사용한다. 모양/비율/색은 임의 변경하지 않는다.
+ */
+function KakaoIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 18 18"
+      fill="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M9 0.5C4.029 0.5 0 3.694 0 7.628c0 2.504 1.632 4.706 4.107 5.985-.182.661-.659 2.402-.754 2.775-.118.464.17.458.358.333.147-.097 2.346-1.593 3.299-2.241.643.094 1.305.143 1.99.143 4.971 0 9-3.194 9-7.628C18 3.694 13.971 0.5 9 0.5z"
+        fill="#191919"
+      />
+    </svg>
+  );
+}
 
 type ProviderId = (typeof PROVIDERS)[number]['id'];
 type OAuthIntent = 'signin' | 'link';
@@ -78,22 +101,28 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
   }
 
   return (
-    <>
-      <ul className="grid gap-2">
-        {PROVIDERS.map((provider) => (
-          <li key={provider.id}>
-            <button
-              type="button"
-              onClick={() => void startOAuth(provider.id)}
-              disabled={pendingProvider !== null}
-              className="block w-full rounded-md border border-slate-300 px-4 py-3 text-center text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {pendingProvider === provider.id ? '로그인 준비 중...' : provider.label}
-            </button>
-          </li>
-        ))}
-      </ul>
-      {errorMessage ? <p className="text-sm text-red-600">{errorMessage}</p> : null}
-    </>
+    <Stack gap="sm">
+      {PROVIDERS.map((provider) => (
+        <Button
+          key={provider.id}
+          type="button"
+          onClick={() => void startOAuth(provider.id)}
+          loading={pendingProvider === provider.id}
+          disabled={pendingProvider !== null && pendingProvider !== provider.id}
+          size="lg"
+          radius="md"
+          fullWidth
+          leftSection={<KakaoIcon size={18} />}
+          style={{ backgroundColor: '#FEE500', color: '#191919' }}
+        >
+          {provider.label}
+        </Button>
+      ))}
+      {errorMessage ? (
+        <Text size="sm" c="red" ta="center">
+          {errorMessage}
+        </Text>
+      ) : null}
+    </Stack>
   );
 }

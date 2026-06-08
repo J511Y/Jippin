@@ -125,15 +125,16 @@ smtp_port = 54325
 pop3_port = 54326
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [storage] — Supabase Storage (MUST — 명시 비활성)
+# [storage] — Supabase Storage
 # ─────────────────────────────────────────────────────────────────────────────
-# CMP-573 ADR 봉인: R2 는 당장 유지. Supabase Storage 전환은 별도 ADR.
-# **`[storage].enabled = false` 명시 (MUST — wake R14 #2).** Supabase CLI 의
-# `storage.enabled` default 는 true 이므로 본 블록 자체를 누락하면 stage-0/preview/
-# production 환경에서 Storage service 가 자동으로 켜진다. R2 정본 유지 + Supabase
-# Storage 비도입 봉인을 충족하려면 본 토글을 명시 false 로 두어야 한다.
+# CMP-573/ADR-0004 봉인: R2 정본 유지 + Supabase Storage 비도입(`enabled=false`)
+# 이었다. **ADR-0007 (CMP-DIRECT) 에서 상담 리드 평면도 첨부 한정으로 Supabase
+# Storage 도입을 결정**하여 본 토글을 true 로 켠다. 버킷(`lead-floorplans`) + owner
+# -folder RLS 는 `supabase/migrations/..._0009_consultation_leads.sql` 가 정의한다.
+# R2 정본(도면 분석 파이프라인 등 다른 산출물)은 그대로 유지된다 — 본 토글은 Storage
+# 서비스 가용성만 켤 뿐이며, 각 Supabase branch 콘솔에서도 Storage 활성화가 필요하다.
 [storage]
-enabled = false
+enabled = true
 file_size_limit = "50MiB"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,16 +188,15 @@ additional_redirect_urls = [
 jwt_expiry = 3600
 enable_refresh_token_rotation = true
 refresh_token_reuse_interval = 10
-# 글로벌 signup gate (위 정책 블록 참고). 스캐폴드 단계 0 시점에는 false. CMP-576 이
-# OAuth/anonymous 를 활성화하는 PR 에서 true 로 켠다. 본 토글이 false 이면 OAuth
-# conversion 도 같이 막히므로, OAuth provider 활성화 PR 은 반드시 본 값을 true 로
-# 함께 바꾼다. 이메일/암호 가입은 본 토글과 독립으로 `[auth.email].enable_signup`
-# 이 영구 false 다.
-enable_signup = false
-# anonymous sign-in 은 CMP-577 PoC 후 활성화 (§7.1.3 A5). 본 PR 시점은 false.
-# CMP-577 이 켤 때 manual linking 흐름과 같은 PR 로 묶고, 같은 PR 에서 글로벌
-# `enable_signup` 도 true 로 함께 바꾼다.
-enable_anonymous_sign_ins = false
+# 글로벌 signup gate. 비회원 상담 신청(CMP-DIRECT/ADR-0007)이 anonymous sign-in 을
+# 필요로 하고, anonymous 도 본 글로벌 gate 의 적용을 받으므로 true 로 켠다. 이메일/암호
+# 가입은 본 토글과 독립으로 `[auth.email].enable_signup` 이 영구 false 다(AGENTS §4.7).
+enable_signup = true
+# anonymous sign-in 활성화. 비회원 상담 신청(CMP-DIRECT/ADR-0007)이 익명 Supabase
+# 세션을 전제로 하므로 켠다. preview/branch 환경에서도 `signInAnonymously()` 가 동작해야
+# 리드 폼이 작동한다. 글로벌 `enable_signup` 도 함께 true (아래) — anonymous 도 signup
+# gate 의 적용을 받기 때문. (자동 identity 병합 금지·email signup 금지 봉인은 그대로.)
+enable_anonymous_sign_ins = true
 # Manual identity linking — CEO 결정 (CMP-572) 봉인: MVP 는 manual linking 우선.
 # 본 토글이 true 여야 anonymous → OAuth upgrade 와 사용자 명시적 "계정 통합" 흐름이
 # 동작한다. **자동 linking 은 본 토글로 통제되지 않는다** — 자동 linking 금지 가드는

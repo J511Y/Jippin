@@ -155,14 +155,14 @@ feat: kakao oauth                       # 이모지 누락
 
 PR 본문은 `.github/PULL_REQUEST_TEMPLATE.md` 가 자동으로 채워준다. 머지 전에 모두 체크되어야 한다.
 
-- [ ] 관련 Paperclip 이슈 식별자(`CMP-###`) 명시
+- [ ] 관련 Paperclip 이슈 식별자(`CMP-###`) 명시 — 보드 이슈 없이 사람과의 직접 대화로 한 작업은 `CMP-DIRECT`
 - [ ] 영향 모듈 명시 (`AUTH` / `INPUT` / `MASK` / `AI` / `OVERLAY` / `CHAT` / `FLOW_GUARD` / `RULE` / `REPORT` / `CONTRACTS` / `INFRA` / `DEVOPS` / `SECURITY` / `QA`)
 - [ ] 공통 컨트랙트(`packages/contracts/schemas/*.schema.json`) 변경 시 `schema_version` bump 및 TS/Python 바인딩 재생성
 - [ ] 비밀번호·키·도면 원본 등 민감 자료 미포함 (시크릿 스캔 CI 통과)
 - [ ] 모듈별 dev 명령(`pnpm dev`, `uv run uvicorn ...`) 또는 `docker compose up` 정상 동작
 - [ ] (해당 시) `README.md` / `AGENTS.md` / 모듈 README 갱신
 - [ ] gitmoji 커밋 메시지 정규식 통과 (`.github/workflows/ci.yml` 의 `gitmoji-validate` job)
-- [ ] PR 제목이 `<이모지> <prefix>(<scope>): <설명> (CMP-###)` 형식 — `.github/workflows/pr-title-lint.yml` 검증
+- [ ] PR 제목이 `<이모지> <prefix>(<scope>): <설명> (CMP-### | CMP-DIRECT)` 형식 — `.github/workflows/pr-title-lint.yml` 검증
 
 ---
 

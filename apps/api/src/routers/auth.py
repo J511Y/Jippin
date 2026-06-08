@@ -46,6 +46,7 @@ from ..services.auth import (
     link_oauth_account,
     link_supabase_account,
     parse_existing_anonymous_user_id,
+    record_kakao_sync_consent,
 )
 from ..services.supabase_session import (
     parse_bearer_token,
@@ -200,11 +201,19 @@ async def complete_supabase_session(
         supabase_subject=str(claims["sub"]),
         email_claim=email_claim,
     )
-    context = await get_current_user_context(result.user_id)
+    # Kakao Sync 로그인은 Kakao 자체 동의 화면을 이미 거쳤으므로 필수 약관 동의를
+    # source='kakao_sync' 로 기록하고 내부 약관 화면(/auth/terms)을 중복 노출하지
+    # 않는다 (AGENTS §4.7 #5 / ADR-0004). 현재 브리지는 'kakao' provider 만 허용하지만
+    # 향후 다른 provider 가 추가될 때를 대비해 분기로 둔다.
+    if requested_provider == "kakao":
+        missing_required_terms = await record_kakao_sync_consent(result.user_id)
+    else:
+        context = await get_current_user_context(result.user_id)
+        missing_required_terms = context.missing_required_terms
     return SupabaseSessionBridgeResult(
         user_id=result.user_id,
         pending_anonymous_user_id=None,
-        missing_required_terms=context.missing_required_terms,
+        missing_required_terms=missing_required_terms,
     )
 
 
