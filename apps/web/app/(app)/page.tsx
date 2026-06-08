@@ -30,9 +30,24 @@ import type { Metadata } from 'next';
 import { Reveal } from '@/components/landing/Reveal';
 import { StatBand } from '@/components/landing/StatBand';
 import { QuickConsultSection } from '@/components/QuickConsultSection';
+import {
+  SITE_DESCRIPTION,
+  SITE_KEYWORDS,
+  SITE_OG_IMAGE,
+  buildHomeJsonLd
+} from '@/lib/site';
 
 export const metadata: Metadata = {
-  title: '집핀 — 벽 철거 전 사전검토'
+  title: '집핀 — 베란다 확장·벽 철거 사전검토',
+  description: SITE_DESCRIPTION,
+  keywords: SITE_KEYWORDS,
+  alternates: { canonical: '/' },
+  openGraph: {
+    title: '집핀 — 벽 하나 헐기 전에, 가능한지부터 확인하세요',
+    description: SITE_DESCRIPTION,
+    url: '/',
+    images: [{ url: SITE_OG_IMAGE }]
+  }
 };
 
 const STEPS = [
@@ -94,6 +109,11 @@ const FEATURES = [
 export default function HomePage() {
   return (
     <Box>
+      {/* JSON-LD: Organization · WebSite · Service · FAQ (SEO 리치결과 + GEO) */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildHomeJsonLd()) }}
+      />
       {/* ── HERO ─────────────────────────────────────────────── */}
       <Box
         style={{
