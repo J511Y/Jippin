@@ -14,7 +14,8 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
 export const metadata: Metadata = {
-  title: '이용약관'
+  title: '이용약관',
+  alternates: { canonical: '/terms' }
 };
 
 const EFFECTIVE_DATE = '2026년 6월 8일';
