@@ -107,6 +107,29 @@ class Settings(BaseSettings):
     supabase_jwks_url: str | None = Field(default=None)
     supabase_jwt_secret: str | None = Field(default=None)
     supabase_jwt_audience: str = Field(default="authenticated")
+
+    # 이메일/비밀번호 회원가입 — Supabase Auth GoTrue admin API 호출용 (CMP-DIRECT).
+    # 비밀번호는 auth.users 가 단독 관리한다(우리 테이블에 password 컬럼 없음 — AGENTS §4.7 #3).
+    # admin base 는 supabase_jwt_issuer(=https://<ref>.supabase.co/auth/v1)에서 파생한다.
+    supabase_url: str | None = Field(default=None)
+    supabase_service_role_key: str | None = Field(default=None)
+    # 회원가입 비밀번호 정책 (Supabase 콘솔 설정과 정합: 최소 6자, 영문+숫자).
+    signup_min_password_length: int = Field(default=6)
+
+    # SOLAPI 문자 인증 (CMP-DIRECT). 발신번호는 SOLAPI 콘솔에 사전 등록된 번호여야 한다.
+    solapi_api_key: str | None = Field(default=None)
+    solapi_api_secret: str | None = Field(default=None)
+    solapi_sender_phone: str | None = Field(default=None)
+    solapi_api_url: str = Field(default="https://api.solapi.com")
+
+    # 휴대폰 OTP — Redis 저장. OAuth state store 와 같은 Redis 를 공유한다.
+    phone_otp_code_length: int = Field(default=6)
+    phone_otp_ttl_seconds: int = Field(default=180)
+    # 인증 성공 후 가입/찾기/재설정 단계에서 쓰는 단기 검증 토큰의 수명.
+    phone_otp_token_ttl_seconds: int = Field(default=600)
+    phone_otp_max_attempts: int = Field(default=5)
+    phone_otp_resend_cooldown_seconds: int = Field(default=30)
+    phone_otp_daily_send_limit: int = Field(default=10)
     kakao_sync_required_term_tags: list[str] = Field(
         default_factory=lambda: ["service_terms", "privacy_policy"]
     )
