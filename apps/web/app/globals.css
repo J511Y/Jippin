@@ -13,15 +13,15 @@ body {
 
 body {
   margin: 0;
+  /* sticky-footer: body 를 세로 플렉스로 두고 main 이 남는 공간을 채운다.
+     이렇게 해야 짧은 페이지에서도 footer 가 viewport 밖으로 밀려 스크롤이 생기지 않는다. */
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
   background: var(--mantine-color-body);
   color: var(--mantine-color-text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-body,
-main {
-  min-height: 100%;
 }
 
 a {
@@ -30,9 +30,4 @@ a {
 
 .mantine-active:active {
   transform: translateY(1px);
-}
-
-/* CMP-618: 모바일 shell 활성 시 root LegalNotice 가 fixed bottom nav 위에 노출되도록 body 하단을 띄운다. */
-body[data-mobile-shell='true'] {
-  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
 }

@@ -74,7 +74,7 @@ export default function SessionsPage() {
         ))}
       </Stack>
 
-      <Card withBorder radius="md" padding="md" bg="var(--jippin-brand-surface)">
+      <Card withBorder radius="md" padding="md">
         <Stack gap="xs">
           <Text size="sm" c="dimmed">
             이 목록은 placeholder 입니다. 실제 세션 목록 API 는 후속 이슈에서 연결됩니다.
