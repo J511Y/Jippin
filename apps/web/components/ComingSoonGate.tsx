@@ -20,8 +20,10 @@ export function ComingSoonGate({
 }) {
   return (
     <Box style={{ position: 'relative', minHeight: 'min(72vh, 620px)' }}>
+      {/* inert: blur 뒤 자식의 키보드 포커스·상호작용·접근성 트리 노출을 모두 차단(P2 a11y). */}
       <Box
         aria-hidden
+        inert
         style={{
           filter: 'blur(6px)',
           opacity: 0.5,
