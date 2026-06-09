@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ...config import Settings
+from ...logging import log_http_call
 from .base import OAuthProviderError, OAuthTokens, ProviderProfile
 
 AUTHORIZATION_ENDPOINT = "https://nid.naver.com/oauth2.0/authorize"
@@ -55,15 +56,19 @@ async def exchange_code(
         or not settings.naver_oauth_redirect_uri
     ):
         raise OAuthProviderError("Naver OAuth provider is not configured.")
-    response = await http_client.post(
-        TOKEN_ENDPOINT,
-        data={
-            "grant_type": "authorization_code",
-            "client_id": settings.naver_oauth_client_id,
-            "client_secret": settings.naver_oauth_client_secret,
-            "redirect_uri": settings.naver_oauth_redirect_uri,
-            "code": code,
-        },
+    response = await log_http_call(
+        "naver",
+        "exchange_code",
+        lambda: http_client.post(
+            TOKEN_ENDPOINT,
+            data={
+                "grant_type": "authorization_code",
+                "client_id": settings.naver_oauth_client_id,
+                "client_secret": settings.naver_oauth_client_secret,
+                "redirect_uri": settings.naver_oauth_redirect_uri,
+                "code": code,
+            },
+        ),
     )
     if response.status_code >= 400:
         raise OAuthProviderError("Naver token exchange failed.")
@@ -86,9 +91,13 @@ async def fetch_userinfo(
     settings: Settings,
 ) -> ProviderProfile:
     del settings
-    response = await http_client.get(
-        USERINFO_ENDPOINT,
-        headers={"Authorization": f"Bearer {tokens.access_token}"},
+    response = await log_http_call(
+        "naver",
+        "fetch_userinfo",
+        lambda: http_client.get(
+            USERINFO_ENDPOINT,
+            headers={"Authorization": f"Bearer {tokens.access_token}"},
+        ),
     )
     if response.status_code >= 400:
         raise OAuthProviderError("Naver userinfo request failed.")
