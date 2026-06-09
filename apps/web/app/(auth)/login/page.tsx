@@ -1,20 +1,20 @@
-import { Anchor, Center, Divider, Stack, Text } from '@mantine/core';
+import { Anchor, Center, Divider, Group, Stack, Text } from '@mantine/core';
 
-import { isSafeNext } from '@/lib/safe-redirect';
+import { DEFAULT_NEXT, isSafeNext, resolveSafeNext } from '@/lib/safe-redirect';
 
+import { EmailLoginForm } from './email-login-form';
 import { LoginButtons } from './login-buttons';
 
 /**
- * 간편가입 로그인 페이지 (CMP-557, CMP-564).
+ * 로그인 페이지 (CMP-DIRECT — 이메일/비밀번호 + 카카오 간편 로그인).
  *
- * - 정책: 자체 가입 / 아이디 찾기 / 비밀번호 찾기 UI 는 제공하지 않는다.
- *   소셜 OAuth provider 만 노출한다.
- * - `/login?next=/app/foo` 형태로 들어오면 `next` 경로를 OAuth start 의 `return_url` 로 전달한다.
- *   `next` 는 `isSafeNext` 로 SSR 단계에서 한 차례 검증한다. (CMP-582 / runbook §11 R11)
- * - 헤더(SiteShell)는 `(auth)/layout.tsx` 가 제공한다. 헤더 로고가 홈 진입점이므로
- *   카드 내부에는 브랜드 로고/홈 링크를 중복 노출하지 않는다.
+ * 정책 변경: 운영자 결정(2026-06-08)으로 이메일/비밀번호 가입·로그인이 허용된다. 비밀번호는
+ * Supabase Auth(auth.users)가 단독 관리하며 우리 테이블에는 저장하지 않는다(AGENTS §4.7 #3
+ * 의 "우리 테이블에 password 컬럼 금지"는 유지). 따라서 이전의 "자체 가입/아이디·비번 찾기
+ * UI 없음" 문구는 본 결정으로 supersede 된다.
  *
- * 주: 서버 컴포넌트이므로 내부 링크는 `component={Link}` 대신 네이티브 `<a>`(Anchor 기본)를 쓴다.
+ * 구성: 이메일+비밀번호 → '또는' divider → 카카오 간편 로그인. 하단에 회원가입/아이디 찾기/
+ * 비밀번호 찾기 링크. `next` 는 SSR 에서 한 차례 검증한다.
  */
 
 export const metadata = {
@@ -31,22 +31,49 @@ function pickNext(value: string | string[] | undefined): string | null {
   return isSafeNext(candidate) ? candidate : null;
 }
 
+function withNext(path: string, nextPath: string | null): string {
+  if (!nextPath) return path;
+  return `${path}?next=${encodeURIComponent(nextPath)}`;
+}
+
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const resolved = (await searchParams) ?? {};
   const nextPath = pickNext(resolved.next);
+  const safeNext = resolveSafeNext(nextPath, DEFAULT_NEXT);
+  const registered = resolved.registered !== undefined;
 
   return (
-    <Center mih="68vh">
-      <Stack gap="lg">
-        <Stack gap={6} ta="center">
-          <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-            소셜 계정으로 빠르게 시작하세요.
+    <Center mih="68vh" py="xl">
+      <Stack gap="lg" w="100%" maw={400}>
+        {registered ? (
+          <Text size="sm" c="teal" ta="center" style={{ wordBreak: 'keep-all' }}>
+            가입이 완료되었습니다. 가입한 이메일과 비밀번호로 로그인해 주세요.
           </Text>
-        </Stack>
+        ) : null}
+
+        <EmailLoginForm nextPath={safeNext} />
+
+        <Group justify="center" gap="xs">
+          <Anchor href={withNext('/signup', nextPath)} size="sm" c="var(--jippin-brand-primary)">
+            회원가입
+          </Anchor>
+          <Text size="sm" c="dimmed">
+            ·
+          </Text>
+          <Anchor href="/find-email" size="sm" c="dimmed">
+            아이디 찾기
+          </Anchor>
+          <Text size="sm" c="dimmed">
+            ·
+          </Text>
+          <Anchor href="/find-password" size="sm" c="dimmed">
+            비밀번호 찾기
+          </Anchor>
+        </Group>
+
+        <Divider label="또는" labelPosition="center" />
 
         <LoginButtons nextPath={nextPath} />
-
-        <Divider />
 
         <Text size="xs" c="dimmed" ta="center" style={{ wordBreak: 'keep-all' }}>
           계속 진행하면{' '}

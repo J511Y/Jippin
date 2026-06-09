@@ -201,6 +201,36 @@ def test_supabase_session_valid_token_mints_cookie(supabase_env, monkeypatch):
     assert "SameSite=lax" in set_cookie.lower() or "samesite=lax" in set_cookie.lower()
 
 
+def test_supabase_session_email_provider_mints_cookie(supabase_env, monkeypatch):
+    """이메일/비밀번호 로그인(provider='email')도 jippin_session 을 발급해야 한다.
+
+    회귀(P1): SupabaseSessionBridgeRequest.requested_provider Literal 에 'email' 이
+    없으면 422 로 막혀 이메일 로그인이 전혀 동작하지 않는다.
+    """
+    pem, jwk = _rsa_keypair()
+    _install_jwks(monkeypatch, {"keys": [jwk]})
+    user_id = uuid.uuid4()
+    _install_identity_lookup(monkeypatch, user_id=user_id)
+
+    token = _mint_token(
+        pem,
+        jwk["kid"],
+        extra_claims={"app_metadata": {"provider": "email", "providers": ["email"]}},
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/auth/supabase/session",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"requested_provider": "email"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["signup_complete"] is True
+    assert "jippin_session=" in response.headers["set-cookie"]
+
+
 def test_supabase_session_ignores_legacy_anonymous_id_after_completed_signin(
     supabase_env, monkeypatch
 ):
