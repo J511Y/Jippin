@@ -150,8 +150,9 @@ async def create_email_user(
 ) -> CreatedUser:
     """GoTrue admin API 로 이메일/비밀번호 사용자를 생성한다.
 
-    휴대폰은 인증을 이미 통과했고 이메일은 문자 채널로 본인확인을 대신하므로
-    ``email_confirm: true`` 로 자동 확인한다.
+    이메일 자동 확인 여부는 ``settings.signup_auto_confirm_email`` 로 제어한다(기본 True).
+    자동 확인은 이메일 소유를 검증하지 않으므로 squatting 위험이 있다 — 보안 강화 시
+    False + Supabase 이메일 확인 플로우를 쓴다.
     """
 
     settings = settings or get_settings()
@@ -169,7 +170,9 @@ async def create_email_user(
     body = {
         "email": email,
         "password": password,
-        "email_confirm": True,
+        # 휴대폰 인증만으로 본인확인을 대신할지(자동 confirm) 운영 설정으로 제어한다.
+        # 자동 confirm 은 이메일 소유를 검증하지 않으므로 squatting 위험이 있다 — 강화 시 False.
+        "email_confirm": settings.signup_auto_confirm_email,
         "user_metadata": {
             "name": display_name,
             "display_name": display_name,

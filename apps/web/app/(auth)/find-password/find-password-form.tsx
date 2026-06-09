@@ -33,6 +33,7 @@ export function FindPasswordForm() {
   });
 
   const phone = useWatch({ control, name: 'phone' });
+  const phoneToken = useWatch({ control, name: 'phoneToken' });
 
   async function onSubmit(values: FindPasswordValues) {
     setServerError(null);
@@ -95,6 +96,7 @@ export function FindPasswordForm() {
           onVerifiedChange={(token) => setValue('phoneToken', token ?? '', { shouldValidate: true })}
           onBlur={() => void trigger('phone')}
           fieldError={errors.phone?.message ?? errors.phoneToken?.message}
+          verified={Boolean(phoneToken)}
           disabled={isSubmitting}
         />
 

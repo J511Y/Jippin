@@ -51,6 +51,7 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
   });
 
   const phone = useWatch({ control, name: 'phone' });
+  const phoneToken = useWatch({ control, name: 'phoneToken' });
 
   async function onSubmit(values: SignupValues) {
     setServerError(null);
@@ -117,6 +118,7 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
           onVerifiedChange={(token) => setValue('phoneToken', token ?? '', { shouldValidate: true })}
           onBlur={() => void trigger('phone')}
           fieldError={errors.phone?.message ?? errors.phoneToken?.message}
+          verified={Boolean(phoneToken)}
           disabled={isSubmitting}
         />
 

@@ -27,7 +27,14 @@ class FakeStore:
     def __init__(self) -> None:
         self.sent: list[str] = []
         self.rolled_back: list[str] = []
+        self.rate_checked: list[str | None] = []
+        self.rate_error: ZippinException | None = None
         self.tokens: dict[str, str] = {"goodtok": NORMALIZED_PHONE}
+
+    async def check_send_rate(self, ip: str | None) -> None:
+        self.rate_checked.append(ip)
+        if self.rate_error is not None:
+            raise self.rate_error
 
     async def reserve_send(self, phone: str) -> str:
         self.sent.append(phone)
@@ -91,6 +98,27 @@ def test_send_code_sends_sms_and_returns_ttl(monkeypatch, store) -> None:
     assert resp.json()["expires_in_seconds"] == get_settings().phone_otp_ttl_seconds
     assert captured["phone"] == NORMALIZED_PHONE
     assert captured["code"] == "123456"
+
+
+def test_send_code_throttles_before_sending(monkeypatch, store) -> None:
+    sent_called = {"n": 0}
+
+    async def fake_send(*, phone: str, code: str, **_) -> None:
+        sent_called["n"] += 1
+
+    monkeypatch.setattr("src.services.sms.send_verification_sms", fake_send)
+    store.rate_error = ZippinException(
+        "요청이 너무 많습니다.", code="PHONE_OTP_IP_LIMIT", http_status=429
+    )
+
+    client = TestClient(create_app())
+    with client:
+        resp = client.post("/auth/phone/send-code", json={"phone": "01012345678"})
+    assert resp.status_code == 429
+    assert resp.json()["error"]["code"] == "PHONE_OTP_IP_LIMIT"
+    # IP/글로벌 한도는 SMS 발송·번호 예약 이전에 적용된다.
+    assert sent_called["n"] == 0
+    assert store.sent == []
 
 
 def test_send_code_rolls_back_reservation_on_sms_failure(monkeypatch, store) -> None:

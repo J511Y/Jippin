@@ -29,6 +29,8 @@ type Props = {
   disabled?: boolean;
   /** RHF 등 외부 폼의 필드 에러 메시지. */
   fieldError?: string | null;
+  /** 인증 완료 여부(부모가 보유한 phoneToken 유무). 입력 잠금/해제의 단일 원천. */
+  verified?: boolean;
   /** 휴대폰 입력 focus-out 시 외부 폼 검증 트리거. */
   onBlur?: () => void;
 };
@@ -39,13 +41,13 @@ export function PhoneVerification({
   onVerifiedChange,
   disabled = false,
   fieldError = null,
+  verified = false,
   onBlur
 }: Props) {
   const [code, setCode] = useState('');
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
-  const [verified, setVerified] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
@@ -74,7 +76,7 @@ export function PhoneVerification({
   function handlePhoneChange(value: string) {
     onPhoneChange(value);
     if (verified) {
-      setVerified(false);
+      // 번호를 바꾸면 부모의 인증 토큰을 무효화한다(부모가 verified 상태의 원천).
       onVerifiedChange(null);
     }
     setSent(false);
@@ -109,7 +111,7 @@ export function PhoneVerification({
     setInfo(null);
     try {
       const { phone_token } = await verifyPhoneCode(phone, code.trim());
-      setVerified(true);
+      // 부모가 phoneToken 을 보유하면 verified=true 로 내려와 입력이 잠긴다(상태 원천=부모).
       onVerifiedChange(phone_token);
       setInfo('인증되었습니다.');
     } catch (err) {

@@ -56,10 +56,24 @@ logger = get_logger("zippin.account")
 router = APIRouter(prefix="/auth", tags=["account"])
 
 
+def _client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    fly_ip = request.headers.get("fly-client-ip")
+    if fly_ip:
+        return fly_ip.strip()
+    return request.client.host if request.client else None
+
+
 @router.post("/phone/send-code", response_model=PhoneSendCodeResponse)
-async def send_phone_code(payload: PhoneSendCodeRequest) -> PhoneSendCodeResponse:
+async def send_phone_code(
+    payload: PhoneSendCodeRequest, request: Request
+) -> PhoneSendCodeResponse:
     settings = sms_service.get_settings()
     store = get_phone_verification_store()
+    # 번호 회전 남용 방지 — 번호 단위 한도(reserve_send) 전에 IP/글로벌 한도를 적용한다.
+    await store.check_send_rate(_client_ip(request))
     code = await store.reserve_send(payload.phone)
     try:
         await sms_service.send_verification_sms(phone=payload.phone, code=code)

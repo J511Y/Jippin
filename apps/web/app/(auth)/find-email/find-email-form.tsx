@@ -32,6 +32,7 @@ export function FindEmailForm() {
   });
 
   const phone = useWatch({ control, name: 'phone' });
+  const phoneToken = useWatch({ control, name: 'phoneToken' });
 
   async function onSubmit(values: FindEmailValues) {
     setServerError(null);
@@ -93,6 +94,7 @@ export function FindEmailForm() {
           onVerifiedChange={(token) => setValue('phoneToken', token ?? '', { shouldValidate: true })}
           onBlur={() => void trigger('phone')}
           fieldError={errors.phone?.message ?? errors.phoneToken?.message}
+          verified={Boolean(phoneToken)}
           disabled={isSubmitting}
         />
 

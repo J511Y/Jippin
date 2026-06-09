@@ -30,7 +30,10 @@ _COOLDOWN_KEY = "phone:otp:cooldown:"
 _DAILY_KEY = "phone:otp:daily:"
 _TOKEN_KEY = "phone:otp:token:"
 _SIGNUP_LOCK_KEY = "phone:signup:lock:"
+_IP_RATE_KEY = "phone:otp:ip:"
+_GLOBAL_RATE_KEY = "phone:otp:global"
 _DAILY_TTL_SECONDS = 86_400
+_HOURLY_TTL_SECONDS = 3_600
 _SIGNUP_LOCK_TTL_SECONDS = 30
 
 
@@ -58,6 +61,8 @@ class PhoneVerificationStore:
         max_attempts: int,
         resend_cooldown_seconds: int,
         daily_send_limit: int,
+        ip_hourly_limit: int,
+        global_hourly_limit: int,
     ) -> None:
         self._redis = redis_client
         self._code_length = code_length
@@ -66,6 +71,8 @@ class PhoneVerificationStore:
         self._max_attempts = max_attempts
         self._resend_cooldown_seconds = resend_cooldown_seconds
         self._daily_send_limit = daily_send_limit
+        self._ip_hourly_limit = ip_hourly_limit
+        self._global_hourly_limit = global_hourly_limit
 
     @classmethod
     def from_url(cls, redis_url: str, **kwargs: int) -> "PhoneVerificationStore":
@@ -75,6 +82,38 @@ class PhoneVerificationStore:
     def _generate_code(self) -> str:
         upper = 10**self._code_length
         return str(secrets.randbelow(upper)).zfill(self._code_length)
+
+    async def _incr_hourly(self, key: str) -> int:
+        count = await self._redis.incr(key)
+        if count == 1:
+            await self._redis.expire(key, _HOURLY_TTL_SECONDS)
+        return count
+
+    async def check_send_rate(self, ip: str | None) -> None:
+        """발송 전 호출. 번호가 아닌 IP/글로벌 시간당 한도로 번호 회전 남용을 막는다.
+
+        ``reserve_send`` 는 휴대폰 번호 단위라 공격자가 번호를 바꿔가며 무제한 발송을
+        유발할 수 있다(직접적 SMS 비용/스팸). IP·글로벌 한도를 먼저 적용한다.
+        """
+
+        try:
+            if ip:
+                ip_count = await self._incr_hourly(f"{_IP_RATE_KEY}{ip}")
+                if ip_count > self._ip_hourly_limit:
+                    raise ZippinException(
+                        "잠시 후 다시 시도해 주세요. 요청이 너무 많습니다.",
+                        code="PHONE_OTP_IP_LIMIT",
+                        http_status=429,
+                    )
+            global_count = await self._incr_hourly(_GLOBAL_RATE_KEY)
+            if global_count > self._global_hourly_limit:
+                raise ZippinException(
+                    "현재 인증 요청이 많아 잠시 후 다시 시도해 주세요.",
+                    code="PHONE_OTP_GLOBAL_LIMIT",
+                    http_status=429,
+                )
+        except RedisError as exc:
+            raise _backend_unavailable(exc) from exc
 
     async def reserve_send(self, phone: str) -> str:
         """재발송 쿨다운/일일 한도를 확인하고 새 코드를 저장한 뒤 코드를 반환한다.
@@ -237,6 +276,8 @@ def get_phone_verification_store() -> PhoneVerificationStore:
         max_attempts=settings.phone_otp_max_attempts,
         resend_cooldown_seconds=settings.phone_otp_resend_cooldown_seconds,
         daily_send_limit=settings.phone_otp_daily_send_limit,
+        ip_hourly_limit=settings.phone_otp_ip_hourly_limit,
+        global_hourly_limit=settings.phone_otp_global_hourly_limit,
     )
 
 
