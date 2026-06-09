@@ -29,6 +29,8 @@ from ..logging import get_logger
 from ..schemas.account import (
     ChangePasswordRequest,
     ChangePasswordResponse,
+    ClaimAnonymousLeadsRequest,
+    ClaimAnonymousLeadsResponse,
     DeleteAccountResponse,
     FindEmailRequest,
     FindEmailResponse,
@@ -94,18 +96,16 @@ async def send_phone_code(
     return PhoneSendCodeResponse(expires_in_seconds=settings.phone_otp_ttl_seconds)
 
 
-async def _resolve_anonymous_owner(request: Request) -> "uuid.UUID | None":
-    """가입 요청에 익명 Supabase 토큰이 실려 있으면 그 소유자 id 를 검증해 반환한다.
+async def _verified_anonymous_user_id(token: str | None) -> uuid.UUID | None:
+    """토큰이 유효한 *익명* Supabase 토큰이면 그 user id 를, 아니면 None 을 반환한다.
 
-    토큰으로 소유권을 증명한 경우에만 기존 익명 리드를 새 계정으로 이관한다(IDOR 방지).
-    헤더가 없거나 영구/무효 토큰이면 None — 가입 흐름을 막지 않는다.
+    토큰으로 소유권을 증명한 경우에만 익명 리드를 영구 계정으로 이관한다(IDOR 방지).
+    무효/영구 토큰은 None — 흐름을 막지 않는다.
     """
 
-    authorization = request.headers.get("authorization")
-    if not authorization:
+    if not token:
         return None
     try:
-        token = parse_bearer_token(authorization)
         async with httpx.AsyncClient(timeout=10.0) as http_client:
             principal = await verify_supabase_request_token(
                 token, http_client=http_client
@@ -113,6 +113,19 @@ async def _resolve_anonymous_owner(request: Request) -> "uuid.UUID | None":
     except ZippinException:
         return None
     return principal.user_id if principal.is_anonymous else None
+
+
+async def _resolve_anonymous_owner(request: Request) -> uuid.UUID | None:
+    """가입 요청 Authorization 헤더의 익명 토큰에서 소유자 id 를 검증해 반환한다."""
+
+    authorization = request.headers.get("authorization")
+    if not authorization:
+        return None
+    try:
+        token = parse_bearer_token(authorization)
+    except ZippinException:
+        return None
+    return await _verified_anonymous_user_id(token)
 
 
 @router.post("/phone/verify-code", response_model=PhoneVerifyResponse)
@@ -249,3 +262,30 @@ async def delete_account(
     await supabase_admin.delete_user(user_id=requester.user_id)
     logger.info("account_deleted", user_id=str(requester.user_id))
     return DeleteAccountResponse()
+
+
+@router.post("/claim-anonymous-leads", response_model=ClaimAnonymousLeadsResponse)
+async def claim_anonymous_leads(
+    payload: ClaimAnonymousLeadsRequest,
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> ClaimAnonymousLeadsResponse:
+    """로그인(기존 이메일 계정) 시 익명 세션의 상담 리드를 영구 계정으로 이관한다.
+
+    회원가입 경로와 대칭 — 영구 토큰(Authorization)과 익명 토큰(body) 양쪽으로 소유권을
+    증명한 경우에만 이관한다. 무효/불일치는 조용히 0건(로그인 흐름을 막지 않는다).
+    """
+
+    if requester.is_anonymous:
+        return ClaimAnonymousLeadsResponse(moved=0)
+    anon_user_id = await _verified_anonymous_user_id(payload.anonymous_access_token)
+    if anon_user_id is None or anon_user_id == requester.user_id:
+        return ClaimAnonymousLeadsResponse(moved=0)
+    moved = await leads_service.reassign_leads_owner(
+        from_user_id=anon_user_id, to_user_id=requester.user_id
+    )
+    logger.info(
+        "login_claimed_anonymous_leads",
+        user_id=str(requester.user_id),
+        moved=moved,
+    )
+    return ClaimAnonymousLeadsResponse(moved=moved)

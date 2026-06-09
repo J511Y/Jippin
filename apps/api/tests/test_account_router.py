@@ -400,6 +400,61 @@ def test_change_password_rejects_wrong_current(monkeypatch) -> None:
     assert resp.json()["error"]["code"] == "CURRENT_PASSWORD_MISMATCH"
 
 
+def test_claim_anonymous_leads_reassigns_with_both_tokens(monkeypatch) -> None:
+    pem, jwk = helpers.rsa_keypair()
+    helpers.install_jwks(monkeypatch, {"keys": [jwk]})
+    perm_token, perm_sub = helpers.mint_token(pem, "test-key-1", is_anonymous=False)
+    anon_token, anon_sub = helpers.mint_token(pem, "test-key-1", is_anonymous=True)
+
+    moved: dict[str, object] = {}
+
+    async def fake_reassign(*, from_user_id, to_user_id):
+        moved["from"] = from_user_id
+        moved["to"] = to_user_id
+        return 3
+
+    monkeypatch.setattr("src.services.leads.reassign_leads_owner", fake_reassign)
+
+    client = TestClient(create_app())
+    with client:
+        resp = client.post(
+            "/auth/claim-anonymous-leads",
+            headers={"authorization": f"Bearer {perm_token}"},
+            json={"anonymous_access_token": anon_token},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["moved"] == 3
+    assert moved["from"] == anon_sub
+    assert moved["to"] == perm_sub
+
+
+def test_claim_anonymous_leads_noop_when_body_token_not_anonymous(monkeypatch) -> None:
+    pem, jwk = helpers.rsa_keypair()
+    helpers.install_jwks(monkeypatch, {"keys": [jwk]})
+    perm_token, _ = helpers.mint_token(pem, "test-key-1", is_anonymous=False)
+    other_permanent, _ = helpers.mint_token(pem, "test-key-1", is_anonymous=False)
+
+    called = {"n": 0}
+
+    async def fake_reassign(*, from_user_id, to_user_id):
+        called["n"] += 1
+        return 1
+
+    monkeypatch.setattr("src.services.leads.reassign_leads_owner", fake_reassign)
+
+    client = TestClient(create_app())
+    with client:
+        resp = client.post(
+            "/auth/claim-anonymous-leads",
+            headers={"authorization": f"Bearer {perm_token}"},
+            json={"anonymous_access_token": other_permanent},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["moved"] == 0
+    # 영구 토큰을 anon 으로 위조 claim 시 이관하지 않는다.
+    assert called["n"] == 0
+
+
 def test_delete_account_requires_permanent_user(monkeypatch) -> None:
     pem, jwk = helpers.rsa_keypair()
     helpers.install_jwks(monkeypatch, {"keys": [jwk]})

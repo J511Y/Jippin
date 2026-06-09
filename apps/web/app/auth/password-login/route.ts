@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 
+import { serverApiBaseUrl } from '@/lib/api-base-url';
 import { isSafeNext } from '@/lib/safe-redirect';
 import { mintBackendSession } from '@/lib/supabase/backend-session';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
@@ -20,6 +21,27 @@ export const dynamic = 'force-dynamic';
 
 function safeNext(value: unknown): string {
   return typeof value === 'string' && isSafeNext(value) ? value : '/';
+}
+
+/**
+ * 로그인한 영구 계정 토큰으로 익명 세션의 상담 리드를 이관 요청한다(백엔드가 양쪽 토큰 검증).
+ * 실패해도 로그인 자체는 막지 않는다(best-effort).
+ */
+async function claimAnonymousLeads(accessToken: string, anonAccessToken: string): Promise<void> {
+  try {
+    await fetch(`${serverApiBaseUrl()}/auth/claim-anonymous-leads`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ anonymous_access_token: anonAccessToken }),
+      cache: 'no-store'
+    });
+  } catch {
+    // 무시 — 리드 이관 실패가 로그인을 막지 않는다.
+  }
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -43,6 +65,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const response = new NextResponse(null);
   const supabase = createRouteHandlerClient({ request, response });
+
+  // 로그인 직전 익명 세션이 있으면 그 access token 을 잡아둔다 — 로그인 후 익명 상담 리드를
+  // 영구 계정으로 이관하는 데 쓴다(회원가입 경로와 대칭, 토큰-증명 기반).
+  const { data: pre } = await supabase.auth.getSession();
+  const anonAccessToken =
+    pre.session?.user?.is_anonymous === true ? pre.session.access_token : null;
+
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   const accessToken = data.session?.access_token;
 
@@ -51,6 +80,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { error: '이메일 또는 비밀번호가 올바르지 않습니다.' },
       { status: 401 }
     );
+  }
+
+  if (anonAccessToken) {
+    await claimAnonymousLeads(accessToken, anonAccessToken);
   }
 
   const bridge = await mintBackendSession(accessToken, 'email', response);

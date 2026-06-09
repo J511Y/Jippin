@@ -174,5 +174,13 @@ class ChangePasswordResponse(BaseModel):
     ok: bool = True
 
 
+class ClaimAnonymousLeadsRequest(BaseModel):
+    anonymous_access_token: str = Field(min_length=1, max_length=4096)
+
+
+class ClaimAnonymousLeadsResponse(BaseModel):
+    moved: int = 0
+
+
 class DeleteAccountResponse(BaseModel):
     ok: bool = True
