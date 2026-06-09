@@ -3,7 +3,9 @@
 import { Button, Stack, Text } from '@mantine/core';
 import { useState } from 'react';
 
+import { stashAnonAccessToken } from '@/lib/leads/claim-anonymous-after-login';
 import { DEFAULT_NEXT, resolveSafeNext } from '@/lib/safe-redirect';
+import { createClient } from '@/lib/supabase/client';
 
 /**
  * 간편가입 OAuth 시작 버튼 (CMP-557, CMP-564).
@@ -57,11 +59,24 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
   const [pendingProvider, setPendingProvider] = useState<ProviderId | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  function startOAuth(provider: ProviderId) {
+  async function startOAuth(provider: ProviderId) {
     setPendingProvider(provider);
     setErrorMessage(null);
 
     try {
+      // 익명 세션이면 access token 을 stash — OAuth 후 익명 상담 리드를 새 카카오 계정으로
+      // 이관하는 데 쓴다(AnonymousLeadClaimer). signInWithOAuth 는 익명 세션을 대체하므로
+      // redirect 전에 토큰을 잡아둬야 한다.
+      try {
+        const supabase = createClient();
+        const { data } = await supabase.auth.getSession();
+        if (data.session?.user?.is_anonymous === true && data.session.access_token) {
+          stashAnonAccessToken(data.session.access_token);
+        }
+      } catch {
+        // 세션 조회 실패는 무시 — 로그인 흐름은 계속한다.
+      }
+
       const url = new URL('/auth/oauth/start', window.location.origin);
       url.searchParams.set('provider', provider);
       url.searchParams.set('intent', 'signin');
@@ -84,7 +99,7 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
         <Button
           key={provider.id}
           type="button"
-          onClick={() => startOAuth(provider.id)}
+          onClick={() => void startOAuth(provider.id)}
           loading={pendingProvider === provider.id}
           disabled={pendingProvider !== null && pendingProvider !== provider.id}
           size="lg"

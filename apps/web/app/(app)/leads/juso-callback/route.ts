@@ -86,11 +86,11 @@ function renderDetailForm(form: FormData, confmKey: string, returnUrl: string): 
   <input type="hidden" name="confmKey" value="${escapeHtmlAttr(confmKey)}"/>
   <input type="hidden" name="returnUrl" value="${escapeHtmlAttr(returnUrl)}"/>
   <input type="hidden" name="resultType" value="4"/>
-  <input type="hidden" name="useDetailAddr" value="Y"/>
+  <input type="hidden" name="useDetailAddr" value="N"/>
   <input type="hidden" name="inputYn" value="Y"/>
 ${hidden}
   <div class="addr">${roadAddr}</div>
-  <input type="text" id="detailAddr" name="detailAddr" placeholder="상세 주소 (예: 101동 1001호)" autofocus
+  <input type="text" id="addrDetail" name="addrDetail" placeholder="상세 주소 (예: 101동 1001호)" autofocus
     onkeydown="if(event.key==='Enter'){event.preventDefault();document.detailForm.submit();}"/>
   <button type="submit">확인</button>
 </form>
@@ -98,12 +98,14 @@ ${hidden}
 </html>`;
 }
 
-/** 2단계 — opener 콜백 호출 후 팝업 종료. */
-function renderCallback(form: FormData): string {
+/** 콜백 단계 — opener 의 jusoCallBack 호출 후 팝업 종료. */
+function renderCallback(form: FormData, detail: string): string {
   const args = CALLBACK_FIELDS.map((name) => {
-    // 콜백의 addrDetail 자리에는 1단계에서 입력한 detailAddr 을 싣는다.
-    const key = name === 'addrDetail' ? 'detailAddr' : name;
-    return escapeJs(String(form.get(key) ?? ''));
+    // 상세주소(addrDetail) 자리에는 확정된 detail 값을 싣는다.
+    if (name === 'addrDetail') {
+      return escapeJs(detail);
+    }
+    return escapeJs(String(form.get(name) ?? ''));
   }).join(',');
   return `<!doctype html>
 <html lang="ko">
@@ -135,11 +137,16 @@ function htmlResponse(body: string): NextResponse {
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const form = await request.formData();
   const inputYn = String(form.get('inputYn') ?? '');
+  // juso 가 echo 하는 공식 필드명은 addrDetail. 일부 흐름의 detailAddr 도 호환 처리한다.
+  const detail = String(form.get('addrDetail') ?? form.get('detailAddr') ?? '');
 
-  if (inputYn === 'Y') {
-    return htmlResponse(renderCallback(form));
+  // 콜백 단계 — useDetailAddr=Y 팝업이 상세주소를 내부 처리해 한 번에 돌려주거나(detail 존재),
+  // 2단계 상세주소 입력을 마친 경우(inputYn=Y) opener 로 결과를 반환한다.
+  if (detail || inputYn === 'Y') {
+    return htmlResponse(renderCallback(form, detail));
   }
 
+  // 1단계 — 상세주소가 아직 없으면 팝업 창 안에서 입력 폼을 렌더한다(fallback).
   const confmKey = process.env.NEXT_PUBLIC_JUSO_POPUP_KEY ?? '';
   const returnUrl = new URL('/leads/juso-callback', request.nextUrl.origin).toString();
   return htmlResponse(renderDetailForm(form, confmKey, returnUrl));
