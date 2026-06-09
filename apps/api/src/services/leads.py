@@ -24,6 +24,7 @@ import sqlalchemy as sa
 from ..config import get_settings
 from ..db import get_engine
 from ..errors import ZippinException
+from ..logging import log_http_call
 from ..models import ConsultationLead, ConsultationLeadAttachment
 
 # consultation_leads 로 그대로 들어가는 컬럼 화이트리스트(서비스/인증 제어 컬럼 제외).
@@ -235,12 +236,15 @@ async def search_addresses(
     async def _run(client: httpx.AsyncClient) -> httpx.Response:
         return await client.get(settings.juso_api_url, params=params)
 
-    try:
+    async def _do() -> httpx.Response:
         if http_client is not None:
-            response = await _run(http_client)
-        else:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await _run(client)
+            return await _run(http_client)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            return await _run(client)
+
+    try:
+        # 검색어(keyword)는 PII 가 될 수 있으므로 로깅하지 않는다 — status/소요시간만 남긴다.
+        response = await log_http_call("juso", "search_addresses", _do)
         response.raise_for_status()
         body = response.json()
     except (httpx.HTTPError, ValueError) as exc:

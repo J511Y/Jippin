@@ -7,6 +7,7 @@ from jose import JWTError, jwt
 
 from ...auth.jwks import get_google_jwks
 from ...config import Settings
+from ...logging import log_http_call
 from .base import OAuthProviderError, OAuthTokens, ProviderProfile
 
 AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -49,15 +50,19 @@ async def exchange_code(
         or not settings.google_oauth_redirect_uri
     ):
         raise OAuthProviderError("Google OAuth provider is not configured.")
-    response = await http_client.post(
-        TOKEN_ENDPOINT,
-        data={
-            "grant_type": "authorization_code",
-            "client_id": settings.google_oauth_client_id,
-            "client_secret": settings.google_oauth_client_secret,
-            "redirect_uri": settings.google_oauth_redirect_uri,
-            "code": code,
-        },
+    response = await log_http_call(
+        "google",
+        "exchange_code",
+        lambda: http_client.post(
+            TOKEN_ENDPOINT,
+            data={
+                "grant_type": "authorization_code",
+                "client_id": settings.google_oauth_client_id,
+                "client_secret": settings.google_oauth_client_secret,
+                "redirect_uri": settings.google_oauth_redirect_uri,
+                "code": code,
+            },
+        ),
     )
     if response.status_code >= 400:
         raise OAuthProviderError("Google token exchange failed.")
@@ -87,9 +92,13 @@ async def fetch_userinfo(
         audience=settings.google_oauth_client_id,
         expected_nonce=expected_nonce,
     )
-    response = await http_client.get(
-        USERINFO_ENDPOINT,
-        headers={"Authorization": f"Bearer {tokens.access_token}"},
+    response = await log_http_call(
+        "google",
+        "fetch_userinfo",
+        lambda: http_client.get(
+            USERINFO_ENDPOINT,
+            headers={"Authorization": f"Bearer {tokens.access_token}"},
+        ),
     )
     if response.status_code >= 400:
         raise OAuthProviderError("Google userinfo request failed.")
