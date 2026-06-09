@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from urllib.parse import urlparse
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Sealed APP_ENV enum; DB branch selection comes from environment URLs.
@@ -92,6 +92,18 @@ class Settings(BaseSettings):
             "NAVER_OAUTH_REDIRECT_URI", "OAUTH_NAVER_REDIRECT_URI"
         ),
     )
+    # Derivation primitives (CMP-DIRECT). Most per-environment URLs are pure
+    # functions of {Supabase project ref, public web origin}; instead of hand-
+    # filling each one per environment, set these two and let _derive_from_
+    # primitives() fill the rest. Any explicit env value still wins (escape
+    # hatch) — derivation only fills fields the operator did not provide.
+    #   - supabase_ref      -> supabase_jwks_url, supabase_jwt_issuer
+    #   - public_web_origin -> frontend_auth_{success,failure,terms}_url, cors
+    # NB: DATABASE_*_URL is intentionally NOT derived — it carries a secret
+    # password and the pooler shard host is not a pure function of the ref.
+    supabase_ref: str | None = Field(default=None)
+    public_web_origin: str | None = Field(default=None)
+
     frontend_auth_success_url: str = Field(default="http://localhost:3000/auth/success")
     frontend_auth_failure_url: str = Field(default="http://localhost:3000/auth/failure")
     frontend_auth_terms_url: str = Field(default="http://localhost:3000/auth/terms")
@@ -206,6 +218,78 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
+
+    @field_validator("supabase_jwks_url", "supabase_jwt_issuer", mode="before")
+    @classmethod
+    def _blank_supabase_url_is_none(cls, v: object) -> object:
+        # A `.env` copied from `.env.example` carries `SUPABASE_JWKS_URL=` (empty
+        # string), which pydantic would otherwise treat as a provided value and
+        # block derivation from SUPABASE_REF. Normalize blank -> unset.
+        if v == "":
+            return None
+        return v
+
+    @field_validator("public_web_origin", mode="before")
+    @classmethod
+    def _validate_public_web_origin(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        if not isinstance(v, str):
+            raise ValueError("PUBLIC_WEB_ORIGIN must be a string.")
+        origin = v.rstrip("/")
+        parsed = urlparse(origin)
+        # Derived into cors_allow_origins, which Starlette compares against the
+        # browser Origin header by exact string (scheme + host[:port], never a
+        # path). Reject any path/query/fragment so a base-URL form like
+        # https://dev.jippin.ai/app can't silently produce a CORS entry that
+        # blocks every real browser call.
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path not in ("", "/")
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "PUBLIC_WEB_ORIGIN must be a bare origin (scheme + host[:port]) "
+                "with no path/query/fragment, e.g. https://dev.jippin.ai."
+            )
+        return origin
+
+    @model_validator(mode="after")
+    def _derive_from_primitives(self) -> "Settings":
+        """Fill per-environment URLs from {supabase_ref, public_web_origin}.
+
+        Only fields the operator did NOT pass explicitly are derived — an env
+        value always wins. This collapses the secrets surface to the irreducible
+        inputs while keeping every field individually overridable (12-factor
+        escape hatch).
+
+        Supabase URLs derive whenever they are falsy (None / blank), so the
+        documented "leave blank and set SUPABASE_REF" path works even when a
+        copied `.env` provides them as empty strings. Fields with concrete
+        defaults (frontend URLs, CORS) use ``model_fields_set`` so their
+        defaults are not mistaken for an explicit override.
+        """
+        provided = self.model_fields_set
+        if self.supabase_ref:
+            base = f"https://{self.supabase_ref}.supabase.co/auth/v1"
+            if not self.supabase_jwks_url:
+                self.supabase_jwks_url = f"{base}/.well-known/jwks.json"
+            if not self.supabase_jwt_issuer:
+                self.supabase_jwt_issuer = base
+        if self.public_web_origin:
+            origin = self.public_web_origin
+            if "frontend_auth_success_url" not in provided:
+                self.frontend_auth_success_url = f"{origin}/auth/success"
+            if "frontend_auth_failure_url" not in provided:
+                self.frontend_auth_failure_url = f"{origin}/auth/failure"
+            if "frontend_auth_terms_url" not in provided:
+                self.frontend_auth_terms_url = f"{origin}/auth/terms"
+            if "cors_allow_origins" not in provided:
+                self.cors_allow_origins = [origin]
+        return self
 
 
 @lru_cache
