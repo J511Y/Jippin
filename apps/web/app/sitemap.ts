@@ -21,6 +21,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.8
     },
     {
+      // 검토(사전검토 세션) 랜딩 — GEO/SEO 인입 페이지로 색인 허용.
+      url: `${SITE_URL}/sessions`,
+      lastModified,
+      changeFrequency: 'weekly',
+      priority: 0.8
+    },
+    {
       url: `${SITE_URL}/terms`,
       lastModified,
       changeFrequency: 'yearly',
