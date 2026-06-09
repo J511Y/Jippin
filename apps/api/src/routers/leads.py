@@ -14,11 +14,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from ..auth.request_token import RequestUser, require_supabase_request_user
+from ..errors import ZippinException
 from ..logging import get_logger
 from ..schemas.leads import (
     AddressSearchResponse,
     LeadCreateRequest,
     LeadResponse,
+    MyLeadsResponse,
 )
 from ..services import leads as leads_service
 
@@ -45,6 +47,21 @@ async def create_lead(
         attachment_count=len(payload.attachments),
     )
     return LeadResponse.model_validate(row)
+
+
+@router.get("/mine", response_model=MyLeadsResponse)
+async def list_my_leads(
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> MyLeadsResponse:
+    """마이페이지 상담 현황 — 로그인한 회원 본인의 리드만 반환한다."""
+    if requester.is_anonymous:
+        raise ZippinException(
+            "상담 현황 조회는 로그인한 회원만 가능합니다.",
+            code="AUTH_ANONYMOUS_TOKEN_NOT_ALLOWED",
+            http_status=403,
+        )
+    rows = await leads_service.list_leads_for_user(user_id=requester.user_id)
+    return MyLeadsResponse.model_validate({"items": rows})
 
 
 @router.get("/address/search", response_model=AddressSearchResponse)

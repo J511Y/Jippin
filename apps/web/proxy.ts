@@ -55,7 +55,7 @@ const PROTECTED_APP_PREFIXES = [
  * - prefix 매칭은 정확한 경로 일치 또는 `<prefix>/` 시작만 인정해 `/contacts-foo` 같은
  *   인접 경로 오매칭을 방지한다.
  */
-const PROTECTED_ROOT_PREFIXES = ['/contacts'] as const;
+const PROTECTED_ROOT_PREFIXES = ['/contacts', '/mypage'] as const;
 
 function isAnonymousAllowed(pathname: string): boolean {
   return ANONYMOUS_ALLOWED_APP_PREFIXES.some((prefix) => pathname.startsWith(prefix));
@@ -106,6 +106,7 @@ export const config = {
     '/app/:path*',
     '/auth/:path*',
     '/login',
-    '/contacts/:path*'
+    '/contacts/:path*',
+    '/mypage/:path*'
   ]
 };

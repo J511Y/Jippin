@@ -13,12 +13,14 @@ from .db import dispose_engines
 from .errors import register_exception_handlers
 from .logging import RequestIDMiddleware, configure_logging, get_logger
 from .middleware.request_log import RequestLogMiddleware
+from .routers.account import router as account_router
 from .routers.auth import router as auth_router
 from .routers.chat import router as chat_router
 from .routers.floorplans import router as floorplans_router
 from .routers.healthz import router as healthz_router
 from .routers.leads import router as leads_router
 from .routers.sessions import router as sessions_router
+from .services.phone_verification import close_phone_verification_store
 
 
 @asynccontextmanager
@@ -31,6 +33,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await close_oauth_state_store()
+        await close_phone_verification_store()
         await dispose_engines()
         log.info("api_stop")
 
@@ -61,6 +64,9 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(auth_router)
+    # 이메일/비밀번호 회원가입·문자인증·아이디/비번 찾기·회원탈퇴 (CMP-DIRECT).
+    # DB/Supabase-backed 실 기능이므로 phase_a 플래그와 무관하게 항상 등록한다.
+    app.include_router(account_router)
     app.include_router(healthz_router)
     # 상담 리드(consultation leads) — DB-backed 실 기능이므로 phase_a 플래그와 무관하게
     # 항상 등록한다. 비회원(익명 Supabase 토큰)도 신청 가능(CMP-DIRECT).
