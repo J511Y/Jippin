@@ -48,8 +48,10 @@ const CALLBACK_FIELDS = [
   'emdNo',
 ] as const;
 
-// 상세주소 입력 폼이 juso 로 재전송해야 하는 주소 필드(콜백 필드와 동일 집합).
-const PASSTHROUGH_FIELDS = [...CALLBACK_FIELDS];
+// 상세주소 입력 폼이 juso 로 재전송하는 주소 필드. addrDetail 은 사용자가 직접 입력하는
+// visible input 으로 따로 두므로 hidden passthrough 에서 제외한다(중복 시 빈 hidden 값이
+// 먼저 읽혀 입력한 상세주소가 유실되는 것을 방지).
+const PASSTHROUGH_FIELDS = CALLBACK_FIELDS.filter((name) => name !== 'addrDetail');
 
 function escapeHtmlAttr(value: string): string {
   return value

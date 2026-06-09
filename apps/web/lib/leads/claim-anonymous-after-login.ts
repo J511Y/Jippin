@@ -70,7 +70,7 @@ export async function claimPendingAnonymousLeads(): Promise<void> {
   }
 
   try {
-    await fetch(`${apiBaseUrl()}/auth/claim-anonymous-leads`, {
+    const res = await fetch(`${apiBaseUrl()}/auth/claim-anonymous-leads`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -80,9 +80,12 @@ export async function claimPendingAnonymousLeads(): Promise<void> {
       body: JSON.stringify({ anonymous_access_token: stashed }),
       cache: 'no-store'
     });
+    // 2xx(이관 시도 완료, moved:0 포함) 일 때만 stash 제거. 401/5xx 등 일시 실패면
+    // stash 를 유지해 다음 mount/auth 변화에서 재시도한다(익명 토큰을 잃지 않는다).
+    if (res.ok) {
+      clearStash();
+    }
   } catch {
-    // best-effort — 실패해도 로그인/탐색을 막지 않는다.
-  } finally {
-    clearStash();
+    // 네트워크 오류 — stash 유지, 다음 기회에 재시도(best-effort).
   }
 }
