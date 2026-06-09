@@ -85,3 +85,15 @@ def test_signup_request_requires_terms_agreement() -> None:
             phone_token="tok",
             agreed_to_terms=False,
         )
+
+
+def test_signup_request_rejects_omitted_terms_agreement() -> None:
+    # 필드를 아예 생략해도(직접 API 호출) 거부되어야 한다 — Literal[True] 필수.
+    with pytest.raises(ValidationError):
+        SignupRequest(
+            name="홍길동",
+            email="hong@example.com",
+            phone="01012345678",
+            password="abc123",
+            phone_token="tok",
+        )

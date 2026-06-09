@@ -4,10 +4,11 @@
 service_role 키로 호출한다. 비밀번호는 auth.users 가 단독 관리하며(우리 테이블엔
 password 컬럼 없음 — AGENTS §4.7 #3), service_role 키는 백엔드만 보유한다.
 
-휴대폰 번호는 ``user_metadata.phone`` 에 정규화 형태로 저장한다(auth.users.phone 의
-unique/phone-provider 결합을 피하기 위함). 아이디(이메일) 찾기는 DB 의
-``auth.users.raw_user_meta_data->>'phone'`` 를 조회한다 — 백엔드 DB role 은 RLS 를
-우회하므로 service_role REST 없이도 안전하게 읽을 수 있다.
+검증된 휴대폰 번호는 ``app_metadata.phone`` 에 정규화 형태로 저장한다. ``user_metadata`` 는
+로그인 사용자가 ``updateUser`` 로 직접 수정할 수 있어 위조 가능하지만, ``app_metadata`` 는
+service_role 만 변경할 수 있어 서버가 소유권을 가진다(auth.users.phone 의 unique/phone-
+provider 결합은 회피). 아이디(이메일) 찾기는 DB 의 ``auth.users.raw_app_meta_data->>'phone'``
+를 조회한다 — 백엔드 DB role 은 RLS 를 우회하므로 service_role REST 없이도 안전하게 읽는다.
 """
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ async def find_emails_by_phone(phone: str) -> list[dict[str, str]]:
         """
         select email, created_at
         from auth.users
-        where raw_user_meta_data->>'phone' = :phone
+        where raw_app_meta_data->>'phone' = :phone
           and email is not null
           and (is_anonymous is not true)
         order by created_at asc
@@ -129,7 +130,7 @@ async def find_user_id_by_email_and_phone(email: str, phone: str) -> uuid.UUID |
         select id
         from auth.users
         where lower(email) = lower(:email)
-          and raw_user_meta_data->>'phone' = :phone
+          and raw_app_meta_data->>'phone' = :phone
           and (is_anonymous is not true)
         limit 1
         """
@@ -173,10 +174,12 @@ async def create_email_user(
         # 휴대폰 인증만으로 본인확인을 대신할지(자동 confirm) 운영 설정으로 제어한다.
         # 자동 confirm 은 이메일 소유를 검증하지 않으므로 squatting 위험이 있다 — 강화 시 False.
         "email_confirm": settings.signup_auto_confirm_email,
+        # 검증된 휴대폰은 사용자가 못 바꾸는 app_metadata 에 둔다(서버 소유). 표시용 이름만
+        # user_metadata 에 둔다(사용자 수정 가능해도 보안 판단에 쓰지 않음).
+        "app_metadata": {"phone": phone},
         "user_metadata": {
             "name": display_name,
             "display_name": display_name,
-            "phone": phone,
         },
     }
 

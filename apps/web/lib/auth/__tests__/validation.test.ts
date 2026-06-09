@@ -1,3 +1,4 @@
+import { zodResolver } from '@hookform/resolvers/zod';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -55,6 +56,30 @@ describe('auth zod schemas', () => {
     if (!res.success) {
       expect(res.error.issues.some((i) => i.path[0] === 'confirm')).toBe(true);
     }
+  });
+
+  it('zodResolver(@hookform/resolvers v5) maps zod 4 errors to RHF field errors', async () => {
+    // 리뷰어 우려 검증: resolver 가 zod 4 ZodError 를 RHF field error 로 변환하는지.
+    const resolver = zodResolver(signupSchema);
+    const result = await resolver(
+      { ...validSignup, password: 'weak', confirm: 'nope', agreed: false },
+      undefined,
+      { fields: {}, shouldUseNativeValidation: false }
+    );
+    expect(Object.keys(result.values)).toHaveLength(0);
+    expect(result.errors.password?.message).toContain('비밀번호');
+    expect(result.errors.agreed).toBeDefined();
+    expect(result.errors.confirm).toBeDefined();
+  });
+
+  it('zodResolver returns parsed values when input is valid', async () => {
+    const resolver = zodResolver(signupSchema);
+    const result = await resolver(validSignup, undefined, {
+      fields: {},
+      shouldUseNativeValidation: false
+    });
+    expect(result.errors).toEqual({});
+    expect((result.values as { email: string }).email).toBe('hong@example.com');
   });
 
   it('changePasswordSchema enforces new-password policy and match', () => {
