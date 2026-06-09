@@ -145,6 +145,25 @@ class LeadResponse(BaseModel):
     created_at: datetime
 
 
+class MyLeadItem(BaseModel):
+    """마이페이지 상담 현황 한 건 — 본인 리드만 반환한다(타인 PII 노출 없음)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    source_form: SourceForm
+    status: LeadStatus
+    applicant_name: str
+    road_addr_part1: str | None = None
+    road_addr_part2: str | None = None
+    expansion_location: str | None = None
+    created_at: datetime
+
+
+class MyLeadsResponse(BaseModel):
+    items: list[MyLeadItem]
+
+
 class AddressSearchItem(BaseModel):
     """도로명주소 API(addrLinkApi.do) 결과 한 건의 정규화 형태."""
 

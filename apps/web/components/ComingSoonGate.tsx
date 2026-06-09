@@ -84,7 +84,7 @@ export function ComingSoonGate({
               </Button>
               {/* <Button
                 component={Link}
-                href="/contacts"
+                href="/mypage"
                 variant="subtle"
                 color="jippin"
                 size="sm"

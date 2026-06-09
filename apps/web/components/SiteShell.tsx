@@ -16,7 +16,9 @@ import { useDisclosure } from '@mantine/hooks';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+
+import { createClient } from '@/lib/supabase/client';
 
 const HEADER_HEIGHT = 60;
 
@@ -26,11 +28,41 @@ type NavItem = {
   match: (pathname: string) => boolean;
 };
 
+// '상담'(/contacts) 메뉴는 제거됨 — 상담 현황은 마이페이지로 이동했다(CMP-DIRECT).
 const NAV_ITEMS: NavItem[] = [
   { href: '/sessions', label: '검토', match: (p) => p.startsWith('/sessions') },
-  { href: '/contacts', label: '상담', match: (p) => p.startsWith('/contacts') },
   { href: '/prices', label: '가격', match: (p) => p.startsWith('/prices') }
 ];
+
+/**
+ * 헤더 인증 상태 — 영구(비익명) Supabase 세션이 있으면 '마이페이지', 아니면 '로그인'.
+ */
+function useIsMember(): boolean {
+  const [isMember, setIsMember] = useState(false);
+
+  useEffect(() => {
+    const supabase = createClient();
+    let active = true;
+
+    const evaluate = (session: { user?: { is_anonymous?: boolean } } | null) => {
+      if (!active) return;
+      const user = session?.user;
+      setIsMember(Boolean(user) && user?.is_anonymous !== true);
+    };
+
+    void supabase.auth.getSession().then(({ data }) => evaluate(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) =>
+      evaluate(session)
+    );
+
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  return isMember;
+}
 
 function NavLink({
   item,
@@ -99,6 +131,9 @@ function BrandMark({ onNavigate }: { onNavigate?: () => void }) {
 export function SiteShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? '/';
   const [drawerOpened, drawer] = useDisclosure(false);
+  const isMember = useIsMember();
+  const accountHref = isMember ? '/mypage' : '/login';
+  const accountLabel = isMember ? '마이페이지' : '로그인';
 
   return (
     <AppShell
@@ -128,14 +163,14 @@ export function SiteShell({ children }: { children: ReactNode }) {
             <Group gap="xs" wrap="nowrap">
               <Button
                 component={Link}
-                href="/login"
+                href={accountHref}
                 size="sm"
                 variant="subtle"
                 color="jippin"
                 radius="md"
                 visibleFrom="sm"
               >
-                로그인
+                {accountLabel}
               </Button>
               <Burger
                 opened={drawerOpened}
@@ -182,14 +217,14 @@ export function SiteShell({ children }: { children: ReactNode }) {
           <Box mt="md">
             <Button
               component={Link}
-              href="/login"
+              href={accountHref}
               onClick={drawer.close}
               fullWidth
               variant="light"
               color="jippin"
               radius="md"
             >
-              로그인
+              {accountLabel}
             </Button>
           </Box>
         </Stack>

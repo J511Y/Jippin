@@ -46,9 +46,11 @@ class SupabaseSessionBridgeRequest(BaseModel):
         default=None,
         description="Deprecated legacy anonymous id. Ignored after CMP-604.",
     )
-    requested_provider: Literal["google", "kakao", "naver"] | None = Field(
+    # 'email' = 자체 이메일/비밀번호 로그인(CMP-DIRECT). 브릿지 validator
+    # (_ALLOWED_SUPABASE_UI_PROVIDERS)와 정합해야 이메일 로그인이 jippin_session 을 발급한다.
+    requested_provider: Literal["google", "kakao", "naver", "email"] | None = Field(
         default=None,
-        description="Provider selected by the signed web OAuth flow context.",
+        description="Provider selected by the signed web flow context (email = 자체 로그인).",
     )
 
 

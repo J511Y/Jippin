@@ -23,7 +23,10 @@ from ..errors import ZippinException
 from ..models import User
 
 _SUPPORTED_ALGORITHMS: tuple[str, ...] = ("RS256", "ES256")
-_ALLOWED_SUPABASE_UI_PROVIDERS: frozenset[str] = frozenset({"kakao"})
+# 'email' = 자체 이메일/비밀번호 로그인(CMP-DIRECT). Supabase 가 이메일 로그인 토큰의
+# app_metadata.provider 를 'email' 로 발급한다. 가입 시 내부 약관 동의(internal_signup)를
+# 이미 기록하므로 별도 Kakao Sync 분기 없이 일반 약관 컨텍스트로 처리한다.
+_ALLOWED_SUPABASE_UI_PROVIDERS: frozenset[str] = frozenset({"kakao", "email"})
 _PROVIDER_ALIASES: dict[str, str] = {
     "custom:kakao": "kakao",
     "custom:naver": "naver",

@@ -35,7 +35,7 @@ export default function NewLeadPage() {
       <Group justify="flex-end">
         <Button
           component="a"
-          href="/contacts"
+          href="/mypage"
           variant="subtle"
           color="jippin"
           radius="md"
