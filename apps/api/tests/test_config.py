@@ -70,6 +70,24 @@ def test_supabase_ref_derives_jwks_and_issuer() -> None:
     )
 
 
+def test_blank_supabase_urls_still_derive_from_ref() -> None:
+    # A `.env` copied from `.env.example` provides these as empty strings;
+    # derivation must still fire (else auth reports AUTH_SESSION_CONFIG_MISSING).
+    settings = Settings(
+        supabase_ref="vrxdfratsckukzyxrlce",
+        supabase_jwks_url="",
+        supabase_jwt_issuer="",
+    )
+    assert (
+        settings.supabase_jwks_url
+        == "https://vrxdfratsckukzyxrlce.supabase.co/auth/v1/.well-known/jwks.json"
+    )
+    assert (
+        settings.supabase_jwt_issuer
+        == "https://vrxdfratsckukzyxrlce.supabase.co/auth/v1"
+    )
+
+
 def test_explicit_supabase_urls_win_over_ref() -> None:
     settings = Settings(
         supabase_ref="vrxdfratsckukzyxrlce",
@@ -115,8 +133,26 @@ def test_no_origin_keeps_localhost_defaults_and_wildcard_cors() -> None:
     assert settings.cors_allow_origins == ["*"]
 
 
-@pytest.mark.parametrize("value", ["dev.jippin.ai", "ftp://x", "/relative", "not a url"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "dev.jippin.ai",  # no scheme
+        "ftp://x",  # wrong scheme
+        "/relative",  # no host
+        "not a url",
+        "https://dev.jippin.ai/app",  # path — would corrupt derived CORS
+        "https://dev.jippin.ai/auth/success",
+        "https://dev.jippin.ai?foo=bar",  # query
+        "https://dev.jippin.ai#frag",  # fragment
+    ],
+)
 def test_invalid_public_web_origin_blocks_boot(value: str) -> None:
     with pytest.raises(ValidationError) as exc:
         Settings(public_web_origin=value)
     assert "PUBLIC_WEB_ORIGIN" in str(exc.value)
+
+
+def test_public_web_origin_allows_port() -> None:
+    settings = Settings(public_web_origin="http://localhost:3000")
+    assert settings.cors_allow_origins == ["http://localhost:3000"]
+    assert settings.frontend_auth_success_url == "http://localhost:3000/auth/success"

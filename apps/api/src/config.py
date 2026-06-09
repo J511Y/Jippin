@@ -181,6 +181,16 @@ class Settings(BaseSettings):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
 
+    @field_validator("supabase_jwks_url", "supabase_jwt_issuer", mode="before")
+    @classmethod
+    def _blank_supabase_url_is_none(cls, v: object) -> object:
+        # A `.env` copied from `.env.example` carries `SUPABASE_JWKS_URL=` (empty
+        # string), which pydantic would otherwise treat as a provided value and
+        # block derivation from SUPABASE_REF. Normalize blank -> unset.
+        if v == "":
+            return None
+        return v
+
     @field_validator("public_web_origin", mode="before")
     @classmethod
     def _validate_public_web_origin(cls, v: object) -> object:
@@ -188,29 +198,48 @@ class Settings(BaseSettings):
             return None
         if not isinstance(v, str):
             raise ValueError("PUBLIC_WEB_ORIGIN must be a string.")
-        parsed = urlparse(v)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        origin = v.rstrip("/")
+        parsed = urlparse(origin)
+        # Derived into cors_allow_origins, which Starlette compares against the
+        # browser Origin header by exact string (scheme + host[:port], never a
+        # path). Reject any path/query/fragment so a base-URL form like
+        # https://dev.jippin.ai/app can't silently produce a CORS entry that
+        # blocks every real browser call.
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path not in ("", "/")
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
             raise ValueError(
-                "PUBLIC_WEB_ORIGIN must be an absolute http(s) origin, "
-                "e.g. https://dev.jippin.ai."
+                "PUBLIC_WEB_ORIGIN must be a bare origin (scheme + host[:port]) "
+                "with no path/query/fragment, e.g. https://dev.jippin.ai."
             )
-        return v.rstrip("/")
+        return origin
 
     @model_validator(mode="after")
     def _derive_from_primitives(self) -> "Settings":
         """Fill per-environment URLs from {supabase_ref, public_web_origin}.
 
         Only fields the operator did NOT pass explicitly are derived — an env
-        value always wins (``model_fields_set`` records what was provided). This
-        collapses the secrets surface to the irreducible inputs while keeping
-        every field individually overridable (12-factor escape hatch).
+        value always wins. This collapses the secrets surface to the irreducible
+        inputs while keeping every field individually overridable (12-factor
+        escape hatch).
+
+        Supabase URLs derive whenever they are falsy (None / blank), so the
+        documented "leave blank and set SUPABASE_REF" path works even when a
+        copied `.env` provides them as empty strings. Fields with concrete
+        defaults (frontend URLs, CORS) use ``model_fields_set`` so their
+        defaults are not mistaken for an explicit override.
         """
         provided = self.model_fields_set
         if self.supabase_ref:
             base = f"https://{self.supabase_ref}.supabase.co/auth/v1"
-            if "supabase_jwks_url" not in provided:
+            if not self.supabase_jwks_url:
                 self.supabase_jwks_url = f"{base}/.well-known/jwks.json"
-            if "supabase_jwt_issuer" not in provided:
+            if not self.supabase_jwt_issuer:
                 self.supabase_jwt_issuer = base
         if self.public_web_origin:
             origin = self.public_web_origin

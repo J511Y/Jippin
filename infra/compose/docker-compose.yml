@@ -117,8 +117,15 @@ services:
       AUTH_JWT_ALG: "${AUTH_JWT_ALG:-HS256}"
       AUTH_JWT_ACCESS_TTL_SECONDS: "${AUTH_JWT_ACCESS_TTL_SECONDS:-3600}"
       AUTH_JWT_REFRESH_TTL_SECONDS: "${AUTH_JWT_REFRESH_TTL_SECONDS:-604800}"
-      SUPABASE_JWKS_URL: "${SUPABASE_JWKS_URL:?SUPABASE_JWKS_URL must be set}"
-      SUPABASE_JWT_ISSUER: "${SUPABASE_JWT_ISSUER:?SUPABASE_JWT_ISSUER must be set}"
+      # Supabase 세션 브릿지 검증값. SUPABASE_REF 하나만 주면 config.py 가
+      # JWKS/issuer 를 파생하므로(apps/api/src/config.py::_derive_from_primitives)
+      # 아래 둘은 optional 로 완화한다. 직접 지정도 가능(지정 시 파생보다 우선).
+      # SUPABASE_REF 도·JWKS/issuer 도 모두 비면 컨테이너는 뜨지만 런타임 auth 가
+      # 503(AUTH_SESSION_CONFIG_MISSING) 으로 떨어진다 — 셋 중 하나는 채울 것.
+      SUPABASE_REF: "${SUPABASE_REF:-}"
+      PUBLIC_WEB_ORIGIN: "${PUBLIC_WEB_ORIGIN:-}"
+      SUPABASE_JWKS_URL: "${SUPABASE_JWKS_URL:-}"
+      SUPABASE_JWT_ISSUER: "${SUPABASE_JWT_ISSUER:-}"
       SUPABASE_JWT_SECRET: "${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET must be set}"
       SUPABASE_JWT_AUDIENCE: "${SUPABASE_JWT_AUDIENCE:-authenticated}"
       FRONTEND_AUTH_SUCCESS_URL: "${FRONTEND_AUTH_SUCCESS_URL:-http://localhost:3000/auth/success}"
