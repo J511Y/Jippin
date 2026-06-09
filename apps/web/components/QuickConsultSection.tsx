@@ -18,17 +18,22 @@ import {
   Title
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { zodResolver } from '@hookform/resolvers/zod';
 import {
   IconArrowRight,
   IconClockHour4,
   IconShieldLock,
   IconUserCheck
 } from '@tabler/icons-react';
-import { useState, type FormEvent } from 'react';
+import { Controller, useForm } from 'react-hook-form';
 import { parseApiError } from '@/lib/api/error';
-import { createLead, type ApplicantKind } from '@/lib/leads/api';
+import { createLead } from '@/lib/leads/api';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
-import { normalizeKoreanPhone } from '@/lib/leads/validation';
+import {
+  normalizeKoreanPhone,
+  quickConsultSchema,
+  type QuickConsultValues
+} from '@/lib/leads/validation';
 
 const POINTS = [
   { icon: IconClockHour4, label: '영업일 1일 내 연락' },
@@ -41,53 +46,46 @@ const POINTS = [
  * 메모만으로 즉시 상담을 신청할 수 있다 (POST /leads, source_form='main_page', CMP-DIRECT).
  */
 export function QuickConsultSection() {
-  const [kind, setKind] = useState<ApplicantKind>('individual');
-  const [name, setName] = useState('');
-  const [contact, setContact] = useState('');
-  const [memo, setMemo] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const phone = normalizeKoreanPhone(contact);
-    if (!name.trim() || !phone) {
-      notifications.show({
-        color: 'red',
-        title: '입력을 확인해 주세요',
-        message: !name.trim()
-          ? '이름을 입력해 주세요.'
-          : '연락처 형식을 확인해 주세요. 예: 010-1234-5678'
-      });
-      return;
+  const {
+    register,
+    handleSubmit,
+    control,
+    reset,
+    formState: { errors, isSubmitting }
+  } = useForm<QuickConsultValues>({
+    resolver: zodResolver(quickConsultSchema),
+    mode: 'onTouched',
+    defaultValues: {
+      applicant_kind: 'individual',
+      applicant_name: '',
+      applicant_phone: '',
+      message: ''
     }
-    setSubmitting(true);
+  });
+
+  async function onSubmit(values: QuickConsultValues) {
     try {
       // 비로그인도 가능: 익명 세션 보장 후 리드 생성.
       await ensureAnonymousSession();
       await createLead({
         source_form: 'main_page',
-        applicant_kind: kind,
-        applicant_name: name.trim(),
-        applicant_phone: phone,
-        message: memo.trim() || null
+        applicant_kind: values.applicant_kind,
+        applicant_name: values.applicant_name.trim(),
+        applicant_phone: normalizeKoreanPhone(values.applicant_phone) ?? values.applicant_phone,
+        message: values.message.trim() || null
       });
       notifications.show({
         color: 'teal',
         title: '상담 신청이 접수되었어요',
-        message: `${name.trim()}님, 영업일 기준 1일 이내에 연락드릴게요.`
+        message: `${values.applicant_name.trim()}님, 영업일 기준 1일 이내에 연락드릴게요.`
       });
-      setKind('individual');
-      setName('');
-      setContact('');
-      setMemo('');
+      reset();
     } catch (error) {
       notifications.show({
         color: 'red',
         title: '상담 신청에 실패했어요',
         message: parseApiError(error).message
       });
-    } finally {
-      setSubmitting(false);
     }
   }
 
@@ -145,20 +143,27 @@ export function QuickConsultSection() {
             padding="xl"
             shadow="sm"
             component="form"
-            onSubmit={handleSubmit}
+            onSubmit={handleSubmit(onSubmit)}
+            noValidate
           >
             <Stack gap="md">
-              <SegmentedControl
-                fullWidth
-                radius="md"
-                size="md"
-                value={kind}
-                onChange={(value) => setKind(value as ApplicantKind)}
-                data={[
-                  { value: 'individual', label: '개인' },
-                  { value: 'company', label: '업체' }
-                ]}
-                aria-label="신청 구분"
+              <Controller
+                name="applicant_kind"
+                control={control}
+                render={({ field }) => (
+                  <SegmentedControl
+                    fullWidth
+                    radius="md"
+                    size="md"
+                    value={field.value}
+                    onChange={field.onChange}
+                    data={[
+                      { value: 'individual', label: '개인' },
+                      { value: 'company', label: '업체' }
+                    ]}
+                    aria-label="신청 구분"
+                  />
+                )}
               />
               <TextInput
                 label="이름"
@@ -166,8 +171,8 @@ export function QuickConsultSection() {
                 radius="md"
                 size="md"
                 withAsterisk
-                value={name}
-                onChange={(e) => setName(e.currentTarget.value)}
+                error={errors.applicant_name?.message}
+                {...register('applicant_name')}
               />
               <TextInput
                 label="연락처"
@@ -176,8 +181,8 @@ export function QuickConsultSection() {
                 radius="md"
                 size="md"
                 withAsterisk
-                value={contact}
-                onChange={(e) => setContact(e.currentTarget.value)}
+                error={errors.applicant_phone?.message}
+                {...register('applicant_phone')}
               />
               <Textarea
                 label="간단 메모 (선택)"
@@ -186,8 +191,8 @@ export function QuickConsultSection() {
                 size="md"
                 minRows={2}
                 autosize
-                value={memo}
-                onChange={(e) => setMemo(e.currentTarget.value)}
+                error={errors.message?.message}
+                {...register('message')}
               />
               <Button
                 type="submit"
@@ -195,7 +200,7 @@ export function QuickConsultSection() {
                 color="coral"
                 radius="md"
                 fullWidth
-                loading={submitting}
+                loading={isSubmitting}
                 rightSection={<IconArrowRight size={18} />}
               >
                 상담 신청하기
