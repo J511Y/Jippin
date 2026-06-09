@@ -29,7 +29,9 @@ _OTP_ATTEMPTS_KEY = "phone:otp:attempts:"
 _COOLDOWN_KEY = "phone:otp:cooldown:"
 _DAILY_KEY = "phone:otp:daily:"
 _TOKEN_KEY = "phone:otp:token:"
+_SIGNUP_LOCK_KEY = "phone:signup:lock:"
 _DAILY_TTL_SECONDS = 86_400
+_SIGNUP_LOCK_TTL_SECONDS = 30
 
 
 def _backend_unavailable(exc: Exception) -> ZippinException:  # noqa: ARG001
@@ -113,6 +115,43 @@ class PhoneVerificationStore:
         except RedisError as exc:
             raise _backend_unavailable(exc) from exc
         return code
+
+    async def rollback_send(self, phone: str) -> None:
+        """SMS 발송 실패 시 reserve_send 의 쿨다운/일일 카운트를 되돌린다.
+
+        provider 장애로 코드가 전달되지 않았는데 쿨다운/일일 한도만 소진돼 번호가
+        잠기는 회귀(P2)를 막는다. 베스트 에포트 — Redis 오류는 조용히 무시한다.
+        """
+
+        try:
+            await self._redis.delete(f"{_COOLDOWN_KEY}{phone}")
+            await self._redis.delete(f"{_OTP_KEY}{phone}")
+            await self._redis.delete(f"{_OTP_ATTEMPTS_KEY}{phone}")
+            remaining = await self._redis.decr(f"{_DAILY_KEY}{phone}")
+            if remaining is not None and remaining < 0:
+                await self._redis.delete(f"{_DAILY_KEY}{phone}")
+        except RedisError:
+            return
+
+    async def acquire_signup_lock(self, phone: str) -> bool:
+        """가입 임계 구역(중복 확인 + 계정 생성) 직렬화용 짧은 락. 획득 시 True."""
+
+        try:
+            acquired = await self._redis.set(
+                f"{_SIGNUP_LOCK_KEY}{phone}",
+                "1",
+                ex=_SIGNUP_LOCK_TTL_SECONDS,
+                nx=True,
+            )
+        except RedisError as exc:
+            raise _backend_unavailable(exc) from exc
+        return bool(acquired)
+
+    async def release_signup_lock(self, phone: str) -> None:
+        try:
+            await self._redis.delete(f"{_SIGNUP_LOCK_KEY}{phone}")
+        except RedisError:
+            return
 
     async def verify_code(self, phone: str, code: str) -> str:
         """코드를 검증하고 성공 시 단기 ``phone_token`` 을 발급한다."""

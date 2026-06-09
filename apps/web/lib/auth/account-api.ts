@@ -64,10 +64,29 @@ export interface SignupInput {
   phone: string;
   password: string;
   phone_token: string;
+  agreed_to_terms: boolean;
 }
 
 export async function signup(input: SignupInput): Promise<{ user_id: string; email: string }> {
-  return request('/auth/signup', { method: 'POST', body: JSON.stringify(input) });
+  // 기존 익명 세션이 있으면 그 access token 을 실어 보낸다. 백엔드가 소유권을 검증해
+  // 익명으로 만든 상담 리드를 새 계정으로 이관한다(IDOR 방지 — 토큰 증명 기반).
+  let anonAuth: Record<string, string> = {};
+  try {
+    const supabase = createClient();
+    const {
+      data: { session }
+    } = await supabase.auth.getSession();
+    if (session?.access_token && session.user?.is_anonymous) {
+      anonAuth = { Authorization: `Bearer ${session.access_token}` };
+    }
+  } catch {
+    anonAuth = {};
+  }
+  return request('/auth/signup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...anonAuth },
+    body: JSON.stringify(input)
+  });
 }
 
 export interface FoundEmail {

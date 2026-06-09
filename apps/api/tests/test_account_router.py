@@ -26,11 +26,21 @@ class FakeStore:
 
     def __init__(self) -> None:
         self.sent: list[str] = []
+        self.rolled_back: list[str] = []
         self.tokens: dict[str, str] = {"goodtok": NORMALIZED_PHONE}
 
     async def reserve_send(self, phone: str) -> str:
         self.sent.append(phone)
         return "123456"
+
+    async def rollback_send(self, phone: str) -> None:
+        self.rolled_back.append(phone)
+
+    async def acquire_signup_lock(self, phone: str) -> bool:
+        return True
+
+    async def release_signup_lock(self, phone: str) -> None:
+        return None
 
     async def verify_code(self, phone: str, code: str) -> str:
         if code != "123456":
@@ -83,6 +93,23 @@ def test_send_code_sends_sms_and_returns_ttl(monkeypatch, store) -> None:
     assert captured["code"] == "123456"
 
 
+def test_send_code_rolls_back_reservation_on_sms_failure(monkeypatch, store) -> None:
+    async def failing_send(*, phone: str, code: str, **_) -> None:
+        raise ZippinException(
+            "인증번호 발송에 실패했습니다.", code="SMS_SEND_FAILED", http_status=502
+        )
+
+    monkeypatch.setattr("src.services.sms.send_verification_sms", failing_send)
+
+    client = TestClient(create_app())
+    with client:
+        resp = client.post("/auth/phone/send-code", json={"phone": "01012345678"})
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "SMS_SEND_FAILED"
+    # 발송 실패 시 예약(쿨다운/일일 카운트)이 롤백되어 번호가 잠기지 않는다.
+    assert store.rolled_back == [NORMALIZED_PHONE]
+
+
 def test_verify_code_returns_token(store) -> None:
     client = TestClient(create_app())
     with client:
@@ -131,6 +158,7 @@ def test_signup_creates_user_and_profile(monkeypatch, store) -> None:
                 "phone": "01012345678",
                 "password": "abc123",
                 "phone_token": "goodtok",
+                "agreed_to_terms": True,
             },
         )
     assert resp.status_code == 201
@@ -140,6 +168,50 @@ def test_signup_creates_user_and_profile(monkeypatch, store) -> None:
     assert calls["create"]["phone"] == NORMALIZED_PHONE
     assert calls["create"]["display_name"] == "홍길동"
     assert calls["profile"]["display_name"] == "홍길동"
+
+
+def test_signup_claims_anonymous_leads_when_token_present(monkeypatch, store) -> None:
+    created_id = uuid.uuid4()
+    pem, jwk = helpers.rsa_keypair()
+    helpers.install_jwks(monkeypatch, {"keys": [jwk]})
+    anon_token, anon_subject = helpers.mint_token(pem, "test-key-1", is_anonymous=True)
+
+    moved: dict[str, object] = {}
+
+    async def fake_create_user(**kwargs):
+        return CreatedUser(user_id=created_id)
+
+    async def fake_profile(**kwargs):
+        return None
+
+    async def fake_reassign(*, from_user_id, to_user_id):
+        moved["from"] = from_user_id
+        moved["to"] = to_user_id
+        return 2
+
+    monkeypatch.setattr(
+        "src.services.supabase_admin.create_email_user", fake_create_user
+    )
+    monkeypatch.setattr("src.routers.account.create_signup_profile", fake_profile)
+    monkeypatch.setattr("src.services.leads.reassign_leads_owner", fake_reassign)
+
+    client = TestClient(create_app())
+    with client:
+        resp = client.post(
+            "/auth/signup",
+            headers={"authorization": f"Bearer {anon_token}"},
+            json={
+                "name": "홍길동",
+                "email": "hong@example.com",
+                "phone": "01012345678",
+                "password": "abc123",
+                "phone_token": "goodtok",
+                "agreed_to_terms": True,
+            },
+        )
+    assert resp.status_code == 201
+    assert moved["from"] == anon_subject
+    assert moved["to"] == created_id
 
 
 def test_signup_rejects_expired_phone_token(store) -> None:
@@ -153,6 +225,7 @@ def test_signup_rejects_expired_phone_token(store) -> None:
                 "phone": "01012345678",
                 "password": "abc123",
                 "phone_token": "missing",
+                "agreed_to_terms": True,
             },
         )
     assert resp.status_code == 400

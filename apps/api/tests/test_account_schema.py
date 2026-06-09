@@ -56,6 +56,7 @@ def test_signup_request_normalizes_phone_and_email() -> None:
         phone="01012345678",
         password="abc123",
         phone_token="tok",
+        agreed_to_terms=True,
     )
     assert req.name == "홍길동"
     assert req.email == "hong@example.com"
@@ -70,4 +71,17 @@ def test_signup_request_rejects_weak_password() -> None:
             phone="01012345678",
             password="weak",  # 영문만 + 6자 미만
             phone_token="tok",
+            agreed_to_terms=True,
+        )
+
+
+def test_signup_request_requires_terms_agreement() -> None:
+    with pytest.raises(ValidationError):
+        SignupRequest(
+            name="홍길동",
+            email="hong@example.com",
+            phone="01012345678",
+            password="abc123",
+            phone_token="tok",
+            agreed_to_terms=False,
         )

@@ -14,9 +14,16 @@
 
 from __future__ import annotations
 
+import uuid
+
+import httpx
 from fastapi import APIRouter, Depends, Request
 
-from ..auth.request_token import RequestUser, require_supabase_request_user
+from ..auth.request_token import (
+    RequestUser,
+    require_supabase_request_user,
+    verify_supabase_request_token,
+)
 from ..errors import ZippinException
 from ..logging import get_logger
 from ..schemas.account import (
@@ -35,6 +42,7 @@ from ..schemas.account import (
     SignupRequest,
     SignupResponse,
 )
+from ..services import leads as leads_service
 from ..services import sms as sms_service
 from ..services import supabase_admin
 from ..services.account import _mask_email, create_signup_profile
@@ -42,6 +50,7 @@ from ..services.phone_verification import (
     assert_token_phone_match,
     get_phone_verification_store,
 )
+from ..services.supabase_session import parse_bearer_token
 
 logger = get_logger("zippin.account")
 router = APIRouter(prefix="/auth", tags=["account"])
@@ -52,9 +61,35 @@ async def send_phone_code(payload: PhoneSendCodeRequest) -> PhoneSendCodeRespons
     settings = sms_service.get_settings()
     store = get_phone_verification_store()
     code = await store.reserve_send(payload.phone)
-    await sms_service.send_verification_sms(phone=payload.phone, code=code)
+    try:
+        await sms_service.send_verification_sms(phone=payload.phone, code=code)
+    except Exception:
+        # 발송 실패 시 쿨다운/일일 카운트를 되돌려 번호가 잠기지 않게 한다(P2 리뷰).
+        await store.rollback_send(payload.phone)
+        raise
     logger.info("phone_code_sent")  # 휴대폰/코드는 로깅하지 않는다(PII).
     return PhoneSendCodeResponse(expires_in_seconds=settings.phone_otp_ttl_seconds)
+
+
+async def _resolve_anonymous_owner(request: Request) -> "uuid.UUID | None":
+    """가입 요청에 익명 Supabase 토큰이 실려 있으면 그 소유자 id 를 검증해 반환한다.
+
+    토큰으로 소유권을 증명한 경우에만 기존 익명 리드를 새 계정으로 이관한다(IDOR 방지).
+    헤더가 없거나 영구/무효 토큰이면 None — 가입 흐름을 막지 않는다.
+    """
+
+    authorization = request.headers.get("authorization")
+    if not authorization:
+        return None
+    try:
+        token = parse_bearer_token(authorization)
+        async with httpx.AsyncClient(timeout=10.0) as http_client:
+            principal = await verify_supabase_request_token(
+                token, http_client=http_client
+            )
+    except ZippinException:
+        return None
+    return principal.user_id if principal.is_anonymous else None
 
 
 @router.post("/phone/verify-code", response_model=PhoneVerifyResponse)
@@ -65,18 +100,40 @@ async def verify_phone_code(payload: PhoneVerifyRequest) -> PhoneVerifyResponse:
 
 
 @router.post("/signup", response_model=SignupResponse, status_code=201)
-async def signup(payload: SignupRequest) -> SignupResponse:
+async def signup(payload: SignupRequest, request: Request) -> SignupResponse:
     store = get_phone_verification_store()
     token_phone = await store.consume_token(payload.phone_token)
-    assert_token_phone_match(token_phone, payload.phone)
+    phone = assert_token_phone_match(token_phone, payload.phone)
 
-    created = await supabase_admin.create_email_user(
-        email=payload.email,
-        password=payload.password,
-        phone=payload.phone,
-        display_name=payload.name,
-    )
-    await create_signup_profile(user_id=created.user_id, display_name=payload.name)
+    # 익명 세션이 실려 있으면(증명된 경우) 기존 익명 리드를 새 계정으로 이관한다.
+    anon_user_id = await _resolve_anonymous_owner(request)
+
+    # 중복 확인 + 계정 생성을 휴대폰 단위로 직렬화해 동시 가입 경합을 막는다(P2 리뷰).
+    if not await store.acquire_signup_lock(phone):
+        raise ZippinException(
+            "이미 같은 번호로 가입이 진행 중입니다. 잠시 후 다시 시도해 주세요.",
+            code="SIGNUP_IN_PROGRESS",
+            http_status=409,
+        )
+    try:
+        created = await supabase_admin.create_email_user(
+            email=payload.email,
+            password=payload.password,
+            phone=payload.phone,
+            display_name=payload.name,
+        )
+        await create_signup_profile(user_id=created.user_id, display_name=payload.name)
+        if anon_user_id is not None and anon_user_id != created.user_id:
+            moved = await leads_service.reassign_leads_owner(
+                from_user_id=anon_user_id, to_user_id=created.user_id
+            )
+            logger.info(
+                "signup_claimed_anonymous_leads",
+                user_id=str(created.user_id),
+                moved=moved,
+            )
+    finally:
+        await store.release_signup_lock(phone)
     logger.info("email_signup_completed", user_id=str(created.user_id))
     return SignupResponse(user_id=str(created.user_id), email=payload.email)
 

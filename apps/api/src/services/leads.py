@@ -140,6 +140,26 @@ async def create_lead(
     return await _insert_lead(lead_values, attachments)
 
 
+async def reassign_leads_owner(
+    *, from_user_id: uuid.UUID, to_user_id: uuid.UUID
+) -> int:
+    """익명 user 의 리드를 영구 계정으로 이관한다(이메일 가입 시 anonymous claim).
+
+    호출자(라우터)는 ``from_user_id`` 소유권을 익명 Supabase 토큰으로 검증한 뒤에만
+    호출해야 한다. 이관된 행 수를 반환한다.
+    """
+
+    if from_user_id == to_user_id:
+        return 0
+    async with get_engine().begin() as conn:
+        result = await conn.execute(
+            sa.update(ConsultationLead)
+            .where(ConsultationLead.user_id == from_user_id)
+            .values(user_id=to_user_id, is_anonymous=False)
+        )
+    return result.rowcount or 0
+
+
 async def list_leads_for_user(*, user_id: uuid.UUID) -> list[dict[str, Any]]:
     """본인(user_id)이 신청한 상담 리드를 최신순으로 조회한다(마이페이지 상담 현황)."""
 

@@ -1,6 +1,16 @@
 'use client';
 
-import { Alert, Anchor, Button, PasswordInput, Stack, Text, TextInput, Title } from '@mantine/core';
+import {
+  Alert,
+  Anchor,
+  Button,
+  Checkbox,
+  PasswordInput,
+  Stack,
+  Text,
+  TextInput,
+  Title
+} from '@mantine/core';
 import { useState } from 'react';
 
 import { AccountApiError, signup } from '@/lib/auth/account-api';
@@ -31,6 +41,7 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
   const [phoneToken, setPhoneToken] = useState<string | null>(null);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [agreed, setAgreed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,6 +55,7 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
     const pwErr = passwordError(password);
     if (pwErr) return setError(pwErr);
     if (password !== confirm) return setError('비밀번호가 일치하지 않습니다.');
+    if (!agreed) return setError('이용약관 및 개인정보처리방침에 동의해 주세요.');
 
     setSubmitting(true);
     try {
@@ -52,7 +64,8 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
         email: email.trim(),
         phone,
         password,
-        phone_token: phoneToken
+        phone_token: phoneToken,
+        agreed_to_terms: agreed
       });
 
       const res = await fetch('/auth/password-login', {
@@ -129,6 +142,23 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
           onChange={(e) => setConfirm(e.currentTarget.value)}
           autoComplete="new-password"
           required
+        />
+
+        <Checkbox
+          checked={agreed}
+          onChange={(e) => setAgreed(e.currentTarget.checked)}
+          label={
+            <Text size="sm" style={{ wordBreak: 'keep-all' }}>
+              <Anchor href="/terms" target="_blank" c="var(--jippin-brand-primary)">
+                이용약관
+              </Anchor>
+              과{' '}
+              <Anchor href="/privacy" target="_blank" c="var(--jippin-brand-primary)">
+                개인정보처리방침
+              </Anchor>
+              에 동의합니다. (필수)
+            </Text>
+          }
         />
 
         {error ? (

@@ -84,6 +84,17 @@ class SignupRequest(BaseModel):
     phone: str = Field(min_length=1, max_length=40)
     password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)
     phone_token: str = Field(min_length=1, max_length=256)
+    # 이용약관·개인정보처리방침 명시적 동의. 동의 없이는 가입/약관 동의 기록을 만들지 않는다.
+    agreed_to_terms: bool = False
+
+    @field_validator("agreed_to_terms")
+    @classmethod
+    def _require_agreement(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError(
+                "이용약관 및 개인정보처리방침에 동의해야 가입할 수 있습니다."
+            )
+        return value
 
     @field_validator("name", mode="before")
     @classmethod
