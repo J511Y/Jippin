@@ -16,8 +16,10 @@ import {
   Title
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { IconInbox, IconLogout, IconUser } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
 
 import {
   AccountApiError,
@@ -26,6 +28,7 @@ import {
   listMyLeads,
   type MyLead
 } from '@/lib/auth/account-api';
+import { changePasswordSchema, type ChangePasswordValues } from '@/lib/auth/validation';
 import { createClient } from '@/lib/supabase/client';
 
 /**
@@ -210,76 +213,61 @@ function ConsultationsSection() {
   );
 }
 
-const MIN_PASSWORD = 6;
-const HAS_LETTER = /[A-Za-z]/;
-const HAS_DIGIT = /\d/;
-
-function passwordError(pw: string): string | null {
-  if (pw.length < MIN_PASSWORD) return `비밀번호는 최소 ${MIN_PASSWORD}자 이상이어야 합니다.`;
-  if (!HAS_LETTER.test(pw) || !HAS_DIGIT.test(pw)) return '비밀번호는 영문과 숫자를 모두 포함해야 합니다.';
-  return null;
-}
-
 function PasswordChangeCard() {
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors, isSubmitting }
+  } = useForm<ChangePasswordValues>({
+    resolver: zodResolver(changePasswordSchema),
+    mode: 'onTouched',
+    defaultValues: { current: '', password: '', confirm: '' }
+  });
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
+  async function onSubmit(values: ChangePasswordValues) {
+    setServerError(null);
     setDone(false);
-    if (!current) return setError('현재 비밀번호를 입력해 주세요.');
-    const pwErr = passwordError(next);
-    if (pwErr) return setError(pwErr);
-    if (next !== confirm) return setError('새 비밀번호가 일치하지 않습니다.');
-
-    setLoading(true);
     try {
-      await changePassword(current, next);
+      await changePassword(values.current, values.password);
       setDone(true);
-      setCurrent('');
-      setNext('');
-      setConfirm('');
+      reset();
     } catch (err) {
-      setError(err instanceof AccountApiError ? err.message : '비밀번호 변경에 실패했습니다.');
-    } finally {
-      setLoading(false);
+      setServerError(err instanceof AccountApiError ? err.message : '비밀번호 변경에 실패했습니다.');
     }
   }
 
   return (
     <Card withBorder radius="lg" padding="lg">
-      <form onSubmit={handleSubmit} noValidate>
+      <form onSubmit={handleSubmit(onSubmit)} noValidate>
         <Stack gap="sm">
           <Title order={2} fz="h3">
             비밀번호 변경
           </Title>
           <PasswordInput
             label="현재 비밀번호"
-            value={current}
-            onChange={(e) => setCurrent(e.currentTarget.value)}
             autoComplete="current-password"
+            error={errors.current?.message}
+            {...register('current')}
           />
           <PasswordInput
             label="새 비밀번호"
             description="6자 이상, 영문과 숫자 포함"
-            value={next}
-            onChange={(e) => setNext(e.currentTarget.value)}
             autoComplete="new-password"
+            error={errors.password?.message}
+            {...register('password')}
           />
           <PasswordInput
             label="새 비밀번호 확인"
-            value={confirm}
-            onChange={(e) => setConfirm(e.currentTarget.value)}
             autoComplete="new-password"
+            error={errors.confirm?.message}
+            {...register('confirm')}
           />
-          {error ? (
+          {serverError ? (
             <Alert color="red" variant="light" py="xs">
-              {error}
+              {serverError}
             </Alert>
           ) : null}
           {done ? (
@@ -287,7 +275,7 @@ function PasswordChangeCard() {
               비밀번호가 변경되었습니다.
             </Alert>
           ) : null}
-          <Button type="submit" color="jippin" radius="md" loading={loading} w="fit-content">
+          <Button type="submit" color="jippin" radius="md" loading={isSubmitting} w="fit-content">
             비밀번호 변경
           </Button>
         </Stack>

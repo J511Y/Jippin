@@ -1,40 +1,46 @@
 'use client';
 
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Alert, Anchor, Button, Card, Stack, Text, Title } from '@mantine/core';
 import { useState } from 'react';
+import { useForm, useWatch } from 'react-hook-form';
 
 import { AccountApiError, findEmail, type FoundEmail } from '@/lib/auth/account-api';
+import { findEmailSchema, type FindEmailValues } from '@/lib/auth/validation';
 import { PhoneVerification } from '@/components/auth/PhoneVerification';
 
 /**
  * 아이디(이메일) 찾기 폼 (CMP-DIRECT).
  *
  * 휴대폰 문자 인증 후, 해당 번호로 가입된 이메일(마스킹)을 조회한다.
+ * react-hook-form + zod 로 focus-out 검증을 표준화한다.
  */
 
 export function FindEmailForm() {
-  const [phone, setPhone] = useState('');
-  const [phoneToken, setPhoneToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [results, setResults] = useState<FoundEmail[] | null>(null);
+  const {
+    handleSubmit,
+    control,
+    setValue,
+    trigger,
+    formState: { errors, isSubmitting }
+  } = useForm<FindEmailValues>({
+    resolver: zodResolver(findEmailSchema),
+    mode: 'onTouched',
+    defaultValues: { phone: '', phoneToken: '' }
+  });
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    if (!phoneToken) {
-      setError('휴대폰 인증을 완료해 주세요.');
-      return;
-    }
-    setLoading(true);
+  const phone = useWatch({ control, name: 'phone' });
+
+  async function onSubmit(values: FindEmailValues) {
+    setServerError(null);
     try {
-      const { emails } = await findEmail(phone, phoneToken);
+      const { emails } = await findEmail(values.phone, values.phoneToken);
       setResults(emails);
-      setPhoneToken(null); // 토큰 1회 소비됨.
+      setValue('phoneToken', ''); // 토큰 1회 소비됨.
     } catch (err) {
-      setError(err instanceof AccountApiError ? err.message : '조회에 실패했습니다.');
-    } finally {
-      setLoading(false);
+      setServerError(err instanceof AccountApiError ? err.message : '조회에 실패했습니다.');
     }
   }
 
@@ -70,7 +76,7 @@ export function FindEmailForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate>
+    <form onSubmit={handleSubmit(onSubmit)} noValidate>
       <Stack gap="md">
         <Stack gap={4}>
           <Title order={1} fz="h2">
@@ -83,25 +89,20 @@ export function FindEmailForm() {
 
         <PhoneVerification
           phone={phone}
-          onPhoneChange={setPhone}
-          onVerifiedChange={setPhoneToken}
-          disabled={loading}
+          onPhoneChange={(v) => setValue('phone', v, { shouldDirty: true })}
+          onVerifiedChange={(token) => setValue('phoneToken', token ?? '', { shouldValidate: true })}
+          onBlur={() => void trigger('phone')}
+          fieldError={errors.phone?.message ?? errors.phoneToken?.message}
+          disabled={isSubmitting}
         />
 
-        {error ? (
+        {serverError ? (
           <Alert color="red" variant="light">
-            {error}
+            {serverError}
           </Alert>
         ) : null}
 
-        <Button
-          type="submit"
-          color="jippin"
-          radius="md"
-          fullWidth
-          loading={loading}
-          disabled={!phoneToken}
-        >
+        <Button type="submit" color="jippin" radius="md" fullWidth loading={isSubmitting}>
           아이디 찾기
         </Button>
 

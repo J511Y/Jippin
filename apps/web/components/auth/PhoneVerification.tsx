@@ -27,13 +27,19 @@ type Props = {
   onPhoneChange: (value: string) => void;
   onVerifiedChange: (token: string | null) => void;
   disabled?: boolean;
+  /** RHF 등 외부 폼의 필드 에러 메시지. */
+  fieldError?: string | null;
+  /** 휴대폰 입력 focus-out 시 외부 폼 검증 트리거. */
+  onBlur?: () => void;
 };
 
 export function PhoneVerification({
   phone,
   onPhoneChange,
   onVerifiedChange,
-  disabled = false
+  disabled = false,
+  fieldError = null,
+  onBlur
 }: Props) {
   const [code, setCode] = useState('');
   const [sent, setSent] = useState(false);
@@ -123,6 +129,8 @@ export function PhoneVerification({
           placeholder="010-1234-5678"
           value={phone}
           onChange={(e) => handlePhoneChange(e.currentTarget.value)}
+          onBlur={onBlur}
+          error={fieldError ?? undefined}
           disabled={lockInputs}
           inputMode="tel"
           autoComplete="tel"
