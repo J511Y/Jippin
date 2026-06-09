@@ -109,7 +109,9 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
     }
   );
 
-  it('uses link intent when the current Supabase session is anonymous', async () => {
+  it('always uses signin intent even with an anonymous Supabase session (ADR-0003 — no auto-link)', async () => {
+    // 익명 세션이 있어도 "카카오로 시작하기" 는 절대 linkIdentity 로 자동 병합하지 않는다.
+    // 자동 link 는 auth.users 에 익명 유저를 남겨 탈퇴/연동해제를 깨뜨린다.
     mocks.getSession.mockResolvedValue({
       data: {
         session: {
@@ -130,7 +132,7 @@ describe('LoginButtons — BFF routing (CMP-584 round-5)', () => {
       expect(assignSpy).toHaveBeenCalledTimes(1);
     });
     const url = new URL(String(assignSpy.mock.calls[0]?.[0]));
-    expect(url.searchParams.get('intent')).toBe('link');
+    expect(url.searchParams.get('intent')).toBe('signin');
     expect(url.searchParams.get('next')).toBe('/reports/preview');
   });
 

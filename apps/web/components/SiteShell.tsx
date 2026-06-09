@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  ActionIcon,
   AppShell,
   Box,
   Burger,
@@ -10,9 +11,11 @@ import {
   Group,
   Stack,
   Text,
+  Tooltip,
   UnstyledButton
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
+import { IconLogout, IconUser } from '@tabler/icons-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -62,6 +65,11 @@ function useIsMember(): boolean {
   }, []);
 
   return isMember;
+}
+
+async function logout() {
+  await fetch('/auth/logout', { method: 'POST' }).catch(() => undefined);
+  window.location.assign('/');
 }
 
 function NavLink({
@@ -132,8 +140,6 @@ export function SiteShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? '/';
   const [drawerOpened, drawer] = useDisclosure(false);
   const isMember = useIsMember();
-  const accountHref = isMember ? '/mypage' : '/login';
-  const accountLabel = isMember ? '마이페이지' : '로그인';
 
   return (
     <AppShell
@@ -161,17 +167,45 @@ export function SiteShell({ children }: { children: ReactNode }) {
             </Group>
 
             <Group gap="xs" wrap="nowrap">
-              <Button
-                component={Link}
-                href={accountHref}
-                size="sm"
-                variant="subtle"
-                color="jippin"
-                radius="md"
-                visibleFrom="sm"
-              >
-                {accountLabel}
-              </Button>
+              {isMember ? (
+                <Group gap={4} wrap="nowrap" visibleFrom="sm">
+                  <Tooltip label="마이페이지" withArrow position="bottom">
+                    <ActionIcon
+                      component={Link}
+                      href="/mypage"
+                      size="lg"
+                      radius="xl"
+                      variant="subtle"
+                      color="jippin"
+                      aria-label="마이페이지"
+                    >
+                      <IconUser size={20} />
+                    </ActionIcon>
+                  </Tooltip>
+                  <Button
+                    size="sm"
+                    variant="subtle"
+                    color="gray"
+                    radius="md"
+                    leftSection={<IconLogout size={16} />}
+                    onClick={() => void logout()}
+                  >
+                    로그아웃
+                  </Button>
+                </Group>
+              ) : (
+                <Button
+                  component={Link}
+                  href="/login"
+                  size="sm"
+                  variant="subtle"
+                  color="jippin"
+                  radius="md"
+                  visibleFrom="sm"
+                >
+                  로그인
+                </Button>
+              )}
               <Burger
                 opened={drawerOpened}
                 onClick={drawer.toggle}
@@ -215,17 +249,47 @@ export function SiteShell({ children }: { children: ReactNode }) {
             />
           ))}
           <Box mt="md">
-            <Button
-              component={Link}
-              href={accountHref}
-              onClick={drawer.close}
-              fullWidth
-              variant="light"
-              color="jippin"
-              radius="md"
-            >
-              {accountLabel}
-            </Button>
+            {isMember ? (
+              <Stack gap="xs">
+                <Button
+                  component={Link}
+                  href="/mypage"
+                  onClick={drawer.close}
+                  fullWidth
+                  variant="light"
+                  color="jippin"
+                  radius="md"
+                  leftSection={<IconUser size={18} />}
+                >
+                  마이페이지
+                </Button>
+                <Button
+                  fullWidth
+                  variant="subtle"
+                  color="gray"
+                  radius="md"
+                  leftSection={<IconLogout size={18} />}
+                  onClick={() => {
+                    drawer.close();
+                    void logout();
+                  }}
+                >
+                  로그아웃
+                </Button>
+              </Stack>
+            ) : (
+              <Button
+                component={Link}
+                href="/login"
+                onClick={drawer.close}
+                fullWidth
+                variant="light"
+                color="jippin"
+                radius="md"
+              >
+                로그인
+              </Button>
+            )}
           </Box>
         </Stack>
       </Drawer>

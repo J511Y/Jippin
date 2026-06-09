@@ -259,7 +259,9 @@ async def delete_user(
         return await client.delete(url, headers=_admin_headers(service_role_key))
 
     response = await _send(_run, http_client)
-    if response.status_code not in (200, 204):
+    # 404 = 이미 삭제된(또는 부분 삭제된) 계정. 탈퇴는 멱등 처리해 사용자가 "탈퇴 실패"
+    # 상태에 갇히지 않게 한다 — public.users 는 FK CASCADE 로 정리된다.
+    if response.status_code not in (200, 204, 404):
         raise ZippinException(
             "회원 탈퇴 처리에 실패했습니다.",
             code="AUTH_ADMIN_FAILED",

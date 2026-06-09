@@ -3,6 +3,7 @@
 import { Button, Stack, Text } from '@mantine/core';
 import { useState } from 'react';
 
+import { stashAnonAccessToken } from '@/lib/leads/claim-anonymous-after-login';
 import { DEFAULT_NEXT, resolveSafeNext } from '@/lib/safe-redirect';
 import { createClient } from '@/lib/supabase/client';
 
@@ -10,9 +11,14 @@ import { createClient } from '@/lib/supabase/client';
  * 간편가입 OAuth 시작 버튼 (CMP-557, CMP-564).
  *
  * - 자체 가입/아이디 찾기/비밀번호 찾기 UI 는 정책상 존재하지 않는다.
- * - 흐름: 버튼 클릭 → Web BFF `GET /auth/oauth/start?provider=<id>&intent=<signin|link>&next=<path>` 로
+ * - 흐름: 버튼 클릭 → Web BFF `GET /auth/oauth/start?provider=<id>&intent=signin&next=<path>` 로
  *   브라우저를 이동시킨다. BFF 는 Supabase PKCE cookie 를 보존한 뒤 provider authorization URL 로 302 한다.
  * - `next` 는 lib/safe-redirect 의 `isSafeNext` SSOT 를 거친 상대 경로만 전달한다.
+ *
+ * ★ intent 는 항상 `signin` 이다 (ADR-0003 — 자동 identity 병합 금지, linkIdentity 는 회원이
+ *   명시적으로 호출하는 경로에서만 사용). 익명 세션에 카카오를 자동 link 하면 auth.users 에
+ *   '익명' 유저로 남아 대시보드/탈퇴/연동해제가 깨지므로, "카카오로 시작하기" 는 언제나
+ *   signInWithOAuth 로 first-class 카카오 계정을 생성/로그인한다.
  */
 
 const PROVIDERS = [{ id: 'kakao', label: '카카오로 시작하기' }] as const;
@@ -40,7 +46,6 @@ function KakaoIcon({ size = 18 }: { size?: number }) {
 }
 
 type ProviderId = (typeof PROVIDERS)[number]['id'];
-type OAuthIntent = 'signin' | 'link';
 
 type LoginButtonsProps = {
   nextPath: string | null;
@@ -48,31 +53,6 @@ type LoginButtonsProps = {
 
 function safeNextPath(nextPath: string | null): string | null {
   return resolveSafeNext(nextPath, DEFAULT_NEXT);
-}
-
-async function resolveOAuthIntent(): Promise<OAuthIntent> {
-  const supabase = createClient();
-  const { data } = await supabase.auth.getSession();
-  const user = data.session?.user as
-    | {
-        is_anonymous?: boolean;
-        app_metadata?: {
-          provider?: string;
-          providers?: string[];
-        };
-      }
-    | undefined;
-  if (user?.is_anonymous === true) {
-    return 'link';
-  }
-  const providers = user?.app_metadata?.providers ?? [];
-  if (
-    user?.app_metadata?.provider === 'anonymous'
-    && providers.every((provider) => provider === 'anonymous')
-  ) {
-    return 'link';
-  }
-  return 'signin';
 }
 
 export function LoginButtons({ nextPath }: LoginButtonsProps) {
@@ -84,9 +64,22 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
     setErrorMessage(null);
 
     try {
+      // 익명 세션이면 access token 을 stash — OAuth 후 익명 상담 리드를 새 카카오 계정으로
+      // 이관하는 데 쓴다(AnonymousLeadClaimer). signInWithOAuth 는 익명 세션을 대체하므로
+      // redirect 전에 토큰을 잡아둬야 한다.
+      try {
+        const supabase = createClient();
+        const { data } = await supabase.auth.getSession();
+        if (data.session?.user?.is_anonymous === true && data.session.access_token) {
+          stashAnonAccessToken(data.session.access_token);
+        }
+      } catch {
+        // 세션 조회 실패는 무시 — 로그인 흐름은 계속한다.
+      }
+
       const url = new URL('/auth/oauth/start', window.location.origin);
       url.searchParams.set('provider', provider);
-      url.searchParams.set('intent', await resolveOAuthIntent());
+      url.searchParams.set('intent', 'signin');
       const next = safeNextPath(nextPath);
       if (next) {
         url.searchParams.set('next', next);

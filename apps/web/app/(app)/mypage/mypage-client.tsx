@@ -58,6 +58,7 @@ function leadTitle(lead: MyLead): string {
 export function MyPageClient() {
   const [email, setEmail] = useState<string | null>(null);
   const [name, setName] = useState<string | null>(null);
+  const [isEmailUser, setIsEmailUser] = useState(false);
   const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => {
@@ -67,6 +68,11 @@ export function MyPageClient() {
       setEmail(user?.email ?? null);
       const meta = (user?.user_metadata ?? {}) as { name?: string; display_name?: string };
       setName(meta.name ?? meta.display_name ?? null);
+      // 비밀번호 변경은 자체(이메일/비밀번호) 가입자만 가능하다. 카카오 등 소셜 로그인은
+      // auth.users 에 비밀번호가 없으므로 해당 영역을 숨긴다.
+      const appMeta = (user?.app_metadata ?? {}) as { provider?: string; providers?: string[] };
+      const providers = appMeta.providers ?? (appMeta.provider ? [appMeta.provider] : []);
+      setIsEmailUser(providers.includes('email'));
       setAuthReady(true);
     });
   }, []);
@@ -89,7 +95,7 @@ export function MyPageClient() {
 
       <ProfileCard email={email} name={name} ready={authReady} />
       <ConsultationsSection />
-      <PasswordChangeCard />
+      {isEmailUser ? <PasswordChangeCard /> : null}
       <DeleteAccountCard />
     </Stack>
   );

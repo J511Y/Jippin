@@ -10,8 +10,7 @@ import {
   Stack,
   Text,
   Textarea,
-  TextInput,
-  UnstyledButton
+  TextInput
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
@@ -20,13 +19,12 @@ import { useState } from 'react';
 import { parseApiError } from '@/lib/api/error';
 import {
   createLead,
-  searchAddress,
-  type AddressItem,
   type ApplicantKind,
   type InflowSource,
   type OwnershipStatus
 } from '@/lib/leads/api';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
+import { openJusoAddressPopup } from '@/lib/leads/juso-popup';
 import { deleteFloorplan, uploadFloorplan, type UploadedAttachment } from '@/lib/leads/upload';
 import { normalizeKoreanPhone, validateKoreanPhone, validateRequiredText } from '@/lib/leads/validation';
 
@@ -60,10 +58,6 @@ const INFLOW_OPTIONS = [
 export function ConsultationLeadForm() {
   const [submitting, setSubmitting] = useState(false);
   const [file, setFile] = useState<File | null>(null);
-  const [keyword, setKeyword] = useState('');
-  const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<AddressItem[]>([]);
-  const [searchError, setSearchError] = useState<string | null>(null);
 
   const form = useForm<FullLeadValues>({
     initialValues: {
@@ -94,33 +88,14 @@ export function ConsultationLeadForm() {
     }
   });
 
-  async function handleSearch() {
-    const trimmed = keyword.trim();
-    if (!trimmed) {
-      setSearchError('검색어를 입력해 주세요.');
-      return;
-    }
-    setSearching(true);
-    setSearchError(null);
-    try {
-      const result = await searchAddress(trimmed);
-      setResults(result.items);
-      if (result.items.length === 0) {
-        setSearchError('검색 결과가 없습니다. 도로명/건물명으로 다시 검색해 보세요.');
-      }
-    } catch (error) {
-      setSearchError(parseApiError(error).message);
-      setResults([]);
-    } finally {
-      setSearching(false);
-    }
-  }
-
-  function selectAddress(item: AddressItem) {
-    form.setFieldValue('road_addr_part1', item.road_addr_part1);
-    form.setFieldValue('road_addr_part2', item.road_addr_part2);
-    setResults([]);
-    setKeyword(item.road_addr_part1);
+  async function openAddressPopup() {
+    // 도로명주소 팝업(useDetailAddr=Y)이 기본주소 + 상세주소를 함께 돌려준다.
+    const result = await openJusoAddressPopup();
+    form.setFieldValue('road_addr_part1', result.roadAddrPart1);
+    form.setFieldValue('road_addr_part2', result.roadAddrPart2);
+    form.setFieldValue('road_addr_detail', result.addrDetail);
+    form.clearFieldError('road_addr_part1');
+    form.clearFieldError('road_addr_detail');
   }
 
   const handleSubmit = form.onSubmit(async (values) => {
@@ -156,7 +131,6 @@ export function ConsultationLeadForm() {
       });
       form.reset();
       setFile(null);
-      setKeyword('');
     } catch (error) {
       // 업로드는 성공했는데 리드 생성이 실패하면 orphan 평면도(연결 row 없는 PII)가
       // 남는다 — best-effort 로 정리한다(클라이언트엔 삭제 권한이 없어 서버 경로 사용).
@@ -199,70 +173,33 @@ export function ConsultationLeadForm() {
         />
 
         <Stack gap="xs">
-          <Text size="sm" fw={500}>
-            현장 주소 <Text component="span" c="red">*</Text>
-          </Text>
-          <Group gap="xs" align="flex-end" wrap="nowrap">
-            <TextInput
-              style={{ flex: 1 }}
-              placeholder="도로명 또는 건물명으로 검색"
-              value={keyword}
-              onChange={(event) => setKeyword(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  void handleSearch();
-                }
-              }}
-            />
+          <Group justify="space-between" align="center" wrap="nowrap">
+            <Text size="sm" fw={500}>
+              현장 주소 <Text component="span" c="red">*</Text>
+            </Text>
             <Button
               type="button"
               variant="light"
               color="jippin"
+              size="xs"
               leftSection={<IconSearch size={16} aria-hidden />}
-              loading={searching}
-              onClick={() => void handleSearch()}
+              onClick={() => void openAddressPopup()}
             >
               주소 검색
             </Button>
           </Group>
-          {searchError ? (
-            <Text size="xs" c="red">
-              {searchError}
-            </Text>
-          ) : null}
-          {results.length > 0 ? (
-            <Card withBorder radius="sm" padding="xs">
-              <Stack gap={4}>
-                {results.map((item) => (
-                  <UnstyledButton
-                    key={`${item.road_addr}-${item.zip_no ?? ''}`}
-                    onClick={() => selectAddress(item)}
-                    style={{ padding: '6px 8px', borderRadius: 6 }}
-                  >
-                    <Text size="sm">{item.road_addr}</Text>
-                    {item.jibun_addr ? (
-                      <Text size="xs" c="dimmed">
-                        {item.jibun_addr}
-                      </Text>
-                    ) : null}
-                  </UnstyledButton>
-                ))}
-              </Stack>
-            </Card>
-          ) : null}
-          {form.values.road_addr_part1 ? (
-            <Text size="xs" c="dimmed">
-              선택된 주소: {form.values.road_addr_part1} {form.values.road_addr_part2}
-            </Text>
-          ) : null}
-          {form.errors.road_addr_part1 ? (
-            <Text size="xs" c="red">
-              {form.errors.road_addr_part1}
-            </Text>
-          ) : null}
           <TextInput
-            placeholder="상세 주소 (예: 101동 1001호)"
+            placeholder="주소 검색을 눌러 도로명주소를 선택하세요"
+            disabled
+            readOnly
+            value={[form.values.road_addr_part1, form.values.road_addr_part2]
+              .filter(Boolean)
+              .join(' ')}
+            error={form.errors.road_addr_part1}
+          />
+          <TextInput
+            placeholder="상세 주소 (주소 검색 시 입력)"
+            disabled
             {...form.getInputProps('road_addr_detail')}
           />
         </Stack>
