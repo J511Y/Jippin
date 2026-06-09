@@ -56,13 +56,15 @@ logger = get_logger("zippin.account")
 router = APIRouter(prefix="/auth", tags=["account"])
 
 
-def _client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    fly_ip = request.headers.get("fly-client-ip")
-    if fly_ip:
-        return fly_ip.strip()
+def _client_ip(request: Request, settings) -> str | None:
+    """IP 한도용 출처 IP. 프록시가 설정하는 신뢰 헤더만 사용하고, 위조 가능한
+    X-Forwarded-For 는 신뢰하지 않는다. 신뢰 헤더가 없으면 소켓 peer 로 폴백한다."""
+
+    header = (settings.phone_otp_trusted_ip_header or "").strip().lower()
+    if header:
+        value = request.headers.get(header)
+        if value:
+            return value.split(",")[0].strip()
     return request.client.host if request.client else None
 
 
@@ -72,14 +74,21 @@ async def send_phone_code(
 ) -> PhoneSendCodeResponse:
     settings = sms_service.get_settings()
     store = get_phone_verification_store()
-    # 번호 회전 남용 방지 — 번호 단위 한도(reserve_send) 전에 IP/글로벌 한도를 적용한다.
-    await store.check_send_rate(_client_ip(request))
+    ip = _client_ip(request, settings)
+    # 번호 단위 한도(쿨다운/일일)를 먼저 적용한다 — 쿨다운 중인 번호로 글로벌 quota 를
+    # 소모하지 못하게 한다(P2 리뷰). 통과한(실제 발송 후보) 요청만 IP/글로벌 한도에 센다.
     code = await store.reserve_send(payload.phone)
+    try:
+        await store.check_send_rate(ip)
+    except Exception:
+        await store.rollback_send(payload.phone)
+        raise
     try:
         await sms_service.send_verification_sms(phone=payload.phone, code=code)
     except Exception:
-        # 발송 실패 시 쿨다운/일일 카운트를 되돌려 번호가 잠기지 않게 한다(P2 리뷰).
+        # 발송 실패 시 번호 예약과 IP/글로벌 카운터를 모두 되돌린다.
         await store.rollback_send(payload.phone)
+        await store.rollback_send_rate(ip)
         raise
     logger.info("phone_code_sent")  # 휴대폰/코드는 로깅하지 않는다(PII).
     return PhoneSendCodeResponse(expires_in_seconds=settings.phone_otp_ttl_seconds)
@@ -123,7 +132,8 @@ async def signup(payload: SignupRequest, request: Request) -> SignupResponse:
     anon_user_id = await _resolve_anonymous_owner(request)
 
     # 중복 확인 + 계정 생성을 휴대폰 단위로 직렬화해 동시 가입 경합을 막는다(P2 리뷰).
-    if not await store.acquire_signup_lock(phone):
+    lock_token = await store.acquire_signup_lock(phone)
+    if lock_token is None:
         raise ZippinException(
             "이미 같은 번호로 가입이 진행 중입니다. 잠시 후 다시 시도해 주세요.",
             code="SIGNUP_IN_PROGRESS",
@@ -147,7 +157,8 @@ async def signup(payload: SignupRequest, request: Request) -> SignupResponse:
                 moved=moved,
             )
     finally:
-        await store.release_signup_lock(phone)
+        # 자기 락(토큰 일치)일 때만 해제 — TTL 만료 후 타 요청 락을 지우지 않는다.
+        await store.release_signup_lock(phone, lock_token)
     logger.info("email_signup_completed", user_id=str(created.user_id))
     return SignupResponse(user_id=str(created.user_id), email=payload.email)
 

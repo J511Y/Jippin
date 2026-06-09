@@ -142,6 +142,9 @@ class Settings(BaseSettings):
     # 번호 회전 남용 방지 — 발송 전에 IP/글로벌 시간당 한도를 함께 적용한다(SMS 비용/스팸 가드).
     phone_otp_ip_hourly_limit: int = Field(default=20)
     phone_otp_global_hourly_limit: int = Field(default=300)
+    # IP 한도의 신뢰 가능한 출처 헤더. 프록시(Fly)가 설정하는 헤더만 신뢰한다 — 클라이언트가
+    # 위조 가능한 X-Forwarded-For 는 쓰지 않는다. 빈 값이면 소켓 peer(request.client.host)만 사용.
+    phone_otp_trusted_ip_header: str = Field(default="fly-client-ip")
     kakao_sync_required_term_tags: list[str] = Field(
         default_factory=lambda: ["service_terms", "privacy_policy"]
     )

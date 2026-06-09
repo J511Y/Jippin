@@ -35,6 +35,11 @@ _GLOBAL_RATE_KEY = "phone:otp:global"
 _DAILY_TTL_SECONDS = 86_400
 _HOURLY_TTL_SECONDS = 3_600
 _SIGNUP_LOCK_TTL_SECONDS = 30
+# 토큰이 일치할 때만 삭제하는 compare-and-delete (자기 락만 해제).
+_RELEASE_LOCK_LUA = (
+    'if redis.call("GET", KEYS[1]) == ARGV[1] '
+    'then return redis.call("DEL", KEYS[1]) else return 0 end'
+)
 
 
 def _backend_unavailable(exc: Exception) -> ZippinException:  # noqa: ARG001
@@ -88,6 +93,16 @@ class PhoneVerificationStore:
         if count == 1:
             await self._redis.expire(key, _HOURLY_TTL_SECONDS)
         return count
+
+    async def rollback_send_rate(self, ip: str | None) -> None:
+        """실제 발송이 실패했을 때 check_send_rate 가 올린 IP/글로벌 카운터를 되돌린다."""
+
+        try:
+            if ip:
+                await self._redis.decr(f"{_IP_RATE_KEY}{ip}")
+            await self._redis.decr(_GLOBAL_RATE_KEY)
+        except RedisError:
+            return
 
     async def check_send_rate(self, ip: str | None) -> None:
         """발송 전 호출. 번호가 아닌 IP/글로벌 시간당 한도로 번호 회전 남용을 막는다.
@@ -172,23 +187,32 @@ class PhoneVerificationStore:
         except RedisError:
             return
 
-    async def acquire_signup_lock(self, phone: str) -> bool:
-        """가입 임계 구역(중복 확인 + 계정 생성) 직렬화용 짧은 락. 획득 시 True."""
+    async def acquire_signup_lock(self, phone: str) -> str | None:
+        """가입 임계 구역(중복 확인 + 계정 생성) 직렬화용 짧은 락.
 
+        소유자 토큰을 값으로 저장하고 획득 시 그 토큰을 반환한다(없으면 None). TTL 만료 후
+        다른 요청이 잡은 락을 이 요청이 잘못 해제하지 못하도록 release 에서 토큰을 대조한다.
+        """
+
+        token = secrets.token_urlsafe(16)
         try:
             acquired = await self._redis.set(
                 f"{_SIGNUP_LOCK_KEY}{phone}",
-                "1",
+                token,
                 ex=_SIGNUP_LOCK_TTL_SECONDS,
                 nx=True,
             )
         except RedisError as exc:
             raise _backend_unavailable(exc) from exc
-        return bool(acquired)
+        return token if acquired else None
 
-    async def release_signup_lock(self, phone: str) -> None:
+    async def release_signup_lock(self, phone: str, token: str) -> None:
+        """자신이 보유한 락(토큰 일치)일 때만 삭제한다(compare-and-delete)."""
+
         try:
-            await self._redis.delete(f"{_SIGNUP_LOCK_KEY}{phone}")
+            await self._redis.eval(
+                _RELEASE_LOCK_LUA, 1, f"{_SIGNUP_LOCK_KEY}{phone}", token
+            )
         except RedisError:
             return
 

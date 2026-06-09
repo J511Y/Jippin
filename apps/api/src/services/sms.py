@@ -28,7 +28,9 @@ from ..logging import get_logger
 
 logger = get_logger("zippin.sms")
 
-_SEND_PATH = "/messages/v4/send"
+# SOLAPI v4 공식 발송 엔드포인트. 단건도 messages 배열로 보내는 send-many/detail 을 쓴다
+# (공식 Python/Node SDK 가 사용하는 경로). 단건 전용 /messages/v4/send 는 사용하지 않는다.
+_SEND_PATH = "/messages/v4/send-many/detail"
 
 
 def _require_provider(settings: Settings) -> tuple[str, str, str]:
@@ -71,6 +73,23 @@ def _strip_phone(phone: str) -> str:
     return "".join(ch for ch in phone if ch.isdigit())
 
 
+def _raise_on_failed_messages(response: httpx.Response) -> None:
+    """send-many/detail 은 일부 실패해도 200 을 반환한다. 실패 목록이 있으면 발송 실패로 본다."""
+
+    try:
+        body = response.json()
+    except ValueError:
+        return
+    failed = body.get("failedMessageList") if isinstance(body, dict) else None
+    if failed:
+        logger.warning("sms_send_rejected", failed_count=len(failed))
+        raise ZippinException(
+            "인증번호 발송에 실패했습니다. 잠시 후 다시 시도해 주세요.",
+            code="SMS_SEND_FAILED",
+            http_status=502,
+        )
+
+
 async def send_verification_sms(
     *,
     phone: str,
@@ -85,11 +104,13 @@ async def send_verification_sms(
 
     text = f"[집핀] 인증번호 [{code}] 를 입력해 주세요."
     payload = {
-        "message": {
-            "to": _strip_phone(phone),
-            "from": _strip_phone(sender),
-            "text": text,
-        }
+        "messages": [
+            {
+                "to": _strip_phone(phone),
+                "from": _strip_phone(sender),
+                "text": text,
+            }
+        ]
     }
     headers = {
         "Authorization": _build_authorization(api_key, api_secret),
@@ -107,6 +128,7 @@ async def send_verification_sms(
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await _run(client)
         response.raise_for_status()
+        _raise_on_failed_messages(response)
     except httpx.HTTPStatusError as exc:
         # 본문에 수신번호/발신번호가 포함될 수 있으므로 status 만 로깅한다(PII 보호).
         logger.warning("sms_send_failed", status=exc.response.status_code)

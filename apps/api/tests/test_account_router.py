@@ -28,6 +28,9 @@ class FakeStore:
         self.sent: list[str] = []
         self.rolled_back: list[str] = []
         self.rate_checked: list[str | None] = []
+        self.rate_rolled_back: list[str | None] = []
+        self.lock_acquired: list[str] = []
+        self.lock_released: list[tuple[str, str]] = []
         self.rate_error: ZippinException | None = None
         self.tokens: dict[str, str] = {"goodtok": NORMALIZED_PHONE}
 
@@ -36,6 +39,9 @@ class FakeStore:
         if self.rate_error is not None:
             raise self.rate_error
 
+    async def rollback_send_rate(self, ip: str | None) -> None:
+        self.rate_rolled_back.append(ip)
+
     async def reserve_send(self, phone: str) -> str:
         self.sent.append(phone)
         return "123456"
@@ -43,11 +49,12 @@ class FakeStore:
     async def rollback_send(self, phone: str) -> None:
         self.rolled_back.append(phone)
 
-    async def acquire_signup_lock(self, phone: str) -> bool:
-        return True
+    async def acquire_signup_lock(self, phone: str) -> str | None:
+        self.lock_acquired.append(phone)
+        return "lock-token"
 
-    async def release_signup_lock(self, phone: str) -> None:
-        return None
+    async def release_signup_lock(self, phone: str, token: str) -> None:
+        self.lock_released.append((phone, token))
 
     async def verify_code(self, phone: str, code: str) -> str:
         if code != "123456":
@@ -116,9 +123,10 @@ def test_send_code_throttles_before_sending(monkeypatch, store) -> None:
         resp = client.post("/auth/phone/send-code", json={"phone": "01012345678"})
     assert resp.status_code == 429
     assert resp.json()["error"]["code"] == "PHONE_OTP_IP_LIMIT"
-    # IP/글로벌 한도는 SMS 발송·번호 예약 이전에 적용된다.
+    # 번호 예약은 IP/글로벌 한도보다 먼저 적용되고(쿨다운 중 번호로 글로벌 quota 소모 방지),
+    # 한도 초과 시 예약은 롤백되며 SMS 는 발송되지 않는다.
     assert sent_called["n"] == 0
-    assert store.sent == []
+    assert store.rolled_back == [NORMALIZED_PHONE]
 
 
 def test_send_code_rolls_back_reservation_on_sms_failure(monkeypatch, store) -> None:
