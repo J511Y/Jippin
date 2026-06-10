@@ -73,9 +73,17 @@ apps/api/
 │   ├── db.py                 # SQLAlchemy async (psycopg3) — pool / non-pool engine
 │   ├── logging.py            # structlog JSON + RequestIDMiddleware
 │   ├── errors.py             # ZippinException + AGENTS.md §4.5 핸들러
-│   ├── models/__init__.py    # Base = DeclarativeBase + naming convention (CMP-537)
-│   └── routers/
-│       └── healthz.py        # GET /healthz
+│   ├── models/              # ORM 모델 (faqs · consultation_leads · sessions/floorplans · auth · …)
+│   │   └── __init__.py       # Base = DeclarativeBase + naming convention (CMP-537)
+│   ├── schemas/             # Pydantic 요청/응답 계약 (leads · faq · account · …)
+│   ├── services/            # DB-backed 비즈니스 로직 (leads · faq · account · …)
+│   └── routers/             # HTTP 라우터
+│       ├── healthz.py        # GET /healthz
+│       ├── auth.py           # Supabase 세션 브리지 / OAuth
+│       ├── account.py        # 회원가입 · 문자인증 · 아이디/비번 찾기 · 회원탈퇴
+│       ├── leads.py          # POST /leads · GET /leads/mine · 주소검색 프록시
+│       ├── faq.py            # GET /faqs (공개 자주묻는질문)
+│       └── sessions.py · floorplans.py · chat.py  # phase_a_skeleton 플래그에서만 등록
 ├── migrations/               # Historical Alembic scripts; do not add forward revisions
 │   ├── env.py                # sync psycopg3, Settings.database_url 만 사용
 │   ├── script.py.mako
