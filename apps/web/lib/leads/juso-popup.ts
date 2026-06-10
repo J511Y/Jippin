@@ -54,10 +54,19 @@ declare global {
   }
 }
 
+/** 부모 ↔ 콜백 페이지(팝업) 사이 같은 오리진 메시지 채널 이름. */
+export const JUSO_CHANNEL = 'juso-address';
+
 /**
  * 도로명주소 팝업을 열고, 사용자가 주소를 선택하면 결과를 resolve 한다.
  * 사용자가 팝업을 닫으면(콜백 미수신) Promise 는 영구 pending 이므로, 호출부는
  * 별도 상태로 로딩을 관리하지 말고 결과 도착 시점에만 폼을 갱신한다.
+ *
+ * 결과 전달은 두 경로를 함께 쓴다:
+ *   1) BroadcastChannel(같은 오리진) — Vercel 미리보기/배포 보호나 COOP 로 `window.opener`
+ *      가 끊겨도 동작하는 1차 경로.
+ *   2) `window.opener.jusoCallBack` — juso 표준 경로(동작 시 더 빠름).
+ * 먼저 도착한 쪽으로 한 번만 resolve 한다.
  */
 export function openJusoAddressPopup(): Promise<JusoAddressResult> {
   return new Promise((resolve) => {
@@ -69,15 +78,37 @@ export function openJusoAddressPopup(): Promise<JusoAddressResult> {
     const popupUrl = mobile ? JUSO_POPUP_URL_MOBILE : JUSO_POPUP_URL_PC;
     const returnUrl = `${window.location.origin}/leads/juso-callback`;
 
-    // 콜백 등록 — returnUrl 라우트가 popup 창에서 window.opener.jusoCallBack 을 호출한다.
-    // 콜백 인자 순서는 juso 공식 샘플(resultType=4)을 따른다.
+    const channel =
+      typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(JUSO_CHANNEL) : null;
+    let settled = false;
+    const finish = (result: JusoAddressResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      channel?.close();
+      window.jusoCallBack = undefined;
+      resolve(result);
+    };
+
+    // 1) BroadcastChannel — 콜백 페이지가 같은 오리진에서 결과를 broadcast 한다.
+    if (channel) {
+      channel.onmessage = (event: MessageEvent) => {
+        const data = event.data as { type?: string; payload?: JusoAddressResult } | null;
+        if (data?.type === JUSO_CHANNEL && data.payload) {
+          finish(data.payload);
+        }
+      };
+    }
+
+    // 2) window.opener.jusoCallBack — juso 표준 경로. 인자 순서는 공식 샘플(resultType=4).
     window.jusoCallBack = (
       roadFullAddr = '',
       roadAddrPart1 = '',
       addrDetail = '',
       roadAddrPart2 = '',
     ) => {
-      resolve({ roadFullAddr, roadAddrPart1, roadAddrPart2, addrDetail });
+      finish({ roadFullAddr, roadAddrPart1, roadAddrPart2, addrDetail });
     };
 
     // 먼저 빈 팝업 창을 연 뒤 그 창을 target 으로 form 을 submit 한다(팝업 차단 회피).

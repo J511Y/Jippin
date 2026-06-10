@@ -54,16 +54,28 @@ function escapeJs(value: string): string {
   return JSON.stringify(value).replace(/</g, '\\u003c');
 }
 
-/** opener 의 jusoCallBack 을 호출하고 팝업을 닫는, 보이지 않는 중계 페이지. */
+// 부모(lib/leads/juso-popup.ts)와 동일한 BroadcastChannel 이름.
+const JUSO_CHANNEL = 'juso-address';
+
+/**
+ * 결과를 부모창으로 넘기고 팝업을 닫는, 보이지 않는 중계 페이지.
+ * 두 경로를 함께 쏜다:
+ *   1) BroadcastChannel(같은 오리진) — Vercel 보호/COOP 로 window.opener 가 끊겨도 동작.
+ *   2) window.opener.jusoCallBack — juso 표준 경로.
+ */
 function renderCallback(params: URLSearchParams): string {
   // juso 가 echo 하는 공식 필드명은 addrDetail. 일부 흐름의 detailAddr 도 호환 처리한다.
   const detail = String(params.get('addrDetail') ?? params.get('detailAddr') ?? '');
-  const args = CALLBACK_FIELDS.map((name) => {
-    if (name === 'addrDetail') {
-      return escapeJs(detail);
-    }
-    return escapeJs(String(params.get(name) ?? ''));
-  }).join(',');
+  const get = (name: string): string =>
+    name === 'addrDetail' ? detail : String(params.get(name) ?? '');
+  // opener.jusoCallBack 인자(공식 샘플 순서) 와 BroadcastChannel payload(부모가 쓰는 4개 필드).
+  const callbackArgs = CALLBACK_FIELDS.map((name) => escapeJs(get(name))).join(',');
+  const payload = {
+    roadFullAddr: get('roadFullAddr'),
+    roadAddrPart1: get('roadAddrPart1'),
+    roadAddrPart2: get('roadAddrPart2'),
+    addrDetail: get('addrDetail'),
+  };
   return `<!doctype html>
 <html lang="ko">
 <head><meta charset="utf-8"><title>주소 선택</title></head>
@@ -71,9 +83,17 @@ function renderCallback(params: URLSearchParams): string {
 <p style="font-family:system-ui,sans-serif;color:#6b7280;padding:16px">주소를 적용하는 중입니다…</p>
 <script>
   (function () {
+    var payload = ${escapeJs(JSON.stringify(payload))};
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        var ch = new BroadcastChannel(${escapeJs(JUSO_CHANNEL)});
+        ch.postMessage({ type: ${escapeJs(JUSO_CHANNEL)}, payload: JSON.parse(payload) });
+        ch.close();
+      }
+    } catch (e) {}
     try {
       if (window.opener && typeof window.opener.jusoCallBack === 'function') {
-        window.opener.jusoCallBack(${args});
+        window.opener.jusoCallBack(${callbackArgs});
       }
     } catch (e) {}
     window.close();
