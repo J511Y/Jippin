@@ -32,6 +32,7 @@
     "@mantine/hooks": "^9.3.0",
     "@mantine/modals": "^9.3.0",
     "@mantine/notifications": "^9.3.0",
+    "@next/third-parties": "^16.2.9",
     "@supabase/ssr": "^0.5.0",
     "@supabase/supabase-js": "^2.45.0",
     "@tabler/icons-react": "^3.44.0",
