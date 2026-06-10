@@ -28,6 +28,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.8
     },
     {
+      // 자주묻는질문 — FAQ 리치결과/GEO 인입 페이지로 색인 허용.
+      url: `${SITE_URL}/faq`,
+      lastModified,
+      changeFrequency: 'monthly',
+      priority: 0.6
+    },
+    {
       url: `${SITE_URL}/terms`,
       lastModified,
       changeFrequency: 'yearly',
