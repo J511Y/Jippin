@@ -9,7 +9,7 @@
 
 ## 1. 프로젝트 상태
 
-현재 단계: **부트스트랩 (CMP-523 진행 중)**. `main` 에는 합의된 요구사항 기준선과 작업 가이드만 포함되어 있고, 실제 서비스 코드(웹·API·컨트랙트·인프라)는 자식 이슈(CMP-524 분해)별 feature 브랜치에서 PR 대기 중이다.
+현재 단계: **MVP 구현 진행 중**. 웹(`apps/web`)·API(`apps/api`)·공통 컨트랙트(`packages/contracts`)·인프라(`infra/`, `supabase/`)가 구현되어 있고, 인증(Supabase Auth)·상담 리드·자주묻는질문 등은 DB-backed 실 기능이다. 통합 브랜치는 `dev`, 배포 토폴로지는 ADR-0006(분리형) 기준으로 진행한다. 모듈별 로컬 개발·테스트 명령은 각 앱 README 가 정본이다.
 
 - 요구·기능·기술·SDD 정본: [`docs/명세서/`](docs/명세서/) (Word/Excel)
 - 정본 텍스트 캐시(Office 미설치 환경용): [`docs/_extracted/`](docs/_extracted/)
@@ -23,28 +23,31 @@
 
 ---
 
-## 2. 모노레포 구조 (목표 상태)
+## 2. 모노레포 구조 (현행)
 
 ```
 jippin/
 ├── apps/
-│   ├── web/                 # Presentation 레이어 (Next.js 16 LTS — CMP-529)
-│   └── api/                 # Application 레이어 (FastAPI 계열 — CMP-528, CTO ADR 확정 대기)
+│   ├── web/                 # Presentation 레이어 (Next.js 16.2 LTS · React 19 · Node 22 · pnpm 9)
+│   └── api/                 # Application 레이어 (FastAPI 0.115 · Python 3.13 · uv)
 ├── packages/
 │   └── contracts/           # CommonJudgmentSchema · CompletionDecision · RuleEvalResult · EstimateResult
 │                            # (언어 중립 JSON 스키마 + 생성된 TS/Python 타입 — CMP-527)
+├── supabase/
+│   └── migrations/          # forward schema SSOT (*.sql) — Supabase GitHub Integration 이 적용
 ├── infra/
-│   ├── docker/              # Dockerfile.web / Dockerfile.api / nginx.conf
-│   └── compose/             # docker-compose.yml + override (CMP-530)
+│   ├── docker/              # nginx.conf (앱 Dockerfile 은 각 apps/*/Dockerfile)
+│   └── compose/             # docker-compose.yml + override.example (로컬 3-컨테이너)
 ├── docs/
 │   ├── 명세서/              # 정본 4종 + 참고 이미지 (read-only)
 │   ├── _extracted/          # 정본 텍스트 캐시 (tooling/extract_specs.py 산출물)
 │   ├── brief/               # CEO 프로젝트 브리프
-│   └── adr/                 # CTO 아키텍처 결정 기록 (예정)
-└── tooling/                 # extract_specs.py 등 보조 스크립트
+│   ├── adr/                 # CTO 아키텍처 결정 기록 (0001–0007)
+│   ├── design/              # 디자인·브랜드 SSOT
+│   └── runbooks/            # 운영 런북 (Supabase·Fly 배포 등)
+├── tools/                   # secret-scan 등 운영 도구
+└── tooling/                 # extract_specs.py · validate_commit_msg.py 등 보조 스크립트
 ```
-
-> `main` 에 아직 모듈이 비어 보이는 이유는 GitHub Flow 정책상 각 라인의 부트스트랩 PR(`feat/web-bootstrap-cmp-529`, `feat/api-bootstrap-cmp-528`, `feat/arch-contracts-cmp-527`, `chore/cmp-530-compose` 등)이 머지 대기 중이기 때문이다.
 
 ---
 
@@ -52,14 +55,14 @@ jippin/
 
 | 영역 | 채택 | 비고 |
 |---|---|---|
-| 웹 프론트엔드 | **Next.js 16 LTS (App Router)** | 명세서 권장(14+)을 재평가해 최신 LTS 채택 — CMP-529 |
-| 백엔드 API | FastAPI 계열 (CTO ADR 확정 대기) | CMP-528 에서 부트스트랩, 대안 검토 진행 중 |
+| 웹 프론트엔드 | **Next.js 16.2 LTS (App Router)** · React 19 · Node 22 · pnpm 9 | ADR-0001 봉인 — CMP-529 |
+| 백엔드 API | **FastAPI 0.115** · Python 3.13 · uv | ADR-0001 봉인 — CMP-528 |
 | 공통 컨트랙트 | TypeScript / Python 타입 자동 생성 | JSON 스키마 정본 — `packages/contracts/` (CMP-527) |
-| DB | **Supabase Postgres + Supabase Auth** | `supabase/migrations/*.sql` 이 forward schema SSOT |
-| 세션·캐시 | Redis (compose 내부) | CMP-530 |
-| 오케스트레이션 | **단일 인스턴스 docker-compose** | 별도 클라우드 매니지드 서비스 사용 안 함 |
-| AI | Mask2Former + VLM (라인별 ADR 예정) | 후속 이슈에서 구현 |
-| 배포 클라우드 | **미정 — 가격·운영 부담 비교 진행 중 (CMP-532)** | 의사결정은 자료 확보 후 별도 이슈 |
+| DB · Auth | **Supabase Postgres + Supabase Auth** | `supabase/migrations/*.sql` 이 forward schema SSOT (ADR-0004) |
+| 세션·캐시 | Redis 7.4 (로컬 compose / 운영 managed 도쿄) | ADR-0006 |
+| 로컬 오케스트레이션 | **docker-compose 3-컨테이너** (web + api + redis) | DB 는 외부 Supabase 원격 |
+| AI | Mask2Former + VLM (라인별 ADR) | 도면 인식·판별 — 후속 이슈에서 구현 |
+| 배포 토폴로지 | **분리형 (제안 — ADR-0006)**: web=Vercel · api=Fly.io 도쿄 · redis=managed · DB=Supabase | ADR-0002(단일 VM) supersede |
 
 ---
 
@@ -68,14 +71,14 @@ jippin/
 ### 4.1 사전 요구사항
 
 - Docker 24+, Docker Compose v2
-- Node.js 20 LTS 이상 (web 로컬 개발 시)
-- Python 3.11 이상 (api 로컬 개발 시)
+- Node.js 22 LTS (web 로컬 개발 시 — `apps/web/.nvmrc`), pnpm 9 (corepack)
+- Python 3.13 (api 로컬 개발 시 — `apps/api/.python-version`), uv 0.5+
 - Supabase project connection string (direct 5432 + pooler 6543)
 
 ### 4.2 환경 변수
 
 ```bash
-cp .env.example .env       # 후속 이슈에서 .env.example 추가 예정
+cp .env.example .env       # 루트 .env.example 참조 (앱별: apps/api/.env.example · apps/web/.env.example)
 # 최소 변수
 # DATABASE_URL=postgresql://...supabase.co/postgres?sslmode=require       # direct 5432 (마이그레이션·롱 트랜잭션)
 # DATABASE_POOL_URL=postgresql://...pooler.supabase.com/postgres?sslmode=require # pooler 6543 (일반 쿼리)
@@ -87,14 +90,14 @@ cp .env.example .env       # 후속 이슈에서 .env.example 추가 예정
 
 ```bash
 # 전체 부팅 (web + api + redis, Postgres 는 Supabase 원격)
-docker compose up --build
+make up                                   # = docker compose -f infra/compose/docker-compose.yml up --build
 
 # 헬스 체크
 curl http://localhost:3000/healthz       # web
 curl http://localhost:8000/healthz       # api
 ```
 
-자세한 모듈별 로컬 개발 명령은 각 앱의 `apps/*/README.md` 가 정본이다. (CTO ADR 확정 후 채워짐)
+자세한 모듈별 로컬 개발·테스트 명령은 각 앱의 `apps/*/README.md` 가 정본이다 (루트 공통 명령은 [`AGENTS.md §6`](AGENTS.md) · `Makefile`).
 
 ---
 
@@ -132,8 +135,8 @@ curl http://localhost:8000/healthz       # api
 | [`docs/design/BRAND.md`](docs/design/BRAND.md) | 브랜드 약속·톤앤매너·금지 톤 | Frontend Lead + CEO 봉인(§1·§5·§6) |
 | [`docs/design/COLOR_SYSTEM.md`](docs/design/COLOR_SYSTEM.md) | 컬러 토큰·상태색·법적/오류 색·WCAG 기준 | Frontend Lead |
 | [`docs/design/TYPOGRAPHY.md`](docs/design/TYPOGRAPHY.md) | 폰트 스택·타입스케일·문체 가이드 | Frontend Lead |
-| `docs/adr/` (예정) | 기술 채택 결정 기록 | CTO·라인 리드 |
-| 각 모듈 `README.md` (예정) | 모듈별 로컬 개발·테스트 명령 정본 | 해당 모듈 라인 리드 |
+| [`docs/adr/`](docs/adr/) | 기술 채택 결정 기록 (0001–0007) | CTO·라인 리드 |
+| 각 앱 `README.md` ([`apps/web`](apps/web/README.md) · [`apps/api`](apps/api/README.md)) | 모듈별 로컬 개발·테스트 명령 정본 | 해당 모듈 라인 리드 |
 
 명세 4종 사이에 모순이 있으면 다음 우선순위를 따른다:
 **(이슈 본문) > (CEO 브리프) > (SDD) > (기술명세서) > (기능명세서) > (요구사항)**.

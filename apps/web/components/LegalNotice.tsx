@@ -76,6 +76,18 @@ export function LegalNotice({ className, variant = 'footer' }: LegalNoticeProps)
               >
                 개인정보처리방침
               </Anchor>
+              <Text size="xs" c="dimmed">
+                ·
+              </Text>
+              <Anchor
+                href="/faq"
+                size="xs"
+                fw={600}
+                c="var(--jippin-brand-copy)"
+                underline="never"
+              >
+                자주묻는질문
+              </Anchor>
             </Group>
             <Text size="xs" c="dimmed">
               © 2026 집핀(Jippin)

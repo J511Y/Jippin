@@ -59,7 +59,7 @@ jippin/
 >
 > **봉인 ADR**: 본 트리·패키지 매니저·런타임은 [`docs/adr/0001-stack-reevaluation.md`](docs/adr/0001-stack-reevaluation.md) 가 봉인한다. 변경은 새 ADR을 발행해 supersede 해야 한다. 핵심 결정:
 > - `apps/web` = **Next.js 16.2 LTS** · React 19 · Node 22 LTS · **pnpm 9.x**
-> - `apps/api` = **FastAPI 0.115** · Python 3.12 · **uv 0.5+**
+> - `apps/api` = **FastAPI 0.115** · Python 3.13 · **uv 0.5+**
 > - DB = **Supabase Postgres** (외부 managed, 로컬 DB 컨테이너 없음). ADR-0004 cutover 완료 (CMP-603). 운영 DB URL 은 Supabase project 가 발급한 connection string. Forward migration SSOT 는 `supabase/migrations/*.sql` + Supabase GitHub Integration. Alembic 은 historical reference 만. 캐시 = **Redis 7.4-alpine** 컨테이너.
 > - 객체 스토리지 = **Cloudflare R2** (S3 호환, zero-egress).
 > - LLM 오케스트레이션 = **LangChain v0.3+**. VLM 기본 = OpenAI `gpt-4.1-mini` / 정밀 = `gpt-4o`.

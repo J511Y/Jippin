@@ -15,6 +15,14 @@ export const SITE_NAME = '집핀';
 export const SITE_NAME_FULL = '집핀 (Jippin)';
 
 /**
+ * Google Tag Manager 컨테이너 ID. 브라우저로 그대로 노출되는 공개 클라이언트
+ * 식별자라 코드에 둔다. GA4 등 실제 태그는 GTM 컨테이너 안에서 관리한다.
+ * 프리뷰/스테이징 컨테이너 분리 시에만 `NEXT_PUBLIC_GTM_ID` 로 덮어쓴다.
+ */
+export const GTM_CONTAINER_ID =
+  process.env.NEXT_PUBLIC_GTM_ID ?? 'GTM-TQN3DM5W';
+
+/**
  * 검색·LLM 인입 키워드. 사용자 지정 핵심 키워드 + 동의어/롱테일.
  * (베란다 확장 / 인테리어 / 아파트 확장 / 화단철거 / 가벽철거 / 사전검토)
  */

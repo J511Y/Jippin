@@ -1,4 +1,5 @@
 import { ColorSchemeScript, mantineHtmlProps } from '@mantine/core';
+import { GoogleTagManager } from '@next/third-parties/google';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import { AnonymousLeadClaimer } from '@/components/AnonymousLeadClaimer';
@@ -6,6 +7,7 @@ import { LegalNotice } from '@/components/LegalNotice';
 import { WebVitals } from '@/components/WebVitals';
 import { Providers } from '@/lib/providers';
 import {
+  GTM_CONTAINER_ID,
   SITE_DESCRIPTION,
   SITE_KEYWORDS,
   SITE_NAME,
@@ -83,6 +85,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <AnonymousLeadClaimer />
         <WebVitals />
       </body>
+      {/* GTM(gtag.js). next/script 로 afterInteractive 주입하고 noscript iframe 도
+          함께 렌더한다. GA4 등 실제 태그는 GTM 컨테이너 안에서 관리한다.
+
+          운영 도메인(jippin.ai)에서만 켠다. NODE_ENV 는 Vercel 의 모든 빌드에서
+          'production' 이라 dev.jippin.ai(Preview)·로컬을 구분하지 못한다. Vercel 이
+          환경별로 주입하는 NEXT_PUBLIC_VERCEL_ENV 로 게이트해야 Production 만 잡힌다. */}
+      {process.env.NEXT_PUBLIC_VERCEL_ENV === 'production' && GTM_CONTAINER_ID ? (
+        <GoogleTagManager gtmId={GTM_CONTAINER_ID} />
+      ) : null}
     </html>
   );
 }
