@@ -32,9 +32,13 @@ export function normalizeKoreanPhone(raw: string): string | null {
  *
  * 최종 제출값은 여전히 `normalizeKoreanPhone` 이 SSOT 로 정규화하므로, 본 포맷터는 표시
  * 편의를 위한 보조 역할이다(휴대폰 3-4-4 / 3-3-4, 서울 02 지역번호를 우선 처리).
+ *
+ * 자릿수를 잘라내지 않는다 — 11자리를 초과하면 남은 숫자를 그대로 노출해
+ * `validateKoreanPhone` 이 잘못된 번호로 거르게 한다(조용한 절단으로 유효해 보이는 값을
+ * 만들지 않는다).
  */
 export function formatKoreanPhone(raw: string): string {
-  const digits = (raw ?? '').replace(NON_DIGIT_RE, '').slice(0, 11);
+  const digits = (raw ?? '').replace(NON_DIGIT_RE, '');
   if (!digits) {
     return '';
   }

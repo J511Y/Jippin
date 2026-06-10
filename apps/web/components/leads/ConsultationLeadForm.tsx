@@ -45,6 +45,21 @@ interface FullLeadValues {
   message: string;
 }
 
+const INITIAL_VALUES: FullLeadValues = {
+  applicant_kind: 'individual',
+  applicant_name: '',
+  applicant_phone: '',
+  road_addr_part1: '',
+  road_addr_part2: '',
+  road_addr_detail: '',
+  expansion_location: '',
+  ownership_status: '',
+  construction_start_date: '',
+  construction_end_date: '',
+  inflow_source: '',
+  message: ''
+};
+
 const INFLOW_OPTIONS = [
   { value: 'naver_search', label: '네이버 검색' },
   { value: 'blog', label: '블로그' },
@@ -65,20 +80,7 @@ export function ConsultationLeadForm() {
   const [phoneLocked, setPhoneLocked] = useState(false);
 
   const form = useForm<FullLeadValues>({
-    initialValues: {
-      applicant_kind: 'individual',
-      applicant_name: '',
-      applicant_phone: '',
-      road_addr_part1: '',
-      road_addr_part2: '',
-      road_addr_detail: '',
-      expansion_location: '',
-      ownership_status: '',
-      construction_start_date: '',
-      construction_end_date: '',
-      inflow_source: '',
-      message: ''
-    },
+    initialValues: INITIAL_VALUES,
     validate: {
       applicant_name: validateRequiredText('이름을 입력해 주세요.'),
       applicant_phone: validateKoreanPhone,
@@ -106,6 +108,14 @@ export function ConsultationLeadForm() {
       const meta = (user.user_metadata ?? {}) as { name?: string; display_name?: string };
       const name = (meta.name ?? meta.display_name ?? '').trim();
       const phone = ((user.app_metadata ?? {}) as { phone?: string }).phone?.trim() ?? '';
+      if (!name && !phone) return;
+      // prefill 값을 현재값 + initialValues 양쪽에 반영한다. initialValues 에도 넣어야
+      // 제출 후 form.reset() 이 잠긴 필드를 빈 값이 아닌 prefill 값으로 되돌린다.
+      form.setInitialValues({
+        ...INITIAL_VALUES,
+        ...(name ? { applicant_name: name } : {}),
+        ...(phone ? { applicant_phone: phone } : {})
+      });
       if (name) {
         form.setFieldValue('applicant_name', name);
         setNameLocked(true);
@@ -163,6 +173,8 @@ export function ConsultationLeadForm() {
         title: '상담 신청이 접수되었어요',
         message: '담당자가 영업일 기준 1일 이내에 연락드릴게요.'
       });
+      // reset() 은 initialValues 로 되돌린다 — 로그인 회원은 prefill 효과에서
+      // setInitialValues 로 이름/연락처를 심어둬 잠긴 필드가 그대로 유지된다.
       form.reset();
       setFile(null);
     } catch (error) {

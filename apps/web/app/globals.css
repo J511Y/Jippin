@@ -34,20 +34,20 @@ a {
 
 /* 비활성(disabled) 입력 가독성 — 기본 Mantine 은 opacity 0.6 + 옅은 회색이라 텍스트가
    흐릿하다. 로그인 시 자동입력되거나 주소검색으로 채워진 값이 또렷이 보이도록 색/배경을
-   고정한다. globals.css 는 @mantine/core/styles.css 뒤에 임포트되어 동일 명시도에서
-   우선한다. -webkit-text-fill-color 는 WebKit 이 disabled 텍스트를 자체로 흐리게
-   처리하는 것을 막는다. */
+   COLOR_SYSTEM.md §3.1 의 form.* 토큰(--jippin-form-disabled-*)으로 고정한다.
+   globals.css 는 @mantine/core/styles.css 뒤에 임포트되어 동일 명시도에서 우선한다.
+   -webkit-text-fill-color 는 WebKit 이 disabled 텍스트를 자체로 흐리게 처리하는 것을 막는다. */
 .mantine-Input-input:disabled,
 .mantine-Input-input[data-disabled] {
   opacity: 1;
-  background-color: #f0f0f0;
-  color: #1c1c1c;
-  -webkit-text-fill-color: #1c1c1c;
+  background-color: var(--jippin-form-disabled-surface);
+  color: var(--jippin-form-disabled-text);
+  -webkit-text-fill-color: var(--jippin-form-disabled-text);
 }
 
 .mantine-Input-input:disabled::placeholder,
 .mantine-Input-input[data-disabled]::placeholder {
-  color: #1c1c1c;
-  -webkit-text-fill-color: #1c1c1c;
+  color: var(--jippin-form-disabled-text);
+  -webkit-text-fill-color: var(--jippin-form-disabled-text);
   opacity: 1;
 }

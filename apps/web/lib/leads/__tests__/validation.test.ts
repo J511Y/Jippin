@@ -50,9 +50,14 @@ describe('formatKoreanPhone', () => {
     expect(formatKoreanPhone('021234567')).toBe('02-123-4567');
   });
 
-  it('strips non-digits and caps at 11 digits', () => {
+  it('strips non-digits while formatting', () => {
     expect(formatKoreanPhone('010 1234 5678')).toBe('010-1234-5678');
-    expect(formatKoreanPhone('010-1234-5678-9')).toBe('010-1234-5678');
+  });
+
+  it('keeps over-length digits visible so validation can reject them', () => {
+    // 12자리를 11자리로 조용히 자르면 잘못된 번호가 유효해 보인다 — 남겨서 노출한다.
+    expect(formatKoreanPhone('010123456789')).toBe('010-1234-56789');
+    expect(validateKoreanPhone('010-1234-56789')).toMatch(/형식/);
   });
 
   it('returns empty string for empty/garbage input', () => {

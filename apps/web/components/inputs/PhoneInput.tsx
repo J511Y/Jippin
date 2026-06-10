@@ -26,7 +26,6 @@ export function PhoneInput({ value, onChange, ...props }: PhoneInputProps) {
       inputMode="tel"
       autoComplete="tel"
       placeholder="010-0000-0000"
-      maxLength={13}
       {...props}
       value={value ?? ''}
       onChange={(event) => onChange?.(formatKoreanPhone(event.currentTarget.value))}

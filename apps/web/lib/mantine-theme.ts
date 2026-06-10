@@ -122,6 +122,12 @@ export const jippinTokens = {
   },
   notice: {
     legal: '#48606A'
+  },
+  // 비활성 입력 상태 토큰 (COLOR_SYSTEM.md §3.1). prefill 된 실제 데이터가 또렷이
+  // 읽히도록 진한 텍스트색을 둔다 — 일반 비활성 텍스트(content.subtle)와 구분.
+  form: {
+    disabledSurface: '#F0F0F0',
+    disabledText: '#1C1C1C'
   }
 } as const;
 
@@ -181,7 +187,9 @@ export const jippinCssVariablesResolver: CSSVariablesResolver = () => ({
     '--jippin-brand-cta': jippinTokens.brand.cta,
     '--jippin-brand-cta-fg': jippinTokens.brand.ctaFg,
     '--jippin-brand-professional': jippinTokens.brand.professional,
-    '--jippin-notice-legal': jippinTokens.notice.legal
+    '--jippin-notice-legal': jippinTokens.notice.legal,
+    '--jippin-form-disabled-surface': jippinTokens.form.disabledSurface,
+    '--jippin-form-disabled-text': jippinTokens.form.disabledText
   },
   light: {
     // 앱 배경은 중립 라이트 그레이 (브랜드 틸 틴트 제거). 표면(카드)은 화이트로 대비.
