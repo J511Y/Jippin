@@ -67,9 +67,7 @@ export function openJusoAddressPopup(): Promise<JusoAddressResult> {
         ? process.env.NEXT_PUBLIC_JUSO_POPUP_MOBILE_KEY
         : process.env.NEXT_PUBLIC_JUSO_POPUP_KEY) ?? '';
     const popupUrl = mobile ? JUSO_POPUP_URL_MOBILE : JUSO_POPUP_URL_PC;
-    // 콜백 라우트가 (useDetailAddr fallback 재전송 시) 같은 디바이스 엔드포인트/키를
-    // 다시 쓰도록 mobile 플래그를 returnUrl 에 실어 보낸다.
-    const returnUrl = `${window.location.origin}/leads/juso-callback${mobile ? '?mobile=1' : ''}`;
+    const returnUrl = `${window.location.origin}/leads/juso-callback`;
 
     // 콜백 등록 — returnUrl 라우트가 popup 창에서 window.opener.jusoCallBack 을 호출한다.
     // 콜백 인자 순서는 juso 공식 샘플(resultType=4)을 따른다.
