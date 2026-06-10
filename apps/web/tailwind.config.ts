@@ -52,6 +52,10 @@ const config: Config = {
         },
         notice: {
           legal: '#48606A'
+        },
+        form: {
+          disabledSurface: '#F0F0F0',
+          disabledText: '#1C1C1C'
         }
       }
     }

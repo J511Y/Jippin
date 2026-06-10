@@ -26,6 +26,7 @@ import {
   IconUserCheck
 } from '@tabler/icons-react';
 import { Controller, useForm } from 'react-hook-form';
+import { PhoneInput } from '@/components/inputs/PhoneInput';
 import { parseApiError } from '@/lib/api/error';
 import { createLead } from '@/lib/leads/api';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
@@ -174,15 +175,21 @@ export function QuickConsultSection() {
                 error={errors.applicant_name?.message}
                 {...register('applicant_name')}
               />
-              <TextInput
-                label="연락처"
-                placeholder="010-0000-0000"
-                inputMode="tel"
-                radius="md"
-                size="md"
-                withAsterisk
-                error={errors.applicant_phone?.message}
-                {...register('applicant_phone')}
+              <Controller
+                name="applicant_phone"
+                control={control}
+                render={({ field }) => (
+                  <PhoneInput
+                    label="연락처"
+                    radius="md"
+                    size="md"
+                    withAsterisk
+                    value={field.value}
+                    onChange={field.onChange}
+                    onBlur={field.onBlur}
+                    error={errors.applicant_phone?.message}
+                  />
+                )}
               />
               <Textarea
                 label="간단 메모 (선택)"

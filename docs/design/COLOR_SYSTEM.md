@@ -58,6 +58,17 @@
 | `content.onProfessional` | `#FFFFFF` | `brand.professional` 위 텍스트 |
 | `notice.legal` | `#48606A` | 법적 고지 문구 색 (`§5` 참조) |
 
+### 3.1 폼 입력 상태 토큰 (Form input state)
+
+비활성(`disabled`) 입력 필드 전용 색이다. `content.subtle`(일반 비활성 텍스트) 과 달리, 비활성 입력에는 로그인 회원의 **이름·연락처처럼 실제 데이터가 미리 채워져** 있어 또렷이 읽혀야 한다. 그래서 옅은 회색 대신 진한 텍스트색을 별도 토큰으로 둔다.
+
+| 토큰 | HEX | 역할 | 사용처 |
+|---|---|---|---|
+| `form.disabledSurface` | `#F0F0F0` | 비활성 입력 배경 | disabled `TextInput`/`PhoneInput` 배경 |
+| `form.disabledText` | `#1C1C1C` | 비활성 입력 텍스트·placeholder | prefill 된 이름·연락처, 주소검색 결과 표시 |
+
+> Mantine 기본 disabled 입력은 `opacity:0.6` 으로 텍스트를 흐리게 처리한다. 본 토큰을 적용할 때는 `opacity` 를 1 로 되돌려 대비를 확보한다(`apps/web/app/globals.css`). 대비: `form.disabledText #1C1C1C` on `form.disabledSurface #F0F0F0` ≈ 15:1 (WCAG AA·AAA 통과, `§6.1`).
+
 ---
 
 ## 4. 상태 색 (Status tokens) — 브랜드와 분리
@@ -193,11 +204,15 @@ colors: {
   },
   notice: {
     legal: '#48606A'
+  },
+  form: {
+    disabledSurface: '#F0F0F0',
+    disabledText: '#1C1C1C'
   }
 }
 ```
 
-> CSS 변수로의 마이그레이션(예: `--brand-primary`) 은 후속 이슈에서 다룬다. 본 이슈 범위에서는 정적 HEX 매핑으로 충분하다.
+> CSS 변수로의 마이그레이션(예: `--brand-primary`) 은 후속 이슈에서 다룬다. 본 이슈 범위에서는 정적 HEX 매핑으로 충분하다. 단, 비활성 입력 토큰(`form.*`) 은 Mantine 전역 CSS 오버라이드(`globals.css`)에서 참조하기 위해 `mantine-theme.ts` 의 `jippinCssVariablesResolver` 가 `--jippin-form-disabled-surface` / `--jippin-form-disabled-text` 로도 노출한다.
 
 ### 7.2 메타데이터 / 브라우저 chrome
 
