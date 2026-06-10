@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+from ..logging import log_http_call
+
 GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 _GOOGLE_JWKS: dict[str, Any] | None = None
 _GOOGLE_JWKS_EXPIRES_AT: datetime | None = None
@@ -19,7 +21,9 @@ async def get_google_jwks(http_client: httpx.AsyncClient) -> dict[str, Any]:
         if _GOOGLE_JWKS_EXPIRES_AT > now:
             return _GOOGLE_JWKS
 
-    response = await http_client.get(GOOGLE_JWKS_URL)
+    response = await log_http_call(
+        "google", "fetch_jwks", lambda: http_client.get(GOOGLE_JWKS_URL)
+    )
     response.raise_for_status()
     _GOOGLE_JWKS = response.json()
     _GOOGLE_JWKS_EXPIRES_AT = now + timedelta(hours=1)
@@ -40,7 +44,9 @@ async def get_supabase_jwks(
     if cached is not None and cached[1] > now:
         return cached[0]
 
-    response = await http_client.get(jwks_url)
+    response = await log_http_call(
+        "supabase", "fetch_jwks", lambda: http_client.get(jwks_url)
+    )
     response.raise_for_status()
     jwks = response.json()
     _SUPABASE_JWKS_CACHE[jwks_url] = (jwks, now + timedelta(hours=1))

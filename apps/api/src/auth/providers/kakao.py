@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ...config import Settings
+from ...logging import log_http_call
 from .base import OAuthProviderError, OAuthTokens, ProviderProfile
 
 AUTHORIZATION_ENDPOINT = "https://kauth.kakao.com/oauth/authorize"
@@ -55,7 +56,9 @@ async def exchange_code(
     if settings.kakao_client_secret:
         data["client_secret"] = settings.kakao_client_secret
 
-    response = await http_client.post(TOKEN_ENDPOINT, data=data)
+    response = await log_http_call(
+        "kakao", "exchange_code", lambda: http_client.post(TOKEN_ENDPOINT, data=data)
+    )
     if response.status_code >= 400:
         raise OAuthProviderError("Kakao token exchange failed.")
     payload = response.json()
@@ -78,9 +81,13 @@ async def fetch_userinfo(
     settings: Settings,
 ) -> ProviderProfile:
     del settings
-    response = await http_client.get(
-        USERINFO_ENDPOINT,
-        headers={"Authorization": f"Bearer {tokens.access_token}"},
+    response = await log_http_call(
+        "kakao",
+        "fetch_userinfo",
+        lambda: http_client.get(
+            USERINFO_ENDPOINT,
+            headers={"Authorization": f"Bearer {tokens.access_token}"},
+        ),
     )
     if response.status_code >= 400:
         raise OAuthProviderError("Kakao userinfo request failed.")

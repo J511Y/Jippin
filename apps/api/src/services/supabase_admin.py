@@ -22,6 +22,7 @@ import sqlalchemy as sa
 from ..config import Settings, get_settings
 from ..db import get_engine
 from ..errors import ZippinException
+from ..logging import log_http_call
 
 
 def _admin_base(settings: Settings) -> str:
@@ -118,7 +119,7 @@ async def verify_password(
             url, json={"email": email, "password": password}, headers=headers
         )
 
-    response = await _send(_run, http_client)
+    response = await _send(_run, http_client, operation="verify_password")
     return response.status_code == 200
 
 
@@ -188,7 +189,7 @@ async def create_email_user(
             url, json=body, headers=_admin_headers(service_role_key)
         )
 
-    response = await _send(_run, http_client)
+    response = await _send(_run, http_client, operation="create_email_user")
 
     if response.status_code in (200, 201):
         data = response.json()
@@ -236,7 +237,7 @@ async def update_user_password(
             url, json={"password": password}, headers=_admin_headers(service_role_key)
         )
 
-    response = await _send(_run, http_client)
+    response = await _send(_run, http_client, operation="update_user_password")
     if response.status_code != 200:
         raise ZippinException(
             "비밀번호 재설정에 실패했습니다.",
@@ -258,7 +259,7 @@ async def delete_user(
     async def _run(client: httpx.AsyncClient) -> httpx.Response:
         return await client.delete(url, headers=_admin_headers(service_role_key))
 
-    response = await _send(_run, http_client)
+    response = await _send(_run, http_client, operation="delete_user")
     # 404 = 이미 삭제된(또는 부분 삭제된) 계정. 탈퇴는 멱등 처리해 사용자가 "탈퇴 실패"
     # 상태에 갇히지 않게 한다 — public.users 는 FK CASCADE 로 정리된다.
     if response.status_code not in (200, 204, 404):
@@ -269,12 +270,17 @@ async def delete_user(
         )
 
 
-async def _send(run, http_client: httpx.AsyncClient | None) -> httpx.Response:
-    try:
+async def _send(
+    run, http_client: httpx.AsyncClient | None, *, operation: str
+) -> httpx.Response:
+    async def _do() -> httpx.Response:
         if http_client is not None:
             return await run(http_client)
         async with httpx.AsyncClient(timeout=10.0) as client:
             return await run(client)
+
+    try:
+        return await log_http_call("supabase_admin", operation, _do)
     except httpx.HTTPError as exc:
         raise ZippinException(
             "Supabase Auth 호출에 실패했습니다.",

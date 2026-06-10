@@ -81,6 +81,19 @@ class RequestLogMiddleware:
                     )
             await send(message)
             if pending_record is not None:
+                # stdout 액세스 로그. 이 미들웨어는 RequestIDMiddleware 바깥(ASGI)에서
+                # 응답을 내보내므로 contextvar 가 이미 비워져 있다 — request_id 는
+                # request.state 에서 직접 읽어 붙인다. 본문/쿼리 값은 남기지 않고
+                # 경로·메서드·상태·소요시간만 기록한다(PII 보호).
+                emit = logger.warning if response_status >= 500 else logger.info
+                emit(
+                    "request_completed",
+                    request_id=getattr(request.state, "request_id", None),
+                    method=request.method,
+                    path=request.url.path,
+                    status=response_status,
+                    duration_ms=pending_record["duration_ms"],
+                )
                 try:
                     schedule_request_log_insert(pending_record)
                 except Exception:

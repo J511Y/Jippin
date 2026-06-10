@@ -1,19 +1,41 @@
 'use client';
 
 /**
- * 도로명주소 검색 팝업 연동 (juso.go.kr — business.juso.go.kr/jst/jstRoadNmAddrApiPop).
+ * 도로명주소 검색 팝업 연동 (juso.go.kr 공식 "팝업 방식").
  *
  * 기존 백엔드 REST 프록시(`/leads/address/search`) 대신 공식 "팝업 방식" 을 사용한다.
+ * 공식 jusoPopup.jsp 샘플과 동일하게 addrlink 패밀리의 디바이스별 엔드포인트를 쓴다
+ * (파라미터·콜백 계약 동일, action URL 만 다름):
+ *   - PC:        business.juso.go.kr/addrlink/addrLinkUrl.do
+ *   - 모바일/태블릿: business.juso.go.kr/addrlink/addrMobileLinkUrl.do
  * 팝업이 `useDetailAddr=Y` 로 상세주소(동/호)까지 받아 returnUrl(`/leads/juso-callback`)
- * 로 POST 하면, 그 라우트가 `window.opener.jusoCallBack(...)` 을 호출한다. 본 helper 는
+ * 로 콜백하면, 그 라우트가 `window.opener.jusoCallBack(...)` 을 호출한다. 본 helper 는
  * 그 콜백을 Promise 로 감싸 한 번의 await 으로 선택 결과를 돌려준다.
  *
- * 팝업용 승인키(`NEXT_PUBLIC_JUSO_POPUP_KEY`)는 REST API 승인키(백엔드 `JUSO_CONFM_KEY`)
- * 와 별개다 — juso 콘솔에서 "팝업" 용으로 발급/도메인 등록한 키를 주입한다.
+ * 팝업용 승인키는 REST API 승인키(백엔드 `JUSO_CONFM_KEY`)와 별개다 — juso 콘솔에서
+ * "팝업" 용으로 발급/도메인 등록한 키를 주입한다. PC 는 `NEXT_PUBLIC_JUSO_POPUP_KEY`,
+ * 모바일/태블릿은 `NEXT_PUBLIC_JUSO_POPUP_MOBILE_KEY` 를 쓴다.
  */
 
-const JUSO_POPUP_URL = 'https://business.juso.go.kr/addrlink/addrLinkUrl.do';
+// PC 인터넷망 팝업. 모바일/태블릿은 같은 addrlink 패밀리의 모바일 엔드포인트를 쓴다
+// (공식 jusoPopup.jsp 샘플 기준, 아래 isMobileOrTablet 으로 분기).
+const JUSO_POPUP_URL_PC = 'https://business.juso.go.kr/addrlink/addrLinkUrl.do';
+const JUSO_POPUP_URL_MOBILE = 'https://business.juso.go.kr/addrlink/addrMobileLinkUrl.do';
 const POPUP_WINDOW_NAME = 'jusoPopup';
+
+/**
+ * 모바일/태블릿 여부. juso 팝업은 디바이스별 전용 엔드포인트(PC: addrLinkUrl.do,
+ * 모바일: addrMobileLinkUrl.do)와 별도 승인키를 쓴다.
+ * iPadOS 13+ 는 데스크톱 UA 를 보내므로 touch 포인트로 보강 판별한다.
+ */
+function isMobileOrTablet(): boolean {
+  const nav = window.navigator;
+  if (/Android|iPhone|iPad|iPod|IEMobile|Opera Mini|Mobile|Tablet|Silk/i.test(nav.userAgent)) {
+    return true;
+  }
+  // iPadOS 13+ : platform 은 'MacIntel' 이지만 멀티터치를 지원한다.
+  return nav.platform === 'MacIntel' && nav.maxTouchPoints > 1;
+}
 
 export interface JusoAddressResult {
   /** 도로명 전체 주소 (예: "서울특별시 강남구 테헤란로 1 (역삼동)") */
@@ -32,33 +54,73 @@ declare global {
   }
 }
 
+/** 부모 ↔ 콜백 페이지(팝업) 사이 같은 오리진 메시지 채널 이름. */
+export const JUSO_CHANNEL = 'juso-address';
+
 /**
  * 도로명주소 팝업을 열고, 사용자가 주소를 선택하면 결과를 resolve 한다.
  * 사용자가 팝업을 닫으면(콜백 미수신) Promise 는 영구 pending 이므로, 호출부는
  * 별도 상태로 로딩을 관리하지 말고 결과 도착 시점에만 폼을 갱신한다.
+ *
+ * 결과 전달은 두 경로를 함께 쓴다:
+ *   1) BroadcastChannel(같은 오리진) — Vercel 미리보기/배포 보호나 COOP 로 `window.opener`
+ *      가 끊겨도 동작하는 1차 경로.
+ *   2) `window.opener.jusoCallBack` — juso 표준 경로(동작 시 더 빠름).
+ * 먼저 도착한 쪽으로 한 번만 resolve 한다.
  */
 export function openJusoAddressPopup(): Promise<JusoAddressResult> {
   return new Promise((resolve) => {
-    const confmKey = process.env.NEXT_PUBLIC_JUSO_POPUP_KEY ?? '';
+    const mobile = isMobileOrTablet();
+    const confmKey =
+      (mobile
+        ? process.env.NEXT_PUBLIC_JUSO_POPUP_MOBILE_KEY
+        : process.env.NEXT_PUBLIC_JUSO_POPUP_KEY) ?? '';
+    const popupUrl = mobile ? JUSO_POPUP_URL_MOBILE : JUSO_POPUP_URL_PC;
     const returnUrl = `${window.location.origin}/leads/juso-callback`;
 
-    // 콜백 등록 — returnUrl 라우트가 popup 창에서 window.opener.jusoCallBack 을 호출한다.
-    // 콜백 인자 순서는 juso 공식 샘플(resultType=4)을 따른다.
+    const channel =
+      typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(JUSO_CHANNEL) : null;
+    let settled = false;
+    const finish = (result: JusoAddressResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      channel?.close();
+      window.jusoCallBack = undefined;
+      resolve(result);
+    };
+
+    // 1) BroadcastChannel — 콜백 페이지가 같은 오리진에서 결과를 broadcast 한다.
+    if (channel) {
+      channel.onmessage = (event: MessageEvent) => {
+        const data = event.data as { type?: string; payload?: JusoAddressResult } | null;
+        if (data?.type === JUSO_CHANNEL && data.payload) {
+          finish(data.payload);
+        }
+      };
+    }
+
+    // 2) window.opener.jusoCallBack — juso 표준 경로. 인자 순서는 공식 샘플(resultType=4).
     window.jusoCallBack = (
       roadFullAddr = '',
       roadAddrPart1 = '',
       addrDetail = '',
       roadAddrPart2 = '',
     ) => {
-      resolve({ roadFullAddr, roadAddrPart1, roadAddrPart2, addrDetail });
+      finish({ roadFullAddr, roadAddrPart1, roadAddrPart2, addrDetail });
     };
 
     // 먼저 빈 팝업 창을 연 뒤 그 창을 target 으로 form 을 submit 한다(팝업 차단 회피).
-    window.open('', POPUP_WINDOW_NAME, 'width=570,height=420,scrollbars=yes,resizable=yes');
+    // 모바일은 작은 고정 창 대신 새 탭/전체 화면으로 띄운다(juso 모바일 권장).
+    const windowFeatures = mobile
+      ? 'scrollbars=yes,resizable=yes'
+      : 'width=570,height=420,scrollbars=yes,resizable=yes';
+    window.open('', POPUP_WINDOW_NAME, windowFeatures);
 
     const form = document.createElement('form');
     form.method = 'post';
-    form.action = JUSO_POPUP_URL;
+    form.action = popupUrl;
     form.target = POPUP_WINDOW_NAME;
     form.acceptCharset = 'UTF-8';
 
