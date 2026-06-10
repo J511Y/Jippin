@@ -4,9 +4,10 @@
  * 도로명주소 검색 팝업 연동 (juso.go.kr 공식 "팝업 방식").
  *
  * 기존 백엔드 REST 프록시(`/leads/address/search`) 대신 공식 "팝업 방식" 을 사용한다.
- * 디바이스별 전용 엔드포인트를 쓴다:
+ * 공식 jusoPopup.jsp 샘플과 동일하게 addrlink 패밀리의 디바이스별 엔드포인트를 쓴다
+ * (파라미터·콜백 계약 동일, action URL 만 다름):
  *   - PC:        business.juso.go.kr/addrlink/addrLinkUrl.do
- *   - 모바일/태블릿: business.juso.go.kr/jst/jstRoadNmAddrApiMobilePop
+ *   - 모바일/태블릿: business.juso.go.kr/addrlink/addrMobileLinkUrl.do
  * 팝업이 `useDetailAddr=Y` 로 상세주소(동/호)까지 받아 returnUrl(`/leads/juso-callback`)
  * 로 콜백하면, 그 라우트가 `window.opener.jusoCallBack(...)` 을 호출한다. 본 helper 는
  * 그 콜백을 Promise 로 감싸 한 번의 await 으로 선택 결과를 돌려준다.
@@ -16,14 +17,15 @@
  * 모바일/태블릿은 `NEXT_PUBLIC_JUSO_POPUP_MOBILE_KEY` 를 쓴다.
  */
 
-// PC 인터넷망 팝업. 모바일/태블릿은 juso "jst" 모바일 팝업을 사용한다(아래 isMobileOrTablet).
+// PC 인터넷망 팝업. 모바일/태블릿은 같은 addrlink 패밀리의 모바일 엔드포인트를 쓴다
+// (공식 jusoPopup.jsp 샘플 기준, 아래 isMobileOrTablet 으로 분기).
 const JUSO_POPUP_URL_PC = 'https://business.juso.go.kr/addrlink/addrLinkUrl.do';
-const JUSO_POPUP_URL_MOBILE = 'https://business.juso.go.kr/jst/jstRoadNmAddrApiMobilePop';
+const JUSO_POPUP_URL_MOBILE = 'https://business.juso.go.kr/addrlink/addrMobileLinkUrl.do';
 const POPUP_WINDOW_NAME = 'jusoPopup';
 
 /**
  * 모바일/태블릿 여부. juso 팝업은 디바이스별 전용 엔드포인트(PC: addrLinkUrl.do,
- * 모바일: jst/jstRoadNmAddrApiMobilePop)와 별도 승인키를 쓴다.
+ * 모바일: addrMobileLinkUrl.do)와 별도 승인키를 쓴다.
  * iPadOS 13+ 는 데스크톱 UA 를 보내므로 touch 포인트로 보강 판별한다.
  */
 function isMobileOrTablet(): boolean {

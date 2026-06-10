@@ -21,10 +21,11 @@ import { type NextRequest, NextResponse } from 'next/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// 디바이스별 juso 팝업 엔드포인트(lib/leads/juso-popup.ts 와 동일). useDetailAddr fallback
-// 단계에서 같은 엔드포인트로 재전송하기 위해 mobile 플래그(returnUrl ?mobile=1)로 분기한다.
+// 디바이스별 juso 팝업 엔드포인트(lib/leads/juso-popup.ts 와 동일, addrlink 패밀리).
+// useDetailAddr fallback 단계에서 같은 엔드포인트로 재전송하기 위해 mobile 플래그
+// (returnUrl ?mobile=1)로 분기한다.
 const JUSO_POPUP_URL_PC = 'https://business.juso.go.kr/addrlink/addrLinkUrl.do';
-const JUSO_POPUP_URL_MOBILE = 'https://business.juso.go.kr/jst/jstRoadNmAddrApiMobilePop';
+const JUSO_POPUP_URL_MOBILE = 'https://business.juso.go.kr/addrlink/addrMobileLinkUrl.do';
 
 // juso resultType=4 콜백 인자 순서(공식 샘플과 동일). 상세주소(addrDetail)는 detailAddr 로 대체된다.
 const CALLBACK_FIELDS = [
