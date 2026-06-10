@@ -25,6 +25,35 @@ export function normalizeKoreanPhone(raw: string): string | null {
   return null;
 }
 
+/**
+ * 입력 중 실시간 표시용 포맷터 — 숫자만 추려 하이픈을 끼워 넣는다. `normalizeKoreanPhone`
+ * 이 "완성된" 번호만 정규화하는 것과 달리, 타이핑 도중의 부분 입력도 자연스럽게 보여준다.
+ * `01012345678` 처럼 하이픈 없이 입력해도 `010-1234-5678` 로 세팅된다.
+ *
+ * 최종 제출값은 여전히 `normalizeKoreanPhone` 이 SSOT 로 정규화하므로, 본 포맷터는 표시
+ * 편의를 위한 보조 역할이다(휴대폰 3-4-4 / 3-3-4, 서울 02 지역번호를 우선 처리).
+ */
+export function formatKoreanPhone(raw: string): string {
+  const digits = (raw ?? '').replace(NON_DIGIT_RE, '').slice(0, 11);
+  if (!digits) {
+    return '';
+  }
+  // 서울(02)은 지역번호가 2자리라 별도 분기한다.
+  if (digits.startsWith('02')) {
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 5) return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+    if (digits.length <= 9)
+      return `${digits.slice(0, 2)}-${digits.slice(2, 5)}-${digits.slice(5)}`;
+    return `${digits.slice(0, 2)}-${digits.slice(2, 6)}-${digits.slice(6)}`;
+  }
+  // 휴대폰(01x)·3자리 지역번호·대표번호 — 11자리는 3-4-4, 그 외는 3-3-4.
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+  if (digits.length <= 10)
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
+}
+
 /** @mantine/form validate 용 — 에러 메시지 또는 null. */
 export function validateKoreanPhone(raw: string): string | null {
   if (!raw || !raw.trim()) {

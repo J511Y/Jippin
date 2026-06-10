@@ -15,7 +15,8 @@ import {
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import { IconPaperclip, IconSearch } from '@tabler/icons-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { PhoneInput } from '@/components/inputs/PhoneInput';
 import { parseApiError } from '@/lib/api/error';
 import {
   createLead,
@@ -25,6 +26,7 @@ import {
 } from '@/lib/leads/api';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
 import { openJusoAddressPopup } from '@/lib/leads/juso-popup';
+import { createClient } from '@/lib/supabase/client';
 import { deleteFloorplan, uploadFloorplan, type UploadedAttachment } from '@/lib/leads/upload';
 import { normalizeKoreanPhone, validateKoreanPhone, validateRequiredText } from '@/lib/leads/validation';
 
@@ -58,6 +60,9 @@ const INFLOW_OPTIONS = [
 export function ConsultationLeadForm() {
   const [submitting, setSubmitting] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  // 로그인 회원은 이름/연락처가 이미 계정에 있으므로 prefill 후 잠근다(개별 잠금).
+  const [nameLocked, setNameLocked] = useState(false);
+  const [phoneLocked, setPhoneLocked] = useState(false);
 
   const form = useForm<FullLeadValues>({
     initialValues: {
@@ -87,6 +92,35 @@ export function ConsultationLeadForm() {
           : null
     }
   });
+
+  // 로그인(비익명) 세션이 있으면 계정의 이름·연락처를 폼에 미리 채우고 잠근다.
+  // 이름은 user_metadata.name, 연락처는 서버가 소유하는 app_metadata.phone(정규화 저장)에서
+  // 읽는다 — 회원가입 시 인증한 휴대폰이 이 위치에 보존된다.
+  useEffect(() => {
+    const supabase = createClient();
+    let active = true;
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!active) return;
+      const user = session?.user;
+      if (!user || user.is_anonymous) return;
+      const meta = (user.user_metadata ?? {}) as { name?: string; display_name?: string };
+      const name = (meta.name ?? meta.display_name ?? '').trim();
+      const phone = ((user.app_metadata ?? {}) as { phone?: string }).phone?.trim() ?? '';
+      if (name) {
+        form.setFieldValue('applicant_name', name);
+        setNameLocked(true);
+      }
+      if (phone) {
+        form.setFieldValue('applicant_phone', phone);
+        setPhoneLocked(true);
+      }
+    });
+    return () => {
+      active = false;
+    };
+    // form 은 useForm 으로부터 안정적이라 마운트 시 1회만 실행한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function openAddressPopup() {
     // 도로명주소 팝업(useDetailAddr=Y)이 기본주소 + 상세주소를 함께 돌려준다.
@@ -161,20 +195,25 @@ export function ConsultationLeadForm() {
             ]}
             {...form.getInputProps('applicant_kind')}
           />
-          <TextInput label="신청인 이름" withAsterisk placeholder="예: 홍길동" {...form.getInputProps('applicant_name')} />
+          <TextInput
+            label="신청인 이름"
+            withAsterisk
+            placeholder="예: 홍길동"
+            disabled={nameLocked}
+            {...form.getInputProps('applicant_name')}
+          />
         </Group>
 
-        <TextInput
+        <PhoneInput
           label="신청인 연락처"
           withAsterisk
-          placeholder="010-0000-0000"
-          inputMode="tel"
+          disabled={phoneLocked}
           {...form.getInputProps('applicant_phone')}
         />
 
         <Stack gap="xs">
           <Group justify="space-between" align="center" wrap="nowrap">
-            <Text size="sm" fw={500}>
+            <Text size="sm" fw={600}>
               현장 주소 <Text component="span" c="red">*</Text>
             </Text>
             <Button
