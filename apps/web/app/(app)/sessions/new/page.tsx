@@ -36,7 +36,7 @@ export default function NewSessionPage() {
         않아요.
       </Alert>
 
-      <Card withBorder radius="md" padding="md">
+      <Card withBorder padding="md">
         <Stack gap="md">
           <TextInput
             label="대상 주소"

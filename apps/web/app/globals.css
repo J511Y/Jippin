@@ -32,9 +32,10 @@ a {
   transform: translateY(1px);
 }
 
-/* FAQ 목록 행 hover — 흰 표면 위에서 브랜드 surface 색으로 살짝 구분한다. */
+/* FAQ 목록 행 hover — 흰 표면(#FFF) 대비 브랜드 surface(#F7FBFA)는 거의 식별이
+   안 되므로, 확실히 보이는 jippin-0 틴트를 쓴다. */
 a[data-faq-row]:hover {
-  background-color: var(--jippin-brand-surface);
+  background-color: var(--mantine-color-jippin-0);
 }
 
 /* 비활성(disabled) 입력 가독성 — 기본 Mantine 은 opacity 0.6 + 옅은 회색이라 텍스트가

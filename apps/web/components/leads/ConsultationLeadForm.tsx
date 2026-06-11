@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Card,
+  Divider,
   FileInput,
   Group,
   Select,
@@ -194,7 +195,7 @@ export function ConsultationLeadForm() {
   });
 
   return (
-    <Card withBorder radius="md" padding="md" component="form" onSubmit={handleSubmit}>
+    <Card withBorder padding="md" component="form" onSubmit={handleSubmit}>
       <Stack gap="md">
         <Group grow>
           <Select
@@ -222,6 +223,9 @@ export function ConsultationLeadForm() {
           disabled={phoneLocked}
           {...form.getInputProps('applicant_phone')}
         />
+
+        {/* 긴 단일 컬럼 폼이라 섹션 라벨로 흐름을 끊어 준다: 신청자 → 현장 → 일정·추가. */}
+        <Divider label="현장 정보" labelPosition="left" mt="xs" />
 
         <Stack gap="xs">
           <Group justify="space-between" align="center" wrap="nowrap">
@@ -272,6 +276,8 @@ export function ConsultationLeadForm() {
           ]}
           {...form.getInputProps('ownership_status')}
         />
+
+        <Divider label="일정 · 추가 정보" labelPosition="left" mt="xs" />
 
         <Group grow>
           <TextInput

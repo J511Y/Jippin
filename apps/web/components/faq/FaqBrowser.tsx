@@ -11,6 +11,7 @@ import {
   TextInput,
   UnstyledButton
 } from '@mantine/core';
+import { IconChevronRight } from '@tabler/icons-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
@@ -23,7 +24,7 @@ import {
 } from '@/lib/faq';
 
 /** 한 페이지에 보여줄 질문 수 — 이를 넘으면 페이징 컨트롤을 노출한다. */
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 10;
 
 type CategoryFilter = FaqCategory | 'all';
 
@@ -113,7 +114,7 @@ export function FaqBrowser({ items }: { items: FaqItem[] }) {
       <TextInput
         value={query}
         onChange={(event) => handleQuery(event.currentTarget.value)}
-        placeholder="궁금한 내용을 검색해 보세요 (예: 비용, 행위허가, 방화)"
+        placeholder="궁금한 내용을 검색해 보세요 (예: 비용, 방화)"
         aria-label="자주묻는질문 검색"
         size="md"
         radius="md"
@@ -157,7 +158,7 @@ export function FaqBrowser({ items }: { items: FaqItem[] }) {
         style={{
           background: 'var(--jippin-brand-surface-alt)',
           border: '1px solid var(--jippin-brand-border)',
-          borderRadius: 'var(--mantine-radius-md)',
+          borderRadius: 'var(--mantine-radius-lg)',
           overflow: 'hidden'
         }}
       >
@@ -184,36 +185,44 @@ export function FaqBrowser({ items }: { items: FaqItem[] }) {
                     : '1px solid var(--jippin-brand-border)'
               }}
             >
-              <Stack gap={6}>
-                {/* 카테고리는 보조 정보 — 중립 outline 뱃지로 둔다. */}
-                <Group gap={6}>
-                  {item.categories.map((slug) => (
-                    <Badge
-                      key={slug}
-                      variant="outline"
-                      color="gray"
-                      size="md"
-                      radius="sm"
-                      fw={500}
+              {/* 우측 chevron — 행이 상세로 이어지는 링크임을 보여주는 affordance. */}
+              <Group gap="sm" wrap="nowrap" justify="space-between" align="center">
+                <Stack gap={6}>
+                  {/* 카테고리는 보조 정보 — 중립 outline 뱃지로 둔다. */}
+                  <Group gap={6}>
+                    {item.categories.map((slug) => (
+                      <Badge
+                        key={slug}
+                        variant="outline"
+                        color="gray"
+                        size="md"
+                        radius="sm"
+                        fw={500}
+                      >
+                        {FAQ_CATEGORY_LABELS[slug]}
+                      </Badge>
+                    ))}
+                  </Group>
+                  <Group gap={8} wrap="nowrap" align="flex-start">
+                    <Text fw={700} c="var(--jippin-brand-ink)">
+                      Q.
+                    </Text>
+                    <Highlight
+                      highlight={keyword}
+                      fw={600}
+                      c="var(--jippin-brand-ink)"
+                      style={{ wordBreak: 'keep-all' }}
                     >
-                      {FAQ_CATEGORY_LABELS[slug]}
-                    </Badge>
-                  ))}
-                </Group>
-                <Group gap={8} wrap="nowrap" align="flex-start">
-                  <Text fw={700} c="var(--jippin-brand-ink)">
-                    Q.
-                  </Text>
-                  <Highlight
-                    highlight={keyword}
-                    fw={600}
-                    c="var(--jippin-brand-ink)"
-                    style={{ wordBreak: 'keep-all' }}
-                  >
-                    {item.question}
-                  </Highlight>
-                </Group>
-              </Stack>
+                      {item.question}
+                    </Highlight>
+                  </Group>
+                </Stack>
+                <IconChevronRight
+                  size={18}
+                  aria-hidden
+                  style={{ flexShrink: 0, color: 'var(--jippin-brand-copy)' }}
+                />
+              </Group>
             </Box>
           ))
         )}

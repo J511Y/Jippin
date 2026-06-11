@@ -21,7 +21,6 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   IconClipboardList,
   IconInbox,
-  IconLogout,
   IconUser
 } from '@tabler/icons-react';
 import { usePathname, useRouter } from 'next/navigation';
@@ -79,6 +78,8 @@ export function MyPageClient() {
   const [email, setEmail] = useState<string | null>(null);
   const [name, setName] = useState<string | null>(null);
   const [isEmailUser, setIsEmailUser] = useState(false);
+  const [providerLabel, setProviderLabel] = useState<string | null>(null);
+  const [joinedAt, setJoinedAt] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [tab, setTab] = useState<MyPageTab>(DEFAULT_TAB);
 
@@ -94,6 +95,14 @@ export function MyPageClient() {
       const appMeta = (user?.app_metadata ?? {}) as { provider?: string; providers?: string[] };
       const providers = appMeta.providers ?? (appMeta.provider ? [appMeta.provider] : []);
       setIsEmailUser(providers.includes('email'));
+      setProviderLabel(
+        providers.includes('kakao')
+          ? '카카오 연동'
+          : providers.includes('email')
+            ? '이메일 가입'
+            : null
+      );
+      setJoinedAt(user?.created_at ? user.created_at.slice(0, 10) : null);
       setAuthReady(true);
     });
   }, []);
@@ -118,19 +127,8 @@ export function MyPageClient() {
 
   return (
     <Stack gap="lg">
-      <Group justify="space-between" align="flex-end" wrap="nowrap">
-        <Title order={1} fz="h1">
-          마이페이지
-        </Title>
-        <Button
-          variant="subtle"
-          color="gray"
-          leftSection={<IconLogout size={16} />}
-          onClick={() => void logout()}
-        >
-          로그아웃
-        </Button>
-      </Group>
+      {/* 로그아웃은 글로벌 헤더(데스크톱)·드로어(모바일)가 제공한다 — 중복 배치하지 않는다. */}
+      <Title order={1}>마이페이지</Title>
 
       <Tabs value={tab} onChange={handleTab} color="jippin" keepMounted>
         <Tabs.List>
@@ -144,9 +142,15 @@ export function MyPageClient() {
 
         <Tabs.Panel value="profile" pt="lg">
           <Stack gap="xl">
-            <ProfileCard email={email} name={name} ready={authReady} />
+            <ProfileCard
+              email={email}
+              name={name}
+              providerLabel={providerLabel}
+              joinedAt={joinedAt}
+              ready={authReady}
+            />
             {isEmailUser ? <PasswordChangeCard /> : null}
-            <DeleteAccountCard />
+            <DeleteAccountSection />
           </Stack>
         </Tabs.Panel>
 
@@ -161,14 +165,18 @@ export function MyPageClient() {
 function ProfileCard({
   email,
   name,
+  providerLabel,
+  joinedAt,
   ready
 }: {
   email: string | null;
   name: string | null;
+  providerLabel: string | null;
+  joinedAt: string | null;
   ready: boolean;
 }) {
   return (
-    <Card withBorder radius="lg" padding="lg">
+    <Card withBorder padding="lg">
       <Group gap="md" wrap="nowrap">
         <ThemeIcon size={44} radius="xl" variant="light" color="jippin">
           <IconUser size={22} />
@@ -176,10 +184,22 @@ function ProfileCard({
         <Stack gap={2}>
           {ready ? (
             <>
-              <Text fw={600}>{name ?? '회원'}</Text>
+              <Group gap="xs" wrap="nowrap">
+                <Text fw={600}>{name ?? '회원'}</Text>
+                {providerLabel ? (
+                  <Badge variant="light" color="jippin" radius="sm" size="sm">
+                    {providerLabel}
+                  </Badge>
+                ) : null}
+              </Group>
               <Text size="sm" c="dimmed">
                 {email ?? '이메일 정보 없음'}
               </Text>
+              {joinedAt ? (
+                <Text size="xs" c="dimmed">
+                  {joinedAt} 가입
+                </Text>
+              ) : null}
             </>
           ) : (
             <Loader size="sm" />
@@ -221,7 +241,7 @@ function ConsultationsSection() {
       </Group>
 
       {error ? (
-        <Alert color="red" variant="light">
+        <Alert color="danger" variant="light">
           {error}
         </Alert>
       ) : leads === null ? (
@@ -229,7 +249,7 @@ function ConsultationsSection() {
           <Loader size="sm" />
         </Group>
       ) : leads.length === 0 ? (
-        <Card withBorder radius="lg" padding="xl">
+        <Card withBorder padding="xl">
           <Stack align="center" gap="sm" ta="center" py="md">
             <ThemeIcon size={48} radius="xl" variant="light" color="gray">
               <IconInbox size={24} />
@@ -303,7 +323,7 @@ function PasswordChangeCard() {
   }
 
   return (
-    <Card withBorder radius="lg" padding="lg">
+    <Card withBorder padding="lg">
       <form onSubmit={handleSubmit(onSubmit)} noValidate>
         <Stack gap="sm">
           <Title order={2} fz="h3">
@@ -334,7 +354,7 @@ function PasswordChangeCard() {
             </Stack>
           </Box>
           {serverError ? (
-            <Alert color="red" variant="light" py="xs">
+            <Alert color="danger" variant="light" py="xs">
               {serverError}
             </Alert>
           ) : null}
@@ -352,7 +372,11 @@ function PasswordChangeCard() {
   );
 }
 
-function DeleteAccountCard() {
+/**
+ * 회원 탈퇴 — 위험 액션이라 카드로 노출하지 않고 탭 최하단의 보조 링크로 강등한다.
+ * 안내·확정은 모달에서 처리한다.
+ */
+function DeleteAccountSection() {
   const [opened, { open, close }] = useDisclosure(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -370,27 +394,22 @@ function DeleteAccountCard() {
   }
 
   return (
-    <Card withBorder radius="lg" padding="lg">
-      <Stack gap="sm">
-        <Title order={2} fz="h3" c="red">
-          회원 탈퇴
-        </Title>
-        <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-          탈퇴하면 계정 정보가 삭제되며 되돌릴 수 없습니다. 신청한 상담 내역은 운영팀
-          처리를 위해 익명으로 보존될 수 있습니다.
-        </Text>
-        <Button variant="light" color="red" radius="md" w="fit-content" onClick={open}>
+    <>
+      <Group justify="flex-end">
+        <Button variant="subtle" color="danger" size="xs" onClick={open}>
           회원 탈퇴
         </Button>
-      </Stack>
+      </Group>
 
       <Modal opened={opened} onClose={close} title="정말 탈퇴하시겠어요?" centered>
         <Stack gap="md">
           <Text size="sm" style={{ wordBreak: 'keep-all' }}>
-            탈퇴 후에는 같은 이메일로 다시 가입해야 하며 계정을 복구할 수 없습니다.
+            탈퇴하면 계정 정보가 삭제되며 되돌릴 수 없습니다. 같은 이메일로 다시
+            가입해야 하며, 신청한 상담 내역은 운영팀 처리를 위해 익명으로 보존될 수
+            있습니다.
           </Text>
           {error ? (
-            <Alert color="red" variant="light" py="xs">
+            <Alert color="danger" variant="light" py="xs">
               {error}
             </Alert>
           ) : null}
@@ -398,12 +417,12 @@ function DeleteAccountCard() {
             <Button variant="default" onClick={close} disabled={loading}>
               취소
             </Button>
-            <Button color="red" loading={loading} onClick={() => void handleDelete()}>
+            <Button color="danger" loading={loading} onClick={() => void handleDelete()}>
               탈퇴하기
             </Button>
           </Group>
         </Stack>
       </Modal>
-    </Card>
+    </>
   );
 }
