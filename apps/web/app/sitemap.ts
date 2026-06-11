@@ -1,12 +1,21 @@
 import type { MetadataRoute } from 'next';
+import { fetchFaqs } from '@/lib/faq';
 import { SITE_URL } from '@/lib/site';
 
 /**
  * 색인 대상은 공개 마케팅/정보 페이지로 한정한다. 검토 세션·상담·인증 등
  * 상호작용/비공개 라우트는 robots.ts 의 disallow 및 각 page 의 noindex 로 제외.
  */
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const lastModified = new Date('2026-06-08');
+  // FAQ 상세(`/faq/{faqId}`)도 공개 정보 페이지라 색인한다(API 미연결 시 폴백 id —
+  // 시드 identity 와 동일).
+  const faqEntries: MetadataRoute.Sitemap = (await fetchFaqs()).map((faq) => ({
+    url: `${SITE_URL}/faq/${faq.id}`,
+    lastModified,
+    changeFrequency: 'monthly',
+    priority: 0.5
+  }));
   return [
     {
       url: `${SITE_URL}/`,
@@ -34,6 +43,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: 'monthly',
       priority: 0.6
     },
+    ...faqEntries,
     {
       url: `${SITE_URL}/terms`,
       lastModified,

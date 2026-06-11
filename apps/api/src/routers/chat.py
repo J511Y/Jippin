@@ -41,7 +41,7 @@ async def append_chat_message(
     session_id: uuid.UUID = Path(...),
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> ChatMessageResponse:
-    row = main_flow.append_chat_message(
+    row = await main_flow.append_chat_message(
         session_id=session_id,
         owner_user_id=requester.user_id,
         payload=payload.model_dump(),

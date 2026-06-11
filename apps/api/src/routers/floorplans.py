@@ -40,7 +40,7 @@ async def create_floorplan_upload(
     session_id: uuid.UUID = Path(...),
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> FloorplanUploadResponse:
-    row = main_flow.create_floorplan_upload(
+    row = await main_flow.create_floorplan_upload(
         session_id=session_id,
         owner_user_id=requester.user_id,
         payload=payload.model_dump(),

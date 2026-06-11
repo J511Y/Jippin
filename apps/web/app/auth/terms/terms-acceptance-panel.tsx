@@ -20,6 +20,19 @@ type TermsAcceptancePanelProps = {
   nextPath: string;
 };
 
+// 서버(missing_required_terms)가 내려주는 term_id 의 사용자 노출 문구.
+// age_over_14 는 법정 자기확인(개인정보보호법)이라 OAuth 가입 경로에서도 항상 필수이며
+// signup form(apps/web/app/(auth)/signup/signup-form.tsx)과 동일한 문구를 쓴다.
+export const TERM_LABELS: Record<string, string> = {
+  service_terms: '이용약관에 동의합니다. (필수)',
+  privacy_policy: '개인정보처리방침에 동의합니다. (필수)',
+  age_over_14: '만 14세 이상입니다. (필수)'
+};
+
+export function termLabel(termId: string): string {
+  return TERM_LABELS[termId] ?? termId;
+}
+
 export function TermsAcceptancePanel({ nextPath }: TermsAcceptancePanelProps) {
   const router = useRouter();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
@@ -183,7 +196,7 @@ export function TermsAcceptancePanel({ nextPath }: TermsAcceptancePanelProps) {
                     }
                     className="size-4 rounded border-slate-300"
                   />
-                  <span>{termId}</span>
+                  <span>{termLabel(termId)}</span>
                 </label>
               </li>
             ))}
