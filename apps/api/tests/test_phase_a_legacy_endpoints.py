@@ -21,7 +21,6 @@ from fastapi.testclient import TestClient
 
 from src.config import get_settings
 from src.main import create_app
-from src.services import main_flow
 
 from . import _supabase_helpers as helpers
 
@@ -30,9 +29,7 @@ from . import _supabase_helpers as helpers
 def _clear_state(monkeypatch):
     helpers.set_supabase_env(monkeypatch)
     get_settings.cache_clear()
-    main_flow._reset_for_tests()
     yield
-    main_flow._reset_for_tests()
     get_settings.cache_clear()
 
 

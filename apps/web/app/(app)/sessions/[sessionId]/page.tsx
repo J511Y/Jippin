@@ -6,7 +6,8 @@ type SessionPageProps = {
 };
 
 export const metadata: Metadata = {
-  title: '사전검토 진행'
+  title: '사전검토 진행',
+  robots: { index: false, follow: false }
 };
 
 export default async function SessionDetailPage({ params }: SessionPageProps) {

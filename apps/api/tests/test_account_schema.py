@@ -61,6 +61,24 @@ def test_signup_request_normalizes_phone_and_email() -> None:
     assert req.name == "홍길동"
     assert req.email == "hong@example.com"
     assert req.phone == "010-1234-5678"
+    # 만 14세 확인/마케팅 동의는 생략 시 False — 라우터가 만 14세 미확인을 400 으로 거부한다.
+    assert req.age_over_14 is False
+    assert req.marketing_consent is False
+
+
+def test_signup_request_accepts_age_and_marketing_consents() -> None:
+    req = SignupRequest(
+        name="홍길동",
+        email="hong@example.com",
+        phone="01012345678",
+        password="abc123",
+        phone_token="tok",
+        agreed_to_terms=True,
+        age_over_14=True,
+        marketing_consent=True,
+    )
+    assert req.age_over_14 is True
+    assert req.marketing_consent is True
 
 
 def test_signup_request_rejects_weak_password() -> None:

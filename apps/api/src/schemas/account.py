@@ -88,6 +88,13 @@ class SignupRequest(BaseModel):
     # 이용약관·개인정보처리방침 명시적 동의. **필수 필드**(default 없음) — 생략 시 422 로 막혀
     # 동의 없이 가입/consent 기록이 생기지 않는다. Literal[True] 로 False/생략을 모두 거부한다.
     agreed_to_terms: Literal[True]
+    # 만 14세 이상 자기확인(개인정보보호법 — 생년월일 미수집, 체크박스 self-attestation).
+    # default False 로 받아 라우터가 누락/False 를 모두 400 + 한국어 에러 envelope 로 거부한다
+    # (pydantic 422 대신 사용자에게 읽히는 메시지를 내려주기 위함).
+    age_over_14: bool = False
+    # 광고성 정보(SMS 등) 수신 동의 — 선택(정보통신망법 §50). 동의(True)한 경우에만
+    # terms_consents 에 기록한다(스키마가 동의 사실만 저장하는 기존 관례).
+    marketing_consent: bool = False
 
     @field_validator("name", mode="before")
     @classmethod
