@@ -195,6 +195,7 @@ def test_signup_creates_user_and_profile(monkeypatch, store) -> None:
                 "password": "abc123",
                 "phone_token": "goodtok",
                 "agreed_to_terms": True,
+                "age_over_14": True,
             },
         )
     assert resp.status_code == 201
@@ -204,6 +205,66 @@ def test_signup_creates_user_and_profile(monkeypatch, store) -> None:
     assert calls["create"]["phone"] == NORMALIZED_PHONE
     assert calls["create"]["display_name"] == "홍길동"
     assert calls["profile"]["display_name"] == "홍길동"
+    # 마케팅 수신 동의를 생략하면 미동의(False)로 전달된다 — 선택 동의.
+    assert calls["profile"]["marketing_agreed"] is False
+
+
+def test_signup_passes_marketing_consent_to_profile(monkeypatch, store) -> None:
+    created_id = uuid.uuid4()
+    calls: dict[str, object] = {}
+
+    async def fake_create_user(**kwargs):
+        return CreatedUser(user_id=created_id)
+
+    async def fake_profile(**kwargs):
+        calls["profile"] = kwargs
+
+    monkeypatch.setattr(
+        "src.services.supabase_admin.create_email_user", fake_create_user
+    )
+    monkeypatch.setattr("src.routers.account.create_signup_profile", fake_profile)
+
+    client = TestClient(create_app())
+    with client:
+        resp = client.post(
+            "/auth/signup",
+            json={
+                "name": "홍길동",
+                "email": "hong@example.com",
+                "phone": "01012345678",
+                "password": "abc123",
+                "phone_token": "goodtok",
+                "agreed_to_terms": True,
+                "age_over_14": True,
+                "marketing_consent": True,
+            },
+        )
+    assert resp.status_code == 201
+    assert calls["profile"]["marketing_agreed"] is True
+
+
+@pytest.mark.parametrize("payload_age", [False, None])
+def test_signup_rejects_missing_or_false_age_attestation(store, payload_age) -> None:
+    # 만 14세 이상 확인(개인정보보호법) — False 든 누락이든 400 + 한국어 에러로 거부한다.
+    body = {
+        "name": "홍길동",
+        "email": "hong@example.com",
+        "phone": "01012345678",
+        "password": "abc123",
+        "phone_token": "goodtok",
+        "agreed_to_terms": True,
+    }
+    if payload_age is not None:
+        body["age_over_14"] = payload_age
+
+    client = TestClient(create_app())
+    with client:
+        resp = client.post("/auth/signup", json=body)
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "AGE_REQUIREMENT_NOT_MET"
+    assert "만 14세" in resp.json()["error"]["message"]
+    # 거부된 요청이 휴대폰 인증 토큰을 소모하지 않는다 — 재시도 가능해야 한다.
+    assert "goodtok" in store.tokens
 
 
 def test_signup_claims_anonymous_leads_when_token_present(monkeypatch, store) -> None:
@@ -243,6 +304,7 @@ def test_signup_claims_anonymous_leads_when_token_present(monkeypatch, store) ->
                 "password": "abc123",
                 "phone_token": "goodtok",
                 "agreed_to_terms": True,
+                "age_over_14": True,
             },
         )
     assert resp.status_code == 201
@@ -262,6 +324,7 @@ def test_signup_rejects_expired_phone_token(store) -> None:
                 "password": "abc123",
                 "phone_token": "missing",
                 "agreed_to_terms": True,
+                "age_over_14": True,
             },
         )
     assert resp.status_code == 400

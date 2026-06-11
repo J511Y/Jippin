@@ -65,6 +65,10 @@ export interface SignupInput {
   password: string;
   phone_token: string;
   agreed_to_terms: boolean;
+  /** 만 14세 이상 자기확인 — 필수(개인정보보호법). false 면 서버가 400 으로 거부한다. */
+  age_over_14: boolean;
+  /** 광고성 정보(SMS 등) 수신 동의 — 선택(정보통신망법 §50). */
+  marketing_consent: boolean;
 }
 
 export async function signup(input: SignupInput): Promise<{ user_id: string; email: string }> {

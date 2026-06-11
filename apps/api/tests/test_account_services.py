@@ -1,15 +1,23 @@
-"""SOLAPI 발송 래퍼·이메일 마스킹·휴대폰 토큰 검증 단위 테스트 (CMP-DIRECT)."""
+"""SOLAPI 발송 래퍼·이메일 마스킹·가입 동의 기록·휴대폰 토큰 검증 단위 테스트 (CMP-DIRECT)."""
 
 from __future__ import annotations
+
+import uuid
 
 import pytest
 
 from solapi.error.MessageNotReceiveError import MessageNotReceivedError
 from solapi.model import RequestMessage
+from sqlalchemy.dialects import postgresql
 
 from src.config import Settings
 from src.errors import ZippinException
-from src.services.account import _mask_email
+from src.services.account import (
+    AGE_OVER_14_TERM_ID,
+    MARKETING_TERM_ID,
+    _mask_email,
+    create_signup_profile,
+)
 from src.services.phone_verification import assert_token_phone_match
 from src.services.sms import send_verification_sms
 
@@ -46,6 +54,79 @@ def _sms_settings() -> Settings:
 )
 def test_mask_email(email: str, expected: str) -> None:
     assert _mask_email(email) == expected
+
+
+class _FakeBegin:
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeEngine:
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+    def begin(self) -> _FakeBegin:
+        return _FakeBegin(self.conn)
+
+
+class _FakeConnection:
+    def __init__(self) -> None:
+        self.statements: list = []
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+        return None
+
+
+def _consent_term_ids(statements) -> set[str]:
+    """terms_consents INSERT 문에서 multi-VALUES 의 term_id 파라미터를 추출한다."""
+
+    term_ids: set[str] = set()
+    for stmt in statements:
+        if "INSERT INTO terms_consents" not in str(stmt):
+            continue
+        params = stmt.compile(dialect=postgresql.dialect()).params
+        term_ids |= {v for k, v in params.items() if k.startswith("term_id")}
+    return term_ids
+
+
+@pytest.fixture
+def signup_profile_conn(monkeypatch) -> _FakeConnection:
+    conn = _FakeConnection()
+    monkeypatch.setattr("src.services.account.get_engine", lambda: _FakeEngine(conn))
+    monkeypatch.setattr("src.services.account.get_settings", lambda: Settings())
+    return conn
+
+
+async def test_create_signup_profile_records_age_attestation(
+    signup_profile_conn,
+) -> None:
+    # 만 14세 이상 확인(age_over_14)은 항상 기록, 마케팅 미동의는 row 를 남기지 않는다.
+    await create_signup_profile(
+        user_id=uuid.uuid4(), display_name="홍길동", marketing_agreed=False
+    )
+    term_ids = _consent_term_ids(signup_profile_conn.statements)
+    assert AGE_OVER_14_TERM_ID in term_ids
+    assert "service_terms" in term_ids
+    assert "privacy_policy" in term_ids
+    assert MARKETING_TERM_ID not in term_ids
+
+
+async def test_create_signup_profile_records_marketing_consent_when_agreed(
+    signup_profile_conn,
+) -> None:
+    await create_signup_profile(
+        user_id=uuid.uuid4(), display_name="홍길동", marketing_agreed=True
+    )
+    term_ids = _consent_term_ids(signup_profile_conn.statements)
+    assert MARKETING_TERM_ID in term_ids
+    assert AGE_OVER_14_TERM_ID in term_ids
 
 
 def test_assert_token_phone_match_accepts_equivalent_formats() -> None:

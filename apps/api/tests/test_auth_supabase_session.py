@@ -643,11 +643,19 @@ class _FakeKakaoConsentConn:
     def __init__(self, agreed_after_insert):
         self.agreed = agreed_after_insert
         self.statements: list[str] = []
+        self.inserted_term_ids: list[str] = []
 
     async def execute(self, statement, *args):  # noqa: ARG002
         sql = str(statement)
         self.statements.append(sql)
         if sql.startswith("INSERT INTO terms_consents"):
+            # 멀티 row VALUES 의 바인딩 값에서 term_id 만 수집 — 어떤 태그가
+            # 실제로 auto-record 되는지 검증하기 위함.
+            self.inserted_term_ids.extend(
+                value
+                for name, value in statement.compile().params.items()
+                if name.startswith("term_id")
+            )
             return None
         return _FakeScalars(self.agreed)
 
@@ -659,7 +667,9 @@ async def test_record_kakao_sync_consent_inserts_kakao_source_and_returns_missin
     from src.services import auth as auth_service
 
     user_id = uuid.uuid4()
-    # insert 직후 select 에서 모든 필수 태그가 동의됨으로 보이게 → missing 없음.
+    # insert 직후 select 에서 Kakao Sync 가 기록 가능한 태그는 모두 동의됨으로 보이게.
+    # age_over_14 는 Kakao 가 대신 동의할 수 없는 법정 자기확인이라 auto-record 에서
+    # 제외되고 missing 으로 남아 /auth/terms 로 라우팅된다 (PR #107 Codex P2).
     conn = _FakeKakaoConsentConn(
         agreed_after_insert=["service_terms", "privacy_policy"]
     )
@@ -667,9 +677,31 @@ async def test_record_kakao_sync_consent_inserts_kakao_source_and_returns_missin
 
     missing = await auth_service.record_kakao_sync_consent(user_id)
 
-    assert missing == []
+    assert missing == ["age_over_14"]
+    assert "service_terms" in conn.inserted_term_ids
+    assert "privacy_policy" in conn.inserted_term_ids
+    assert "age_over_14" not in conn.inserted_term_ids
     insert_sql = next(
         s for s in conn.statements if s.startswith("INSERT INTO terms_consents")
     )
     assert "ON CONFLICT" in insert_sql
     assert "DO NOTHING" in insert_sql
+
+
+@pytest.mark.asyncio
+async def test_record_kakao_sync_consent_completes_after_user_confirms_age(
+    supabase_env, monkeypatch
+):
+    """사용자가 /auth/terms 에서 age_over_14 를 직접 동의한 뒤에는 missing 이 없다."""
+    from src.services import auth as auth_service
+
+    user_id = uuid.uuid4()
+    conn = _FakeKakaoConsentConn(
+        agreed_after_insert=["service_terms", "privacy_policy", "age_over_14"]
+    )
+    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
+
+    missing = await auth_service.record_kakao_sync_consent(user_id)
+
+    assert missing == []
+    assert "age_over_14" not in conn.inserted_term_ids
