@@ -19,6 +19,12 @@ INTERNAL_TERMS_VERSION = "internal_signup"
 KAKAO_SYNC_TERMS_SOURCE = "kakao_sync"
 KAKAO_SYNC_TERMS_VERSION = "kakao_sync"
 
+# 만 14세 이상 자기확인(개인정보보호법) — 생년월일은 수집하지 않고 체크박스 attestation 만
+# terms_consents 에 timestamp 와 함께 남긴다(감사 추적). 법정 요건이라 env
+# (KAKAO_SYNC_REQUIRED_TERM_TAGS)로 끌 수 없게 코드에 고정하며, 이메일 가입
+# (services/account.py)과 OAuth 브리지/terms-accept 경로 모두에 공통 강제된다.
+AGE_OVER_14_TERM_ID = "age_over_14"
+
 
 @dataclass(frozen=True)
 class AnonymousUserResult:
@@ -167,17 +173,6 @@ async def accept_required_terms(
     pending_anonymous_user_id: uuid.UUID | None,  # noqa: ARG001 - legacy field ignored.
 ) -> TermsAcceptResult:
     settings = get_settings()
-    required_term_ids = _required_term_ids(settings)
-    missing_from_payload = [
-        term_id for term_id in required_term_ids if term_id not in agreed_term_ids
-    ]
-    if missing_from_payload:
-        raise ZippinException(
-            "Required terms are missing.",
-            code="TERMS_REQUIRED_MISSING",
-            http_status=422,
-            details={"missing_required_terms": missing_from_payload},
-        )
 
     async with get_engine().begin() as conn:
         user_exists = (
@@ -190,6 +185,28 @@ async def accept_required_terms(
                 "Authentication is required.",
                 code="AUTH_UNAUTHENTICATED",
                 http_status=401,
+            )
+
+        # 이미 기록된 동의(kakao_sync 포함, source/version 무관)와 이번 페이로드의
+        # 합집합으로 충족 여부를 판단한다 — "이 호출이 끝나면 모든 필수 약관에 동의
+        # 기록이 존재하는가"가 요건이지, 페이로드 단독으로 전체를 다시 보내는 것이
+        # 아니다. /auth/terms 화면은 missing_required_terms 만 렌더/전송하므로
+        # (예: Kakao Sync 가입자는 age_over_14 하나만 보냄) 페이로드-단독 검증은
+        # Kakao 가입 완료를 막는 회귀가 된다 (PR #107 Codex P1).
+        # 단, consent row 는 사용자가 이번 요청에서 실제 체크한 항목만 기록한다
+        # (감사 무결성 — 사용자가 동의하지 않은 항목을 대신 기록하지 않는다).
+        missing_before_payload = await _missing_required_terms(conn, user_id, settings)
+        effective_missing = [
+            term_id
+            for term_id in missing_before_payload
+            if term_id not in agreed_term_ids
+        ]
+        if effective_missing:
+            raise ZippinException(
+                "Required terms are missing.",
+                code="TERMS_REQUIRED_MISSING",
+                http_status=422,
+                details={"missing_required_terms": effective_missing},
             )
 
         if agreed_term_ids:
@@ -245,10 +262,20 @@ async def record_kakao_sync_consent(user_id: uuid.UUID) -> list[str]:
 
     이미 ``internal_signup`` 으로 받은 동의가 있어도 version 이 다르므로 충돌 없이 공존하며,
     재호출은 ``on_conflict_do_nothing`` 으로 idempotent 하다.
+
+    예외: ``age_over_14`` 는 Kakao Sync 가 대신 동의할 수 없는 항목(법정 자기확인)이라
+    auto-record 에서 제외한다 — missing 으로 남아 사용자가 ``/auth/terms`` 에서 직접
+    확인하게 된다.
     """
 
     settings = get_settings()
-    required_terms = _required_term_ids(settings)
+    # 만 14세 확인은 사용자가 우리 약관 화면에서 직접 체크해야 하므로 Kakao Sync
+    # 자동 동의 기록 대상에서 제외한다 (missing_required_terms 에 남아 /auth/terms 라우팅).
+    required_terms = [
+        term_id
+        for term_id in _required_term_ids(settings)
+        if term_id != AGE_OVER_14_TERM_ID
+    ]
     async with get_engine().begin() as conn:
         if required_terms:
             consent_rows = [
@@ -297,4 +324,8 @@ async def _missing_required_terms(conn, user_id: uuid.UUID, settings) -> list[st
 
 
 def _required_term_ids(settings) -> list[str]:
-    return list(dict.fromkeys(settings.kakao_sync_required_term_tags))
+    # age_over_14 는 법정 요건(개인정보보호법)이라 env(KAKAO_SYNC_REQUIRED_TERM_TAGS)로
+    # 끌 수 없게 코드에 고정한다 — 이메일/OAuth 모든 가입 경로에서 항상 필수.
+    return list(
+        dict.fromkeys([*settings.kakao_sync_required_term_tags, AGE_OVER_14_TERM_ID])
+    )

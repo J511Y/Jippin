@@ -15,7 +15,9 @@ const validSignup = {
   phoneToken: 'tok',
   password: 'abc123',
   confirm: 'abc123',
-  agreed: true
+  agreed: true,
+  over14: true,
+  marketing: false
 };
 
 describe('auth zod schemas', () => {
@@ -43,6 +45,19 @@ describe('auth zod schemas', () => {
     if (!res.success) {
       expect(res.error.issues.some((i) => i.path[0] === 'agreed')).toBe(true);
     }
+  });
+
+  it('signupSchema requires the age-over-14 attestation (만 14세 이상)', () => {
+    const res = signupSchema.safeParse({ ...validSignup, over14: false });
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues.some((i) => i.path[0] === 'over14')).toBe(true);
+    }
+  });
+
+  it('signupSchema accepts both marketing consent choices (선택 동의)', () => {
+    expect(signupSchema.safeParse({ ...validSignup, marketing: true }).success).toBe(true);
+    expect(signupSchema.safeParse({ ...validSignup, marketing: false }).success).toBe(true);
   });
 
   it('signupSchema requires a phone verification token', () => {

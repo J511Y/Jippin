@@ -63,11 +63,19 @@ export const signupSchema = z
     phoneToken: phoneTokenSchema,
     password: passwordSchema,
     confirm: z.string().min(1, '비밀번호 확인을 입력해 주세요.'),
-    agreed: z.boolean()
+    agreed: z.boolean(),
+    /** 만 14세 이상 자기확인 — 필수(개인정보보호법). 생년월일은 수집하지 않는다. */
+    over14: z.boolean(),
+    /** 광고성 정보(SMS 등) 수신 동의 — 선택(정보통신망법 §50). */
+    marketing: z.boolean()
   })
   .refine((d) => d.agreed, {
     path: ['agreed'],
     message: '이용약관 및 개인정보처리방침에 동의해 주세요.'
+  })
+  .refine((d) => d.over14, {
+    path: ['over14'],
+    message: '만 14세 이상만 가입할 수 있어요. 만 14세 이상 여부를 확인해 주세요.'
   })
   .refine((d) => passwordsMatch(d) === true, {
     path: ['confirm'],
