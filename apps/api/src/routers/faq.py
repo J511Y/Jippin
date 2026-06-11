@@ -1,14 +1,16 @@
 """자주묻는질문(FAQ) 라우터 (CMP-DIRECT).
 
-``GET /faqs`` 는 공개 콘텐츠라 인증을 요구하지 않는다. 공개 노출(is_published=true)
-FAQ 를 카테고리/정렬 순 평면 목록으로 반환하며, 그룹핑·라벨링은 프론트가 처리한다.
+``GET /faqs``·``GET /faqs/{faq_id}`` 는 공개 콘텐츠라 인증을 요구하지 않는다.
+목록은 공개 노출(is_published=true) FAQ 를 전역 정렬 순 평면 목록으로 반환하며,
+카테고리 필터·검색·페이징·라벨링은 프론트가 처리한다. 상세는 비공개/부재 행을
+동일하게 404 로 처리한다.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
-from ..schemas.faq import FaqListResponse
+from ..schemas.faq import FaqItem, FaqListResponse
 from ..services import faq as faq_service
 
 router = APIRouter(prefix="/faqs", tags=["faqs"])
@@ -18,3 +20,11 @@ router = APIRouter(prefix="/faqs", tags=["faqs"])
 async def list_faqs() -> FaqListResponse:
     rows = await faq_service.list_published_faqs()
     return FaqListResponse.model_validate({"items": rows})
+
+
+@router.get("/{faq_id}", response_model=FaqItem)
+async def get_faq(faq_id: int) -> FaqItem:
+    row = await faq_service.get_published_faq(faq_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="FAQ not found")
+    return FaqItem.model_validate(row)

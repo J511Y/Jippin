@@ -82,7 +82,7 @@ apps/api/
 │       ├── auth.py           # Supabase 세션 브리지 / OAuth
 │       ├── account.py        # 회원가입 · 문자인증 · 아이디/비번 찾기 · 회원탈퇴
 │       ├── leads.py          # POST /leads · GET /leads/mine · 주소검색 프록시
-│       ├── faq.py            # GET /faqs (공개 자주묻는질문)
+│       ├── faq.py            # GET /faqs · GET /faqs/{faq_id} (공개 자주묻는질문)
 │       └── sessions.py · floorplans.py · chat.py  # phase_a_skeleton 플래그에서만 등록
 ├── migrations/               # Historical Alembic scripts; do not add forward revisions
 │   ├── env.py                # sync psycopg3, Settings.database_url 만 사용

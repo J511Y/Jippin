@@ -1,8 +1,9 @@
 import { Stack, Text, Title } from '@mantine/core';
 import type { Metadata } from 'next';
+import { Suspense } from 'react';
 
-import { FaqView } from '@/components/faq/FaqView';
-import { fetchFaqs, groupFaqs, stripMarkdown } from '@/lib/faq';
+import { FaqBrowser } from '@/components/faq/FaqBrowser';
+import { fetchFaqs, stripMarkdown } from '@/lib/faq';
 import { absoluteUrl, SITE_URL } from '@/lib/site';
 
 export const metadata: Metadata = {
@@ -39,7 +40,6 @@ function buildFaqJsonLd(
 
 export default async function FaqPage() {
   const items = await fetchFaqs();
-  const groups = groupFaqs(items);
   const jsonLd = buildFaqJsonLd(items);
 
   return (
@@ -57,7 +57,10 @@ export default async function FaqPage() {
           상담으로 문의해 주세요.
         </Text>
       </Stack>
-      <FaqView groups={groups} />
+      {/* useSearchParams(URL 쿼리 동기화) 사용으로 Suspense 경계가 필요하다. */}
+      <Suspense>
+        <FaqBrowser items={items} />
+      </Suspense>
     </Stack>
   );
 }
