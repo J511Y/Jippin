@@ -56,6 +56,18 @@ export function absoluteUrl(path = '/'): string {
 }
 
 /**
+ * JSON-LD 를 ``<script type="application/ld+json">`` 에 인라인하기 위한 직렬화.
+ *
+ * ``JSON.stringify`` 는 ``<`` 를 이스케이프하지 않아 콘텐츠에 ``</script>`` 가
+ * 들어오면(관리자 편집·DB 직접 수정 경로) 스크립트가 조기 종료되어 뒤따르는
+ * 마크업이 실행될 수 있다. ``<`` 를 유니코드 이스케이프(backslash-u003c)로 치환해
+ * 차단한다(JSON 파싱 결과는 동일).
+ */
+export function safeJsonLd(data: unknown): string {
+  return JSON.stringify(data).replace(/</g, '\\u003c');
+}
+
+/**
  * 홈 화면에 주입하는 JSON-LD 그래프.
  * Organization + WebSite + Service(제공 서비스) + FAQPage 를 한 @graph 로 묶어
  * 검색 리치 결과와 LLM 의 사실 추출(GEO) 정확도를 동시에 높인다.

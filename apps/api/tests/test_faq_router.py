@@ -118,6 +118,9 @@ def test_get_faq_missing_or_unpublished_is_404(monkeypatch) -> None:
         response = client.get("/faqs/999")
 
     assert response.status_code == 404
+    # 전역 핸들러가 detail 을 error.message 봉투로 옮긴다 — 웹(`lib/faq.ts`)이 이
+    # 메시지로 부재 404 와 라우트-미스 404 를 구분하므로 계약을 고정한다.
+    assert response.json()["error"]["message"] == "FAQ not found"
 
 
 def test_get_faq_non_int_id_is_422() -> None:

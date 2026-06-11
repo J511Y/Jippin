@@ -101,8 +101,11 @@ export async function fetchFaqs(): Promise<FaqItem[]> {
     });
     if (!response.ok) return FAQ_FALLBACK;
     const body = (await response.json()) as { items?: unknown };
-    const items = Array.isArray(body.items) ? body.items : [];
-    const parsed = items
+    if (!Array.isArray(body.items)) return FAQ_FALLBACK;
+    // 정상 응답의 빈 목록은 의도된 상태(전체 비공개 등)로 존중한다 — 폴백은
+    // 네트워크 장애·계약 불일치(구버전 페이로드 등)에만 쓴다.
+    if (body.items.length === 0) return [];
+    const parsed = body.items
       .map(parseFaqItem)
       .filter((it): it is FaqItem => it !== null);
     return parsed.length > 0 ? parsed : FAQ_FALLBACK;
@@ -130,11 +133,15 @@ export async function fetchFaqById(faqId: number): Promise<FaqItem | null> {
     });
     if (response.status === 404) {
       // 백엔드 라우터(`apps/api/src/routers/faq.py`)의 부재 404 만 신뢰한다.
-      // FastAPI 의 라우트-미스 404 는 detail 이 "Not Found" 라 구분된다.
+      // 전역 핸들러(`apps/api/src/errors.py`)가 HTTPException 을
+      // `{ error: { message } }` 봉투로 감싸므로 그 메시지로 판별하고,
+      // 라우트 자체가 없는 구버전 API 의 404(message "Not Found")는 폴백으로 둔다.
       const body = (await response.json().catch(() => null)) as {
+        error?: { message?: unknown };
         detail?: unknown;
       } | null;
-      return body?.detail === 'FAQ not found' ? null : fallback;
+      const message = body?.error?.message ?? body?.detail;
+      return message === 'FAQ not found' ? null : fallback;
     }
     if (!response.ok) return fallback;
     return parseFaqItem(await response.json()) ?? fallback;

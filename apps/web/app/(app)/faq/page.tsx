@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 
 import { FaqBrowser } from '@/components/faq/FaqBrowser';
 import { fetchFaqs, stripMarkdown } from '@/lib/faq';
-import { absoluteUrl, SITE_URL } from '@/lib/site';
+import { absoluteUrl, safeJsonLd, SITE_URL } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: '자주묻는질문',
@@ -45,7 +45,7 @@ export default async function FaqPage() {
     <Stack gap="lg">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }}
       />
       <Stack gap={4}>
         <Title order={1} fz="1.75rem" style={{ wordBreak: 'keep-all' }}>

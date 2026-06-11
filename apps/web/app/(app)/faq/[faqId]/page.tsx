@@ -19,7 +19,7 @@ import {
   stripMarkdown,
   type FaqItem
 } from '@/lib/faq';
-import { absoluteUrl, SITE_URL } from '@/lib/site';
+import { absoluteUrl, safeJsonLd, SITE_URL } from '@/lib/site';
 
 type FaqDetailPageProps = {
   params: Promise<{ faqId: string }>;
@@ -119,7 +119,7 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
     <Stack gap="lg" component="article">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }}
       />
 
       {/* 빵부스러기(좌) + 뒤로가기(우) — 보조 내비게이션이라 중립 색으로 둔다. */}
