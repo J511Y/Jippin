@@ -44,11 +44,11 @@ class Settings(BaseSettings):
     # 평면도 첨부 Supabase Storage 버킷명 (migration 0009 와 정합).
     lead_floorplan_bucket: str = Field(default="lead-floorplans")
 
-    # CMP-609 Phase A skeleton 라우터 (sessions/floorplans/chat) 의 운영 노출 가드.
-    # `services.main_flow` 는 in-memory 저장소이므로 컨테이너 재시작/멀티 worker
-    # 환경에서 세션이 유실된다. CMP-608 Phase A migration + DB-backed repository
-    # 가 들어오기 전에는 본 플래그를 끄고 운영 API surface 에서 라우터를 빼야 한다.
-    # 테스트/로컬 dev 만 명시적으로 활성화한다.
+    # CMP-609 Phase A 라우터 (sessions/floorplans/chat) 의 운영 노출 가드.
+    # `services.main_flow` 는 DB-backed (CMP-608 상당) 로 전환되어 세션 유실
+    # 위험은 없지만, Phase A 기능 자체가 미공개 상태이므로 운영 default 는
+    # 계속 False 다. 테스트/로컬 dev 만 명시적으로 활성화하고, 출시 시점에
+    # 별도 이슈로 켠다.
     phase_a_skeleton_enabled: bool = Field(default=False)
 
     oauth_state_redis_url: str | None = Field(default=None)
