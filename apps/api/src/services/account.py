@@ -22,6 +22,14 @@ from .auth import (
     _required_term_ids,
 )
 
+# 만 14세 이상 자기확인(개인정보보호법) — 생년월일은 수집하지 않고 체크박스 attestation 만
+# terms_consents 에 timestamp 와 함께 남긴다(감사 추적). 라우터가 False/누락을 400 으로
+# 거부하므로 본 모듈에 도달한 가입은 항상 동의 상태다.
+AGE_OVER_14_TERM_ID = "age_over_14"
+# 광고성 정보(SMS 등) 수신 동의 — 선택(정보통신망법 §50). 기존 약관 화면의 term_id 관례
+# (`marketing`, tests/test_auth_secondary_endpoints.py)를 재사용한다.
+MARKETING_TERM_ID = "marketing"
+
 
 def _mask_email(email: str) -> str:
     local, _, domain = email.partition("@")
@@ -34,11 +42,22 @@ def _mask_email(email: str) -> str:
     return f"{masked_local}@{domain}"
 
 
-async def create_signup_profile(*, user_id: uuid.UUID, display_name: str) -> None:
-    """이메일 가입자의 public.users 프로필과 내부 약관 동의를 기록한다."""
+async def create_signup_profile(
+    *, user_id: uuid.UUID, display_name: str, marketing_agreed: bool = False
+) -> None:
+    """이메일 가입자의 public.users 프로필과 내부 약관 동의를 기록한다.
+
+    필수 약관(`service_terms`/`privacy_policy`)과 만 14세 이상 확인(`age_over_14`)은
+    항상 기록하고, 광고성 정보 수신(`marketing`)은 동의한 경우에만 기록한다 —
+    terms_consents 는 동의 사실(agreed_at)만 저장하므로 미동의는 row 를 남기지 않는다.
+    """
 
     settings = get_settings()
-    required_terms = _required_term_ids(settings)
+    consent_term_ids = list(
+        dict.fromkeys([*_required_term_ids(settings), AGE_OVER_14_TERM_ID])
+    )
+    if marketing_agreed:
+        consent_term_ids.append(MARKETING_TERM_ID)
     async with get_engine().begin() as conn:
         await conn.execute(
             pg_insert(User)
@@ -48,7 +67,7 @@ async def create_signup_profile(*, user_id: uuid.UUID, display_name: str) -> Non
                 set_={"display_name": display_name, "updated_at": sa.func.now()},
             )
         )
-        if required_terms:
+        if consent_term_ids:
             consent_rows = [
                 {
                     "user_id": user_id,
@@ -58,7 +77,7 @@ async def create_signup_profile(*, user_id: uuid.UUID, display_name: str) -> Non
                     "agreed_at": sa.func.now(),
                     "updated_at": sa.func.now(),
                 }
-                for term_id in required_terms
+                for term_id in consent_term_ids
             ]
             await conn.execute(
                 pg_insert(TermsConsent)

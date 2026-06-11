@@ -6,6 +6,7 @@ import {
   Anchor,
   Button,
   Checkbox,
+  Divider,
   PasswordInput,
   Stack,
   Text,
@@ -46,7 +47,9 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
       phoneToken: '',
       password: '',
       confirm: '',
-      agreed: false
+      agreed: false,
+      over14: false,
+      marketing: false
     }
   });
 
@@ -62,7 +65,9 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
         phone: values.phone,
         password: values.password,
         phone_token: values.phoneToken,
-        agreed_to_terms: values.agreed
+        agreed_to_terms: values.agreed,
+        age_over_14: values.over14,
+        marketing_consent: values.marketing
       });
 
       const res = await fetch('/auth/password-login', {
@@ -153,6 +158,28 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
             </Text>
           }
           {...register('agreed')}
+        />
+
+        <Checkbox
+          error={errors.over14?.message}
+          label={
+            <Text size="sm" style={{ wordBreak: 'keep-all' }}>
+              만 14세 이상입니다. (필수)
+            </Text>
+          }
+          {...register('over14')}
+        />
+
+        {/* 선택 동의 — 필수 동의와 시각적으로 분리(정보통신망법 §50 광고성 정보 수신). */}
+        <Divider />
+
+        <Checkbox
+          label={
+            <Text size="sm" style={{ wordBreak: 'keep-all' }}>
+              이벤트·혜택 등 광고성 정보(SMS 등) 수신에 동의합니다. (선택)
+            </Text>
+          }
+          {...register('marketing')}
         />
 
         {serverError ? (

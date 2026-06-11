@@ -137,6 +137,15 @@ async def verify_phone_code(payload: PhoneVerifyRequest) -> PhoneVerifyResponse:
 
 @router.post("/signup", response_model=SignupResponse, status_code=201)
 async def signup(payload: SignupRequest, request: Request) -> SignupResponse:
+    # 만 14세 이상 확인(개인정보보호법) — 누락/False 모두 거부. phone_token 을 소모하기
+    # 전에 검사해 거부된 요청이 인증 토큰을 태우지 않게 한다.
+    if not payload.age_over_14:
+        raise ZippinException(
+            "만 14세 이상만 가입할 수 있어요. 만 14세 이상 여부를 확인해 주세요.",
+            code="AGE_REQUIREMENT_NOT_MET",
+            http_status=400,
+        )
+
     store = get_phone_verification_store()
     token_phone = await store.consume_token(payload.phone_token)
     phone = assert_token_phone_match(token_phone, payload.phone)
@@ -159,7 +168,11 @@ async def signup(payload: SignupRequest, request: Request) -> SignupResponse:
             phone=payload.phone,
             display_name=payload.name,
         )
-        await create_signup_profile(user_id=created.user_id, display_name=payload.name)
+        await create_signup_profile(
+            user_id=created.user_id,
+            display_name=payload.name,
+            marketing_agreed=payload.marketing_consent,
+        )
         if anon_user_id is not None and anon_user_id != created.user_id:
             moved = await leads_service.reassign_leads_owner(
                 from_user_id=anon_user_id, to_user_id=created.user_id
