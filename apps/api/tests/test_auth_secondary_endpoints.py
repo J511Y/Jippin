@@ -549,7 +549,9 @@ class _FakeConnection:
         if statement_text.startswith("SELECT users.id"):
             return _FakeResult(self.user_id)
         if statement_text.startswith("SELECT terms_consents.term_id"):
-            return _FakeResult(values=["service_terms", "privacy_policy"])
+            return _FakeResult(
+                values=["service_terms", "privacy_policy", "age_over_14"]
+            )
         return _FakeResult()
 
 
@@ -564,7 +566,7 @@ async def test_accept_required_terms_upserts_rows_without_legacy_anonymous_claim
 
     result = await auth_service.accept_required_terms(
         user_id=user_id,
-        agreed_term_ids={"service_terms", "privacy_policy"},
+        agreed_term_ids={"service_terms", "privacy_policy", "age_over_14"},
         pending_anonymous_user_id=anonymous_user_id,
     )
 
@@ -578,6 +580,36 @@ async def test_accept_required_terms_upserts_rows_without_legacy_anonymous_claim
     assert "(user_id, term_id, version, source" in combined_sql
     assert "ON CONFLICT (user_id, term_id, version) DO UPDATE" in combined_sql
     assert "UPDATE anonymous_users" not in combined_sql
+
+
+@pytest.mark.asyncio
+async def test_accept_required_terms_rejects_payload_missing_age_over_14(
+    monkeypatch, auth_env
+):
+    """만 14세 확인은 법정 요건 — payload 에서 빠지면 422 + missing 목록에 노출.
+
+    회귀: age_over_14 가 env(KAKAO_SYNC_REQUIRED_TERM_TAGS) 기반 required 목록에서
+    빠져 OAuth 가입자가 만 14세 확인 없이 가입 완료되는 구멍 (PR #107 Codex P2).
+    """
+    user_id = uuid.uuid4()
+    conn = _FakeConnection(user_id, uuid.uuid4())
+    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
+
+    with pytest.raises(ZippinException) as exc_info:
+        await auth_service.accept_required_terms(
+            user_id=user_id,
+            agreed_term_ids={"service_terms", "privacy_policy"},
+            pending_anonymous_user_id=None,
+        )
+
+    assert exc_info.value.code == "TERMS_REQUIRED_MISSING"
+    assert exc_info.value.http_status == 422
+    assert "age_over_14" in exc_info.value.details["missing_required_terms"]
+    # 검증 전에 어떤 DB write 도 일어나지 않아야 한다.
+    assert all(
+        not statement.startswith("INSERT INTO terms_consents")
+        for statement in conn.statements
+    )
 
 
 def test_kakao_sync_audit_stub_accepts_payload_with_bearer_header(auth_env):

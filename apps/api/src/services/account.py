@@ -17,15 +17,16 @@ from ..config import get_settings
 from ..db import get_engine
 from ..models import TermsConsent, User
 from .auth import (
+    AGE_OVER_14_TERM_ID,
     INTERNAL_TERMS_SOURCE,
     INTERNAL_TERMS_VERSION,
     _required_term_ids,
 )
 
-# 만 14세 이상 자기확인(개인정보보호법) — 생년월일은 수집하지 않고 체크박스 attestation 만
-# terms_consents 에 timestamp 와 함께 남긴다(감사 추적). 라우터가 False/누락을 400 으로
-# 거부하므로 본 모듈에 도달한 가입은 항상 동의 상태다.
-AGE_OVER_14_TERM_ID = "age_over_14"
+# 만 14세 이상 자기확인(AGE_OVER_14_TERM_ID)은 services/auth.py 에 정의되어
+# _required_term_ids 가 코드 고정으로 항상 포함한다(법정 요건 — env 로 끌 수 없음).
+# 이메일 가입 라우터가 False/누락을 400 으로 거부하므로 본 모듈에 도달한 가입은 항상
+# 동의 상태다.
 # 광고성 정보(SMS 등) 수신 동의 — 선택(정보통신망법 §50). 기존 약관 화면의 term_id 관례
 # (`marketing`, tests/test_auth_secondary_endpoints.py)를 재사용한다.
 MARKETING_TERM_ID = "marketing"
