@@ -7,7 +7,8 @@ type ReportPageProps = {
 };
 
 export const metadata: Metadata = {
-  title: '사전검토 리포트'
+  title: '사전검토 리포트',
+  robots: { index: false, follow: false }
 };
 
 export default async function SessionReportPage({ params }: ReportPageProps) {
