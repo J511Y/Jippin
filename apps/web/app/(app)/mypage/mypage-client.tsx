@@ -3,21 +3,28 @@
 import {
   Alert,
   Badge,
+  Box,
   Button,
   Card,
-  Divider,
   Group,
   Loader,
   Modal,
   PasswordInput,
   Stack,
+  Tabs,
   Text,
   ThemeIcon,
   Title
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { IconInbox, IconLogout, IconUser } from '@tabler/icons-react';
+import {
+  IconClipboardList,
+  IconInbox,
+  IconLogout,
+  IconUser
+} from '@tabler/icons-react';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
@@ -34,8 +41,18 @@ import { createClient } from '@/lib/supabase/client';
 /**
  * 마이페이지 (CMP-DIRECT).
  *
- * 프로필 · 상담 현황(기존 /contacts 에서 이동) · 비밀번호 변경 · 로그아웃/회원 탈퇴.
+ * '내 정보'(프로필 · 비밀번호 변경 · 회원 탈퇴)와 '상담 현황'(기존 /contacts 에서
+ * 이동) 두 탭으로 구성한다. 활성 탭은 URL 쿼리(`?tab=`)와 동기화해 딥링크를
+ * 지원한다.
  */
+
+type MyPageTab = 'profile' | 'consultations';
+
+const DEFAULT_TAB: MyPageTab = 'profile';
+
+function isMyPageTab(value: string | null): value is MyPageTab {
+  return value === 'profile' || value === 'consultations';
+}
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   new: { label: '접수됨', color: 'jippin' },
@@ -56,10 +73,14 @@ function leadTitle(lead: MyLead): string {
 }
 
 export function MyPageClient() {
+  const router = useRouter();
+  const pathname = usePathname();
+
   const [email, setEmail] = useState<string | null>(null);
   const [name, setName] = useState<string | null>(null);
   const [isEmailUser, setIsEmailUser] = useState(false);
   const [authReady, setAuthReady] = useState(false);
+  const [tab, setTab] = useState<MyPageTab>(DEFAULT_TAB);
 
   useEffect(() => {
     const supabase = createClient();
@@ -77,8 +98,26 @@ export function MyPageClient() {
     });
   }, []);
 
+  // 공유된 URL(`/mypage?tab=`)의 탭 상태는 마운트 후 한 번만 반영한다.
+  // FaqBrowser 와 같은 패턴 — useSearchParams 의 Suspense 요구를 피하면서
+  // SSR 은 기본 탭으로 렌더한다(외부 시스템 = URL 의 의도된 1회 동기화).
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    const raw = new URLSearchParams(window.location.search).get('tab');
+    if (isMyPageTab(raw)) setTab(raw);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  const handleTab = (value: string | null) => {
+    const next = isMyPageTab(value) ? value : DEFAULT_TAB;
+    setTab(next);
+    router.replace(next === DEFAULT_TAB ? pathname : `${pathname}?tab=${next}`, {
+      scroll: false
+    });
+  };
+
   return (
-    <Stack gap="xl">
+    <Stack gap="lg">
       <Group justify="space-between" align="flex-end" wrap="nowrap">
         <Title order={1} fz="h1">
           마이페이지
@@ -93,10 +132,28 @@ export function MyPageClient() {
         </Button>
       </Group>
 
-      <ProfileCard email={email} name={name} ready={authReady} />
-      <ConsultationsSection />
-      {isEmailUser ? <PasswordChangeCard /> : null}
-      <DeleteAccountCard />
+      <Tabs value={tab} onChange={handleTab} color="jippin" keepMounted>
+        <Tabs.List>
+          <Tabs.Tab value="profile" leftSection={<IconUser size={16} />}>
+            내 정보
+          </Tabs.Tab>
+          <Tabs.Tab value="consultations" leftSection={<IconClipboardList size={16} />}>
+            상담 현황
+          </Tabs.Tab>
+        </Tabs.List>
+
+        <Tabs.Panel value="profile" pt="lg">
+          <Stack gap="xl">
+            <ProfileCard email={email} name={name} ready={authReady} />
+            {isEmailUser ? <PasswordChangeCard /> : null}
+            <DeleteAccountCard />
+          </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="consultations" pt="lg">
+          <ConsultationsSection />
+        </Tabs.Panel>
+      </Tabs>
     </Stack>
   );
 }
@@ -252,25 +309,30 @@ function PasswordChangeCard() {
           <Title order={2} fz="h3">
             비밀번호 변경
           </Title>
-          <PasswordInput
-            label="현재 비밀번호"
-            autoComplete="current-password"
-            error={errors.current?.message}
-            {...register('current')}
-          />
-          <PasswordInput
-            label="새 비밀번호"
-            description="6자 이상, 영문과 숫자 포함"
-            autoComplete="new-password"
-            error={errors.password?.message}
-            {...register('password')}
-          />
-          <PasswordInput
-            label="새 비밀번호 확인"
-            autoComplete="new-password"
-            error={errors.confirm?.message}
-            {...register('confirm')}
-          />
+          {/* lg 컨테이너에서도 입력 줄 길이는 읽기 좋게 480px 로 제한한다. */}
+          <Box maw={480}>
+            <Stack gap="sm">
+              <PasswordInput
+                label="현재 비밀번호"
+                autoComplete="current-password"
+                error={errors.current?.message}
+                {...register('current')}
+              />
+              <PasswordInput
+                label="새 비밀번호"
+                description="6자 이상, 영문과 숫자 포함"
+                autoComplete="new-password"
+                error={errors.password?.message}
+                {...register('password')}
+              />
+              <PasswordInput
+                label="새 비밀번호 확인"
+                autoComplete="new-password"
+                error={errors.confirm?.message}
+                {...register('confirm')}
+              />
+            </Stack>
+          </Box>
           {serverError ? (
             <Alert color="red" variant="light" py="xs">
               {serverError}
@@ -310,7 +372,6 @@ function DeleteAccountCard() {
   return (
     <Card withBorder radius="lg" padding="lg">
       <Stack gap="sm">
-        <Divider />
         <Title order={2} fz="h3" c="red">
           회원 탈퇴
         </Title>

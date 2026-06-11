@@ -38,6 +38,17 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/faq', label: '자주묻는질문', match: (p) => p.startsWith('/faq') }
 ];
 
+// 목록·상세 중심 페이지(검토/자주묻는질문/마이페이지)는 PC 에서 lg 로 넓게,
+// 입력 폼(로그인·상담 신청·새 검토)과 약관류는 가독성을 위해 sm 을 유지한다.
+const WIDE_ROUTE_PREFIXES = ['/sessions', '/faq', '/mypage'];
+
+function mainContainerSize(pathname: string): 'sm' | 'lg' {
+  if (pathname.startsWith('/sessions/new')) return 'sm';
+  return WIDE_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+    ? 'lg'
+    : 'sm';
+}
+
 /**
  * 헤더 인증 상태 — 영구(비익명) Supabase 세션이 있으면 '마이페이지', 아니면 '로그인'.
  */
@@ -224,7 +235,7 @@ export function SiteShell({ children }: { children: ReactNode }) {
           // 랜딩(홈·가격)은 풀블리드 섹션을 직접 제어한다.
           children
         ) : (
-          <Container size="sm" py="xl">
+          <Container size={mainContainerSize(pathname)} py="xl">
             {children}
           </Container>
         )}
