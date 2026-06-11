@@ -1,9 +1,16 @@
-"""Phase A skeleton tests for /sessions (CMP-609).
+"""Phase A DB-backed tests for /sessions (CMP-609 → DB 영속화).
+
+TEST_MODE 에서는 실 DB 미접속이므로 ``services.main_flow`` 의 ``_db_*`` seam
+을 stateful fake (``_main_flow_db_fake``) 로 대체한다 — ``test_leads_router``
+가 ``_insert_lead`` 를 monkeypatch 하는 패턴의 확장. 라우터/검증/ownership
+경로는 실 코드 그대로 실행된다.
 
 Coverage:
 
-- 익명 + 비익명 Supabase 토큰 모두 ``POST /sessions`` 가 허용된다.
-- ``GET /sessions/{id}`` 은 owner subject 만 본인 row 를 본다 (다른 owner = 404).
+- 익명 + 비익명 Supabase 토큰 모두 ``POST /sessions`` 가 허용되고 row 가
+  fake 저장소 (실 DB 대응) 에 기록된다.
+- ``GET /sessions/{id}`` / ``PUT /sessions/{id}/address`` 는 owner subject 만
+  본인 row 를 본다 (다른 owner = 404).
 - ``PUT /sessions/{id}/address`` 가 ``session_addresses`` row 를 upsert 하고
   세션 status 를 ``address_ready`` 로 전이한다.
 - legacy ``x-jippin-anon-id`` 헤더는 무시된다 (auth 는 Supabase 토큰 SSOT).
@@ -18,18 +25,17 @@ from fastapi.testclient import TestClient
 
 from src.config import get_settings
 from src.main import create_app
-from src.services import main_flow
 
+from . import _main_flow_db_fake as db_fake
 from . import _supabase_helpers as helpers
 
 
 @pytest.fixture(autouse=True)
-def _clear_state(monkeypatch):
+def fake_db(monkeypatch):
     helpers.set_supabase_env(monkeypatch)
     get_settings.cache_clear()
-    main_flow._reset_for_tests()
-    yield
-    main_flow._reset_for_tests()
+    fake = db_fake.install_main_flow_fake(monkeypatch)
+    yield fake
     get_settings.cache_clear()
 
 
@@ -39,7 +45,7 @@ def _client(monkeypatch) -> tuple[TestClient, str, str, dict]:
     return TestClient(create_app()), pem, jwk["kid"], jwk
 
 
-def test_create_session_allows_non_anonymous_user(monkeypatch):
+def test_create_session_allows_non_anonymous_user(monkeypatch, fake_db):
     client, pem, kid, _ = _client(monkeypatch)
     token, subject = helpers.mint_token(pem, kid, is_anonymous=False)
     with client:
@@ -57,6 +63,12 @@ def test_create_session_allows_non_anonymous_user(monkeypatch):
     assert body["expires_at"] is None
     assert "is_anonymous_owner" not in body
     assert body["status"] == "draft"
+    # DB-backed 경로 회귀: row 가 in-memory dict 가 아니라 DB seam (fake) 을
+    # 통해 영속화됐는지 확인한다.
+    stored = list(fake_db.sessions.values())
+    assert len(stored) == 1
+    assert str(stored[0]["id"]) == body["id"]
+    assert stored[0]["user_id"] == subject
 
 
 def test_create_session_allows_anonymous_supabase_token(monkeypatch):
@@ -144,6 +156,36 @@ def test_get_session_owner_only(monkeypatch):
         )
         assert forbidden.status_code == 404
         assert forbidden.json()["error"]["code"] == "SESSION_NOT_FOUND"
+
+
+def test_put_session_address_blocks_non_owner(monkeypatch, fake_db):
+    """ownership 회귀: user B 는 user A 세션의 주소를 만들거나 바꿀 수 없다.
+
+    부재 세션과 동일한 404 (SESSION_NOT_FOUND) 로 응답해 세션 id 열거를
+    막는다 — /leads 와 같은 error envelope 규약.
+    """
+
+    client, pem, kid, _ = _client(monkeypatch)
+    owner_token, _ = helpers.mint_token(pem, kid)
+    intruder_token, _ = helpers.mint_token(pem, kid)
+    with client:
+        created = client.post(
+            "/sessions",
+            headers={"Authorization": f"Bearer {owner_token}"},
+            json={},
+        ).json()
+        session_id = created["id"]
+
+        forbidden = client.put(
+            f"/sessions/{session_id}/address",
+            headers={"Authorization": f"Bearer {intruder_token}"},
+            json={"road_address": "서울 강남구 테헤란로 1"},
+        )
+    assert forbidden.status_code == 404
+    assert forbidden.json()["error"]["code"] == "SESSION_NOT_FOUND"
+    # 거절된 시도는 어떤 address row 도 남기지 않는다.
+    assert fake_db.session_addresses == {}
+    assert fake_db.sessions[next(iter(fake_db.sessions))]["address_id"] is None
 
 
 def test_put_session_address_transitions_to_address_ready(monkeypatch):
