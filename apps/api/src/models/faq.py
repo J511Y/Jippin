@@ -45,13 +45,14 @@ class Faq(TimestampMixin, Base):
     __tablename__ = "faqs"
     # 제약 ``name`` 은 테이블 접두사를 포함하지 않는다 — naming convention
     # ``ck_%(table_name)s_%(constraint_name)s`` 가 ``ck_faqs_<name>`` 으로 만든다.
-    # ``<@`` 는 빈 배열에 true 이므로 길이 검사를 병행한다(마이그레이션과 동일).
+    # ``<@`` 는 빈 배열에 true 이고 ``array_length('{}',1)`` 은 NULL(UNKNOWN → 통과)이라
+    # cardinality 로 빈 배열을 차단한다(마이그레이션과 동일).
     __table_args__ = (
         sa.CheckConstraint(
             "categories <@ array["
             "'cost', 'prereview', 'glossary', 'act_permit', "
             "'resident_consent', 'fireproofing', 'use_inspection'"
-            "]::text[] and array_length(categories, 1) >= 1",
+            "]::text[] and cardinality(categories) >= 1",
             name="categories_allowed",
         ),
     )

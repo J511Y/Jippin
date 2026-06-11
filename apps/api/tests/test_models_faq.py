@@ -40,5 +40,6 @@ def test_faq_categories_check_constraint_matches_allowed_slugs() -> None:
     sqltext = check_constraints["ck_faqs_categories_allowed"]
     for slug in FAQ_CATEGORIES:
         assert f"'{slug}'" in sqltext
-    # 빈 배열 차단(<@ 는 빈 배열에 true 라 길이 검사를 병행한다).
-    assert "array_length(categories, 1) >= 1" in sqltext
+    # 빈 배열 차단 — array_length('{}',1) 은 NULL(UNKNOWN → check 통과)이라
+    # cardinality 를 쓴다.
+    assert "cardinality(categories) >= 1" in sqltext

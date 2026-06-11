@@ -26,5 +26,7 @@ async def list_faqs() -> FaqListResponse:
 async def get_faq(faq_id: int) -> FaqItem:
     row = await faq_service.get_published_faq(faq_id)
     if row is None:
+        # detail 문자열은 웹(`apps/web/lib/faq.ts`)이 "부재 404" 와 "라우트가 없는
+        # 구버전 API 404(detail: Not Found)" 를 구분하는 데 쓴다 — 변경 시 동기화.
         raise HTTPException(status_code=404, detail="FAQ not found")
     return FaqItem.model_validate(row)

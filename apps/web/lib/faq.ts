@@ -114,9 +114,11 @@ export async function fetchFaqs(): Promise<FaqItem[]> {
 /**
  * 백엔드 ``GET /faqs/{faqId}`` 에서 FAQ 한 건을 가져온다(상세 페이지 전용).
  *
- * - 404(부재·비공개)는 ``null`` 을 반환해 페이지가 ``notFound()`` 처리한다.
- * - 네트워크 장애 등 그 밖의 실패는 폴백 목록에서 같은 id 를 찾아 반환한다
- *   (시드와 id 가 일치하므로 콘텐츠가 비지 않는다).
+ * - 부재·비공개 404(백엔드가 ``detail: "FAQ not found"`` 로 응답)는 ``null`` 을
+ *   반환해 페이지가 ``notFound()`` 처리한다.
+ * - 상세 라우트가 아직 없는 구버전 API(스태거드 배포)의 404 나 네트워크 장애 등
+ *   그 밖의 실패는 폴백 목록에서 같은 id 를 찾아 반환한다(시드와 id 가 일치하므로
+ *   목록 폴백에서 이어지는 상세 링크가 깨지지 않는다).
  */
 export async function fetchFaqById(faqId: number): Promise<FaqItem | null> {
   const { FAQ_FALLBACK } = await import('@/lib/faq-fallback');
@@ -126,7 +128,14 @@ export async function fetchFaqById(faqId: number): Promise<FaqItem | null> {
       headers: { Accept: 'application/json' },
       next: { revalidate: 300 }
     });
-    if (response.status === 404) return null;
+    if (response.status === 404) {
+      // 백엔드 라우터(`apps/api/src/routers/faq.py`)의 부재 404 만 신뢰한다.
+      // FastAPI 의 라우트-미스 404 는 detail 이 "Not Found" 라 구분된다.
+      const body = (await response.json().catch(() => null)) as {
+        detail?: unknown;
+      } | null;
+      return body?.detail === 'FAQ not found' ? null : fallback;
+    }
     if (!response.ok) return fallback;
     return parseFaqItem(await response.json()) ?? fallback;
   } catch {

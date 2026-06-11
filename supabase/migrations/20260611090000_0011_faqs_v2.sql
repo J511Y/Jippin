@@ -27,13 +27,14 @@ create table public.faqs (
   created_at timestamp with time zone not null default now(),
   updated_at timestamp with time zone not null default now(),
   constraint pk_faqs primary key (id),
-  -- 허용 슬러그 외 값과 빈 배열을 차단한다(``<@`` 는 빈 배열에 true 이므로 길이 검사 병행).
+  -- 허용 슬러그 외 값과 빈 배열을 차단한다. ``<@`` 는 빈 배열에 true 이고,
+  -- ``array_length('{}'::text[], 1)`` 은 NULL(UNKNOWN → check 통과)이라 cardinality 를 쓴다.
   constraint ck_faqs_categories_allowed check (
     categories <@ array[
       'cost', 'prereview', 'glossary', 'act_permit',
       'resident_consent', 'fireproofing', 'use_inspection'
     ]::text[]
-    and array_length(categories, 1) >= 1
+    and cardinality(categories) >= 1
   )
 );
 
