@@ -1,0 +1,1199 @@
+{
+  "allow_first_floor_exception": {
+    "internal": {
+      "additional_checks": [],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법시행령",
+          "rule_id": "R-WALL-02",
+          "section": "제35조 별표 3 (비내력벽 철거)",
+          "source": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-01",
+          "section": "제6조 (화재감지기 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-06",
+          "section": "제5조·제6조 (1층 세대 예외)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "1층 세대는 아래층 화재 확산·대피 경로 제약이 없어 화재감지기만 설치 대상이 됩니다 (방화판·방화문 제외)."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "가능성 있음",
+      "reasons": [
+        "철거 대상 벽이 비내력벽으로 확인되어, 행위허가 절차를 전제로 검토를 진행할 수 있습니다.",
+        "1층 세대 예외가 적용되어 방화판·방화문 설치 의무가 제외될 가능성이 있습니다."
+      ],
+      "required_facilities": [
+        {
+          "facility": "fire_detector",
+          "label": "화재감지기",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-01",
+            "section": "제6조 (화재감지기 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+          },
+          "location": "확장되는 발코니 부분",
+          "note": null,
+          "quantity_unit": "개소"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 별표 3 (비내력벽 철거)",
+          "statute": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법시행령"
+        },
+        {
+          "article": "제6조 (화재감지기 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제5조·제6조 (1층 세대 예외)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "1층 세대는 아래층 화재 확산·대피 경로 제약이 없어 화재감지기만 설치 대상이 됩니다 (방화판·방화문 제외).",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [
+        {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    }
+  },
+  "allow_first_floor_sprinkler": {
+    "internal": {
+      "additional_checks": [],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법시행령",
+          "rule_id": "R-WALL-02",
+          "section": "제35조 별표 3 (비내력벽 철거)",
+          "source": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-03",
+          "section": "제5조 제1항·제6조 (스프링클러 살수범위 예외)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "발코니가 스프링클러 살수범위에 포함되는 경우 방화판·방화유리창과 화재감지기 설치 의무가 제외됩니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-06",
+          "section": "제5조·제6조 (1층 세대 예외)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "1층 세대는 아래층 화재 확산·대피 경로 제약이 없어 화재감지기만 설치 대상이 됩니다 (방화판·방화문 제외)."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "가능성 있음",
+      "reasons": [
+        "철거 대상 벽이 비내력벽으로 확인되어, 행위허가 절차를 전제로 검토를 진행할 수 있습니다.",
+        "발코니가 스프링클러 살수범위에 포함되어 방화판·방화유리창과 화재감지기 설치 의무가 제외될 가능성이 있습니다.",
+        "1층 세대 예외가 적용되어 방화판·방화문 설치 의무가 제외될 가능성이 있습니다."
+      ],
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 별표 3 (비내력벽 철거)",
+          "statute": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법시행령"
+        },
+        {
+          "article": "제5조 제1항·제6조 (스프링클러 살수범위 예외)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "발코니가 스프링클러 살수범위에 포함되는 경우 방화판·방화유리창과 화재감지기 설치 의무가 제외됩니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제5조·제6조 (1층 세대 예외)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "1층 세대는 아래층 화재 확산·대피 경로 제약이 없어 화재감지기만 설치 대상이 됩니다 (방화판·방화문 제외).",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    }
+  },
+  "allow_high_floor_fixed_window": {
+    "internal": {
+      "additional_checks": [],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법시행령",
+          "rule_id": "R-WALL-02",
+          "section": "제35조 별표 3 (비내력벽 철거)",
+          "source": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-01",
+          "section": "제6조 (화재감지기 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-02",
+          "section": "제5조 (방화판 또는 방화유리창의 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/건축법시행령",
+          "rule_id": "R-FIRE-04",
+          "section": "제46조 제4항 (대피공간 출입구 방화문)",
+          "source": "건축법 시행령",
+          "summary": "대피공간을 두는 경우 그 출입구에는 방화문을 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/건축법시행령",
+          "rule_id": "R-EVAC-01",
+          "section": "제46조 제4항 (아파트 4층 이상 대피공간)",
+          "source": "건축법 시행령",
+          "summary": "4층 이상 세대의 발코니를 확장하는 경우 대피공간 또는 경량칸막이 등 대체 대피 경로를 확보해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "가능성 있음",
+      "reasons": [
+        "철거 대상 벽이 비내력벽으로 확인되어, 행위허가 절차를 전제로 검토를 진행할 수 있습니다.",
+        "대피공간(또는 경량칸막이)이 확인되어 대피 경로 요건을 충족할 가능성이 있습니다."
+      ],
+      "required_facilities": [
+        {
+          "facility": "fire_detector",
+          "label": "화재감지기",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-01",
+            "section": "제6조 (화재감지기 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+          },
+          "location": "확장되는 발코니 부분",
+          "note": null,
+          "quantity_unit": "개소"
+        },
+        {
+          "facility": "fire_glass",
+          "label": "방화유리창",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-02",
+            "section": "제5조 (방화판 또는 방화유리창의 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+          },
+          "location": "아래층 세대와 접하는 발코니 외부 창호 부위",
+          "note": "고정형(입면분할) 창호 기준 산출",
+          "quantity_unit": "m (창호 가로 길이)"
+        },
+        {
+          "facility": "fire_door",
+          "label": "방화문(대피공간 출입구)",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/법령/건축법시행령",
+            "rule_id": "R-FIRE-04",
+            "section": "제46조 제4항 (대피공간 출입구 방화문)",
+            "source": "건축법 시행령",
+            "summary": "대피공간을 두는 경우 그 출입구에는 방화문을 설치해야 합니다."
+          },
+          "location": "대피공간 출입구",
+          "note": null,
+          "quantity_unit": "개소"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 별표 3 (비내력벽 철거)",
+          "statute": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법시행령"
+        },
+        {
+          "article": "제6조 (화재감지기 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제5조 (방화판 또는 방화유리창의 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제46조 제4항 (대피공간 출입구 방화문)",
+          "statute": "건축법 시행령",
+          "summary": "대피공간을 두는 경우 그 출입구에는 방화문을 설치해야 합니다.",
+          "url": "https://www.law.go.kr/법령/건축법시행령"
+        },
+        {
+          "article": "제46조 제4항 (아파트 4층 이상 대피공간)",
+          "statute": "건축법 시행령",
+          "summary": "4층 이상 세대의 발코니를 확장하는 경우 대피공간 또는 경량칸막이 등 대체 대피 경로를 확보해야 합니다.",
+          "url": "https://www.law.go.kr/법령/건축법시행령"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [
+        {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        },
+        {
+          "code": "FIRE_GLASS",
+          "label": "방화유리창",
+          "measurement_basis": "아래층 세대와 접하는 발코니 외부 창호 부위 — m (창호 가로 길이)"
+        },
+        {
+          "code": "AUTOMATIC_DOOR_CLOSER",
+          "label": "방화문(대피공간 출입구)",
+          "measurement_basis": "대피공간 출입구 — 개소"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    }
+  },
+  "allow_mid_floor_full_facilities": {
+    "internal": {
+      "additional_checks": [],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법시행령",
+          "rule_id": "R-WALL-02",
+          "section": "제35조 별표 3 (비내력벽 철거)",
+          "source": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-01",
+          "section": "제6조 (화재감지기 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-02",
+          "section": "제5조 (방화판 또는 방화유리창의 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/건축법시행령",
+          "rule_id": "R-FIRE-04",
+          "section": "제46조 제4항 (대피공간 출입구 방화문)",
+          "source": "건축법 시행령",
+          "summary": "대피공간을 두는 경우 그 출입구에는 방화문을 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "가능성 있음",
+      "reasons": [
+        "철거 대상 벽이 비내력벽으로 확인되어, 행위허가 절차를 전제로 검토를 진행할 수 있습니다."
+      ],
+      "required_facilities": [
+        {
+          "facility": "fire_detector",
+          "label": "화재감지기",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-01",
+            "section": "제6조 (화재감지기 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+          },
+          "location": "확장되는 발코니 부분",
+          "note": null,
+          "quantity_unit": "개소"
+        },
+        {
+          "facility": "fire_panel",
+          "label": "방화판",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-02",
+            "section": "제5조 (방화판 또는 방화유리창의 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+          },
+          "location": "아래층 세대와 접하는 발코니 창호 하부 외벽",
+          "note": "비고정형(여닫이·접이·미닫이 등) 창호 기준 산출",
+          "quantity_unit": "m (가로 길이)"
+        },
+        {
+          "facility": "fire_door",
+          "label": "방화문(대피공간 출입구)",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/법령/건축법시행령",
+            "rule_id": "R-FIRE-04",
+            "section": "제46조 제4항 (대피공간 출입구 방화문)",
+            "source": "건축법 시행령",
+            "summary": "대피공간을 두는 경우 그 출입구에는 방화문을 설치해야 합니다."
+          },
+          "location": "대피공간 출입구",
+          "note": null,
+          "quantity_unit": "개소"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 별표 3 (비내력벽 철거)",
+          "statute": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법시행령"
+        },
+        {
+          "article": "제6조 (화재감지기 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제5조 (방화판 또는 방화유리창의 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제46조 제4항 (대피공간 출입구 방화문)",
+          "statute": "건축법 시행령",
+          "summary": "대피공간을 두는 경우 그 출입구에는 방화문을 설치해야 합니다.",
+          "url": "https://www.law.go.kr/법령/건축법시행령"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [
+        {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        },
+        {
+          "code": "FIRE_PANEL",
+          "label": "방화판",
+          "measurement_basis": "아래층 세대와 접하는 발코니 창호 하부 외벽 — m (가로 길이)"
+        },
+        {
+          "code": "AUTOMATIC_DOOR_CLOSER",
+          "label": "방화문(대피공간 출입구)",
+          "measurement_basis": "대피공간 출입구 — 개소"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    }
+  },
+  "allow_sprinkler_exception": {
+    "internal": {
+      "additional_checks": [],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법시행령",
+          "rule_id": "R-WALL-02",
+          "section": "제35조 별표 3 (비내력벽 철거)",
+          "source": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-03",
+          "section": "제5조 제1항·제6조 (스프링클러 살수범위 예외)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "발코니가 스프링클러 살수범위에 포함되는 경우 방화판·방화유리창과 화재감지기 설치 의무가 제외됩니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/건축법시행령",
+          "rule_id": "R-FIRE-04",
+          "section": "제46조 제4항 (대피공간 출입구 방화문)",
+          "source": "건축법 시행령",
+          "summary": "대피공간을 두는 경우 그 출입구에는 방화문을 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/건축법시행령",
+          "rule_id": "R-EVAC-01",
+          "section": "제46조 제4항 (아파트 4층 이상 대피공간)",
+          "source": "건축법 시행령",
+          "summary": "4층 이상 세대의 발코니를 확장하는 경우 대피공간 또는 경량칸막이 등 대체 대피 경로를 확보해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "가능성 있음",
+      "reasons": [
+        "철거 대상 벽이 비내력벽으로 확인되어, 행위허가 절차를 전제로 검토를 진행할 수 있습니다.",
+        "대피공간(또는 경량칸막이)이 확인되어 대피 경로 요건을 충족할 가능성이 있습니다.",
+        "발코니가 스프링클러 살수범위에 포함되어 방화판·방화유리창과 화재감지기 설치 의무가 제외될 가능성이 있습니다."
+      ],
+      "required_facilities": [
+        {
+          "facility": "fire_door",
+          "label": "방화문(대피공간 출입구)",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/법령/건축법시행령",
+            "rule_id": "R-FIRE-04",
+            "section": "제46조 제4항 (대피공간 출입구 방화문)",
+            "source": "건축법 시행령",
+            "summary": "대피공간을 두는 경우 그 출입구에는 방화문을 설치해야 합니다."
+          },
+          "location": "대피공간 출입구",
+          "note": null,
+          "quantity_unit": "개소"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 별표 3 (비내력벽 철거)",
+          "statute": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법시행령"
+        },
+        {
+          "article": "제5조 제1항·제6조 (스프링클러 살수범위 예외)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "발코니가 스프링클러 살수범위에 포함되는 경우 방화판·방화유리창과 화재감지기 설치 의무가 제외됩니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제46조 제4항 (대피공간 출입구 방화문)",
+          "statute": "건축법 시행령",
+          "summary": "대피공간을 두는 경우 그 출입구에는 방화문을 설치해야 합니다.",
+          "url": "https://www.law.go.kr/법령/건축법시행령"
+        },
+        {
+          "article": "제46조 제4항 (아파트 4층 이상 대피공간)",
+          "statute": "건축법 시행령",
+          "summary": "4층 이상 세대의 발코니를 확장하는 경우 대피공간 또는 경량칸막이 등 대체 대피 경로를 확보해야 합니다.",
+          "url": "https://www.law.go.kr/법령/건축법시행령"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [
+        {
+          "code": "AUTOMATIC_DOOR_CLOSER",
+          "label": "방화문(대피공간 출입구)",
+          "measurement_basis": "대피공간 출입구 — 개소"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    }
+  },
+  "allow_staircase_exception": {
+    "internal": {
+      "additional_checks": [],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법시행령",
+          "rule_id": "R-WALL-02",
+          "section": "제35조 별표 3 (비내력벽 철거)",
+          "source": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-01",
+          "section": "제6조 (화재감지기 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-02",
+          "section": "제5조 (방화판 또는 방화유리창의 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/건축법시행령",
+          "rule_id": "R-FIRE-05",
+          "section": "제46조 제4항 단서 (직통계단 2개소 이상 예외)",
+          "source": "건축법 시행령",
+          "summary": "각 세대에서 이용 가능한 직통계단(계단실)이 2개소 이상이면 방화문 설치 의무가 제외됩니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/건축법시행령",
+          "rule_id": "R-EVAC-01",
+          "section": "제46조 제4항 (아파트 4층 이상 대피공간)",
+          "source": "건축법 시행령",
+          "summary": "4층 이상 세대의 발코니를 확장하는 경우 대피공간 또는 경량칸막이 등 대체 대피 경로를 확보해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "가능성 있음",
+      "reasons": [
+        "철거 대상 벽이 비내력벽으로 확인되어, 행위허가 절차를 전제로 검토를 진행할 수 있습니다.",
+        "대피공간(또는 경량칸막이)이 확인되어 대피 경로 요건을 충족할 가능성이 있습니다.",
+        "계단실이 2개소 이상으로 확인되어 방화문 설치 의무가 제외될 가능성이 있습니다."
+      ],
+      "required_facilities": [
+        {
+          "facility": "fire_detector",
+          "label": "화재감지기",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-01",
+            "section": "제6조 (화재감지기 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+          },
+          "location": "확장되는 발코니 부분",
+          "note": null,
+          "quantity_unit": "개소"
+        },
+        {
+          "facility": "fire_panel",
+          "label": "방화판",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-02",
+            "section": "제5조 (방화판 또는 방화유리창의 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+          },
+          "location": "아래층 세대와 접하는 발코니 창호 하부 외벽",
+          "note": "비고정형(여닫이·접이·미닫이 등) 창호 기준 산출",
+          "quantity_unit": "m (가로 길이)"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 별표 3 (비내력벽 철거)",
+          "statute": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법시행령"
+        },
+        {
+          "article": "제6조 (화재감지기 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제5조 (방화판 또는 방화유리창의 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제46조 제4항 단서 (직통계단 2개소 이상 예외)",
+          "statute": "건축법 시행령",
+          "summary": "각 세대에서 이용 가능한 직통계단(계단실)이 2개소 이상이면 방화문 설치 의무가 제외됩니다.",
+          "url": "https://www.law.go.kr/법령/건축법시행령"
+        },
+        {
+          "article": "제46조 제4항 (아파트 4층 이상 대피공간)",
+          "statute": "건축법 시행령",
+          "summary": "4층 이상 세대의 발코니를 확장하는 경우 대피공간 또는 경량칸막이 등 대체 대피 경로를 확보해야 합니다.",
+          "url": "https://www.law.go.kr/법령/건축법시행령"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [
+        {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        },
+        {
+          "code": "FIRE_PANEL",
+          "label": "방화판",
+          "measurement_basis": "아래층 세대와 접하는 발코니 창호 하부 외벽 — m (가로 길이)"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    }
+  },
+  "deny_load_bearing_full_input": {
+    "internal": {
+      "additional_checks": [
+        "구조 도면과 함께 관할 행정기관·구조 전문가 상담을 진행해 주세요."
+      ],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-WALL-01",
+          "section": "제35조 및 동법 시행령 제35조 별표 3",
+          "source": "공동주택관리법",
+          "summary": "내력벽의 철거·변경은 행위허가 대상이며 구조 안전 확인 없이는 허용되지 않습니다. 사전검토 단계에서는 진행이 어렵다고 안내합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "어려움",
+      "reasons": [
+        "철거를 검토하신 벽이 내력벽으로 확인되었습니다. 내력벽의 철거·변경은 구조 안전과 직결되어 사전검토 단계에서는 진행이 어렵습니다."
+      ],
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "제출하신 정보로는 어렵습니다. 사유는 다음과 같습니다.",
+      "verdict": "DENY"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 및 동법 시행령 제35조 별표 3",
+          "statute": "공동주택관리법",
+          "summary": "내력벽의 철거·변경은 행위허가 대상이며 구조 안전 확인 없이는 허용되지 않습니다. 사전검토 단계에서는 진행이 어렵다고 안내합니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "제출하신 정보로는 어렵습니다. 사유는 다음과 같습니다.",
+      "verdict": "DENY"
+    }
+  },
+  "deny_load_bearing_only_wall_known": {
+    "internal": {
+      "additional_checks": [
+        "구조 도면과 함께 관할 행정기관·구조 전문가 상담을 진행해 주세요."
+      ],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-WALL-01",
+          "section": "제35조 및 동법 시행령 제35조 별표 3",
+          "source": "공동주택관리법",
+          "summary": "내력벽의 철거·변경은 행위허가 대상이며 구조 안전 확인 없이는 허용되지 않습니다. 사전검토 단계에서는 진행이 어렵다고 안내합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "어려움",
+      "reasons": [
+        "철거를 검토하신 벽이 내력벽으로 확인되었습니다. 내력벽의 철거·변경은 구조 안전과 직결되어 사전검토 단계에서는 진행이 어렵습니다."
+      ],
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "제출하신 정보로는 어렵습니다. 사유는 다음과 같습니다.",
+      "verdict": "DENY"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 및 동법 시행령 제35조 별표 3",
+          "statute": "공동주택관리법",
+          "summary": "내력벽의 철거·변경은 행위허가 대상이며 구조 안전 확인 없이는 허용되지 않습니다. 사전검토 단계에서는 진행이 어렵다고 안내합니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "제출하신 정보로는 어렵습니다. 사유는 다음과 같습니다.",
+      "verdict": "DENY"
+    }
+  },
+  "hold_all_missing": {
+    "internal": {
+      "additional_checks": [
+        "철거하려는 벽이 내력벽인지 비내력벽인지 확인이 필요합니다.",
+        "세대가 몇 층인지 확인이 필요합니다.",
+        "발코니 천장에 스프링클러가 있는지 확인이 필요합니다.",
+        "비상시 대피할 수 있는 대피공간(또는 옆 세대로 통하는 경량칸막이)이 있는지 확인이 필요합니다.",
+        "건물의 계단실이 몇 개인지 확인이 필요합니다.",
+        "외부 창호가 여닫이형인지 고정형(입면분할창)인지 확인이 필요합니다.",
+        "철거 부위가 방화구획에 포함되는지 확인이 필요합니다."
+      ],
+      "hold_reasons": [
+        "INSUFFICIENT_DATA"
+      ],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [],
+      "permit_requirement": "UNDETERMINED",
+      "possibility_label": "추가 확인 필요",
+      "reasons": [
+        "판단에 필요한 정보가 아직 모두 확인되지 않았습니다. 아래 항목을 확인해 주시면 다시 검토할 수 있습니다."
+      ],
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
+      "verdict": "HOLD"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [],
+      "permit_required": true,
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
+      "verdict": "HOLD"
+    }
+  },
+  "hold_fire_zone": {
+    "internal": {
+      "additional_checks": [
+        "방화구획 변경 가능 여부를 관할 행정기관 또는 건축 전문가와 확인해 주세요."
+      ],
+      "hold_reasons": [
+        "RULE_EXCEPTION"
+      ],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법시행령",
+          "rule_id": "R-WALL-02",
+          "section": "제35조 별표 3 (비내력벽 철거)",
+          "source": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/건축법",
+          "rule_id": "R-ZONE-01",
+          "section": "제49조 및 건축물의 피난·방화구조 등의 기준에 관한 규칙 제14조",
+          "source": "건축법",
+          "summary": "철거 대상 부위가 방화구획에 포함되는 경우 구획 성능 유지 여부를 별도로 검토해야 하며, 자동 판단 범위를 벗어납니다."
+        }
+      ],
+      "permit_requirement": "UNDETERMINED",
+      "possibility_label": "추가 확인 필요",
+      "reasons": [
+        "철거 대상 벽이 비내력벽으로 확인되어, 행위허가 절차를 전제로 검토를 진행할 수 있습니다.",
+        "철거 부위가 방화구획에 포함되어 있어 자동 검토 범위를 벗어납니다. 방화구획 성능 유지 여부는 별도 확인이 필요합니다."
+      ],
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
+      "verdict": "HOLD"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 별표 3 (비내력벽 철거)",
+          "statute": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법시행령"
+        },
+        {
+          "article": "제49조 및 건축물의 피난·방화구조 등의 기준에 관한 규칙 제14조",
+          "statute": "건축법",
+          "summary": "철거 대상 부위가 방화구획에 포함되는 경우 구획 성능 유지 여부를 별도로 검토해야 하며, 자동 판단 범위를 벗어납니다.",
+          "url": "https://www.law.go.kr/법령/건축법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
+      "verdict": "HOLD"
+    }
+  },
+  "hold_invalid_values": {
+    "internal": {
+      "additional_checks": [
+        "철거하려는 벽이 내력벽인지 비내력벽인지 확인이 필요합니다.",
+        "세대가 몇 층인지 확인이 필요합니다.",
+        "발코니 천장에 스프링클러가 있는지 확인이 필요합니다."
+      ],
+      "hold_reasons": [
+        "INSUFFICIENT_DATA"
+      ],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [],
+      "permit_requirement": "UNDETERMINED",
+      "possibility_label": "추가 확인 필요",
+      "reasons": [
+        "판단에 필요한 정보가 아직 모두 확인되지 않았습니다. 아래 항목을 확인해 주시면 다시 검토할 수 있습니다."
+      ],
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
+      "verdict": "HOLD"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [],
+      "permit_required": true,
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
+      "verdict": "HOLD"
+    }
+  },
+  "hold_missing_wall_type": {
+    "internal": {
+      "additional_checks": [
+        "철거하려는 벽이 내력벽인지 비내력벽인지 확인이 필요합니다."
+      ],
+      "hold_reasons": [
+        "INSUFFICIENT_DATA"
+      ],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [],
+      "permit_requirement": "UNDETERMINED",
+      "possibility_label": "추가 확인 필요",
+      "reasons": [
+        "판단에 필요한 정보가 아직 모두 확인되지 않았습니다. 아래 항목을 확인해 주시면 다시 검토할 수 있습니다."
+      ],
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
+      "verdict": "HOLD"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [],
+      "permit_required": true,
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
+      "verdict": "HOLD"
+    }
+  },
+  "warn_no_evacuation_space_high_floor": {
+    "internal": {
+      "additional_checks": [
+        "대피공간·경량칸막이 등 대체 대피 경로 확보 방안을 확인해 주세요. 대피공간을 확보하는 경우 그 출입구 방화문 설치 여부도 함께 검토가 필요합니다."
+      ],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-11",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법시행령",
+          "rule_id": "R-WALL-02",
+          "section": "제35조 별표 3 (비내력벽 철거)",
+          "source": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-01",
+          "section": "제6조 (화재감지기 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-02",
+          "section": "제5조 (방화판 또는 방화유리창의 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/건축법시행령",
+          "rule_id": "R-EVAC-01",
+          "section": "제46조 제4항 (아파트 4층 이상 대피공간)",
+          "source": "건축법 시행령",
+          "summary": "4층 이상 세대의 발코니를 확장하는 경우 대피공간 또는 경량칸막이 등 대체 대피 경로를 확보해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "가능성 있음 (추가 확인 필요)",
+      "reasons": [
+        "철거 대상 벽이 비내력벽으로 확인되어, 행위허가 절차를 전제로 검토를 진행할 수 있습니다.",
+        "4층 이상 세대는 발코니 확장 시 대피공간 등 대피 경로 확보가 필요한데, 현재 정보로는 확인되지 않았습니다."
+      ],
+      "required_facilities": [
+        {
+          "facility": "fire_detector",
+          "label": "화재감지기",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-01",
+            "section": "제6조 (화재감지기 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+          },
+          "location": "확장되는 발코니 부분",
+          "note": null,
+          "quantity_unit": "개소"
+        },
+        {
+          "facility": "fire_panel",
+          "label": "방화판",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-02",
+            "section": "제5조 (방화판 또는 방화유리창의 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+          },
+          "location": "아래층 세대와 접하는 발코니 창호 하부 외벽",
+          "note": "비고정형(여닫이·접이·미닫이 등) 창호 기준 산출",
+          "quantity_unit": "m (가로 길이)"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "user_message": "지금 정보 기준으로는 가능성이 있지만, 아래 항목을 추가로 확인해 주셔야 합니다.",
+      "verdict": "WARN"
+    },
+    "rule_eval_result": {
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 별표 3 (비내력벽 철거)",
+          "statute": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법시행령"
+        },
+        {
+          "article": "제6조 (화재감지기 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제5조 (방화판 또는 방화유리창의 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제46조 제4항 (아파트 4층 이상 대피공간)",
+          "statute": "건축법 시행령",
+          "summary": "4층 이상 세대의 발코니를 확장하는 경우 대피공간 또는 경량칸막이 등 대체 대피 경로를 확보해야 합니다.",
+          "url": "https://www.law.go.kr/법령/건축법시행령"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [
+        {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        },
+        {
+          "code": "FIRE_PANEL",
+          "label": "방화판",
+          "measurement_basis": "아래층 세대와 접하는 발코니 창호 하부 외벽 — m (가로 길이)"
+        }
+      ],
+      "ruleset_version": "2018-775.v1",
+      "schema_version": "1.0.0",
+      "user_message": "지금 정보 기준으로는 가능성이 있지만, 아래 항목을 추가로 확인해 주셔야 합니다.",
+      "verdict": "WARN"
+    }
+  }
+}

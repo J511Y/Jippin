@@ -48,7 +48,13 @@ export interface RequiredFacility {
   /**
    * 방화시설/안전시설 코드.
    */
-  code: "FIRE_PANEL" | "FIRE_GLASS" | "EVACUATION_SPACE" | "SPRINKLER" | "AUTOMATIC_DOOR_CLOSER";
+  code:
+    | "FIRE_DETECTOR"
+    | "FIRE_PANEL"
+    | "FIRE_GLASS"
+    | "EVACUATION_SPACE"
+    | "SPRINKLER"
+    | "AUTOMATIC_DOOR_CLOSER";
   /**
    * 사용자 노출 라벨.
    */
