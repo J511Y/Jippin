@@ -33,7 +33,7 @@ function parseFaqId(raw: string): number | null {
   return /^\d+$/.test(raw) ? Number(raw) : null;
 }
 
-/** 카테고리가 겹치는 다른 질문 — 상세 하단 "함께 보면 좋은 질문" + 내부 링크(SEO). */
+/** 카테고리가 겹치는 다른 질문 — 상세 하단 "관련 질문" + 내부 링크(SEO). */
 function relatedFaqs(item: FaqItem, all: FaqItem[], limit = 5): FaqItem[] {
   return all
     .filter(
@@ -122,17 +122,24 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
 
-      {/* 빵부스러기 — 보조 내비게이션이라 중립 색으로 둔다. */}
-      <Group gap={6} fz="sm" c="dimmed">
+      {/* 빵부스러기(좌) + 뒤로가기(우) — 보조 내비게이션이라 중립 색으로 둔다. */}
+      <Group justify="space-between" align="center">
+        <Group gap={6}>
+          <Anchor href="/faq" size="sm" c="dimmed" underline="hover">
+            자주묻는질문
+          </Anchor>
+          <Text span size="sm" c="dimmed">
+            /
+          </Text>
+          <Text span size="sm" c="dimmed">
+            {item.categories
+              .map((slug) => FAQ_CATEGORY_LABELS[slug])
+              .join(' · ')}
+          </Text>
+        </Group>
         <Anchor href="/faq" size="sm" c="dimmed" underline="hover">
-          자주묻는질문
+          ← 목록으로
         </Anchor>
-        <Text span size="sm" c="dimmed">
-          /
-        </Text>
-        <Text span size="sm" c="dimmed">
-          {item.categories.map((slug) => FAQ_CATEGORY_LABELS[slug]).join(' · ')}
-        </Text>
       </Group>
 
       {/* 본문 카드 — 흰 표면으로 페이지 배경과 구분한다. */}
@@ -141,7 +148,7 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
         style={{
           background: 'var(--jippin-brand-surface-alt)',
           border: '1px solid var(--jippin-brand-border)',
-          borderRadius: 'var(--mantine-radius-lg)'
+          borderRadius: 'var(--mantine-radius-md)'
         }}
       >
         <Stack gap="md">
@@ -158,67 +165,77 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
         </Stack>
       </Box>
 
-      {/* 함께 보면 좋은 질문 — 같은 카테고리 내부 링크. */}
-      {related.length > 0 ? (
-        <Box
-          p={{ base: 'lg', sm: 'xl' }}
-          component="section"
-          style={{
-            background: 'var(--jippin-brand-surface-alt)',
-            border: '1px solid var(--jippin-brand-border)',
-            borderRadius: 'var(--mantine-radius-lg)'
-          }}
+      <Divider color="var(--jippin-brand-border)" />
+
+      {/* 상담 유도 — 카드 없이 본문 흐름에 둔다. 강조(primary)는 버튼 하나에만. */}
+      <Stack gap="sm" component="section">
+        <Title order={2} fz="1.05rem" c="var(--jippin-brand-ink)">
+          더 궁금한 점이 있으신가요?
+        </Title>
+        <Text
+          size="sm"
+          c="var(--jippin-brand-copy)"
+          style={{ wordBreak: 'keep-all' }}
         >
-          <Stack gap="sm">
-            <Title order={2} fz="1.05rem" c="var(--jippin-brand-ink)">
-              함께 보면 좋은 질문
-            </Title>
-            <Stack gap={10}>
-              {related.map((other) => (
-                <Anchor
-                  key={other.id}
-                  href={`/faq/${other.id}`}
-                  c="var(--jippin-brand-copy)"
+          평면도 한 장이면 1분 안에 철거·확장 가능성을 무료로 확인할 수 있어요.
+          자세한 내용은 전문가 상담으로 이어가세요.
+        </Text>
+        <Group gap="sm">
+          <Button component="a" href="/sessions/new" radius="md">
+            무료로 사전검토 시작
+          </Button>
+          <Button component="a" href="/leads/new" variant="default" radius="md">
+            전문가 상담
+          </Button>
+        </Group>
+      </Stack>
+
+      <Divider color="var(--jippin-brand-border)" />
+
+      {/* 관련 질문 — 같은 카테고리 내부 링크, 표처럼 행 구분선으로 나눈다. */}
+      {related.length > 0 ? (
+        <Stack gap="sm" component="section">
+          <Title order={2} fz="1.05rem" c="var(--jippin-brand-ink)">
+            관련 질문
+          </Title>
+          <Stack
+            gap={0}
+            style={{
+              background: 'var(--jippin-brand-surface-alt)',
+              border: '1px solid var(--jippin-brand-border)',
+              borderRadius: 'var(--mantine-radius-md)',
+              overflow: 'hidden'
+            }}
+          >
+            {related.map((other, index) => (
+              <Box
+                key={other.id}
+                component="a"
+                href={`/faq/${other.id}`}
+                data-faq-row
+                px="lg"
+                py="sm"
+                style={{
+                  display: 'block',
+                  textDecoration: 'none',
+                  borderTop:
+                    index === 0
+                      ? undefined
+                      : '1px solid var(--jippin-brand-border)'
+                }}
+              >
+                <Text
                   fw={500}
-                  underline="hover"
+                  c="var(--jippin-brand-copy)"
                   style={{ wordBreak: 'keep-all' }}
                 >
-                  Q. {other.question}
-                </Anchor>
-              ))}
-            </Stack>
+                  {other.question}
+                </Text>
+              </Box>
+            ))}
           </Stack>
-        </Box>
-      ) : null}
-
-      {/* 상담 유도 — 강조(primary)는 여기 버튼 하나에만 쓴다. */}
-      <Box
-        p={{ base: 'lg', sm: 'xl' }}
-        component="section"
-        style={{
-          background: 'var(--jippin-brand-surface)',
-          border: '1px solid var(--jippin-brand-border)',
-          borderRadius: 'var(--mantine-radius-lg)'
-        }}
-      >
-        <Stack gap="sm">
-          <Title order={2} fz="1.05rem" c="var(--jippin-brand-ink)">
-            더 궁금한 점이 있으신가요?
-          </Title>
-          <Text size="sm" c="var(--jippin-brand-copy)" style={{ wordBreak: 'keep-all' }}>
-            평면도 한 장이면 1분 안에 철거·확장 가능성을 무료로 확인할 수
-            있어요. 자세한 내용은 전문가 상담으로 이어가세요.
-          </Text>
-          <Group gap="sm">
-            <Button component="a" href="/sessions/new" radius="md">
-              무료로 사전검토 시작
-            </Button>
-            <Button component="a" href="/leads/new" variant="default" radius="md">
-              전문가 상담
-            </Button>
-          </Group>
         </Stack>
-      </Box>
+      ) : null}
     </Stack>
   );
 }

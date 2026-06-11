@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Badge,
   Box,
   Group,
   Highlight,
@@ -156,7 +157,7 @@ export function FaqBrowser({ items }: { items: FaqItem[] }) {
         style={{
           background: 'var(--jippin-brand-surface-alt)',
           border: '1px solid var(--jippin-brand-border)',
-          borderRadius: 'var(--mantine-radius-lg)',
+          borderRadius: 'var(--mantine-radius-md)',
           overflow: 'hidden'
         }}
       >
@@ -183,13 +184,22 @@ export function FaqBrowser({ items }: { items: FaqItem[] }) {
                     : '1px solid var(--jippin-brand-border)'
               }}
             >
-              <Stack gap={4}>
-                {/* 카테고리는 보조 정보 — 뱃지 강조 없이 중립 텍스트로 둔다. */}
-                <Text size="sm" c="dimmed">
-                  {item.categories
-                    .map((slug) => FAQ_CATEGORY_LABELS[slug])
-                    .join(' · ')}
-                </Text>
+              <Stack gap={6}>
+                {/* 카테고리는 보조 정보 — 중립 outline 뱃지로 둔다. */}
+                <Group gap={6}>
+                  {item.categories.map((slug) => (
+                    <Badge
+                      key={slug}
+                      variant="outline"
+                      color="gray"
+                      size="md"
+                      radius="sm"
+                      fw={500}
+                    >
+                      {FAQ_CATEGORY_LABELS[slug]}
+                    </Badge>
+                  ))}
+                </Group>
                 <Group gap={8} wrap="nowrap" align="flex-start">
                   <Text fw={700} c="var(--jippin-brand-ink)">
                     Q.
