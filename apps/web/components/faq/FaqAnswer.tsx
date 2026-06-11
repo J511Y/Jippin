@@ -16,7 +16,8 @@ export function FaqAnswer({ markdown }: { markdown: string }) {
   return (
     <Typography>
       <Box
-        fz="sm"
+        fz="md"
+        lh={1.7}
         c="var(--jippin-brand-copy)"
         style={{ wordBreak: 'keep-all' }}
       >

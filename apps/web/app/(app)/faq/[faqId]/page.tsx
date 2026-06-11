@@ -1,9 +1,25 @@
-import { Anchor, Badge, Group, Stack, Title } from '@mantine/core';
+import {
+  Anchor,
+  Box,
+  Button,
+  Divider,
+  Group,
+  Stack,
+  Text,
+  Title
+} from '@mantine/core';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
 import { FaqAnswer } from '@/components/faq/FaqAnswer';
-import { FAQ_CATEGORY_LABELS, fetchFaqById, stripMarkdown } from '@/lib/faq';
+import {
+  FAQ_CATEGORY_LABELS,
+  fetchFaqById,
+  fetchFaqs,
+  stripMarkdown,
+  type FaqItem
+} from '@/lib/faq';
+import { absoluteUrl, SITE_URL } from '@/lib/site';
 
 type FaqDetailPageProps = {
   params: Promise<{ faqId: string }>;
@@ -15,6 +31,56 @@ export const revalidate = 300;
 /** URL 파라미터를 identity 정수 id 로 좁힌다(아니면 null → 404). */
 function parseFaqId(raw: string): number | null {
   return /^\d+$/.test(raw) ? Number(raw) : null;
+}
+
+/** 카테고리가 겹치는 다른 질문 — 상세 하단 "함께 보면 좋은 질문" + 내부 링크(SEO). */
+function relatedFaqs(item: FaqItem, all: FaqItem[], limit = 5): FaqItem[] {
+  return all
+    .filter(
+      (other) =>
+        other.id !== item.id &&
+        other.categories.some((slug) => item.categories.includes(slug))
+    )
+    .slice(0, limit);
+}
+
+function buildDetailJsonLd(item: FaqItem): Record<string, unknown>[] {
+  return [
+    {
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      '@id': `${SITE_URL}/faq/${item.id}#faqpage`,
+      url: absoluteUrl(`/faq/${item.id}`),
+      mainEntity: [
+        {
+          '@type': 'Question',
+          name: item.question,
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: stripMarkdown(item.answer)
+          }
+        }
+      ]
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        {
+          '@type': 'ListItem',
+          position: 1,
+          name: '자주묻는질문',
+          item: absoluteUrl('/faq')
+        },
+        {
+          '@type': 'ListItem',
+          position: 2,
+          name: item.question,
+          item: absoluteUrl(`/faq/${item.id}`)
+        }
+      ]
+    }
+  ];
 }
 
 export async function generateMetadata({
@@ -46,26 +112,113 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
   const item = await fetchFaqById(id);
   if (!item) notFound();
 
+  const related = relatedFaqs(item, await fetchFaqs());
+  const jsonLd = buildDetailJsonLd(item);
+
   return (
-    <Stack gap="lg">
-      <Anchor href="/faq" size="sm" c="var(--jippin-brand-primary)" fw={600}>
-        ← 자주묻는질문 목록으로
-      </Anchor>
+    <Stack gap="lg" component="article">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
 
-      <Stack gap="xs">
-        <Group gap={6}>
-          {item.categories.map((slug) => (
-            <Badge key={slug} variant="light" size="sm" radius="sm">
-              {FAQ_CATEGORY_LABELS[slug]}
-            </Badge>
-          ))}
-        </Group>
-        <Title order={1} fz="1.5rem" style={{ wordBreak: 'keep-all' }}>
-          {item.question}
-        </Title>
-      </Stack>
+      {/* 빵부스러기 — 보조 내비게이션이라 중립 색으로 둔다. */}
+      <Group gap={6} fz="sm" c="dimmed">
+        <Anchor href="/faq" size="sm" c="dimmed" underline="hover">
+          자주묻는질문
+        </Anchor>
+        <Text span size="sm" c="dimmed">
+          /
+        </Text>
+        <Text span size="sm" c="dimmed">
+          {item.categories.map((slug) => FAQ_CATEGORY_LABELS[slug]).join(' · ')}
+        </Text>
+      </Group>
 
-      <FaqAnswer markdown={item.answer} />
+      {/* 본문 카드 — 흰 표면으로 페이지 배경과 구분한다. */}
+      <Box
+        p={{ base: 'lg', sm: 'xl' }}
+        style={{
+          background: 'var(--jippin-brand-surface-alt)',
+          border: '1px solid var(--jippin-brand-border)',
+          borderRadius: 'var(--mantine-radius-lg)'
+        }}
+      >
+        <Stack gap="md">
+          <Title
+            order={1}
+            fz="1.5rem"
+            c="var(--jippin-brand-ink)"
+            style={{ wordBreak: 'keep-all' }}
+          >
+            {item.question}
+          </Title>
+          <Divider color="var(--jippin-brand-border)" />
+          <FaqAnswer markdown={item.answer} />
+        </Stack>
+      </Box>
+
+      {/* 함께 보면 좋은 질문 — 같은 카테고리 내부 링크. */}
+      {related.length > 0 ? (
+        <Box
+          p={{ base: 'lg', sm: 'xl' }}
+          component="section"
+          style={{
+            background: 'var(--jippin-brand-surface-alt)',
+            border: '1px solid var(--jippin-brand-border)',
+            borderRadius: 'var(--mantine-radius-lg)'
+          }}
+        >
+          <Stack gap="sm">
+            <Title order={2} fz="1.05rem" c="var(--jippin-brand-ink)">
+              함께 보면 좋은 질문
+            </Title>
+            <Stack gap={10}>
+              {related.map((other) => (
+                <Anchor
+                  key={other.id}
+                  href={`/faq/${other.id}`}
+                  c="var(--jippin-brand-copy)"
+                  fw={500}
+                  underline="hover"
+                  style={{ wordBreak: 'keep-all' }}
+                >
+                  Q. {other.question}
+                </Anchor>
+              ))}
+            </Stack>
+          </Stack>
+        </Box>
+      ) : null}
+
+      {/* 상담 유도 — 강조(primary)는 여기 버튼 하나에만 쓴다. */}
+      <Box
+        p={{ base: 'lg', sm: 'xl' }}
+        component="section"
+        style={{
+          background: 'var(--jippin-brand-surface)',
+          border: '1px solid var(--jippin-brand-border)',
+          borderRadius: 'var(--mantine-radius-lg)'
+        }}
+      >
+        <Stack gap="sm">
+          <Title order={2} fz="1.05rem" c="var(--jippin-brand-ink)">
+            더 궁금한 점이 있으신가요?
+          </Title>
+          <Text size="sm" c="var(--jippin-brand-copy)" style={{ wordBreak: 'keep-all' }}>
+            평면도 한 장이면 1분 안에 철거·확장 가능성을 무료로 확인할 수
+            있어요. 자세한 내용은 전문가 상담으로 이어가세요.
+          </Text>
+          <Group gap="sm">
+            <Button component="a" href="/sessions/new" radius="md">
+              무료로 사전검토 시작
+            </Button>
+            <Button component="a" href="/leads/new" variant="default" radius="md">
+              전문가 상담
+            </Button>
+          </Group>
+        </Stack>
+      </Box>
     </Stack>
   );
 }

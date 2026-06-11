@@ -1,6 +1,5 @@
 import { Stack, Text, Title } from '@mantine/core';
 import type { Metadata } from 'next';
-import { Suspense } from 'react';
 
 import { FaqBrowser } from '@/components/faq/FaqBrowser';
 import { fetchFaqs, stripMarkdown } from '@/lib/faq';
@@ -57,10 +56,9 @@ export default async function FaqPage() {
           상담으로 문의해 주세요.
         </Text>
       </Stack>
-      {/* useSearchParams(URL 쿼리 동기화) 사용으로 Suspense 경계가 필요하다. */}
-      <Suspense>
-        <FaqBrowser items={items} />
-      </Suspense>
+      {/* SSR 은 기본 상태(전체/1페이지)로 렌더해 질문 링크가 HTML 에 포함된다.
+          URL 쿼리 상태는 FaqBrowser 가 마운트 후 적용한다(SEO — useSearchParams 회피). */}
+      <FaqBrowser items={items} />
     </Stack>
   );
 }
