@@ -538,20 +538,41 @@ class _FakeEngine:
 
 
 class _FakeConnection:
-    def __init__(self, user_id: uuid.UUID, anonymous_user_id: uuid.UUID):
+    """terms_consents 상태를 흉내내는 fake — INSERT 가 기록되고 SELECT 가 그걸 돌려준다.
+
+    accept_required_terms 가 "페이로드 단독"이 아니라 "이미 기록된 동의 + 페이로드
+    합집합"으로 충족을 판단하므로(PR #107 Codex P1), fake 도 INSERT 된 term_id 를
+    추적해 이후 SELECT terms_consents 가 실제 DB 처럼 응답해야 한다.
+    """
+
+    def __init__(
+        self,
+        user_id: uuid.UUID,
+        anonymous_user_id: uuid.UUID,
+        recorded_term_ids: set[str] | None = None,
+    ):
         self.user_id = user_id
         self.anonymous_user_id = anonymous_user_id
         self.statements: list[str] = []
+        self.recorded_term_ids: set[str] = set(recorded_term_ids or set())
+        self.inserted_term_batches: list[list[str]] = []
 
     async def execute(self, statement):
         statement_text = str(statement)
         self.statements.append(statement_text)
+        if statement_text.startswith("INSERT INTO terms_consents"):
+            inserted = {
+                value
+                for key, value in statement.compile().params.items()
+                if key.startswith("term_id")
+            }
+            self.inserted_term_batches.append(sorted(inserted))
+            self.recorded_term_ids.update(inserted)
+            return _FakeResult()
         if statement_text.startswith("SELECT users.id"):
             return _FakeResult(self.user_id)
         if statement_text.startswith("SELECT terms_consents.term_id"):
-            return _FakeResult(
-                values=["service_terms", "privacy_policy", "age_over_14"]
-            )
+            return _FakeResult(values=sorted(self.recorded_term_ids))
         return _FakeResult()
 
 
@@ -586,10 +607,12 @@ async def test_accept_required_terms_upserts_rows_without_legacy_anonymous_claim
 async def test_accept_required_terms_rejects_payload_missing_age_over_14(
     monkeypatch, auth_env
 ):
-    """만 14세 확인은 법정 요건 — payload 에서 빠지면 422 + missing 목록에 노출.
+    """만 14세 확인은 법정 요건 — 기존 동의도 payload 도 없으면 422 + missing 노출.
 
     회귀: age_over_14 가 env(KAKAO_SYNC_REQUIRED_TERM_TAGS) 기반 required 목록에서
     빠져 OAuth 가입자가 만 14세 확인 없이 가입 완료되는 구멍 (PR #107 Codex P2).
+    새 의미론: 이미 기록된 동의 + payload 합집합으로 판단하므로, 사전 동의가 전혀
+    없는 사용자가 age_over_14 를 빼면 여전히 422 다.
     """
     user_id = uuid.uuid4()
     conn = _FakeConnection(user_id, uuid.uuid4())
@@ -604,12 +627,98 @@ async def test_accept_required_terms_rejects_payload_missing_age_over_14(
 
     assert exc_info.value.code == "TERMS_REQUIRED_MISSING"
     assert exc_info.value.http_status == 422
-    assert "age_over_14" in exc_info.value.details["missing_required_terms"]
+    assert exc_info.value.details["missing_required_terms"] == ["age_over_14"]
     # 검증 전에 어떤 DB write 도 일어나지 않아야 한다.
-    assert all(
-        not statement.startswith("INSERT INTO terms_consents")
-        for statement in conn.statements
+    assert conn.inserted_term_batches == []
+
+
+@pytest.mark.asyncio
+async def test_accept_required_terms_completes_kakao_partial_payload(
+    monkeypatch, auth_env
+):
+    """Kakao 경로 end-to-end — kakao_sync 자동 동의 후 age_over_14 만 보내도 완료.
+
+    회귀(PR #107 Codex P1): record_kakao_sync_consent 가 service_terms/privacy_policy
+    를 source='kakao_sync' 로 기록하고 /auth/terms 화면은 missing(age_over_14)만
+    전송하는데, payload-단독 검증이 이를 422 로 거부해 Kakao 가입이 완료 불가였다.
+    새 의미론: 이미 기록된 동의(kakao_sync 포함)와 payload 의 합집합으로 충족 판단.
+    """
+    user_id = uuid.uuid4()
+    conn = _FakeConnection(user_id, uuid.uuid4())
+    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
+
+    missing_after_kakao = await auth_service.record_kakao_sync_consent(user_id)
+    assert missing_after_kakao == ["age_over_14"]
+    assert conn.inserted_term_batches == [["privacy_policy", "service_terms"]]
+
+    result = await auth_service.accept_required_terms(
+        user_id=user_id,
+        agreed_term_ids={"age_over_14"},
+        pending_anonymous_user_id=None,
     )
+
+    assert result == TermsAcceptResult(
+        signup_complete=True,
+        missing_required_terms=[],
+        claimed_anonymous_user=False,
+    )
+    # 사용자가 이번 요청에서 실제 체크한 항목(age_over_14)만 새로 기록된다 —
+    # kakao_sync 가 이미 기록한 항목을 internal_signup 으로 중복 대필하지 않는다.
+    assert conn.inserted_term_batches == [
+        ["privacy_policy", "service_terms"],
+        ["age_over_14"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_accept_required_terms_rejects_empty_payload_without_prior_consents(
+    monkeypatch, auth_env
+):
+    """사전 동의 0 + 빈 payload → 필수 3종 전부 missing 으로 422."""
+    user_id = uuid.uuid4()
+    conn = _FakeConnection(user_id, uuid.uuid4())
+    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
+
+    with pytest.raises(ZippinException) as exc_info:
+        await auth_service.accept_required_terms(
+            user_id=user_id,
+            agreed_term_ids=set(),
+            pending_anonymous_user_id=None,
+        )
+
+    assert exc_info.value.code == "TERMS_REQUIRED_MISSING"
+    assert exc_info.value.http_status == 422
+    assert exc_info.value.details["missing_required_terms"] == [
+        "service_terms",
+        "privacy_policy",
+        "age_over_14",
+    ]
+    assert conn.inserted_term_batches == []
+
+
+@pytest.mark.asyncio
+async def test_accept_required_terms_rejects_partial_payload_without_prior_consents(
+    monkeypatch, auth_env
+):
+    """사전 동의 0 + payload {age_over_14} → 나머지 둘만 missing (age_over_14 제외)."""
+    user_id = uuid.uuid4()
+    conn = _FakeConnection(user_id, uuid.uuid4())
+    monkeypatch.setattr(auth_service, "get_engine", lambda: _FakeEngine(conn))
+
+    with pytest.raises(ZippinException) as exc_info:
+        await auth_service.accept_required_terms(
+            user_id=user_id,
+            agreed_term_ids={"age_over_14"},
+            pending_anonymous_user_id=None,
+        )
+
+    assert exc_info.value.code == "TERMS_REQUIRED_MISSING"
+    assert exc_info.value.http_status == 422
+    assert exc_info.value.details["missing_required_terms"] == [
+        "service_terms",
+        "privacy_policy",
+    ]
+    assert conn.inserted_term_batches == []
 
 
 def test_kakao_sync_audit_stub_accepts_payload_with_bearer_header(auth_env):

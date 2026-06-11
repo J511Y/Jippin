@@ -173,17 +173,6 @@ async def accept_required_terms(
     pending_anonymous_user_id: uuid.UUID | None,  # noqa: ARG001 - legacy field ignored.
 ) -> TermsAcceptResult:
     settings = get_settings()
-    required_term_ids = _required_term_ids(settings)
-    missing_from_payload = [
-        term_id for term_id in required_term_ids if term_id not in agreed_term_ids
-    ]
-    if missing_from_payload:
-        raise ZippinException(
-            "Required terms are missing.",
-            code="TERMS_REQUIRED_MISSING",
-            http_status=422,
-            details={"missing_required_terms": missing_from_payload},
-        )
 
     async with get_engine().begin() as conn:
         user_exists = (
@@ -196,6 +185,28 @@ async def accept_required_terms(
                 "Authentication is required.",
                 code="AUTH_UNAUTHENTICATED",
                 http_status=401,
+            )
+
+        # 이미 기록된 동의(kakao_sync 포함, source/version 무관)와 이번 페이로드의
+        # 합집합으로 충족 여부를 판단한다 — "이 호출이 끝나면 모든 필수 약관에 동의
+        # 기록이 존재하는가"가 요건이지, 페이로드 단독으로 전체를 다시 보내는 것이
+        # 아니다. /auth/terms 화면은 missing_required_terms 만 렌더/전송하므로
+        # (예: Kakao Sync 가입자는 age_over_14 하나만 보냄) 페이로드-단독 검증은
+        # Kakao 가입 완료를 막는 회귀가 된다 (PR #107 Codex P1).
+        # 단, consent row 는 사용자가 이번 요청에서 실제 체크한 항목만 기록한다
+        # (감사 무결성 — 사용자가 동의하지 않은 항목을 대신 기록하지 않는다).
+        missing_before_payload = await _missing_required_terms(conn, user_id, settings)
+        effective_missing = [
+            term_id
+            for term_id in missing_before_payload
+            if term_id not in agreed_term_ids
+        ]
+        if effective_missing:
+            raise ZippinException(
+                "Required terms are missing.",
+                code="TERMS_REQUIRED_MISSING",
+                http_status=422,
+                details={"missing_required_terms": effective_missing},
             )
 
         if agreed_term_ids:
