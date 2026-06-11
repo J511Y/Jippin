@@ -65,6 +65,7 @@
         "code": {
           "type": "string",
           "enum": [
+            "FIRE_DETECTOR",
             "FIRE_PANEL",
             "FIRE_GLASS",
             "EVACUATION_SPACE",

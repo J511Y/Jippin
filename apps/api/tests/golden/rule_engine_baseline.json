@@ -90,7 +90,13 @@
         }
       ],
       "permit_required": true,
-      "required_facilities": [],
+      "required_facilities": [
+        {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        }
+      ],
       "ruleset_version": "2018-775.v1",
       "schema_version": "1.0.0",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
@@ -328,6 +334,11 @@
       "permit_required": true,
       "required_facilities": [
         {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        },
+        {
           "code": "FIRE_GLASS",
           "label": "방화유리창",
           "measurement_basis": "아래층 세대와 접하는 발코니 외부 창호 부위 — m (창호 가로 길이)"
@@ -476,6 +487,11 @@
       ],
       "permit_required": true,
       "required_facilities": [
+        {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        },
         {
           "code": "FIRE_PANEL",
           "label": "방화판",
@@ -745,6 +761,11 @@
       "permit_required": true,
       "required_facilities": [
         {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        },
+        {
           "code": "FIRE_PANEL",
           "label": "방화판",
           "measurement_basis": "아래층 세대와 접하는 발코니 창호 하부 외벽 — m (가로 길이)"
@@ -881,8 +902,6 @@
         "비상시 대피할 수 있는 대피공간(또는 옆 세대로 통하는 경량칸막이)이 있는지 확인이 필요합니다.",
         "건물의 계단실이 몇 개인지 확인이 필요합니다.",
         "외부 창호가 여닫이형인지 고정형(입면분할창)인지 확인이 필요합니다.",
-        "확장하려는 공간이 발코니와 접해 있는지 확인이 필요합니다.",
-        "이 건물에 기존 행위허가(또는 신고) 이력이 있는지 확인이 필요합니다.",
         "철거 부위가 방화구획에 포함되는지 확인이 필요합니다."
       ],
       "hold_reasons": [
@@ -1160,6 +1179,11 @@
       ],
       "permit_required": true,
       "required_facilities": [
+        {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        },
         {
           "code": "FIRE_PANEL",
           "label": "방화판",

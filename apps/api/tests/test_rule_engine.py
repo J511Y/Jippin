@@ -4,8 +4,9 @@
 
 1. 대표 corpus — 모든 규칙 분기를 덮는 입력을 2회 평가해 canonical JSON
    동일성을 단언한다.
-2. 누락/비정상 edge — 어떤 필드가 빠져도 추측 없이 보류(HOLD +
-   INSUFFICIENT_DATA)로 분류되는지 property-style 로 확인한다 (NFR-QUAL-003).
+2. 누락/비정상 edge — 규칙이 소비하는 필드가 빠지면 추측 없이 보류(HOLD +
+   INSUFFICIENT_DATA)로 분류되고, 판정 미사용 필드(optional)는 누락이어도
+   보류가 아님을 property-style 로 확인한다 (NFR-QUAL-003).
 3. 계약 정합 — 입력은 ``common-judgment-schema.schema.json`` 의
    ``JudgmentValues`` 캐노니컬 필드명을, 출력은 ``rule-eval-result.schema.json``
    (생성된 zippin_contracts pydantic 모델로 검증)을 따른다.
@@ -26,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from src.services.rule_engine import (
+    _FACILITY_CONTRACT_CODES,
     CONTEXT_FIELDS,
     JUDGMENT_VALUE_FIELDS,
     RULE_EVAL_RESULT_SCHEMA_VERSION,
@@ -63,6 +65,15 @@ RULE_EVAL_SCHEMA_PATH = (
 # 생성된 계약 pydantic 모델 (packages/contracts/python) — 추가 의존성 없이
 # (pydantic 은 이미 런타임 의존성) 캐노니컬 출력 shape 를 검증한다.
 sys.path.insert(0, str(_REPO_ROOT / "packages" / "contracts" / "python"))
+from zippin_contracts.common_judgment_schema import (  # noqa: E402
+    WallType as ContractWallType,
+)
+from zippin_contracts.common_judgment_schema import (  # noqa: E402
+    WindowForm as ContractWindowForm,
+)
+from zippin_contracts.rule_eval_result import (  # noqa: E402
+    Code as ContractFacilityCode,
+)
 from zippin_contracts.rule_eval_result import (  # noqa: E402
     RuleEvalResult as ContractRuleEvalResult,
 )
@@ -70,6 +81,20 @@ from zippin_contracts.rule_eval_result import (  # noqa: E402
 #: 결정론 직렬화 검증용 고정 평가 시각 — evaluate() 는 시계를 갖지 않으므로
 #: 호출자(테스트)가 주입한다 (NFR-QUAL-002).
 FIXED_EVALUATED_AT = datetime(2026, 6, 11, 0, 0, 0, tzinfo=UTC)
+
+#: 충분성(보류) 검사 대상 — 실제 규칙이 소비하는 필드 (엔진 _REQUIRED_FIELDS
+#: 와 동일해야 한다). permit_history_known·balcony_attached 는 수집 대상이되
+#: 판정 미사용이므로 누락이어도 보류가 아니다 (P2 수정).
+REQUIRED_INPUT_FIELDS: tuple[str, ...] = (
+    "wall_type",
+    "floor_count",
+    "has_sprinkler",
+    "has_evacuation_space",
+    "stairwell_count",
+    "window_form",
+    "fire_zone",
+)
+OPTIONAL_INPUT_FIELDS: tuple[str, ...] = ("balcony_attached", "permit_history_known")
 
 # ---------------------------------------------------------------------------
 # 대표 corpus — 모든 규칙 분기를 덮는다 (FR-RULE-004 수용 기준: 예외 케이스
@@ -132,7 +157,8 @@ CORPUS: dict[str, dict[str, object]] = {
     # 방화구획 포함 → RULE_EXCEPTION 보류 + 이후 평가 중단 (보수 분기,
     # CHAT-004) — 수동 검토 케이스에는 시설 목록을 산출하지 않는다.
     "hold_fire_zone": {**_FULL_BASE, "fire_zone": True},
-    # 전체 누락 → INSUFFICIENT_DATA 보류 + 9개 항목 전부 안내.
+    # 전체 누락 → INSUFFICIENT_DATA 보류 + 규칙 소비 7개 항목 안내
+    # (판정 미사용 optional 필드는 안내하지 않는다).
     "hold_all_missing": {},
     # 벽체 종류만 누락 → 보류 (DENY 판단 자체가 불가).
     "hold_missing_wall_type": {
@@ -353,8 +379,8 @@ def test_fire_zone_holds_and_short_circuits_remaining_rules():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("missing_field", sorted(_FULL_BASE))
-def test_any_single_missing_field_yields_explicit_hold(missing_field: str):
+@pytest.mark.parametrize("missing_field", sorted(REQUIRED_INPUT_FIELDS))
+def test_any_single_missing_required_field_yields_explicit_hold(missing_field: str):
     values = {k: v for k, v in _FULL_BASE.items() if k != missing_field}
     result = evaluate_judgment_values(values).to_dict()
     assert result["verdict"] == Verdict.HOLD.value
@@ -365,10 +391,33 @@ def test_any_single_missing_field_yields_explicit_hold(missing_field: str):
     assert result["permit_requirement"] == PermitRequirement.UNDETERMINED.value
 
 
+@pytest.mark.parametrize("optional_field", sorted(OPTIONAL_INPUT_FIELDS))
+def test_missing_optional_field_does_not_hold(optional_field: str):
+    """P2 수정 — 판정 미사용 필드는 누락(None)이어도 보류가 아니다."""
+
+    omitted = {k: v for k, v in _FULL_BASE.items() if k != optional_field}
+    explicit_null = {**_FULL_BASE, optional_field: None}
+    for values in (omitted, explicit_null):
+        result = evaluate_judgment_values(values).to_dict()
+        assert result["verdict"] != Verdict.HOLD.value
+        assert result["hold_reasons"] == []
+
+
+def test_required_field_set_matches_engine_and_contract():
+    """테스트의 required/optional 분류 == 엔진 분류 == 계약 필드 전체."""
+
+    assert set(REQUIRED_INPUT_FIELDS) | set(OPTIONAL_INPUT_FIELDS) == set(
+        JUDGMENT_VALUE_FIELDS
+    ) | set(CONTEXT_FIELDS)
+    # 누락 보류는 required 만 트리거한다.
+    all_missing = RuleInput.from_judgment_values({})
+    assert set(all_missing.missing_fields()) == set(REQUIRED_INPUT_FIELDS)
+
+
 def test_all_missing_lists_every_required_field():
     result = evaluate_judgment_values({}).to_dict()
     assert result["verdict"] == Verdict.HOLD.value
-    assert len(result["additional_checks"]) == len(_FULL_BASE)
+    assert len(result["additional_checks"]) == len(REQUIRED_INPUT_FIELDS)
 
 
 def test_invalid_values_are_never_guessed():
@@ -413,6 +462,50 @@ def test_enum_instances_accepted_same_as_strings():
     assert via_enum.to_canonical_json() == via_str.to_canonical_json()
 
 
+def test_generated_contract_enum_instances_accepted_same_as_strings():
+    """P2 수정 — zippin_contracts 생성 모델의 plain Enum 인스턴스도 허용.
+
+    호출자가 pydantic 모델 속성(예: ``judgment_values.window_form``)을
+    그대로 병합해 넘기는 end-to-end 경로를 고정한다.
+    """
+
+    via_contract_enum = evaluate(
+        RuleInput.from_judgment_values(
+            {
+                **_FULL_BASE,
+                "wall_type": ContractWallType.NON_LOAD_BEARING,
+                "window_form": ContractWindowForm.OPENABLE,
+            }
+        )
+    )
+    via_str = evaluate(RuleInput.from_judgment_values(_FULL_BASE))
+    assert via_contract_enum.to_canonical_json() == via_str.to_canonical_json()
+    # 캐노니컬 직렬화까지 동일해야 한다 (REPORT/스냅샷 경로).
+    assert via_contract_enum.to_contract_dict(
+        evaluated_at=FIXED_EVALUATED_AT
+    ) == via_str.to_contract_dict(evaluated_at=FIXED_EVALUATED_AT)
+
+
+def test_generated_contract_null_window_member_treated_as_missing():
+    # 계약 WindowForm 의 null 멤버 — .value 가 None 이므로 미수집과 동일.
+    parsed = RuleInput.from_judgment_values(
+        {**_FULL_BASE, "window_form": ContractWindowForm.NoneType_None}
+    )
+    assert parsed.window_form is None
+    assert parsed.invalid_fields == ()
+    assert evaluate(parsed).verdict is Verdict.HOLD
+
+
+def test_generated_contract_unknown_wall_type_instance_demoted():
+    # 계약 WallType.UNKNOWN 인스턴스 — 문자열 "UNKNOWN" 과 동일하게 보류.
+    parsed = RuleInput.from_judgment_values(
+        {**_FULL_BASE, "wall_type": ContractWallType.UNKNOWN}
+    )
+    assert parsed.wall_type is None
+    assert "wall_type" in parsed.invalid_fields
+    assert evaluate(parsed).verdict is Verdict.HOLD
+
+
 # ---------------------------------------------------------------------------
 # 5. 출력 계약 정합 — RuleEvalResult 캐노니컬 직렬화 (CMP-527 정본)
 # ---------------------------------------------------------------------------
@@ -427,6 +520,34 @@ def test_contract_dict_validates_against_rule_eval_result_contract():
         )
         validated = ContractRuleEvalResult.model_validate(payload)
         assert validated.schema_version == RULE_EVAL_RESULT_SCHEMA_VERSION, name
+
+
+def test_fire_detector_serialized_canonically():
+    """P1 수정 — 화재감지기(고시 §6)가 캐노니컬 직렬화에서 누락되지 않는다."""
+
+    payload = evaluate_judgment_values(_FULL_BASE).to_contract_dict(
+        evaluated_at=FIXED_EVALUATED_AT
+    )
+    codes = [item["code"] for item in payload["required_facilities"]]
+    assert "FIRE_DETECTOR" in codes
+    # 내부 시설 수 == 캐노니컬 시설 수 — 어떤 시설도 직렬화에서 빠지지 않는다.
+    internal = evaluate_judgment_values(_FULL_BASE).to_dict()
+    assert len(payload["required_facilities"]) == len(internal["required_facilities"])
+    # 생성된 계약 모델(enum 포함)을 통과한다.
+    validated = ContractRuleEvalResult.model_validate(payload)
+    assert ContractFacilityCode.FIRE_DETECTOR in [
+        item.code for item in validated.required_facilities
+    ]
+
+
+def test_every_engine_facility_type_has_contract_code():
+    """엔진 FacilityType 전사가 계약 enum 으로 매핑된다 — 무단 누락 방지."""
+
+    schema = json.loads(RULE_EVAL_SCHEMA_PATH.read_text(encoding="utf-8"))
+    allowed = set(schema["$defs"]["RequiredFacility"]["properties"]["code"]["enum"])
+    for facility_type in FacilityType:
+        code = _FACILITY_CONTRACT_CODES[facility_type]
+        assert code in allowed, facility_type
 
 
 def test_contract_schema_version_matches_published_const():

@@ -9,7 +9,9 @@ common-judgment-schema.schema.json``)의 ``judgment_values`` 를 입력으로
 
 - ``JudgmentValues`` 의 캐노니컬 필드명(``floor_count``, ``has_sprinkler``,
   ``has_evacuation_space``, ``stairwell_count``, ``window_form``,
-  ``balcony_attached``, ``permit_history_known``)을 그대로 소비한다.
+  ``balcony_attached``, ``permit_history_known``)을 그대로 받는다. 단,
+  충분성(보류) 검사는 규칙이 실제 소비하는 ``_REQUIRED_FIELDS`` 에만
+  적용한다 — 판정 미사용 필드는 ``_OPTIONAL_FIELDS`` 참고.
 - ``wall_type``/``fire_zone`` 은 ``judgment_values`` 가 아니라
   CommonJudgmentSchema 의 ``wall_objects``·``selected_walls`` 분석에서
   유도되는 **엔진 컨텍스트 키**다. 호출자(CHAT/FLOW_GUARD 연동 계층)가
@@ -124,14 +126,13 @@ class FacilityType(enum.StrEnum):
     FIRE_DOOR = "fire_door"
 
 
-#: RuleEvalResult 계약 ``RequiredFacility.code`` enum 으로의 매핑.
+#: RuleEvalResult 계약 ``RequiredFacility.code`` enum 으로의 **전사** 매핑 —
+#: 엔진이 산출하는 모든 시설은 캐노니컬 직렬화에 빠짐없이 나타나야 한다
+#: (고시 §6 화재감지기 포함, FR-RULE-003).
 #: - 방화문(대피공간 출입구)은 자동 닫힘 구조가 요건이므로 계약 코드
 #:   ``AUTOMATIC_DOOR_CLOSER`` 로 표기한다.
-#: - FIRE_DETECTOR(화재감지기, 고시 제6조)는 계약 enum 에 대응 코드가 아직
-#:   없어 캐노니컬 직렬화에서 제외된다 — 내부 :meth:`RuleVerdict.to_dict`
-#:   와 사용자 노출 문구에는 유지하며, 계약 enum 확장은 별도 컨트랙트
-#:   개정(ADR)으로 다룬다.
 _FACILITY_CONTRACT_CODES: dict[FacilityType, str] = {
+    FacilityType.FIRE_DETECTOR: "FIRE_DETECTOR",
     FacilityType.FIRE_PANEL: "FIRE_PANEL",
     FacilityType.FIRE_GLASS: "FIRE_GLASS",
     FacilityType.FIRE_DOOR: "AUTOMATIC_DOOR_CLOSER",
@@ -151,12 +152,30 @@ JUDGMENT_VALUE_FIELDS: tuple[str, ...] = (
 #: judgment_values 밖에서 유도되는 엔진 컨텍스트 키 (모듈 docstring 참고).
 CONTEXT_FIELDS: tuple[str, ...] = ("wall_type", "fire_zone")
 
-#: RULE-002 핵심 판단 변수 — 전부 채워져야 시설·가능성 평가가 가능하다.
-#: 누락 시 '판단 불가(보류)' + 사유 반환이 수용 기준이다 (FR-RULE-002).
+#: RULE-002 핵심 판단 변수 — 실제 규칙(R-WALL/R-ZONE/R-EVAC/R-FIRE)이
+#: 소비하는 필드만 충분성 검사 대상이다. 전부 채워져야 시설·가능성 평가가
+#: 가능하며, 누락 시 '판단 불가(보류)' + 사유 반환이 수용 기준이다
+#: (FR-RULE-002).
 _REQUIRED_FIELDS: tuple[str, ...] = (
     "wall_type",
-    *JUDGMENT_VALUE_FIELDS,
+    "floor_count",
+    "has_sprinkler",
+    "has_evacuation_space",
+    "stairwell_count",
+    "window_form",
     "fire_zone",
+)
+
+#: 수집은 하되(기술명세 JudgmentValues) 현행 규칙이 판정에 사용하지 않는
+#: 필드 — 미수집(None)이어도 보류(HOLD) 사유가 되지 않는다.
+#: - ``balcony_attached``: 확장 대상 식별용 메타데이터. 어느 R-* 규칙도
+#:   분기에 사용하지 않는다.
+#: - ``permit_history_known``: 행위허가 이력 인지 여부. 절차 안내 참고용일
+#:   뿐 판정 분기 입력이 아니다.
+#: 값이 *제공되었는데* 형식이 비정상이면 다른 필드와 동일하게
+#: ``invalid_fields`` 로 강등되어 재확인을 요청한다 (추측 금지 원칙 유지).
+_OPTIONAL_FIELDS: tuple[str, ...] = tuple(
+    name for name in JUDGMENT_VALUE_FIELDS if name not in _REQUIRED_FIELDS
 )
 
 _ACCEPTED_KEYS: frozenset[str] = frozenset(JUDGMENT_VALUE_FIELDS) | frozenset(
@@ -232,6 +251,12 @@ class RuleInput:
 
         def _enum(name: str, enum_cls: type[enum.StrEnum]) -> enum.StrEnum | None:
             raw = values.get(name)
+            if isinstance(raw, enum.Enum) and not isinstance(raw, enum_cls):
+                # zippin_contracts 생성 모델의 plain Enum 인스턴스 허용 —
+                # 호출자가 pydantic 모델 속성을 그대로 넘기는 경우 .value 로
+                # 강등해 문자열 어휘와 동일하게 매칭한다 (계약 WindowForm 의
+                # null 멤버는 .value 가 None 이라 미수집으로 흐른다).
+                raw = raw.value
             if raw is None:
                 return None
             if isinstance(raw, enum_cls):
@@ -305,21 +330,16 @@ class RequiredFacility:
         }
 
     @property
-    def contract_code(self) -> str | None:
-        """RuleEvalResult 계약 코드 — 대응 코드가 없으면 None."""
+    def contract_code(self) -> str:
+        """RuleEvalResult 계약 ``RequiredFacility.code`` — 전사 매핑."""
 
-        return _FACILITY_CONTRACT_CODES.get(self.facility)
+        return _FACILITY_CONTRACT_CODES[self.facility]
 
     def to_contract_dict(self) -> dict[str, object]:
         """계약 ``RequiredFacility`` item (code/label/measurement_basis)."""
 
-        code = self.contract_code
-        if code is None:
-            raise ValueError(
-                f"계약 RequiredFacility.code 에 대응 없음: {self.facility.value}"
-            )
         return {
-            "code": code,
+            "code": self.contract_code,
             "label": self.label,
             "measurement_basis": f"{self.location} — {self.quantity_unit}",
         }
@@ -390,9 +410,7 @@ class RuleVerdict:
             "schema_version": RULE_EVAL_RESULT_SCHEMA_VERSION,
             "verdict": self.verdict.value,
             "required_facilities": [
-                facility.to_contract_dict()
-                for facility in self.required_facilities
-                if facility.contract_code is not None
+                facility.to_contract_dict() for facility in self.required_facilities
             ],
             "permit_required": self.permit_required,
             "legal_basis": [

@@ -29,6 +29,7 @@ class Code(Enum):
     방화시설/안전시설 코드.
     """
 
+    FIRE_DETECTOR = "FIRE_DETECTOR"
     FIRE_PANEL = "FIRE_PANEL"
     FIRE_GLASS = "FIRE_GLASS"
     EVACUATION_SPACE = "EVACUATION_SPACE"
