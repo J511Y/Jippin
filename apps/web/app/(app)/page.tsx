@@ -34,7 +34,8 @@ import {
   SITE_DESCRIPTION,
   SITE_KEYWORDS,
   SITE_OG_IMAGE,
-  buildHomeJsonLd
+  buildHomeJsonLd,
+  safeJsonLd
 } from '@/lib/site';
 
 export const metadata: Metadata = {
@@ -112,7 +113,7 @@ export default function HomePage() {
       {/* JSON-LD: Organization · WebSite · Service · FAQ (SEO 리치결과 + GEO) */}
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildHomeJsonLd()) }}
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(buildHomeJsonLd()) }}
       />
       {/* ── HERO ─────────────────────────────────────────────── */}
       <Box

@@ -47,7 +47,7 @@ apps/web/
 ├── components/
 │   ├── LegalNotice.tsx        # 푸터(약관·개인정보·자주묻는질문 링크 + 법적 고지)
 │   ├── SiteShell.tsx          # 공통 헤더(검토·가격·자주묻는질문)/푸터 셸 + 로그인/마이페이지
-│   ├── faq/                   # FaqView — 카테고리 아코디언 + react-markdown 답변
+│   ├── faq/                   # FaqBrowser(필터·검색·페이징) + FaqAnswer(react-markdown 답변)
 │   ├── a2ui/                  # 채팅·동적 컴포넌트 placeholder (SDD §6.2 CHAT)
 │   └── ui/                    # Mantine 기본 컴포넌트 re-export + Storybook 예시
 ├── lib/
@@ -93,7 +93,7 @@ apps/web/
 세부 제품 판단:
 
 - `/leads` 는 신규 상담 요청 생성. 신청한 상담의 진행 현황은 **마이페이지(`/mypage`)** 에서 관리합니다(기존 `/contacts` 에서 이동, CMP-DIRECT). 헤더 메뉴의 '상담' 항목은 제거되었습니다.
-- `/faq` (자주묻는질문)는 백엔드 `GET /faqs` 에서 공개 FAQ 를 받아 카테고리별 아코디언으로 렌더하고, 답변은 마크다운(`react-markdown` + `remark-gfm`)으로 표시합니다. DB 정본은 `faqs` 테이블(`supabase/migrations/..._0010_faqs.sql`)이며, 카테고리 슬러그↔한국어 라벨/순서와 API 미연결 시 폴백은 `lib/faq.ts` 가 소유합니다(서버 컴포넌트 + ISR 5분). 관리자 편집 UI(Phase 3)는 후속 이슈입니다.
+- `/faq` (자주묻는질문)는 백엔드 `GET /faqs` 에서 공개 FAQ 전체를 받아 클라이언트에서 카테고리 필터·질문 검색(하이라이팅)·페이징(5개/페이지)을 처리하고, 질문 클릭 시 상세(`/faq/{faqId}`, `GET /faqs/{faqId}`)로 이동합니다. 답변은 마크다운(`react-markdown` + `remark-gfm` + `rehype-raw`)으로 상세에서 렌더합니다. DB 정본은 `faqs` 테이블(`supabase/migrations/..._0011_faqs_v2.sql` — identity 정수 id + `categories text[]` 다중 카테고리)이며, 카테고리 슬러그↔한국어 라벨/순서는 `lib/faq.ts`, API 미연결 시 폴백은 `lib/faq-fallback.ts`(시드와 동일 내용·id)가 소유합니다(서버 컴포넌트 + ISR 5분). 관리자 편집 UI(Phase 3)는 후속 이슈입니다.
 - 로그인/회원가입: 이메일+비밀번호와 카카오 OAuth 를 함께 제공합니다. 비밀번호는 Supabase Auth(auth.users)가 단독 관리하며 우리 테이블에는 저장하지 않습니다(AGENTS §4.7 #3). 휴대폰 본인확인은 SOLAPI 문자 인증(백엔드)으로 처리합니다.
 - `/sessions/:sessionId/report` 는 AI 사전검토 → 상담 전환의 중심이므로 항상 inline `LegalNotice` 를 노출합니다. (AGENTS.md §4.6 정본 문구)
 - 모든 `(app)` 화면은 `(app)/layout.tsx` 가 공통 `SiteShell` 로 감쌉니다. `SiteShell` 은 상단 헤더(브랜드 + 메뉴 + 로그인/마이페이지)를 제공하고, root layout 의 `LegalNotice` 푸터가 sticky-footer 로 하단에 노출됩니다.
