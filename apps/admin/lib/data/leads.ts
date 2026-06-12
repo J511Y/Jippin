@@ -15,6 +15,12 @@ import { createServiceRoleClient } from '@/lib/supabase/service-role';
 
 export const LEADS_PAGE_SIZE = 20;
 
+/** 페이지당 행 수 — TablePagination 의 옵션 범위로 클램프. */
+export function clampPageSize(size: number | undefined, fallback = 20): number {
+  if (!size || Number.isNaN(size)) return fallback;
+  return Math.min(100, Math.max(10, Math.trunc(size)));
+}
+
 export interface LeadListRow {
   id: string;
   applicant_name: string;
@@ -24,6 +30,7 @@ export interface LeadListRow {
   road_addr_part1: string | null;
   status: string;
   inflow_source: string | null;
+  is_anonymous: boolean;
   assigned_admin_id?: string | null;
   created_at: string;
 }
@@ -73,10 +80,11 @@ export interface LeadListFilter {
   status?: string;
   q?: string;
   page?: number;
+  size?: number;
 }
 
 const LIST_COLUMNS_BASE =
-  'id, applicant_name, applicant_phone, applicant_kind, source_form, road_addr_part1, status, inflow_source, created_at';
+  'id, applicant_name, applicant_phone, applicant_kind, source_form, road_addr_part1, status, inflow_source, is_anonymous, created_at';
 
 export async function listLeads(filter: LeadListFilter): Promise<{
   rows: LeadListRow[];
@@ -86,14 +94,15 @@ export async function listLeads(filter: LeadListFilter): Promise<{
 }> {
   const supabase = createServiceRoleClient();
   const page = Math.max(1, filter.page ?? 1);
-  const from = (page - 1) * LEADS_PAGE_SIZE;
+  const pageSize = clampPageSize(filter.size, LEADS_PAGE_SIZE);
+  const from = (page - 1) * pageSize;
 
   function buildQuery(columns: string) {
     let query = supabase
       .from('consultation_leads')
       .select(columns, { count: 'exact' })
       .order('created_at', { ascending: false })
-      .range(from, from + LEADS_PAGE_SIZE - 1);
+      .range(from, from + pageSize - 1);
 
     if (filter.status) {
       query = query.eq('status', filter.status);
@@ -123,7 +132,7 @@ export async function listLeads(filter: LeadListFilter): Promise<{
     rows: (data ?? []) as unknown as LeadListRow[],
     total: count ?? 0,
     page,
-    pageSize: LEADS_PAGE_SIZE
+    pageSize
   };
 }
 

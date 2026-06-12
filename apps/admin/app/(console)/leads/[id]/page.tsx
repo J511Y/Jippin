@@ -230,13 +230,6 @@ export default async function LeadDetailPage({
               <Field label="배정 일시">{formatDateTime(lead.assigned_at)}</Field>
             ) : null}
             <Separator />
-            <Field label="회원 연결">
-              {lead.user_id ? (
-                <span className="font-mono text-xs">{lead.user_id}</span>
-              ) : (
-                '비회원/삭제됨'
-              )}
-            </Field>
             <Field label="마지막 변경">{formatDateTime(lead.updated_at)}</Field>
           </CardContent>
         </Card>

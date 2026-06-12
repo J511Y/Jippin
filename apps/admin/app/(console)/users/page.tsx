@@ -1,9 +1,6 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import Link from 'next/link';
-
+import { TablePagination } from '@/components/console/table-pagination';
 import { UserSearch } from '@/components/users/user-search';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -22,22 +19,18 @@ import { cn } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
-function buildPageHref(params: { q?: string }, page: number): string {
-  const search = new URLSearchParams();
-  if (params.q) search.set('q', params.q);
-  if (page > 1) search.set('page', String(page));
-  const qs = search.toString();
-  return qs ? `/users?${qs}` : '/users';
-}
-
 export default async function UsersPage({
   searchParams
 }: {
-  searchParams: Promise<{ q?: string; page?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; size?: string }>;
 }) {
   const params = await searchParams;
   const page = Math.max(1, Number(params.page) || 1);
-  const { rows, total, pageSize } = await listUsers({ q: params.q, page });
+  const { rows, total, pageSize } = await listUsers({
+    q: params.q,
+    page,
+    size: Number(params.size)
+  });
   const lastPage = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -46,8 +39,7 @@ export default async function UsersPage({
         <div>
           <h1 className="text-xl font-semibold">회원</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            계정 {total.toLocaleString('ko-KR')}개 — 익명 세션 제외, 프로필(public.users)은
-            조인 표시
+            총 {total.toLocaleString('ko-KR')}명
           </p>
         </div>
         <UserSearch q={params.q} />
@@ -79,7 +71,7 @@ export default async function UsersPage({
                   <TableCell className="text-muted-foreground">{user.email ?? '—'}</TableCell>
                   <TableCell>
                     {user.status ? (
-                      <span className="flex items-center gap-2 text-sm">
+                      <span className="flex items-center gap-2">
                         <span
                           className={cn(
                             'size-1.5 rounded-full',
@@ -89,8 +81,7 @@ export default async function UsersPage({
                         {USER_STATUS_LABELS[user.status] ?? user.status}
                       </span>
                     ) : (
-                      // public.users 프로필이 없는 계정 (가입 미완료/관리자 계정)
-                      <span className="text-muted-foreground text-sm">프로필 없음</span>
+                      <span className="text-muted-foreground">프로필 없음</span>
                     )}
                   </TableCell>
                   <TableCell>
@@ -111,31 +102,13 @@ export default async function UsersPage({
         </Table>
       </div>
 
-      {lastPage > 1 ? (
-        <div className="flex items-center justify-between">
-          <p className="text-muted-foreground text-xs">
-            {page} / {lastPage} 페이지
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page <= 1}
-              render={page > 1 ? <Link href={buildPageHref(params, page - 1)} /> : undefined}
-            >
-              <ChevronLeft className="size-3.5" /> 이전
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= lastPage}
-              render={page < lastPage ? <Link href={buildPageHref(params, page + 1)} /> : undefined}
-            >
-              다음 <ChevronRight className="size-3.5" />
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      <TablePagination
+        page={page}
+        lastPage={lastPage}
+        total={total}
+        pageSize={pageSize}
+        unitLabel="명"
+      />
     </div>
   );
 }

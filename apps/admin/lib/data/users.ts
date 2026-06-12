@@ -9,6 +9,7 @@
 
 import 'server-only';
 
+import { clampPageSize } from '@/lib/data/leads';
 import { createServiceRoleClient } from '@/lib/supabase/service-role';
 
 export const USERS_PAGE_SIZE = 20;
@@ -23,7 +24,7 @@ export interface UserListRow {
   created_at: string;
 }
 
-export async function listUsers(filter: { q?: string; page?: number }): Promise<{
+export async function listUsers(filter: { q?: string; page?: number; size?: number }): Promise<{
   rows: UserListRow[];
   total: number;
   page: number;
@@ -31,13 +32,14 @@ export async function listUsers(filter: { q?: string; page?: number }): Promise<
 }> {
   const supabase = createServiceRoleClient();
   const page = Math.max(1, filter.page ?? 1);
-  const offset = (page - 1) * USERS_PAGE_SIZE;
+  const pageSize = clampPageSize(filter.size, USERS_PAGE_SIZE);
+  const offset = (page - 1) * pageSize;
   const term = filter.q?.trim() || null;
 
   // 1차: 0012 admin_list_users RPC — auth.users(익명 제외) 기준 + public.users 프로필 조인.
   const { data, error } = await supabase.rpc('admin_list_users', {
     search: term,
-    page_limit: USERS_PAGE_SIZE,
+    page_limit: pageSize,
     page_offset: offset
   });
   if (!error && Array.isArray(data)) {
@@ -46,7 +48,7 @@ export async function listUsers(filter: { q?: string; page?: number }): Promise<
       rows: rows.map(({ total_count: _total, provider: _provider, ...row }) => row),
       total: rows[0] ? Number(rows[0].total_count) : 0,
       page,
-      pageSize: USERS_PAGE_SIZE
+      pageSize
     };
   }
 
@@ -56,7 +58,7 @@ export async function listUsers(filter: { q?: string; page?: number }): Promise<
     .from('users')
     .select('id, display_name, status, role, last_login_at, created_at', { count: 'exact' })
     .order('created_at', { ascending: false })
-    .range(offset, offset + USERS_PAGE_SIZE - 1);
+    .range(offset, offset + pageSize - 1);
 
   if (term) {
     const sanitized = term.replaceAll(/[,()"\\]/g, ' ').trim();
@@ -78,6 +80,6 @@ export async function listUsers(filter: { q?: string; page?: number }): Promise<
     }),
     total: count ?? 0,
     page,
-    pageSize: USERS_PAGE_SIZE
+    pageSize
   };
 }
