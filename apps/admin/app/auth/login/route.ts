@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { isAdminUser } from '@/lib/auth';
+import { resolveSafeNext } from '@/lib/safe-redirect';
 import { createRouteHandlerClient } from '@/lib/supabase/server';
 
 /**
@@ -17,12 +18,6 @@ import { createRouteHandlerClient } from '@/lib/supabase/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function safeNext(value: unknown): string {
-  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
-    ? value
-    : '/';
-}
-
 export async function POST(request: NextRequest): Promise<NextResponse> {
   let body: { email?: unknown; password?: unknown; next?: unknown };
   try {
@@ -33,7 +28,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const email = typeof body.email === 'string' ? body.email.trim() : '';
   const password = typeof body.password === 'string' ? body.password : '';
-  const next = safeNext(body.next);
+  const next = resolveSafeNext(body.next);
 
   if (!email || !password) {
     return NextResponse.json({ error: '이메일과 비밀번호를 입력해 주세요.' }, { status: 400 });
@@ -51,7 +46,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   if (!isAdminUser(data.user)) {
-    await supabase.auth.signOut();
+    // 메인 제품과 auth 를 공유하므로 전역 signOut 은 해당 사용자의 모든 기기 세션을
+    // 무효화한다 — 방금 만든 admin 사이트 세션만 지우도록 local scope 로 제한.
+    await supabase.auth.signOut({ scope: 'local' });
     const out = NextResponse.json({ error: '관리자 권한이 없는 계정입니다.' }, { status: 403 });
     // signOut 의 쿠키 삭제분까지 응답에 반영한다.
     for (const cookie of response.headers.getSetCookie?.() ?? []) {

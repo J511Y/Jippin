@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 
 import { apiBaseUrl } from '@/lib/api-base-url';
 import { isAdminUser } from '@/lib/auth';
+import { listAdminOptions } from '@/lib/data/leads';
 import { LEAD_STATUSES, type LeadStatus } from '@/lib/labels';
 import { createServerComponentClient } from '@/lib/supabase/server';
 import { createServiceRoleClient } from '@/lib/supabase/service-role';
@@ -53,8 +54,15 @@ async function sendAssigneeNotification(
   if (!accessToken) {
     return { notified: false, notifyError: '세션 토큰을 찾을 수 없습니다.' };
   }
+  const base = apiBaseUrl();
+  if (!base) {
+    return {
+      notified: false,
+      notifyError: 'API_BASE_URL 미설정 — 비프로덕션 환경에서는 알림톡을 발송하지 않습니다.'
+    };
+  }
   try {
-    const res = await fetch(`${apiBaseUrl()}/leads/${leadId}/assignee-notification`, {
+    const res = await fetch(`${base}/leads/${leadId}/assignee-notification`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -102,12 +110,21 @@ export async function updateLeadStatus(leadId: string, status: string): Promise<
   return { ok: true };
 }
 
-export async function assignLead(
-  leadId: string,
-  adminId: string | null,
-  assigneeName?: string
-): Promise<AssignResult> {
+export async function assignLead(leadId: string, adminId: string | null): Promise<AssignResult> {
   const { accessToken } = await requireAdminActor();
+
+  // 클라이언트가 보낸 adminId 를 신뢰하지 않는다 — service_role 로 쓰기 전에
+  // admin_list_admins(app_metadata.role='admin') 목록과 대조하고, 알림톡의
+  // 담당자명도 서버에서 같은 목록으로 도출한다.
+  let assignee: { name: string; company: string } | null = null;
+  if (adminId) {
+    const admins = await listAdminOptions();
+    const matched = admins?.find((admin) => admin.id === adminId) ?? null;
+    if (!matched) {
+      return { ok: false, error: '관리자 목록에 없는 사용자입니다.' };
+    }
+    assignee = matched;
+  }
 
   const supabase = createServiceRoleClient();
   const { error } = await supabase
@@ -125,8 +142,10 @@ export async function assignLead(
 
   // 배정(해제 아님)일 때만 고객에게 담당자 배정 알림톡을 발송한다.
   // 배정 자체는 이미 저장됐으므로 발송 실패가 배정을 되돌리지 않는다.
-  if (adminId && assigneeName) {
-    const result = await sendAssigneeNotification(leadId, assigneeName, accessToken);
+  if (assignee) {
+    // 알림톡 #{담당자명} = "{회사명} {이름}" (콘솔 표시는 이름만 — labels SSOT).
+    const alimtalkName = [assignee.company, assignee.name].filter(Boolean).join(' ');
+    const result = await sendAssigneeNotification(leadId, alimtalkName, accessToken);
     return { ok: true, ...result };
   }
   return { ok: true };
