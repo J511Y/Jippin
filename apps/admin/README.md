@@ -17,7 +17,7 @@ Next.js 16(App Router) 단독 앱. 별도 백엔드 없이 main Supabase 프로�
 cd apps/admin
 cp .env.example .env.local   # anon key 는 Supabase 대시보드에서 주입
 corepack pnpm@9 install
-corepack pnpm@9 dev          # http://localhost:3100
+corepack pnpm@9 dev          # http://localhost:4000
 ```
 
 - 글로벌 pnpm v11 과 무관하게 `corepack pnpm@9` 로 호출한다 (engines.pnpm <10).

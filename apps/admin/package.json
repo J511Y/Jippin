@@ -10,9 +10,9 @@
   },
   "packageManager": "pnpm@9.12.0",
   "scripts": {
-    "dev": "next dev -p 3100",
+    "dev": "next dev -p 4000",
     "build": "next build",
-    "start": "next start -p 3100",
+    "start": "next start -p 4000",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
