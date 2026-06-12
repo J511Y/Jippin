@@ -1,8 +1,9 @@
 /**
  * 회원 목록 데이터 로더 (CMP-DIRECT).
  *
- * 정본은 public.users — 카카오/이메일 가입을 거친 집핀 정식 회원 테이블(0005)이다.
- * (auth.users 의 익명 세션은 회원이 아니므로 포함하지 않는다.)
+ * 계정 SSOT 는 auth.users — 익명 세션을 제외한 전체 계정이 목록 기준이고,
+ * public.users 는 앱 프로필(LEFT JOIN)로만 붙인다 (0012 admin_list_users RPC).
+ * status 가 null 이면 프로필 미생성 계정(가입 미완료/관리자)이다.
  * 서버 전용 — 호출자는 requireAdminUser 게이트를 통과해야 한다.
  */
 
@@ -16,9 +17,9 @@ export interface UserListRow {
   id: string;
   email: string | null;
   display_name: string | null;
-  status: string;
+  status: string | null;
   role: string;
-  last_login_at: string | null;
+  last_sign_in_at: string | null;
   created_at: string;
 }
 
@@ -33,24 +34,24 @@ export async function listUsers(filter: { q?: string; page?: number }): Promise<
   const offset = (page - 1) * USERS_PAGE_SIZE;
   const term = filter.q?.trim() || null;
 
-  // 1차: 0012 admin_list_users RPC — auth.users 조인으로 email 포함 + 이메일 검색.
+  // 1차: 0012 admin_list_users RPC — auth.users(익명 제외) 기준 + public.users 프로필 조인.
   const { data, error } = await supabase.rpc('admin_list_users', {
     search: term,
     page_limit: USERS_PAGE_SIZE,
     page_offset: offset
   });
   if (!error && Array.isArray(data)) {
-    const rows = data as Array<UserListRow & { total_count: number }>;
+    const rows = data as Array<UserListRow & { provider: string | null; total_count: number }>;
     return {
-      rows: rows.map(({ total_count: _total, ...row }) => row),
+      rows: rows.map(({ total_count: _total, provider: _provider, ...row }) => row),
       total: rows[0] ? Number(rows[0].total_count) : 0,
       page,
       pageSize: USERS_PAGE_SIZE
     };
   }
 
-  // 폴백 — 0012 미적용 환경. public.users 에는 email 이 없으므로(0007 정리)
-  // display_name 검색만 지원하고 email 은 비워 둔다.
+  // 폴백 — 0012 미적용 환경. auth.users 는 PostgREST 로 접근 불가하므로 public.users
+  // 프로필만으로 근사 표시한다 (email 없음 — 0007 정리, last_login_at 을 최근 로그인으로).
   let query = supabase
     .from('users')
     .select('id, display_name, status, role, last_login_at, created_at', { count: 'exact' })
@@ -69,7 +70,12 @@ export async function listUsers(filter: { q?: string; page?: number }): Promise<
     throw new Error(`회원 조회 실패: ${fallbackError.message}`);
   }
   return {
-    rows: (rows ?? []).map((row) => ({ ...row, email: null }) as UserListRow),
+    rows: (rows ?? []).map((row) => {
+      const { last_login_at, ...rest } = row as Record<string, unknown> & {
+        last_login_at: string | null;
+      };
+      return { ...rest, email: null, last_sign_in_at: last_login_at } as UserListRow;
+    }),
     total: count ?? 0,
     page,
     pageSize: USERS_PAGE_SIZE

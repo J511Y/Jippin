@@ -169,8 +169,9 @@ as $$
   order by u.email;
 $$;
 
--- 회원 목록 (관리자 콘솔 /users). public.users 는 0007 정리로 email 컬럼이 없고
--- auth.users 가 이메일 SSOT 이므로 security definer 조인으로 합쳐 준다.
+-- 회원 목록 (관리자 콘솔 /users). 계정 SSOT 는 auth.users — 익명 세션을 제외한
+-- 전체 계정을 기준으로 하고, public.users 는 앱 프로필(LEFT JOIN)로만 붙인다.
+-- (프로필 row 가 없는 계정 = 가입 미완료/관리자 계정도 목록에 보인다 — status null.)
 create or replace function public.admin_list_users(
   search text default null,
   page_limit integer default 20,
@@ -182,7 +183,8 @@ returns table (
   display_name text,
   status text,
   role text,
-  last_login_at timestamp with time zone,
+  provider text,
+  last_sign_in_at timestamp with time zone,
   created_at timestamp with time zone,
   total_count bigint
 )
@@ -192,22 +194,30 @@ security definer
 set search_path = public, pg_temp
 as $$
   select
-    u.id,
+    au.id,
     au.email::text,
-    u.display_name,
+    coalesce(
+      nullif(btrim(au.raw_user_meta_data ->> 'name'), ''),
+      u.display_name
+    ) as display_name,
     u.status,
-    u.role,
-    u.last_login_at,
-    u.created_at,
+    coalesce(au.raw_app_meta_data ->> 'role', u.role, 'user') as role,
+    au.raw_app_meta_data ->> 'provider' as provider,
+    au.last_sign_in_at,
+    au.created_at,
     count(*) over () as total_count
-  from public.users as u
-  join auth.users as au on au.id = u.id
+  from auth.users as au
+  left join public.users as u on u.id = au.id
   where
-    search is null
-    or btrim(search) = ''
-    or au.email ilike '%' || btrim(search) || '%'
-    or u.display_name ilike '%' || btrim(search) || '%'
-  order by u.created_at desc
+    coalesce(au.is_anonymous, false) = false
+    and (
+      search is null
+      or btrim(search) = ''
+      or au.email ilike '%' || btrim(search) || '%'
+      or u.display_name ilike '%' || btrim(search) || '%'
+      or au.raw_user_meta_data ->> 'name' ilike '%' || btrim(search) || '%'
+    )
+  order by au.created_at desc
   limit greatest(coalesce(page_limit, 20), 1)
   offset greatest(coalesce(page_offset, 0), 0);
 $$;

@@ -46,7 +46,8 @@ export default async function UsersPage({
         <div>
           <h1 className="text-xl font-semibold">회원</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            정식 회원 {total.toLocaleString('ko-KR')}명
+            계정 {total.toLocaleString('ko-KR')}개 — 익명 세션 제외, 프로필(public.users)은
+            조인 표시
           </p>
         </div>
         <UserSearch q={params.q} />
@@ -77,15 +78,20 @@ export default async function UsersPage({
                   <TableCell className="font-medium">{user.display_name ?? '—'}</TableCell>
                   <TableCell className="text-muted-foreground">{user.email ?? '—'}</TableCell>
                   <TableCell>
-                    <span className="flex items-center gap-2 text-sm">
-                      <span
-                        className={cn(
-                          'size-1.5 rounded-full',
-                          USER_STATUS_DOT_CLASS[user.status] ?? 'bg-zinc-400'
-                        )}
-                      />
-                      {USER_STATUS_LABELS[user.status] ?? user.status}
-                    </span>
+                    {user.status ? (
+                      <span className="flex items-center gap-2 text-sm">
+                        <span
+                          className={cn(
+                            'size-1.5 rounded-full',
+                            USER_STATUS_DOT_CLASS[user.status] ?? 'bg-zinc-400'
+                          )}
+                        />
+                        {USER_STATUS_LABELS[user.status] ?? user.status}
+                      </span>
+                    ) : (
+                      // public.users 프로필이 없는 계정 (가입 미완료/관리자 계정)
+                      <span className="text-muted-foreground text-sm">프로필 없음</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Badge variant="secondary" className="font-normal">
@@ -93,7 +99,7 @@ export default async function UsersPage({
                     </Badge>
                   </TableCell>
                   <TableCell className="text-muted-foreground text-right text-xs tabular-nums">
-                    {formatDateTime(user.last_login_at)}
+                    {formatDateTime(user.last_sign_in_at)}
                   </TableCell>
                   <TableCell className="text-muted-foreground text-right text-xs tabular-nums">
                     {formatDateTime(user.created_at)}
