@@ -1,5 +1,6 @@
 import { Badge, Button, Card, Group, Stack, Text, Title } from '@mantine/core';
 import type { Metadata } from 'next';
+import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
 import { LegalNotice } from '@/components/LegalNotice';
 
 type ReportPageProps = {
@@ -58,16 +59,17 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
       <LegalNotice variant="inline" />
 
       <Stack gap="sm">
-        <Button
-          component="a"
-          href={`/leads/new?fromSession=${sessionId}`}
+        {/* 기존 fromSession(전환 컨텍스트) 파라미터와 cta(인입 추적)를 함께 부착. */}
+        <LeadCtaButton
+          cta="report_bottom"
+          fromSession={sessionId}
           size="lg"
           color="coral"
           radius="md"
           fullWidth
         >
           전문가 상담 신청하기
-        </Button>
+        </LeadCtaButton>
         <Button
           component="a"
           href="/sessions"

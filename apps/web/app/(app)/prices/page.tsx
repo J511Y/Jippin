@@ -14,6 +14,8 @@ import {
 import { IconArrowRight, IconCheck } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 
+import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+import { type LeadCtaId } from '@/lib/analytics/lead-cta';
 import { SITE_OG_IMAGE } from '@/lib/site';
 
 export const metadata: Metadata = {
@@ -30,13 +32,22 @@ export const metadata: Metadata = {
   }
 };
 
+type PlanCta = {
+  label: string;
+  color: 'jippin' | 'coral';
+  variant?: 'filled' | 'default';
+} & (
+  | { href: string; leadCta?: never }
+  | { href?: never; leadCta: LeadCtaId } // 상담 인입 CTA — 위치 식별자로 추적
+);
+
 type Plan = {
   name: string;
   price: string;
   priceNote?: string;
   description: string;
   features: string[];
-  cta: { href: string; label: string; color: 'jippin' | 'coral'; variant?: 'filled' | 'default' };
+  cta: PlanCta;
   highlighted?: boolean;
 };
 
@@ -63,7 +74,7 @@ const PLANS: Plan[] = [
       '현장 리스크 피드백',
       '1일 이내 회신'
     ],
-    cta: { href: '/leads/new', label: '상담 신청하기', color: 'coral', variant: 'filled' },
+    cta: { leadCta: 'prices_consult', label: '상담 신청하기', color: 'coral', variant: 'filled' },
     highlighted: true
   },
   {
@@ -76,7 +87,7 @@ const PLANS: Plan[] = [
       '현장 실측 방문',
       '행위허가 서류 대행',
     ],
-    cta: { href: '/leads/new', label: '상담 신청하기', color: 'jippin', variant: 'default' }
+    cta: { leadCta: 'prices_permit', label: '상담 신청하기', color: 'jippin', variant: 'default' }
   }
 ];
 
@@ -180,19 +191,34 @@ export default function PricesPage() {
                   ))}
                 </Stack>
 
-                <Button
-                  component="a"
-                  href={plan.cta.href}
-                  size="md"
-                  radius="md"
-                  color={plan.cta.color}
-                  variant={plan.cta.variant ?? 'filled'}
-                  fullWidth
-                  mt="auto"
-                  rightSection={<IconArrowRight size={16} />}
-                >
-                  {plan.cta.label}
-                </Button>
+                {plan.cta.leadCta ? (
+                  <LeadCtaButton
+                    cta={plan.cta.leadCta}
+                    size="md"
+                    radius="md"
+                    color={plan.cta.color}
+                    variant={plan.cta.variant ?? 'filled'}
+                    fullWidth
+                    mt="auto"
+                    rightSection={<IconArrowRight size={16} />}
+                  >
+                    {plan.cta.label}
+                  </LeadCtaButton>
+                ) : (
+                  <Button
+                    component="a"
+                    href={plan.cta.href}
+                    size="md"
+                    radius="md"
+                    color={plan.cta.color}
+                    variant={plan.cta.variant ?? 'filled'}
+                    fullWidth
+                    mt="auto"
+                    rightSection={<IconArrowRight size={16} />}
+                  >
+                    {plan.cta.label}
+                  </Button>
+                )}
               </Stack>
             </Card>
           ))}

@@ -18,6 +18,7 @@ import { notifications } from '@mantine/notifications';
 import { IconPaperclip, IconSearch } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { PhoneInput } from '@/components/inputs/PhoneInput';
+import { trackLeadSubmit } from '@/lib/analytics/lead-cta';
 import { parseApiError } from '@/lib/api/error';
 import {
   createLead,
@@ -169,6 +170,9 @@ export function ConsultationLeadForm() {
         message: values.message.trim() || null,
         attachments
       });
+      // 인입 식별자는 현재 URL 의 ?cta= 에서 읽는다(직접 진입이면 '(direct)').
+      // 제출 핸들러 안에서만 location 을 읽으므로 useSearchParams/Suspense 가 필요 없다.
+      trackLeadSubmit('lead_page');
       notifications.show({
         color: 'teal',
         title: '상담 신청이 접수되었어요',

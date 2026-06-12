@@ -12,6 +12,7 @@ import { IconChevronRight } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
+import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
 import { FaqAnswer } from '@/components/faq/FaqAnswer';
 import {
   FAQ_CATEGORY_LABELS,
@@ -184,9 +185,9 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
           <Button component="a" href="/sessions/new" radius="md">
             무료로 사전검토 시작
           </Button>
-          <Button component="a" href="/leads/new" variant="default" radius="md">
+          <LeadCtaButton cta="faq_detail" variant="default" radius="md">
             전문가 상담
-          </Button>
+          </LeadCtaButton>
         </Group>
       </Stack>
 
