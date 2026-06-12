@@ -50,7 +50,12 @@
 
 - Access token: HS256, payload `{ sub: user_id, role, exp, iat, request_id }`, TTL 1 시간 (`apps/api/app/core/config.py:jwt_access_ttl_seconds`).
 - Refresh token: 7 일 TTL, DB `users.refresh_token_hash` 에 hash 만 저장 (bcrypt cost ≥12).
-- Admin 2 차 인증: TOTP (RFC 6238). Admin 로그인 시 `/admin/2fa/verify` 강제.
+- Admin 2 차 인증: **운영자 결정 (2026-06-12) 으로 적용 유예.** 관리자 콘솔 (`apps/admin`)
+  은 당분간 이메일+비밀번호 + `app_metadata.role='admin'` 클레임 게이트로 운영한다
+  (role 은 service_role 로만 부여 가능 — `tools/admin/create-admin-users.mjs`).
+  상담 운영 본격화 / 외부 공개 전에 Supabase MFA (TOTP, AAL2 게이트) 도입을 재평가한다.
+  (원 정책: TOTP RFC 6238, Admin 로그인 시 강제 — PR #117 Codex 리뷰에서 지적,
+  운영자가 유예 결정.)
 
 ### 2.3 후속 이슈 트리거
 
