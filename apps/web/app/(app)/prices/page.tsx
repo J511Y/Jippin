@@ -109,9 +109,8 @@ export default function PricesPage() {
             >
               사전검토는 무료, 상담은 필요한 만큼
             </Title>
-            <Text c="dimmed" maw={560} style={{ wordBreak: 'keep-all' }}>
-              AI 사전검토로 가능성부터 확인하고, 더 자세한 상담을 원하시는 경우 전문가 상담으로
-              이어가세요.
+            <Text c="dimmed" maw={480} style={{ wordBreak: 'keep-all' }}>
+              AI 사전검토로 가능성부터 확인하고, 더 자세한 내용은 전문가 상담으로 이어가세요.
             </Text>
           </Stack>
         </Container>
@@ -202,6 +201,20 @@ export default function PricesPage() {
         <Text size="xs" c="dimmed" ta="center" mt="xl">
           상담 상품과 가격은 대상 규모와 진행 범위에 따라 안내해 드립니다.
         </Text>
+
+        {/* 가격 앵커가 '문의' 중심이라, 비용 관련 FAQ 로 바로 이어주는 보조 동선을 둔다. */}
+        <Group justify="center" mt="md">
+          <Button
+            component="a"
+            href="/faq?category=cost"
+            variant="subtle"
+            color="jippin"
+            radius="md"
+            rightSection={<IconArrowRight size={16} />}
+          >
+            비용 관련 자주묻는질문 보기
+          </Button>
+        </Group>
       </Container>
     </Box>
   );

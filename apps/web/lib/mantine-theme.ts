@@ -1,4 +1,5 @@
 import {
+  Card,
   createTheme,
   InputWrapper,
   type CSSVariablesResolver,
@@ -151,13 +152,25 @@ export const jippinTheme = createTheme({
   headings: {
     fontFamily: 'inherit',
     fontWeight: '600',
+    // 페이지 타이틀(h1)~카드 타이틀(h3) 스케일 SSOT. 페이지별 fz 오버라이드로
+    // 18/22/24/28px 가 혼재하던 것을 본 스케일로 통일한다 (CMP-DIRECT UI 정비).
     sizes: {
-      h1: { fontSize: '1.375rem', lineHeight: '1.875rem' },
-      h2: { fontSize: '1.125rem', lineHeight: '1.625rem' },
-      h3: { fontSize: '1rem', lineHeight: '1.5rem' }
+      h1: { fontSize: '1.75rem', lineHeight: '2.375rem' },
+      h2: { fontSize: '1.375rem', lineHeight: '1.875rem' },
+      h3: { fontSize: '1.125rem', lineHeight: '1.625rem' },
+      h4: { fontSize: '1rem', lineHeight: '1.5rem' }
     }
   },
   components: {
+    // 표면 카드 기본값 SSOT — 라디우스(lg)와 보더 컬러(브랜드 토큰)를 고정한다.
+    // Mantine 기본 보더(gray-3 #DEE2E6)와 브랜드 보더(#D9E3E1)가 한 화면에 섞여
+    // 미묘하게 다른 두 회색 선이 보이던 문제를 막는다.
+    Card: Card.extend({
+      defaultProps: { radius: 'lg' },
+      styles: {
+        root: { borderColor: 'var(--jippin-brand-border)' }
+      }
+    }),
     // 입력 label–input 간격/크기 보정. Mantine 기본은 label margin 0 + 다소 큰 폰트라
     // 답답해 보인다. TextInput·Textarea·Select 등은 내부적으로 InputWrapper 로 label 을
     // 렌더하므로 본 오버라이드가 모든 입력에 전역 적용된다.

@@ -48,7 +48,7 @@ export default async function FaqPage() {
         dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }}
       />
       <Stack gap={4}>
-        <Title order={1} fz="1.75rem" style={{ wordBreak: 'keep-all' }}>
+        <Title order={1} style={{ wordBreak: 'keep-all' }}>
           자주묻는질문
         </Title>
         <Text c="dimmed" style={{ wordBreak: 'keep-all' }}>

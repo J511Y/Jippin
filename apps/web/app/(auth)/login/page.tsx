@@ -1,4 +1,4 @@
-import { Anchor, Center, Divider, Group, Stack, Text } from '@mantine/core';
+import { Anchor, Center, Divider, Group, Stack, Text, Title } from '@mantine/core';
 
 import { DEFAULT_NEXT, isSafeNext, resolveSafeNext } from '@/lib/safe-redirect';
 
@@ -45,8 +45,18 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   return (
     <Center mih="68vh" py="xl">
       <Stack gap="lg" w="100%" maw={400}>
+        {/* 회원가입 페이지와 같은 타이틀 블록 — 필드부터 시작하지 않도록 한다. */}
+        <Stack gap={4}>
+          <Title order={1} fz="h2">
+            로그인
+          </Title>
+          <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+            집핀 계정으로 상담 진행 상황을 확인하세요.
+          </Text>
+        </Stack>
+
         {registered ? (
-          <Text size="sm" c="teal" ta="center" style={{ wordBreak: 'keep-all' }}>
+          <Text size="sm" c="success.6" ta="center" style={{ wordBreak: 'keep-all' }}>
             가입이 완료되었습니다. 가입한 이메일과 비밀번호로 로그인해 주세요.
           </Text>
         ) : null}

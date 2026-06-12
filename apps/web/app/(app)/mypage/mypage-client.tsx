@@ -3,21 +3,27 @@
 import {
   Alert,
   Badge,
+  Box,
   Button,
   Card,
-  Divider,
   Group,
   Loader,
   Modal,
   PasswordInput,
   Stack,
+  Tabs,
   Text,
   ThemeIcon,
   Title
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { IconInbox, IconLogout, IconUser } from '@tabler/icons-react';
+import {
+  IconClipboardList,
+  IconInbox,
+  IconUser
+} from '@tabler/icons-react';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
@@ -34,8 +40,18 @@ import { createClient } from '@/lib/supabase/client';
 /**
  * 마이페이지 (CMP-DIRECT).
  *
- * 프로필 · 상담 현황(기존 /contacts 에서 이동) · 비밀번호 변경 · 로그아웃/회원 탈퇴.
+ * '내 정보'(프로필 · 비밀번호 변경 · 회원 탈퇴)와 '상담 현황'(기존 /contacts 에서
+ * 이동) 두 탭으로 구성한다. 활성 탭은 URL 쿼리(`?tab=`)와 동기화해 딥링크를
+ * 지원한다.
  */
+
+type MyPageTab = 'profile' | 'consultations';
+
+const DEFAULT_TAB: MyPageTab = 'profile';
+
+function isMyPageTab(value: string | null): value is MyPageTab {
+  return value === 'profile' || value === 'consultations';
+}
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   new: { label: '접수됨', color: 'jippin' },
@@ -56,10 +72,16 @@ function leadTitle(lead: MyLead): string {
 }
 
 export function MyPageClient() {
+  const router = useRouter();
+  const pathname = usePathname();
+
   const [email, setEmail] = useState<string | null>(null);
   const [name, setName] = useState<string | null>(null);
   const [isEmailUser, setIsEmailUser] = useState(false);
+  const [providerLabel, setProviderLabel] = useState<string | null>(null);
+  const [joinedAt, setJoinedAt] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [tab, setTab] = useState<MyPageTab>(DEFAULT_TAB);
 
   useEffect(() => {
     const supabase = createClient();
@@ -73,30 +95,69 @@ export function MyPageClient() {
       const appMeta = (user?.app_metadata ?? {}) as { provider?: string; providers?: string[] };
       const providers = appMeta.providers ?? (appMeta.provider ? [appMeta.provider] : []);
       setIsEmailUser(providers.includes('email'));
+      setProviderLabel(
+        providers.includes('kakao')
+          ? '카카오 연동'
+          : providers.includes('email')
+            ? '이메일 가입'
+            : null
+      );
+      setJoinedAt(user?.created_at ? user.created_at.slice(0, 10) : null);
       setAuthReady(true);
     });
   }, []);
 
-  return (
-    <Stack gap="xl">
-      <Group justify="space-between" align="flex-end" wrap="nowrap">
-        <Title order={1} fz="h1">
-          마이페이지
-        </Title>
-        <Button
-          variant="subtle"
-          color="gray"
-          leftSection={<IconLogout size={16} />}
-          onClick={() => void logout()}
-        >
-          로그아웃
-        </Button>
-      </Group>
+  // 공유된 URL(`/mypage?tab=`)의 탭 상태는 마운트 후 한 번만 반영한다.
+  // FaqBrowser 와 같은 패턴 — useSearchParams 의 Suspense 요구를 피하면서
+  // SSR 은 기본 탭으로 렌더한다(외부 시스템 = URL 의 의도된 1회 동기화).
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    const raw = new URLSearchParams(window.location.search).get('tab');
+    if (isMyPageTab(raw)) setTab(raw);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
 
-      <ProfileCard email={email} name={name} ready={authReady} />
-      <ConsultationsSection />
-      {isEmailUser ? <PasswordChangeCard /> : null}
-      <DeleteAccountCard />
+  const handleTab = (value: string | null) => {
+    const next = isMyPageTab(value) ? value : DEFAULT_TAB;
+    setTab(next);
+    router.replace(next === DEFAULT_TAB ? pathname : `${pathname}?tab=${next}`, {
+      scroll: false
+    });
+  };
+
+  return (
+    <Stack gap="lg">
+      {/* 로그아웃은 글로벌 헤더(데스크톱)·드로어(모바일)가 제공한다 — 중복 배치하지 않는다. */}
+      <Title order={1}>마이페이지</Title>
+
+      <Tabs value={tab} onChange={handleTab} color="jippin" keepMounted>
+        <Tabs.List>
+          <Tabs.Tab value="profile" leftSection={<IconUser size={16} />}>
+            내 정보
+          </Tabs.Tab>
+          <Tabs.Tab value="consultations" leftSection={<IconClipboardList size={16} />}>
+            상담 현황
+          </Tabs.Tab>
+        </Tabs.List>
+
+        <Tabs.Panel value="profile" pt="lg">
+          <Stack gap="xl">
+            <ProfileCard
+              email={email}
+              name={name}
+              providerLabel={providerLabel}
+              joinedAt={joinedAt}
+              ready={authReady}
+            />
+            {isEmailUser ? <PasswordChangeCard /> : null}
+            <DeleteAccountSection />
+          </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="consultations" pt="lg">
+          <ConsultationsSection />
+        </Tabs.Panel>
+      </Tabs>
     </Stack>
   );
 }
@@ -104,14 +165,18 @@ export function MyPageClient() {
 function ProfileCard({
   email,
   name,
+  providerLabel,
+  joinedAt,
   ready
 }: {
   email: string | null;
   name: string | null;
+  providerLabel: string | null;
+  joinedAt: string | null;
   ready: boolean;
 }) {
   return (
-    <Card withBorder radius="lg" padding="lg">
+    <Card withBorder padding="lg">
       <Group gap="md" wrap="nowrap">
         <ThemeIcon size={44} radius="xl" variant="light" color="jippin">
           <IconUser size={22} />
@@ -119,10 +184,22 @@ function ProfileCard({
         <Stack gap={2}>
           {ready ? (
             <>
-              <Text fw={600}>{name ?? '회원'}</Text>
+              <Group gap="xs" wrap="nowrap">
+                <Text fw={600}>{name ?? '회원'}</Text>
+                {providerLabel ? (
+                  <Badge variant="light" color="jippin" radius="sm" size="sm">
+                    {providerLabel}
+                  </Badge>
+                ) : null}
+              </Group>
               <Text size="sm" c="dimmed">
                 {email ?? '이메일 정보 없음'}
               </Text>
+              {joinedAt ? (
+                <Text size="xs" c="dimmed">
+                  {joinedAt} 가입
+                </Text>
+              ) : null}
             </>
           ) : (
             <Loader size="sm" />
@@ -164,7 +241,7 @@ function ConsultationsSection() {
       </Group>
 
       {error ? (
-        <Alert color="red" variant="light">
+        <Alert color="danger" variant="light">
           {error}
         </Alert>
       ) : leads === null ? (
@@ -172,7 +249,7 @@ function ConsultationsSection() {
           <Loader size="sm" />
         </Group>
       ) : leads.length === 0 ? (
-        <Card withBorder radius="lg" padding="xl">
+        <Card withBorder padding="xl">
           <Stack align="center" gap="sm" ta="center" py="md">
             <ThemeIcon size={48} radius="xl" variant="light" color="gray">
               <IconInbox size={24} />
@@ -246,33 +323,38 @@ function PasswordChangeCard() {
   }
 
   return (
-    <Card withBorder radius="lg" padding="lg">
+    <Card withBorder padding="lg">
       <form onSubmit={handleSubmit(onSubmit)} noValidate>
         <Stack gap="sm">
           <Title order={2} fz="h3">
             비밀번호 변경
           </Title>
-          <PasswordInput
-            label="현재 비밀번호"
-            autoComplete="current-password"
-            error={errors.current?.message}
-            {...register('current')}
-          />
-          <PasswordInput
-            label="새 비밀번호"
-            description="6자 이상, 영문과 숫자 포함"
-            autoComplete="new-password"
-            error={errors.password?.message}
-            {...register('password')}
-          />
-          <PasswordInput
-            label="새 비밀번호 확인"
-            autoComplete="new-password"
-            error={errors.confirm?.message}
-            {...register('confirm')}
-          />
+          {/* lg 컨테이너에서도 입력 줄 길이는 읽기 좋게 480px 로 제한한다. */}
+          <Box maw={480}>
+            <Stack gap="sm">
+              <PasswordInput
+                label="현재 비밀번호"
+                autoComplete="current-password"
+                error={errors.current?.message}
+                {...register('current')}
+              />
+              <PasswordInput
+                label="새 비밀번호"
+                description="6자 이상, 영문과 숫자 포함"
+                autoComplete="new-password"
+                error={errors.password?.message}
+                {...register('password')}
+              />
+              <PasswordInput
+                label="새 비밀번호 확인"
+                autoComplete="new-password"
+                error={errors.confirm?.message}
+                {...register('confirm')}
+              />
+            </Stack>
+          </Box>
           {serverError ? (
-            <Alert color="red" variant="light" py="xs">
+            <Alert color="danger" variant="light" py="xs">
               {serverError}
             </Alert>
           ) : null}
@@ -290,7 +372,11 @@ function PasswordChangeCard() {
   );
 }
 
-function DeleteAccountCard() {
+/**
+ * 회원 탈퇴 — 위험 액션이라 카드로 노출하지 않고 탭 최하단의 보조 링크로 강등한다.
+ * 안내·확정은 모달에서 처리한다.
+ */
+function DeleteAccountSection() {
   const [opened, { open, close }] = useDisclosure(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -308,28 +394,22 @@ function DeleteAccountCard() {
   }
 
   return (
-    <Card withBorder radius="lg" padding="lg">
-      <Stack gap="sm">
-        <Divider />
-        <Title order={2} fz="h3" c="red">
-          회원 탈퇴
-        </Title>
-        <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-          탈퇴하면 계정 정보가 삭제되며 되돌릴 수 없습니다. 신청한 상담 내역은 운영팀
-          처리를 위해 익명으로 보존될 수 있습니다.
-        </Text>
-        <Button variant="light" color="red" radius="md" w="fit-content" onClick={open}>
+    <>
+      <Group justify="flex-end">
+        <Button variant="subtle" color="danger" size="xs" onClick={open}>
           회원 탈퇴
         </Button>
-      </Stack>
+      </Group>
 
       <Modal opened={opened} onClose={close} title="정말 탈퇴하시겠어요?" centered>
         <Stack gap="md">
           <Text size="sm" style={{ wordBreak: 'keep-all' }}>
-            탈퇴 후에는 같은 이메일로 다시 가입해야 하며 계정을 복구할 수 없습니다.
+            탈퇴하면 계정 정보가 삭제되며 되돌릴 수 없습니다. 같은 이메일로 다시
+            가입해야 하며, 신청한 상담 내역은 운영팀 처리를 위해 익명으로 보존될 수
+            있습니다.
           </Text>
           {error ? (
-            <Alert color="red" variant="light" py="xs">
+            <Alert color="danger" variant="light" py="xs">
               {error}
             </Alert>
           ) : null}
@@ -337,12 +417,12 @@ function DeleteAccountCard() {
             <Button variant="default" onClick={close} disabled={loading}>
               취소
             </Button>
-            <Button color="red" loading={loading} onClick={() => void handleDelete()}>
+            <Button color="danger" loading={loading} onClick={() => void handleDelete()}>
               탈퇴하기
             </Button>
           </Group>
         </Stack>
       </Modal>
-    </Card>
+    </>
   );
 }

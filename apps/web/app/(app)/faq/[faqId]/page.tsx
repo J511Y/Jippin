@@ -8,6 +8,7 @@ import {
   Text,
   Title
 } from '@mantine/core';
+import { IconChevronRight } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
@@ -148,13 +149,12 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
         style={{
           background: 'var(--jippin-brand-surface-alt)',
           border: '1px solid var(--jippin-brand-border)',
-          borderRadius: 'var(--mantine-radius-md)'
+          borderRadius: 'var(--mantine-radius-lg)'
         }}
       >
         <Stack gap="md">
           <Title
             order={1}
-            fz="1.5rem"
             c="var(--jippin-brand-ink)"
             style={{ wordBreak: 'keep-all' }}
           >
@@ -169,7 +169,7 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
 
       {/* 상담 유도 — 카드 없이 본문 흐름에 둔다. 강조(primary)는 버튼 하나에만. */}
       <Stack gap="sm" component="section">
-        <Title order={2} fz="1.05rem" c="var(--jippin-brand-ink)">
+        <Title order={2} fz="h3" c="var(--jippin-brand-ink)">
           더 궁금한 점이 있으신가요?
         </Title>
         <Text
@@ -195,7 +195,7 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
       {/* 관련 질문 — 같은 카테고리 내부 링크, 표처럼 행 구분선으로 나눈다. */}
       {related.length > 0 ? (
         <Stack gap="sm" component="section">
-          <Title order={2} fz="1.05rem" c="var(--jippin-brand-ink)">
+          <Title order={2} fz="h3" c="var(--jippin-brand-ink)">
             관련 질문
           </Title>
           <Stack
@@ -203,7 +203,7 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
             style={{
               background: 'var(--jippin-brand-surface-alt)',
               border: '1px solid var(--jippin-brand-border)',
-              borderRadius: 'var(--mantine-radius-md)',
+              borderRadius: 'var(--mantine-radius-lg)',
               overflow: 'hidden'
             }}
           >
@@ -224,13 +224,20 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
                       : '1px solid var(--jippin-brand-border)'
                 }}
               >
-                <Text
-                  fw={500}
-                  c="var(--jippin-brand-copy)"
-                  style={{ wordBreak: 'keep-all' }}
-                >
-                  {other.question}
-                </Text>
+                <Group gap="sm" wrap="nowrap" justify="space-between" align="center">
+                  <Text
+                    fw={500}
+                    c="var(--jippin-brand-copy)"
+                    style={{ wordBreak: 'keep-all' }}
+                  >
+                    {other.question}
+                  </Text>
+                  <IconChevronRight
+                    size={16}
+                    aria-hidden
+                    style={{ flexShrink: 0, color: 'var(--jippin-brand-copy)' }}
+                  />
+                </Group>
               </Box>
             ))}
           </Stack>
