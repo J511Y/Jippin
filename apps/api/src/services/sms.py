@@ -19,6 +19,7 @@ from solapi.model import RequestMessage
 from ..config import Settings, get_settings
 from ..errors import ZippinException
 from ..logging import get_logger, log_external_op
+from .solapi_client import build_message_service
 
 logger = get_logger("zippin.sms")
 
@@ -41,16 +42,6 @@ def _require_provider(settings: Settings) -> tuple[str, str, str]:
     )
 
 
-def _build_service(
-    settings: Settings, api_key: str, api_secret: str
-) -> SolapiMessageService:
-    service = SolapiMessageService(api_key=api_key, api_secret=api_secret)
-    # SDK 는 base_url 을 https://api.solapi.com 으로 고정한다. 프록시/모의 서버로
-    # 엔드포인트를 바꿔야 하는 환경을 위해 설정값(SOLAPI_API_URL)으로 덮어쓴다.
-    service.base_url = settings.solapi_api_url.rstrip("/")
-    return service
-
-
 async def send_verification_sms(
     *,
     phone: str,
@@ -68,7 +59,7 @@ async def send_verification_sms(
 
     text = f"[집핀] 인증번호 [{code}] 를 입력해 주세요."
     message = RequestMessage(from_=sender, to=phone, text=text)
-    service = service or _build_service(settings, api_key, api_secret)
+    service = service or build_message_service(settings, api_key, api_secret)
 
     try:
         # SDK 의 send() 는 동기(blocking) httpx 호출이므로 스레드로 위임해
