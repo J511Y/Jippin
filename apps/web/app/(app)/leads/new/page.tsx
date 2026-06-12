@@ -35,7 +35,7 @@ export default function NewLeadPage() {
       <Group justify="flex-end">
         <Button
           component="a"
-          href="/mypage"
+          href="/mypage?tab=consultations"
           variant="subtle"
           color="jippin"
           radius="md"
