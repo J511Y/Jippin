@@ -27,6 +27,10 @@ logger = get_logger("zippin.request_log")
 
 RequestLogRecord = dict[str, Any]
 
+# Fly 헬스체크가 30초 간격으로 /healthz 를 호출해 request_logs 를 채우므로
+# 기록 대상에서 제외한다. 헬스 상태는 Fly 체크 결과로 충분하다.
+SKIP_PATHS: frozenset[str] = frozenset({"/healthz"})
+
 
 class RequestLogMiddleware:
     """Capture API request/response metadata and enqueue a best-effort DB insert."""
@@ -41,7 +45,7 @@ class RequestLogMiddleware:
         self.max_body_bytes = max_body_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] != "http" or scope["path"] in SKIP_PATHS:
             await self.app(scope, receive, send)
             return
 

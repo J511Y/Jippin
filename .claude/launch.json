@@ -1,0 +1,32 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "corepack",
+      "runtimeArgs": ["pnpm@9", "-C", "apps/web", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "admin",
+      "runtimeExecutable": "corepack",
+      "runtimeArgs": ["pnpm@9", "-C", "apps/admin", "dev"],
+      "port": 4000
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--directory",
+        "apps/api",
+        "uvicorn",
+        "src.main:app",
+        "--reload",
+        "--port",
+        "8000"
+      ],
+      "port": 8000
+    }
+  ]
+}
