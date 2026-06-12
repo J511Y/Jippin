@@ -110,14 +110,16 @@ export async function getSession(id: string): Promise<SessionDetail | null> {
 
 export async function getSessionMessages(sessionId: string): Promise<ChatMessageRow[]> {
   const supabase = createServiceRoleClient();
+  // 최신 300건을 가져와 시간순으로 뒤집는다 — 오래된 세션에서 최근 대화가
+  // limit 에 잘려 안 보이는 일이 없도록 (오름차순 + limit 은 앞쪽만 남긴다).
   const { data, error } = await supabase
     .from('chat_messages')
     .select('id, role, content, content_redacted, created_at')
     .eq('session_id', sessionId)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(300);
   if (error) return [];
-  return (data ?? []) as ChatMessageRow[];
+  return ((data ?? []) as ChatMessageRow[]).reverse();
 }
 
 export async function getSessionUploads(sessionId: string): Promise<SessionUploadRow[]> {
