@@ -27,6 +27,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
+import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
 import {
   AccountApiError,
   changePassword,
@@ -235,9 +236,9 @@ function ConsultationsSection() {
         <Title order={2} fz="h3">
           상담 현황
         </Title>
-        <Button component="a" href="/leads/new" color="coral" radius="md" size="xs">
+        <LeadCtaButton cta="mypage_header" color="coral" radius="md" size="xs">
           새 상담
-        </Button>
+        </LeadCtaButton>
       </Group>
 
       {error ? (
@@ -258,9 +259,9 @@ function ConsultationsSection() {
             <Text size="sm" c="dimmed">
               전문가 상담을 신청하면 여기에서 진행 상태를 확인할 수 있어요.
             </Text>
-            <Button component="a" href="/leads/new" color="coral" radius="md" mt="xs">
+            <LeadCtaButton cta="mypage_empty" color="coral" radius="md" mt="xs">
               상담 신청하기
-            </Button>
+            </LeadCtaButton>
           </Stack>
         </Card>
       ) : (

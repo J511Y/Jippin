@@ -11,6 +11,8 @@ import {
 import { IconArrowRight, IconCheck } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 
+import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+
 export const metadata: Metadata = {
   title: '상담 신청'
 };
@@ -53,9 +55,8 @@ export default function LeadsPage() {
         </Stack>
       </Card>
 
-      <Button
-        component="a"
-        href="/leads/new"
+      <LeadCtaButton
+        cta="leads_list"
         size="lg"
         color="coral"
         radius="md"
@@ -63,7 +64,7 @@ export default function LeadsPage() {
         rightSection={<IconArrowRight size={18} />}
       >
         상담 신청서 작성하기
-      </Button>
+      </LeadCtaButton>
 
       <Card withBorder radius="lg" padding="lg">
         <Stack gap="xs">

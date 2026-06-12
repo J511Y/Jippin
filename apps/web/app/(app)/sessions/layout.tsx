@@ -10,6 +10,7 @@ export default function SessionsLayout({ children }: { children: ReactNode }) {
     <ComingSoonGate
       title="AI 사전검토, 마무리 단계예요"
       description="검토 엔진을 다듬고 있어요. 지금은 전문가가 직접 사전검토부터 행위허가까지 도와드립니다."
+      ctaId="sessions_gate"
     >
       {children}
     </ComingSoonGate>

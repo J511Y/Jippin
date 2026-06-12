@@ -27,6 +27,7 @@ import {
 } from '@tabler/icons-react';
 import { Controller, useForm } from 'react-hook-form';
 import { PhoneInput } from '@/components/inputs/PhoneInput';
+import { trackLeadSubmit } from '@/lib/analytics/lead-cta';
 import { parseApiError } from '@/lib/api/error';
 import { createLead } from '@/lib/leads/api';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
@@ -75,6 +76,8 @@ export function QuickConsultSection() {
         applicant_phone: normalizeKoreanPhone(values.applicant_phone) ?? values.applicant_phone,
         message: values.message.trim() || null
       });
+      // 인라인 폼이라 /leads/new 를 거치지 않는다 — 위치 식별자를 직접 지정.
+      trackLeadSubmit('main_page', 'home_quick_form');
       notifications.show({
         color: 'teal',
         title: '상담 신청이 접수되었어요',
