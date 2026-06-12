@@ -9,7 +9,16 @@ const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 export const metadata: Metadata = {
   title: '집핀 관리자',
-  robots: { index: false, follow: false }
+  robots: { index: false, follow: false },
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/favicon-96x96.png', type: 'image/png', sizes: '96x96' }
+    ],
+    apple: '/apple-touch-icon.png'
+  },
+  manifest: '/site.webmanifest'
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

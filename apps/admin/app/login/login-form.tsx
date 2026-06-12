@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -55,9 +56,15 @@ export function LoginForm({ next }: { next?: string }) {
   return (
     <Card className="w-90">
       <CardHeader>
-        <div className="bg-foreground text-background mb-2 flex size-8 items-center justify-center rounded-md text-[15px] font-bold">
-          집
-        </div>
+        <Image
+          src="/logo.png"
+          alt="집핀"
+          width={32}
+          height={32}
+          className="mb-2"
+          priority
+          unoptimized
+        />
         <CardTitle>집핀 관리자</CardTitle>
         <CardDescription>관리자 계정으로 로그인하세요</CardDescription>
       </CardHeader>

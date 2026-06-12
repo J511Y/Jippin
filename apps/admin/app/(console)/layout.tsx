@@ -1,4 +1,5 @@
 import { LogOut } from 'lucide-react';
+import Image from 'next/image';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -26,9 +27,8 @@ export default async function ConsoleLayout({ children }: { children: ReactNode 
       <aside className="bg-sidebar fixed inset-y-0 left-0 flex w-60 flex-col border-r">
         <div className="flex h-14 items-center border-b px-4">
           <Link href="/" className="flex items-center gap-2 text-sm font-semibold">
-            <span className="bg-foreground text-background flex size-6 items-center justify-center rounded-md text-[13px] font-bold">
-              집
-            </span>
+            {/* 96px 원본을 24px 로 쓰는 정적 로고 — 옵티마이저(sharp) 의존을 피한다 */}
+            <Image src="/logo.png" alt="집핀" width={24} height={24} priority unoptimized />
             집핀 관리자
           </Link>
         </div>
