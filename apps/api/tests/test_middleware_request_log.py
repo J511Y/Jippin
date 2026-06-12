@@ -21,15 +21,25 @@ def _serialized(value):
     return json.dumps(value, default=str, sort_keys=True)
 
 
+def _app_with_ping():
+    app = create_app()
+
+    @app.get("/_ping")
+    async def _ping():
+        return {"ok": True}
+
+    return app
+
+
 def test_request_log_captures_request_id_and_duration(monkeypatch):
     records = []
     request_id = uuid.uuid4()
     monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
 
-    app = create_app()
+    app = _app_with_ping()
     with TestClient(app) as client:
         response = client.get(
-            "/healthz",
+            "/_ping",
             headers={
                 "x-request-id": str(request_id),
                 "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -50,6 +60,19 @@ def test_request_log_captures_request_id_and_duration(monkeypatch):
     assert record["country"] == "KR"
     assert record["region"] == "11"
     assert record["last_ip"] == "203.0.113.9"
+
+
+def test_request_log_skips_healthz(monkeypatch):
+    """Fly 헬스체크(/healthz)는 request_logs 에 기록하지 않는다."""
+    records = []
+    monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert records == []
 
 
 def test_request_log_redacts_body_and_query_without_consuming_body(monkeypatch):
@@ -233,10 +256,10 @@ def test_request_log_does_not_persist_sensitive_header_names_or_values(monkeypat
     records = []
     monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
 
-    app = create_app()
+    app = _app_with_ping()
     with TestClient(app) as client:
         response = client.get(
-            "/healthz",
+            "/_ping",
             headers={
                 "Authorization": "Bearer HEADERSECRET",
                 "Cookie": "session=COOKIESECRET",
@@ -264,10 +287,10 @@ def test_request_log_sanitizes_referrer_query_and_fragment(monkeypatch):
     records = []
     monkeypatch.setattr(request_log, "schedule_request_log_insert", records.append)
 
-    app = create_app()
+    app = _app_with_ping()
     with TestClient(app) as client:
         response = client.get(
-            "/healthz",
+            "/_ping",
             headers={
                 "Referer": "https://example.com/callback?token=ABC&state=xyz#frag"
             },
@@ -309,9 +332,9 @@ def test_request_log_schedule_failure_does_not_affect_response(monkeypatch):
 
     monkeypatch.setattr(request_log, "schedule_request_log_insert", _raise)
 
-    app = create_app()
+    app = _app_with_ping()
     with TestClient(app) as client:
-        response = client.get("/healthz")
+        response = client.get("/_ping")
 
     assert response.status_code == 200
 
