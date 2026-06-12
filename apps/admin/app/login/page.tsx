@@ -13,15 +13,7 @@ export default async function LoginPage({
 }) {
   const { next } = await searchParams;
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 24
-      }}
-    >
+    <main className="bg-secondary/40 flex min-h-screen items-center justify-center p-6">
       <LoginForm next={typeof next === 'string' ? next : undefined} />
     </main>
   );

@@ -1,6 +1,17 @@
 'use client';
 
-import { useState, type CSSProperties, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
+
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle
+} from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 /**
  * 관리자 로그인 폼 (CMP-DIRECT).
@@ -8,15 +19,6 @@ import { useState, type CSSProperties, type FormEvent } from 'react';
  * 비밀번호는 서버측 Route Handler(`/auth/login`)로만 전송하고 클라이언트
  * 스토리지에 남기지 않는다 (apps/web password-login 과 동일 원칙).
  */
-
-const inputStyle: CSSProperties = {
-  width: '100%',
-  padding: '10px 12px',
-  fontSize: 15,
-  border: '1px solid #d4d7dc',
-  borderRadius: 8
-};
-
 export function LoginForm({ next }: { next?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -51,51 +53,36 @@ export function LoginForm({ next }: { next?: string }) {
   }
 
   return (
-    <form
-      onSubmit={onSubmit}
-      style={{
-        width: 360,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-        padding: 32,
-        background: '#fff',
-        border: '1px solid #e3e5e9',
-        borderRadius: 12
-      }}
-    >
-      <h1 style={{ margin: 0, fontSize: 20 }}>집핀 관리자</h1>
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-        이메일
-        <input name="email" type="email" autoComplete="username" required style={inputStyle} />
-      </label>
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-        비밀번호
-        <input
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-          style={inputStyle}
-        />
-      </label>
-      {error ? <p style={{ margin: 0, fontSize: 13, color: '#c92a2a' }}>{error}</p> : null}
-      <button
-        type="submit"
-        disabled={submitting}
-        style={{
-          padding: '10px 12px',
-          fontSize: 15,
-          fontWeight: 600,
-          color: '#fff',
-          background: submitting ? '#868e96' : '#1a1c1f',
-          border: 'none',
-          borderRadius: 8,
-          cursor: submitting ? 'default' : 'pointer'
-        }}
-      >
-        {submitting ? '로그인 중…' : '로그인'}
-      </button>
-    </form>
+    <Card className="w-90">
+      <CardHeader>
+        <div className="bg-foreground text-background mb-2 flex size-8 items-center justify-center rounded-md text-[15px] font-bold">
+          집
+        </div>
+        <CardTitle>집핀 관리자</CardTitle>
+        <CardDescription>관리자 계정으로 로그인하세요</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={onSubmit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="email">이메일</Label>
+            <Input id="email" name="email" type="email" autoComplete="username" required />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="password">비밀번호</Label>
+            <Input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+            />
+          </div>
+          {error ? <p className="text-destructive text-sm">{error}</p> : null}
+          <Button type="submit" disabled={submitting} className="mt-1 w-full">
+            {submitting ? '로그인 중…' : '로그인'}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
