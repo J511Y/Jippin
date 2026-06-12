@@ -164,6 +164,27 @@ class MyLeadsResponse(BaseModel):
     items: list[MyLeadItem]
 
 
+class AssigneeNotificationRequest(BaseModel):
+    """담당자 배정 알림톡 발송 요청 — 관리자 콘솔(apps/admin) 전용.
+
+    ``assignee_name`` 은 "{회사명} {이름}" 조합으로 들어온다 (회사명 ≤60 + 이름 ≤40).
+    """
+
+    assignee_name: str = Field(min_length=1, max_length=101)
+
+    @field_validator("assignee_name")
+    @classmethod
+    def _strip_assignee_name(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("assignee_name 은 비어 있을 수 없습니다.")
+        return stripped
+
+
+class AssigneeNotificationResponse(BaseModel):
+    sent: bool
+
+
 class AddressSearchItem(BaseModel):
     """도로명주소 API(addrLinkApi.do) 결과 한 건의 정규화 형태."""
 

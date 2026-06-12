@@ -143,6 +143,69 @@ jobs:
         run: pnpm run lint
 
   # -------------------------------------------------------------------
+  # 2.5) apps/admin — 관리자 콘솔 (Next.js 16 / pnpm 9) typecheck + build
+  #      service_role 기반 PII 콘솔이므로 타입 깨짐/빌드 실패 머지를 차단한다.
+  # -------------------------------------------------------------------
+  admin:
+    name: admin (typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/admin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect apps/admin
+        id: detect
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [[ -f apps/admin/package.json ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/admin/package.json 없음 — 본 job 은 no-op."
+          fi
+
+      - name: Setup pnpm
+        if: steps.detect.outputs.exists == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        if: steps.detect.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+          cache-dependency-path: apps/admin/pnpm-lock.yaml
+
+      - name: pnpm install (frozen if lock present)
+        if: steps.detect.outputs.exists == 'true'
+        shell: bash
+        run: |
+          if [[ -f pnpm-lock.yaml ]]; then
+            pnpm install --frozen-lockfile
+          else
+            echo "::warning::pnpm-lock.yaml 미존재. 초기 부트스트랩 단계로 간주하고 lock 없이 설치한다."
+            pnpm install --no-frozen-lockfile
+          fi
+
+      - name: Typecheck (tsc --noEmit)
+        if: steps.detect.outputs.exists == 'true'
+        run: pnpm run typecheck
+
+      - name: Build (next build)
+        if: steps.detect.outputs.exists == 'true'
+        # env 는 전부 요청 시점에 lazy 로 읽으므로 빌드에는 더미 값으로 충분하다.
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-dummy-anon-key
+        run: pnpm run build
+
+  # -------------------------------------------------------------------
   # 3) apps/api — FastAPI 0.115 / Python 3.13 / uv (ruff)
   # -------------------------------------------------------------------
   api:
@@ -470,6 +533,7 @@ jobs:
     needs:
       - gitmoji-validate
       - web
+      - admin
       - api
       - typecheck-api
       - test-web
@@ -485,6 +549,7 @@ jobs:
           for r in \
             "${{ needs.gitmoji-validate.result }}" \
             "${{ needs.web.result }}" \
+            "${{ needs.admin.result }}" \
             "${{ needs.api.result }}" \
             "${{ needs.typecheck-api.result }}" \
             "${{ needs.test-web.result }}" \

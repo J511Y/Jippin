@@ -11,13 +11,21 @@ override 한 것이다.
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
-from ..auth.request_token import RequestUser, require_supabase_request_user
+from ..auth.request_token import (
+    RequestUser,
+    require_supabase_admin_user,
+    require_supabase_request_user,
+)
 from ..errors import ZippinException
 from ..logging import get_logger
 from ..schemas.leads import (
     AddressSearchResponse,
+    AssigneeNotificationRequest,
+    AssigneeNotificationResponse,
     LeadCreateRequest,
     LeadResponse,
     MyLeadsResponse,
@@ -56,6 +64,44 @@ async def create_lead(
         source_form=payload.source_form,
     )
     return LeadResponse.model_validate(row)
+
+
+@router.post(
+    "/{lead_id}/assignee-notification",
+    response_model=AssigneeNotificationResponse,
+    status_code=202,
+)
+async def notify_assignee_assigned(
+    lead_id: uuid.UUID,
+    payload: AssigneeNotificationRequest,
+    admin: RequestUser = Depends(require_supabase_admin_user),
+) -> AssigneeNotificationResponse:
+    """담당자 배정 알림톡 발송 — 관리자 콘솔(apps/admin)의 배정 액션 전용.
+
+    배정 자체(assigned_admin_id 갱신)는 관리자 앱이 service_role 로 직접 수행하고,
+    본 엔드포인트는 알림톡 발송만 담당한다(SOLAPI 자격증명은 backend 단독 보유).
+    발송 실패는 ``ZippinException`` 으로 그대로 전파해 관리자에게 결과를 알린다.
+    """
+
+    contact = await leads_service.get_lead_contact(lead_id=lead_id)
+    if contact is None:
+        raise ZippinException(
+            "상담 리드를 찾을 수 없습니다.",
+            code="LEAD_NOT_FOUND",
+            http_status=404,
+        )
+    await alimtalk_service.send_assignee_assigned_alimtalk(
+        phone=contact["applicant_phone"],
+        applicant_name=contact["applicant_name"],
+        assignee_name=payload.assignee_name,
+    )
+    # PII(고객명/연락처)는 로깅하지 않는다 — lead_id 와 발송자만 남긴다.
+    logger.info(
+        "lead_assignee_alimtalk_sent",
+        lead_id=str(lead_id),
+        admin_user_id=str(admin.user_id),
+    )
+    return AssigneeNotificationResponse(sent=True)
 
 
 @router.get("/mine", response_model=MyLeadsResponse)

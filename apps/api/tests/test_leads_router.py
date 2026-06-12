@@ -189,3 +189,86 @@ def test_lead_page_missing_fields_returns_422(monkeypatch, captured) -> None:
         )
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# POST /leads/{lead_id}/assignee-notification — 관리자 전용 담당자 배정 알림톡.
+# ---------------------------------------------------------------------------
+
+
+def _admin_client(monkeypatch):
+    pem, jwk = helpers.rsa_keypair()
+    helpers.install_jwks(monkeypatch, {"keys": [jwk]})
+    token, subject = helpers.mint_token(
+        pem,
+        "test-key-1",
+        extra_claims={"app_metadata": {"provider": "email", "role": "admin"}},
+    )
+    client = TestClient(create_app())
+    return client, token, subject
+
+
+def test_assignee_notification_rejects_non_admin(monkeypatch) -> None:
+    client, token, _subject = _auth_client(monkeypatch)
+    with client:
+        response = client.post(
+            f"/leads/{uuid.uuid4()}/assignee-notification",
+            headers={"authorization": f"Bearer {token}"},
+            json={"assignee_name": "김쿤"},
+        )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "AUTH_ADMIN_REQUIRED"
+
+
+def test_assignee_notification_lead_not_found(monkeypatch) -> None:
+    client, token, _subject = _admin_client(monkeypatch)
+
+    async def fake_contact(*, lead_id):  # noqa: ARG001
+        return None
+
+    monkeypatch.setattr("src.services.leads.get_lead_contact", fake_contact)
+    with client:
+        response = client.post(
+            f"/leads/{uuid.uuid4()}/assignee-notification",
+            headers={"authorization": f"Bearer {token}"},
+            json={"assignee_name": "김쿤"},
+        )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "LEAD_NOT_FOUND"
+
+
+def test_assignee_notification_sends_alimtalk(monkeypatch) -> None:
+    client, token, _subject = _admin_client(monkeypatch)
+    lead_id = uuid.uuid4()
+    sent: dict[str, object] = {}
+
+    async def fake_contact(*, lead_id):
+        return {
+            "id": lead_id,
+            "applicant_name": "홍길동",
+            "applicant_phone": "01012345678",
+        }
+
+    async def fake_send(*, phone, applicant_name, assignee_name, **_kwargs):
+        sent["phone"] = phone
+        sent["applicant_name"] = applicant_name
+        sent["assignee_name"] = assignee_name
+
+    monkeypatch.setattr("src.services.leads.get_lead_contact", fake_contact)
+    monkeypatch.setattr(
+        "src.services.alimtalk.send_assignee_assigned_alimtalk", fake_send
+    )
+    with client:
+        response = client.post(
+            f"/leads/{lead_id}/assignee-notification",
+            headers={"authorization": f"Bearer {token}"},
+            json={"assignee_name": "  김쿤  "},
+        )
+    assert response.status_code == 202
+    assert response.json() == {"sent": True}
+    # assignee_name 은 strip 되어 전달된다.
+    assert sent == {
+        "phone": "01012345678",
+        "applicant_name": "홍길동",
+        "assignee_name": "김쿤",
+    }
