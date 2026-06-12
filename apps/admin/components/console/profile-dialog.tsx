@@ -38,6 +38,7 @@ export function ProfileDialog({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -60,6 +61,7 @@ export function ProfileDialog({
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         className="hover:bg-secondary/60 flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors"
@@ -120,7 +122,17 @@ export function ProfileDialog({
             />
           </div>
           <DialogFooter>
-            <PasswordDialog />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                // 모달이 겹치지 않도록 프로필 모달을 닫고 비밀번호 모달을 연다.
+                setOpen(false);
+                setPasswordOpen(true);
+              }}
+            >
+              비밀번호 변경
+            </Button>
             <Button type="submit" disabled={pending}>
               {pending ? '저장 중…' : '저장'}
             </Button>
@@ -128,5 +140,14 @@ export function ProfileDialog({
         </form>
       </DialogContent>
     </Dialog>
+    <PasswordDialog
+      open={passwordOpen}
+      onOpenChange={(next) => {
+        setPasswordOpen(next);
+        // 비밀번호 모달이 닫히면(성공·취소 모두) 프로필 모달로 복귀한다.
+        if (!next) setOpen(true);
+      }}
+    />
+    </>
   );
 }

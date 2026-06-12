@@ -61,7 +61,23 @@ export async function updateProfile(input: ProfileInput): Promise<ActionResult> 
   return { ok: true };
 }
 
-export async function updatePassword(newPassword: string): Promise<ActionResult> {
+export interface PasswordInput {
+  currentPassword: string;
+  newPassword: string;
+}
+
+/** GoTrue 에러 코드 → 사용자용 한국어 메시지 (출처: supabase/auth apierrors). */
+const PASSWORD_ERROR_MESSAGES: Record<string, string> = {
+  current_password_required: '현재 비밀번호를 입력해 주세요.',
+  current_password_invalid: '현재 비밀번호가 올바르지 않습니다.',
+  same_password: '새 비밀번호가 현재 비밀번호와 같습니다. 다른 비밀번호를 입력해 주세요.',
+  weak_password: '비밀번호가 보안 기준을 충족하지 않습니다.'
+};
+
+export async function updatePassword({
+  currentPassword,
+  newPassword
+}: PasswordInput): Promise<ActionResult> {
   const supabase = await createServerComponentClient();
   const {
     data: { user }
@@ -70,6 +86,9 @@ export async function updatePassword(newPassword: string): Promise<ActionResult>
     return { ok: false, error: '관리자 권한이 필요합니다.' };
   }
 
+  if (!currentPassword) {
+    return { ok: false, error: '현재 비밀번호를 입력해 주세요.' };
+  }
   if (newPassword.length < 8) {
     return { ok: false, error: '비밀번호는 8자 이상이어야 합니다.' };
   }
@@ -77,9 +96,15 @@ export async function updatePassword(newPassword: string): Promise<ActionResult>
     return { ok: false, error: '비밀번호는 72자 이하여야 합니다.' };
   }
 
-  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  // Supabase 프로젝트의 secure password change 설정이 켜져 있어 현재 비밀번호
+  // 검증(current_password)이 필수다 — 누락 시 GoTrue 가 400(current_password_required)을 반환한다.
+  const { error } = await supabase.auth.updateUser({
+    password: newPassword,
+    current_password: currentPassword
+  });
   if (error) {
-    return { ok: false, error: `비밀번호 변경 실패: ${error.message}` };
+    const known = error.code ? PASSWORD_ERROR_MESSAGES[error.code] : undefined;
+    return { ok: false, error: known ?? `비밀번호 변경 실패: ${error.message}` };
   }
   return { ok: true };
 }

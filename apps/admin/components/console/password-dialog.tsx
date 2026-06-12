@@ -11,15 +11,27 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
-  DialogTrigger
+  DialogTitle
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
-/** 비밀번호 변경 모달 — 프로필 모달 푸터에서 중첩 Dialog 로 연다 (CMP-DIRECT). */
-export function PasswordDialog() {
-  const [open, setOpen] = useState(false);
+/**
+ * 비밀번호 변경 모달 (CMP-DIRECT).
+ *
+ * 프로필 모달과 겹치지 않도록 controlled 형제 모달로 둔다 — 열림/닫힘은
+ * `ProfileDialog` 가 소유하고, 닫히면 프로필 모달이 다시 열린다.
+ *
+ * Supabase 프로젝트는 비밀번호 변경 시 현재 비밀번호 확인을 요구한다
+ * (GoTrue `UpdatePasswordRequireCurrentPassword`) — 현재 비밀번호 입력 필수.
+ */
+export function PasswordDialog({
+  open,
+  onOpenChange
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -27,20 +39,21 @@ export function PasswordDialog() {
     event.preventDefault();
     setError(null);
     const form = new FormData(event.currentTarget);
-    const password = String(form.get('password') ?? '');
+    const currentPassword = String(form.get('current') ?? '');
+    const newPassword = String(form.get('password') ?? '');
     const confirm = String(form.get('confirm') ?? '');
-    if (password !== confirm) {
+    if (newPassword !== confirm) {
       setError('비밀번호 확인이 일치하지 않습니다.');
       return;
     }
     startTransition(async () => {
-      const result = await updatePassword(password);
+      const result = await updatePassword({ currentPassword, newPassword });
       if (!result.ok) {
         setError(result.error ?? '비밀번호 변경에 실패했습니다.');
         return;
       }
       toast.success('비밀번호를 변경했습니다.');
-      setOpen(false);
+      onOpenChange(false);
     });
   }
 
@@ -48,23 +61,29 @@ export function PasswordDialog() {
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        setOpen(next);
+        onOpenChange(next);
         if (!next) setError(null);
       }}
     >
-      <DialogTrigger
-        render={
-          <Button type="button" variant="outline">
-            비밀번호 변경
-          </Button>
-        }
-      />
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>비밀번호 변경</DialogTitle>
-          <DialogDescription>8자 이상의 새 비밀번호를 입력해 주세요.</DialogDescription>
+          <DialogDescription>
+            현재 비밀번호 확인 후 8자 이상의 새 비밀번호로 변경합니다.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="current-password">현재 비밀번호</Label>
+            <Input
+              id="current-password"
+              name="current"
+              type="password"
+              autoComplete="current-password"
+              maxLength={72}
+              required
+            />
+          </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="new-password">새 비밀번호</Label>
             <Input
