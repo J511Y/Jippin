@@ -142,6 +142,9 @@ class Settings(BaseSettings):
     solapi_api_secret: str | None = Field(default=None)
     solapi_sender_phone: str | None = Field(default=None)
     solapi_api_url: str = Field(default="https://api.solapi.com")
+    # 카카오 알림톡 채널 ID(pfId) — SOLAPI 콘솔에 연동된 카카오 비즈니스 채널. 미설정 시
+    # 알림톡 발송이 비활성화된다(상담 접수 알림은 skip, 직접 발송은 503).
+    solapi_channel_id: str | None = Field(default=None)
 
     # 휴대폰 OTP — Redis 저장. OAuth state store 와 같은 Redis 를 공유한다.
     phone_otp_code_length: int = Field(default=6)

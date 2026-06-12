@@ -11,7 +11,7 @@ override 한 것이다.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
 from ..auth.request_token import RequestUser, require_supabase_request_user
 from ..errors import ZippinException
@@ -22,6 +22,7 @@ from ..schemas.leads import (
     LeadResponse,
     MyLeadsResponse,
 )
+from ..services import alimtalk as alimtalk_service
 from ..services import leads as leads_service
 
 logger = get_logger("zippin.leads")
@@ -31,6 +32,7 @@ router = APIRouter(prefix="/leads", tags=["leads"])
 @router.post("", response_model=LeadResponse, status_code=201)
 async def create_lead(
     payload: LeadCreateRequest,
+    background_tasks: BackgroundTasks,
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> LeadResponse:
     row = await leads_service.create_lead(
@@ -45,6 +47,13 @@ async def create_lead(
         source_form=row["source_form"],
         is_anonymous=requester.is_anonymous,
         attachment_count=len(payload.attachments),
+    )
+    # 접수 알림톡은 응답 이후 best-effort 로 발송한다 — 미설정/실패해도 신청은 이미 성공이다.
+    background_tasks.add_task(
+        alimtalk_service.notify_lead_received,
+        phone=payload.applicant_phone,
+        applicant_name=payload.applicant_name,
+        source_form=payload.source_form,
     )
     return LeadResponse.model_validate(row)
 

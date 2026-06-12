@@ -92,6 +92,41 @@ def test_create_main_page_lead_succeeds(monkeypatch, captured) -> None:
     assert captured["lead_values"]["applicant_phone"] == "010-1234-5678"
 
 
+def test_create_lead_schedules_alimtalk_notification(monkeypatch, captured) -> None:
+    # 리드 생성 성공 시 접수 알림톡이 background task 로 예약된다(정규화된 연락처 사용).
+    calls: list[dict[str, str]] = []
+
+    async def fake_notify(*, phone, applicant_name, source_form):
+        calls.append(
+            {
+                "phone": phone,
+                "applicant_name": applicant_name,
+                "source_form": source_form,
+            }
+        )
+
+    monkeypatch.setattr("src.services.alimtalk.notify_lead_received", fake_notify)
+    client, token, _subject = _auth_client(monkeypatch, is_anonymous=True)
+    with client:
+        response = client.post(
+            "/leads",
+            headers={"authorization": f"Bearer {token}"},
+            json={
+                "source_form": "main_page",
+                "applicant_name": "홍길동",
+                "applicant_phone": "01012345678",
+            },
+        )
+    assert response.status_code == 201
+    assert calls == [
+        {
+            "phone": "010-1234-5678",
+            "applicant_name": "홍길동",
+            "source_form": "main_page",
+        }
+    ]
+
+
 def test_create_lead_with_owner_attachment_succeeds(monkeypatch, captured) -> None:
     client, token, subject = _auth_client(monkeypatch)
     with client:
