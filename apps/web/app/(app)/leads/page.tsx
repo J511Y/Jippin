@@ -11,6 +11,8 @@ import {
 import { IconArrowRight, IconCheck } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 
+import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+
 export const metadata: Metadata = {
   title: '상담 신청'
 };
@@ -30,7 +32,7 @@ export default function LeadsPage() {
         </Title>
         <Text c="dimmed" size="sm" style={{ wordBreak: 'keep-all' }}>
           사전검토 없이 전문가 상담을 바로 신청할 수 있어요. 신청한 상담은{' '}
-          <Anchor href="/mypage" c="var(--jippin-brand-primary)">
+          <Anchor href="/mypage?tab=consultations" c="var(--jippin-brand-primary)">
             상담 진행
           </Anchor>
           에서 관리합니다.
@@ -53,9 +55,8 @@ export default function LeadsPage() {
         </Stack>
       </Card>
 
-      <Button
-        component="a"
-        href="/leads/new"
+      <LeadCtaButton
+        cta="leads_list"
         size="lg"
         color="coral"
         radius="md"
@@ -63,7 +64,7 @@ export default function LeadsPage() {
         rightSection={<IconArrowRight size={18} />}
       >
         상담 신청서 작성하기
-      </Button>
+      </LeadCtaButton>
 
       <Card withBorder radius="lg" padding="lg">
         <Stack gap="xs">
@@ -73,7 +74,7 @@ export default function LeadsPage() {
           </Text>
           <Button
             component="a"
-            href="/mypage"
+            href="/mypage?tab=consultations"
             variant="subtle"
             color="jippin"
             radius="md"

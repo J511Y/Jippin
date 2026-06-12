@@ -1,9 +1,11 @@
 'use client';
 
-import { Box, Button, Card, Stack, Text, ThemeIcon } from '@mantine/core';
+import { Box, Card, Stack, Text, ThemeIcon } from '@mantine/core';
 import { IconArrowRight, IconSparkles } from '@tabler/icons-react';
-import Link from 'next/link';
 import type { ReactNode } from 'react';
+
+import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+import type { LeadCtaId } from '@/lib/analytics/lead-cta';
 
 /**
  * 개발 중인 메인 기능(검토/에이전트 세션)을 blur 로 가리고 상담으로 인입시키는 게이트.
@@ -12,11 +14,14 @@ import type { ReactNode } from 'react';
 export function ComingSoonGate({
   children,
   title,
-  description
+  description,
+  ctaId
 }: {
   children: ReactNode;
   title: string;
   description: string;
+  /** 상담 인입 추적 식별자 — 게이트를 씌운 영역별로 구분한다. */
+  ctaId: LeadCtaId;
 }) {
   return (
     <Box style={{ position: 'relative', minHeight: 'min(72vh, 620px)' }}>
@@ -71,9 +76,8 @@ export function ComingSoonGate({
               </Text>
             </Stack>
             <Stack gap="xs" w="100%" mt="xs">
-              <Button
-                component={Link}
-                href="/leads/new"
+              <LeadCtaButton
+                cta={ctaId}
                 color="coral"
                 size="md"
                 radius="md"
@@ -81,7 +85,7 @@ export function ComingSoonGate({
                 rightSection={<IconArrowRight size={18} />}
               >
                 전문가 상담 신청하기
-              </Button>
+              </LeadCtaButton>
               {/* <Button
                 component={Link}
                 href="/mypage"

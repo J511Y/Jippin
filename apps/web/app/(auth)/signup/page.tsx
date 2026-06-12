@@ -1,7 +1,8 @@
-import { Center, Stack } from '@mantine/core';
+import { Center, Divider, Stack } from '@mantine/core';
 
 import { isSafeNext } from '@/lib/safe-redirect';
 
+import { LoginButtons } from '../login/login-buttons';
 import { SignupForm } from './signup-form';
 
 /**
@@ -33,6 +34,11 @@ export default async function SignupPage({ searchParams }: PageProps) {
     <Center mih="68vh" py="xl">
       <Stack gap="lg" w="100%" maw={420}>
         <SignupForm nextPath={nextPath} />
+
+        {/* 로그인 페이지와 대칭 — 카카오 간편가입도 같은 진입점에서 시작할 수 있게 한다.
+            OAuth 신규 가입의 약관 동의는 기존 /auth/terms 온보딩 흐름이 받는다. */}
+        <Divider label="또는" labelPosition="center" />
+        <LoginButtons nextPath={nextPath} />
       </Stack>
     </Center>
   );

@@ -27,6 +27,7 @@ import {
 } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 
+import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
 import { Reveal } from '@/components/landing/Reveal';
 import { StatBand } from '@/components/landing/StatBand';
 import { QuickConsultSection } from '@/components/QuickConsultSection';
@@ -175,15 +176,9 @@ export default function HomePage() {
                 >
                   무료로 사전검토 시작
                 </Button>
-                <Button
-                  component="a"
-                  href="/leads/new"
-                  size="lg"
-                  variant="default"
-                  radius="md"
-                >
+                <LeadCtaButton cta="home_hero" size="lg" variant="default" radius="md">
                   전문가 상담
-                </Button>
+                </LeadCtaButton>
               </Group>
             </Stack>
 

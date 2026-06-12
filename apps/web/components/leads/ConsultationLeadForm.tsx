@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Card,
+  Divider,
   FileInput,
   Group,
   Select,
@@ -17,6 +18,7 @@ import { notifications } from '@mantine/notifications';
 import { IconPaperclip, IconSearch } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { PhoneInput } from '@/components/inputs/PhoneInput';
+import { trackLeadSubmit } from '@/lib/analytics/lead-cta';
 import { parseApiError } from '@/lib/api/error';
 import {
   createLead,
@@ -168,6 +170,9 @@ export function ConsultationLeadForm() {
         message: values.message.trim() || null,
         attachments
       });
+      // 인입 식별자는 현재 URL 의 ?cta= 에서 읽는다(직접 진입이면 '(direct)').
+      // 제출 핸들러 안에서만 location 을 읽으므로 useSearchParams/Suspense 가 필요 없다.
+      trackLeadSubmit('lead_page');
       notifications.show({
         color: 'teal',
         title: '상담 신청이 접수되었어요',
@@ -194,7 +199,7 @@ export function ConsultationLeadForm() {
   });
 
   return (
-    <Card withBorder radius="md" padding="md" component="form" onSubmit={handleSubmit}>
+    <Card withBorder padding="md" component="form" onSubmit={handleSubmit}>
       <Stack gap="md">
         <Group grow>
           <Select
@@ -222,6 +227,9 @@ export function ConsultationLeadForm() {
           disabled={phoneLocked}
           {...form.getInputProps('applicant_phone')}
         />
+
+        {/* 긴 단일 컬럼 폼이라 섹션 라벨로 흐름을 끊어 준다: 신청자 → 현장 → 일정·추가. */}
+        <Divider label="현장 정보" labelPosition="left" mt="xs" />
 
         <Stack gap="xs">
           <Group justify="space-between" align="center" wrap="nowrap">
@@ -272,6 +280,8 @@ export function ConsultationLeadForm() {
           ]}
           {...form.getInputProps('ownership_status')}
         />
+
+        <Divider label="일정 · 추가 정보" labelPosition="left" mt="xs" />
 
         <Group grow>
           <TextInput
