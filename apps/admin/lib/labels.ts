@@ -83,19 +83,22 @@ export const UPLOAD_STATUS_LABELS: Record<string, string> = {
   promoted_to_catalog: '카탈로그 승격'
 };
 
+/** 전역 일시 기본 포맷 — yyyy-MM-dd HH:mm (KST). sv-SE 로케일이 ISO 형태를 보장한다. */
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—';
-  return new Date(value).toLocaleString('ko-KR', {
+  return new Date(value).toLocaleString('sv-SE', {
     timeZone: 'Asia/Seoul',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
+    hour12: false
   });
 }
 
+/** 전역 일자 기본 포맷 — yyyy-MM-dd (KST). */
 export function formatDate(value: string | null | undefined): string {
   if (!value) return '—';
-  return new Date(value).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' });
+  return new Date(value).toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
 }

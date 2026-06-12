@@ -13,12 +13,38 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
-import { LEAD_STATUSES, LEAD_STATUS_LABELS } from '@/lib/labels';
+import type { AdminOption } from '@/lib/data/leads';
+import { LEAD_STATUSES, LEAD_STATUS_DOT_CLASS, LEAD_STATUS_LABELS } from '@/lib/labels';
+import { cn } from '@/lib/utils';
 
 const ALL = 'all';
+const UNASSIGNED = 'none';
 
-/** 상담 리스트 필터 바 — 상태 + 검색어를 URL searchParams 로 유지 (CMP-DIRECT). */
-export function LeadFilters({ status, q }: { status?: string; q?: string }) {
+function StatusOption({ status }: { status?: string }) {
+  if (!status) return <>모든 상태</>;
+  return (
+    <span className="flex items-center gap-2">
+      <span className={cn('size-1.5 rounded-full', LEAD_STATUS_DOT_CLASS[status])} />
+      {LEAD_STATUS_LABELS[status] ?? status}
+    </span>
+  );
+}
+
+/**
+ * 상담 리스트 필터 바 — 상태(dot)·담당자·검색어를 URL searchParams 로 유지 (CMP-DIRECT).
+ * 담당자 필터는 0012 적용 환경에서만 노출된다(admins null 이면 숨김).
+ */
+export function LeadFilters({
+  status,
+  q,
+  assignee,
+  admins
+}: {
+  status?: string;
+  q?: string;
+  assignee?: string;
+  admins: AdminOption[] | null;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -39,6 +65,11 @@ export function LeadFilters({ status, q }: { status?: string; q?: string }) {
     apply({ q: term.trim() || undefined });
   }
 
+  const assigneeLabel =
+    assignee === UNASSIGNED
+      ? '미배정'
+      : (admins?.find((admin) => admin.id === assignee)?.name ?? '모든 담당자');
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <form onSubmit={onSearch} className="relative">
@@ -56,29 +87,50 @@ export function LeadFilters({ status, q }: { status?: string; q?: string }) {
       >
         <SelectTrigger size="sm" className="w-32">
           <SelectValue>
-            {status ? (LEAD_STATUS_LABELS[status] ?? status) : '모든 상태'}
+            <StatusOption status={status} />
           </SelectValue>
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={ALL}>모든 상태</SelectItem>
           {LEAD_STATUSES.map((entry) => (
             <SelectItem key={entry} value={entry}>
-              {LEAD_STATUS_LABELS[entry]}
+              <StatusOption status={entry} />
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
-      {status || q ? (
+      {admins ? (
+        <Select
+          value={assignee ?? ALL}
+          onValueChange={(next) =>
+            apply({ assignee: next === ALL ? undefined : (next ?? undefined) })
+          }
+        >
+          <SelectTrigger size="sm" className="w-36">
+            <SelectValue>{assigneeLabel}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>모든 담당자</SelectItem>
+            <SelectItem value={UNASSIGNED}>미배정</SelectItem>
+            {admins.map((admin) => (
+              <SelectItem key={admin.id} value={admin.id}>
+                {admin.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
+      {status || q || assignee ? (
         <Button
           variant="ghost"
           size="sm"
           className="text-muted-foreground"
           onClick={() => {
             setTerm('');
-            apply({ q: undefined, status: undefined });
+            apply({ q: undefined, status: undefined, assignee: undefined });
           }}
         >
-          <XIcon className="size-3.5" />
+          <XIcon data-icon="inline-start" />
           초기화
         </Button>
       ) : null}

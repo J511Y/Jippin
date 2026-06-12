@@ -36,12 +36,7 @@ export default async function UsersPage({
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">회원</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            총 {total.toLocaleString('ko-KR')}명
-          </p>
-        </div>
+        <h1 className="text-xl font-semibold">회원</h1>
         <UserSearch q={params.q} />
       </div>
 

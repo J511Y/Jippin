@@ -79,6 +79,8 @@ export interface AdminOption {
 export interface LeadListFilter {
   status?: string;
   q?: string;
+  /** 담당자 필터 — 관리자 uuid 또는 'none'(미배정). */
+  assignee?: string;
   page?: number;
   size?: number;
 }
@@ -97,7 +99,7 @@ export async function listLeads(filter: LeadListFilter): Promise<{
   const pageSize = clampPageSize(filter.size, LEADS_PAGE_SIZE);
   const from = (page - 1) * pageSize;
 
-  function buildQuery(columns: string) {
+  function buildQuery(columns: string, withAssignee: boolean) {
     let query = supabase
       .from('consultation_leads')
       .select(columns, { count: 'exact' })
@@ -106,6 +108,12 @@ export async function listLeads(filter: LeadListFilter): Promise<{
 
     if (filter.status) {
       query = query.eq('status', filter.status);
+    }
+    if (withAssignee && filter.assignee) {
+      query =
+        filter.assignee === 'none'
+          ? query.is('assigned_admin_id', null)
+          : query.eq('assigned_admin_id', filter.assignee);
     }
     if (filter.q) {
       // PostgREST or() 인자에 들어가는 사용자 입력은 예약문자를 제거해 필터 주입을 막는다.
@@ -120,10 +128,13 @@ export async function listLeads(filter: LeadListFilter): Promise<{
   }
 
   // 담당자 컬럼(0012)은 미적용 환경에 없을 수 있다 — undefined column(42703)이면
-  // 담당자 없이 재조회해 리스트 자체는 항상 동작하게 한다.
-  let { data, count, error } = await buildQuery(`${LIST_COLUMNS_BASE}, assigned_admin_id`);
+  // 담당자 컬럼·필터 없이 재조회해 리스트 자체는 항상 동작하게 한다.
+  let { data, count, error } = await buildQuery(
+    `${LIST_COLUMNS_BASE}, assigned_admin_id`,
+    true
+  );
   if (error && error.code === '42703') {
-    ({ data, count, error } = await buildQuery(LIST_COLUMNS_BASE));
+    ({ data, count, error } = await buildQuery(LIST_COLUMNS_BASE, false));
   }
   if (error) {
     throw new Error(`상담 리드 조회 실패: ${error.message}`);
