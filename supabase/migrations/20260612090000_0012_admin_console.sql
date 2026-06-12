@@ -146,10 +146,11 @@ as $$
 $$;
 
 -- 담당자 배정 드롭다운용 관리자 목록 (app_metadata.role='admin').
--- name 은 알림톡 #{담당자명} 치환에도 쓰인다 — user_metadata.name 이 없으면
--- 이메일 local-part 로 폴백한다(관리자가 직접 이름을 설정할 때까지의 기본값).
+-- name 은 콘솔 담당자 표시에 쓰이고, 알림톡 #{담당자명} 은 "{company} {name}" 으로
+-- 호출자가 조합한다. name 미설정 시 이메일 local-part 폴백(관리자가 프로필 모달에서
+-- 실명을 설정할 때까지의 기본값).
 create or replace function public.admin_list_admins()
-returns table (id uuid, email text, name text)
+returns table (id uuid, email text, name text, company text)
 language sql
 stable
 security definer
@@ -161,10 +162,54 @@ as $$
     coalesce(
       nullif(btrim(u.raw_user_meta_data ->> 'name'), ''),
       split_part(u.email::text, '@', 1)
-    ) as name
+    ) as name,
+    coalesce(btrim(u.raw_user_meta_data ->> 'company'), '') as company
   from auth.users as u
   where u.raw_app_meta_data ->> 'role' = 'admin'
   order by u.email;
+$$;
+
+-- 회원 목록 (관리자 콘솔 /users). public.users 는 0007 정리로 email 컬럼이 없고
+-- auth.users 가 이메일 SSOT 이므로 security definer 조인으로 합쳐 준다.
+create or replace function public.admin_list_users(
+  search text default null,
+  page_limit integer default 20,
+  page_offset integer default 0
+)
+returns table (
+  id uuid,
+  email text,
+  display_name text,
+  status text,
+  role text,
+  last_login_at timestamp with time zone,
+  created_at timestamp with time zone,
+  total_count bigint
+)
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select
+    u.id,
+    au.email::text,
+    u.display_name,
+    u.status,
+    u.role,
+    u.last_login_at,
+    u.created_at,
+    count(*) over () as total_count
+  from public.users as u
+  join auth.users as au on au.id = u.id
+  where
+    search is null
+    or btrim(search) = ''
+    or au.email ilike '%' || btrim(search) || '%'
+    or u.display_name ilike '%' || btrim(search) || '%'
+  order by u.created_at desc
+  limit greatest(coalesce(page_limit, 20), 1)
+  offset greatest(coalesce(page_offset, 0), 0);
 $$;
 
 -- 함수는 기본적으로 PUBLIC 에 EXECUTE 가 열리므로 명시적으로 회수한다.
@@ -172,8 +217,10 @@ revoke execute on function public.admin_dashboard_stats() from public, anon, aut
 revoke execute on function public.admin_lead_daily_counts(integer) from public, anon, authenticated;
 revoke execute on function public.admin_session_funnel() from public, anon, authenticated;
 revoke execute on function public.admin_list_admins() from public, anon, authenticated;
+revoke execute on function public.admin_list_users(text, integer, integer) from public, anon, authenticated;
 
 grant execute on function public.admin_dashboard_stats() to service_role;
 grant execute on function public.admin_lead_daily_counts(integer) to service_role;
 grant execute on function public.admin_session_funnel() to service_role;
 grant execute on function public.admin_list_admins() to service_role;
+grant execute on function public.admin_list_users(text, integer, integer) to service_role;

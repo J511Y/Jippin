@@ -1,6 +1,6 @@
 'use client';
 
-import { Images, LayoutDashboard, MessagesSquare, ScanSearch } from 'lucide-react';
+import { Images, LayoutDashboard, MessagesSquare, ScanSearch, Users } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
@@ -21,7 +21,10 @@ const SECTIONS: Array<{
   },
   {
     label: '운영',
-    items: [{ href: '/leads', title: '상담', icon: MessagesSquare }]
+    items: [
+      { href: '/leads', title: '상담', icon: MessagesSquare },
+      { href: '/users', title: '회원', icon: Users }
+    ]
   },
   {
     label: '사전검토',

@@ -65,6 +65,8 @@ export interface AdminOption {
   email: string;
   /** user_metadata.name, 없으면 이메일 local-part (0012 RPC 폴백과 동일). */
   name: string;
+  /** user_metadata.company — 알림톡 #{담당자명} = "{company} {name}" 조합용. */
+  company: string;
 }
 
 export interface LeadListFilter {

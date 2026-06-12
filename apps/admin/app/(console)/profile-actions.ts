@@ -60,3 +60,26 @@ export async function updateProfile(input: ProfileInput): Promise<ActionResult> 
   revalidatePath('/', 'layout');
   return { ok: true };
 }
+
+export async function updatePassword(newPassword: string): Promise<ActionResult> {
+  const supabase = await createServerComponentClient();
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
+  if (!isAdminUser(user)) {
+    return { ok: false, error: '관리자 권한이 필요합니다.' };
+  }
+
+  if (newPassword.length < 8) {
+    return { ok: false, error: '비밀번호는 8자 이상이어야 합니다.' };
+  }
+  if (newPassword.length > 72) {
+    return { ok: false, error: '비밀번호는 72자 이하여야 합니다.' };
+  }
+
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) {
+    return { ok: false, error: `비밀번호 변경 실패: ${error.message}` };
+  }
+  return { ok: true };
+}

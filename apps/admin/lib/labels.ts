@@ -60,6 +60,18 @@ export const SOURCE_FORM_LABELS: Record<string, string> = {
   lead_page: '상담 신청 페이지'
 };
 
+export const USER_STATUS_LABELS: Record<string, string> = {
+  active: '활성',
+  suspended: '정지',
+  deleted: '탈퇴'
+};
+
+export const USER_STATUS_DOT_CLASS: Record<string, string> = {
+  active: 'bg-emerald-500',
+  suspended: 'bg-amber-500',
+  deleted: 'bg-zinc-400'
+};
+
 export const UPLOAD_STATUS_LABELS: Record<string, string> = {
   uploaded: '업로드됨',
   scan_pending: '스캔 대기',

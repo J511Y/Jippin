@@ -165,9 +165,12 @@ class MyLeadsResponse(BaseModel):
 
 
 class AssigneeNotificationRequest(BaseModel):
-    """담당자 배정 알림톡 발송 요청 — 관리자 콘솔(apps/admin) 전용."""
+    """담당자 배정 알림톡 발송 요청 — 관리자 콘솔(apps/admin) 전용.
 
-    assignee_name: str = Field(min_length=1, max_length=40)
+    ``assignee_name`` 은 "{회사명} {이름}" 조합으로 들어온다 (회사명 ≤60 + 이름 ≤40).
+    """
+
+    assignee_name: str = Field(min_length=1, max_length=101)
 
     @field_validator("assignee_name")
     @classmethod

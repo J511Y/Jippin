@@ -45,11 +45,11 @@ export function AssigneeSelect({
     setValue(next);
     startTransition(async () => {
       const assignee = next === UNASSIGNED ? null : admins.find((admin) => admin.id === next);
-      const result = await assignLead(
-        leadId,
-        next === UNASSIGNED ? null : next,
-        assignee?.name
-      );
+      // 알림톡 #{담당자명} 은 "{회사명} {이름}" — 콘솔 표시는 이름만 사용한다.
+      const alimtalkName = assignee
+        ? [assignee.company, assignee.name].filter(Boolean).join(' ')
+        : undefined;
+      const result = await assignLead(leadId, next === UNASSIGNED ? null : next, alimtalkName);
       if (!result.ok) {
         setValue(prev);
         toast.error(result.error ?? '담당자 배정에 실패했습니다.');

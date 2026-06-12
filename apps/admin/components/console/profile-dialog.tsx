@@ -5,6 +5,7 @@ import { useState, useTransition, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
 import { updateProfile } from '@/app/(console)/profile-actions';
+import { PasswordDialog } from '@/components/console/password-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -104,7 +105,7 @@ export function ProfileDialog({
               name="company"
               defaultValue={company}
               maxLength={60}
-              placeholder="(주)신너테크"
+              placeholder="(주)신한이너텍"
             />
           </div>
           <div className="flex flex-col gap-1.5">
@@ -119,6 +120,7 @@ export function ProfileDialog({
             />
           </div>
           <DialogFooter>
+            <PasswordDialog />
             <Button type="submit" disabled={pending}>
               {pending ? '저장 중…' : '저장'}
             </Button>
