@@ -1,0 +1,22 @@
+/**
+ * Supabase env readers — apps/web `lib/supabase/env.ts` 와 동일 패턴 (CMP-DIRECT).
+ *
+ * 단일 SSOT: `lib/supabase/*` 만이 `@supabase/ssr` / `@supabase/supabase-js` 를 import 한다.
+ * 환경변수 미설정 시 fail loud — fallback 금지.
+ */
+
+type RequiredEnvKey = 'NEXT_PUBLIC_SUPABASE_URL' | 'NEXT_PUBLIC_SUPABASE_ANON_KEY';
+
+function readRequiredEnv(key: RequiredEnvKey): string {
+  const value = process.env[key];
+  if (!value) {
+    throw new Error(
+      `[supabase/env] missing required env var: ${key}. ` +
+        `Set it in apps/admin/.env.local for local dev, or in the runtime secret manager for preview/prod.`
+    );
+  }
+  return value;
+}
+
+export const supabaseUrl = (): string => readRequiredEnv('NEXT_PUBLIC_SUPABASE_URL');
+export const supabaseAnonKey = (): string => readRequiredEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY');
