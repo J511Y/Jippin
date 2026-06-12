@@ -26,3 +26,14 @@ export function requireAdminUser(user: User | null | undefined): User {
   }
   return user;
 }
+
+/** user_metadata 의 프로필 필드 — 표시명은 0012 admin_list_admins 폴백과 동일 규칙. */
+export function adminProfile(user: User): { name: string; company: string; phone: string } {
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const metaName = typeof meta.name === 'string' ? meta.name.trim() : '';
+  return {
+    name: metaName || (user.email?.split('@')[0] ?? '관리자'),
+    company: typeof meta.company === 'string' ? meta.company : '',
+    phone: typeof meta.phone === 'string' ? meta.phone : ''
+  };
+}

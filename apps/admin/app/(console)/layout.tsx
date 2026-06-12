@@ -2,10 +2,11 @@ import { LogOut } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
+import { ProfileDialog } from '@/components/console/profile-dialog';
 import { SidebarNav } from '@/components/console/sidebar-nav';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
-import { requireAdminUser } from '@/lib/auth';
+import { adminProfile, requireAdminUser } from '@/lib/auth';
 import { createServerComponentClient } from '@/lib/supabase/server';
 
 /**
@@ -18,6 +19,7 @@ export default async function ConsoleLayout({ children }: { children: ReactNode 
     data: { user }
   } = await supabase.auth.getUser();
   const admin = requireAdminUser(user);
+  const profile = adminProfile(admin);
 
   return (
     <div className="flex min-h-screen">
@@ -33,12 +35,15 @@ export default async function ConsoleLayout({ children }: { children: ReactNode 
         <div className="flex-1 overflow-y-auto px-2 py-4">
           <SidebarNav />
         </div>
-        <div className="border-t p-3">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-muted-foreground truncate text-xs" title={admin.email ?? ''}>
-              {admin.email}
-            </p>
-            <form action="/auth/logout" method="post">
+        <div className="border-t p-2">
+          <div className="flex items-center gap-1">
+            <ProfileDialog
+              name={profile.name}
+              email={admin.email ?? ''}
+              company={profile.company}
+              phone={profile.phone}
+            />
+            <form action="/auth/logout" method="post" className="shrink-0">
               <Button
                 type="submit"
                 variant="ghost"
