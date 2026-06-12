@@ -44,6 +44,8 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 }
 
 export const config = {
-  // 정적 자산만 제외하고 전부 게이트를 태운다.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|robots.txt).*)']
+  // 정적 자산(_next/* 및 확장자 있는 public 파일 — logo.png, site.webmanifest 등)만
+  // 제외하고 전부 게이트를 태운다. 비로그인 상태의 /login 페이지도 로고/파비콘을
+  // 받아야 하므로 dot 포함 경로는 게이트 대상이 아니다 (앱 라우트에는 dot 이 없다).
+  matcher: ['/((?!_next/static|_next/image|.*\\..*).*)']
 };
