@@ -18,8 +18,8 @@ export interface UserListRow {
   id: string;
   email: string | null;
   display_name: string | null;
+  phone: string | null;
   status: string | null;
-  role: string;
   last_sign_in_at: string | null;
   created_at: string;
 }
@@ -52,11 +52,13 @@ export async function listUsers(filter: { q?: string; page?: number; size?: numb
     };
   }
 
-  // 폴백 — 0012 미적용 환경. auth.users 는 PostgREST 로 접근 불가하므로 public.users
-  // 프로필만으로 근사 표시한다 (email 없음 — 0007 정리, last_login_at 을 최근 로그인으로).
+  // 폴백 — 0013 미적용 환경. auth.users 는 PostgREST 로 접근 불가하므로 public.users
+  // 프로필만으로 근사 표시한다 (email/phone 없음 — phone 은 auth app_metadata 에만 있다,
+  // last_login_at 을 최근 로그인으로). 일반 회원(role='user')만 노출한다.
   let query = supabase
     .from('users')
     .select('id, display_name, status, role, last_login_at, created_at', { count: 'exact' })
+    .eq('role', 'user')
     .order('created_at', { ascending: false })
     .range(offset, offset + pageSize - 1);
 
@@ -73,10 +75,10 @@ export async function listUsers(filter: { q?: string; page?: number; size?: numb
   }
   return {
     rows: (rows ?? []).map((row) => {
-      const { last_login_at, ...rest } = row as Record<string, unknown> & {
+      const { last_login_at, role: _role, ...rest } = row as Record<string, unknown> & {
         last_login_at: string | null;
       };
-      return { ...rest, email: null, last_sign_in_at: last_login_at } as UserListRow;
+      return { ...rest, email: null, phone: null, last_sign_in_at: last_login_at } as UserListRow;
     }),
     total: count ?? 0,
     page,

@@ -1,6 +1,5 @@
 import { TablePagination } from '@/components/console/table-pagination';
 import { UserSearch } from '@/components/users/user-search';
-import { Badge } from '@/components/ui/badge';
 import {
   Table,
   TableBody,
@@ -46,8 +45,8 @@ export default async function UsersPage({
             <TableRow>
               <TableHead>이름</TableHead>
               <TableHead>이메일</TableHead>
+              <TableHead>전화번호</TableHead>
               <TableHead>상태</TableHead>
-              <TableHead>역할</TableHead>
               <TableHead className="text-right">최근 로그인</TableHead>
               <TableHead className="text-right">가입일</TableHead>
             </TableRow>
@@ -64,6 +63,9 @@ export default async function UsersPage({
                 <TableRow key={user.id}>
                   <TableCell className="font-medium">{user.display_name ?? '—'}</TableCell>
                   <TableCell className="text-muted-foreground">{user.email ?? '—'}</TableCell>
+                  <TableCell className="text-muted-foreground tabular-nums">
+                    {user.phone ?? '—'}
+                  </TableCell>
                   <TableCell>
                     {user.status ? (
                       <span className="flex items-center gap-2">
@@ -78,11 +80,6 @@ export default async function UsersPage({
                     ) : (
                       <span className="text-muted-foreground">프로필 없음</span>
                     )}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary" className="font-normal">
-                      {user.role}
-                    </Badge>
                   </TableCell>
                   <TableCell className="text-muted-foreground text-right text-xs tabular-nums">
                     {formatDateTime(user.last_sign_in_at)}
