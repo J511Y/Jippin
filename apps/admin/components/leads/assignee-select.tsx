@@ -16,7 +16,11 @@ import type { AdminOption } from '@/lib/data/leads';
 
 const UNASSIGNED = 'unassigned';
 
-/** 상담 담당자 배정 셀렉트 (CMP-DIRECT). */
+/**
+ * 상담 담당자 배정 셀렉트 (CMP-DIRECT).
+ * 배정 시 고객에게 SOLAPI 담당자 배정 알림톡이 발송된다(백엔드 위임) — 발송 결과를
+ * 토스트로 구분해 알린다. 배정 저장과 발송은 분리돼 있어 발송 실패가 배정을 되돌리지 않는다.
+ */
 export function AssigneeSelect({
   leadId,
   assignedAdminId,
@@ -33,24 +37,35 @@ export function AssigneeSelect({
   const currentLabel =
     value === UNASSIGNED
       ? '미배정'
-      : (admins.find((admin) => admin.id === value)?.email ?? value);
+      : (admins.find((admin) => admin.id === value)?.name ?? value);
 
   function onChange(next: string | null) {
     if (!next || next === value) return;
     const prev = value;
     setValue(next);
     startTransition(async () => {
-      const result = await assignLead(leadId, next === UNASSIGNED ? null : next);
+      const assignee = next === UNASSIGNED ? null : admins.find((admin) => admin.id === next);
+      const result = await assignLead(
+        leadId,
+        next === UNASSIGNED ? null : next,
+        assignee?.name
+      );
       if (!result.ok) {
         setValue(prev);
         toast.error(result.error ?? '담당자 배정에 실패했습니다.');
         return;
       }
-      toast.success(
-        next === UNASSIGNED
-          ? '담당자 배정을 해제했습니다.'
-          : `담당자를 배정했습니다: ${admins.find((admin) => admin.id === next)?.email ?? ''}`
-      );
+      if (next === UNASSIGNED) {
+        toast.success('담당자 배정을 해제했습니다.');
+      } else if (result.notified) {
+        toast.success(`${assignee?.name ?? ''} 배정 완료 — 고객에게 알림톡을 발송했습니다.`);
+      } else {
+        toast.warning(
+          `배정은 저장됐지만 알림톡 발송에 실패했습니다${
+            result.notifyError ? `: ${result.notifyError}` : '.'
+          }`
+        );
+      }
       router.refresh();
     });
   }
@@ -64,7 +79,10 @@ export function AssigneeSelect({
         <SelectItem value={UNASSIGNED}>미배정</SelectItem>
         {admins.map((admin) => (
           <SelectItem key={admin.id} value={admin.id}>
-            {admin.email}
+            <span className="flex flex-col">
+              <span>{admin.name}</span>
+              <span className="text-muted-foreground text-[11px]">{admin.email}</span>
+            </span>
           </SelectItem>
         ))}
       </SelectContent>

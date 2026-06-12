@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { apiBaseUrl } from '@/lib/api-base-url';
 import { isAdminUser } from '@/lib/auth';
 import { LEAD_STATUSES, type LeadStatus } from '@/lib/labels';
 import { createServerComponentClient } from '@/lib/supabase/server';
@@ -19,6 +20,12 @@ interface ActionResult {
   error?: string;
 }
 
+export interface AssignResult extends ActionResult {
+  /** 알림톡 발송 성공 여부 — undefined 면 발송을 시도하지 않음(배정 해제 등). */
+  notified?: boolean;
+  notifyError?: string;
+}
+
 async function requireAdminActor() {
   const supabase = await createServerComponentClient();
   const {
@@ -27,7 +34,49 @@ async function requireAdminActor() {
   if (!isAdminUser(user)) {
     throw new Error('관리자 권한이 필요합니다.');
   }
-  return user;
+  // 백엔드 위임 호출(알림톡)용 access token — 검증은 백엔드가 JWKS 로 다시 한다.
+  const {
+    data: { session }
+  } = await supabase.auth.getSession();
+  return { user, accessToken: session?.access_token ?? null };
+}
+
+/**
+ * 담당자 배정 알림톡 발송 — SOLAPI 자격증명은 backend 단독 보유이므로
+ * apps/api `POST /leads/{id}/assignee-notification` 에 위임한다.
+ */
+async function sendAssigneeNotification(
+  leadId: string,
+  assigneeName: string,
+  accessToken: string | null
+): Promise<{ notified: boolean; notifyError?: string }> {
+  if (!accessToken) {
+    return { notified: false, notifyError: '세션 토큰을 찾을 수 없습니다.' };
+  }
+  try {
+    const res = await fetch(`${apiBaseUrl()}/leads/${leadId}/assignee-notification`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({ assignee_name: assigneeName }),
+      cache: 'no-store'
+    });
+    if (res.status === 202) {
+      return { notified: true };
+    }
+    const body = (await res.json().catch(() => null)) as {
+      error?: { message?: string };
+    } | null;
+    return {
+      notified: false,
+      notifyError: body?.error?.message ?? `알림톡 발송 실패 (HTTP ${res.status})`
+    };
+  } catch {
+    return { notified: false, notifyError: '알림톡 발송 요청에 실패했습니다.' };
+  }
 }
 
 function revalidateLead(leadId: string): void {
@@ -53,8 +102,12 @@ export async function updateLeadStatus(leadId: string, status: string): Promise<
   return { ok: true };
 }
 
-export async function assignLead(leadId: string, adminId: string | null): Promise<ActionResult> {
-  await requireAdminActor();
+export async function assignLead(
+  leadId: string,
+  adminId: string | null,
+  assigneeName?: string
+): Promise<AssignResult> {
+  const { accessToken } = await requireAdminActor();
 
   const supabase = createServiceRoleClient();
   const { error } = await supabase
@@ -69,11 +122,18 @@ export async function assignLead(leadId: string, adminId: string | null): Promis
     return { ok: false, error: `담당자 배정 실패: ${error.message}` };
   }
   revalidateLead(leadId);
+
+  // 배정(해제 아님)일 때만 고객에게 담당자 배정 알림톡을 발송한다.
+  // 배정 자체는 이미 저장됐으므로 발송 실패가 배정을 되돌리지 않는다.
+  if (adminId && assigneeName) {
+    const result = await sendAssigneeNotification(leadId, assigneeName, accessToken);
+    return { ok: true, ...result };
+  }
   return { ok: true };
 }
 
 export async function addLeadComment(leadId: string, body: string): Promise<ActionResult> {
-  const actor = await requireAdminActor();
+  const { user: actor } = await requireAdminActor();
 
   const trimmed = body.trim();
   if (!trimmed) {

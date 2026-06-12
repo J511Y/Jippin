@@ -63,6 +63,8 @@ export interface LeadComment {
 export interface AdminOption {
   id: string;
   email: string;
+  /** user_metadata.name, 없으면 이메일 local-part (0012 RPC 폴백과 동일). */
+  name: string;
 }
 
 export interface LeadListFilter {
@@ -70,6 +72,9 @@ export interface LeadListFilter {
   q?: string;
   page?: number;
 }
+
+const LIST_COLUMNS_BASE =
+  'id, applicant_name, applicant_phone, applicant_kind, source_form, road_addr_part1, status, inflow_source, created_at';
 
 export async function listLeads(filter: LeadListFilter): Promise<{
   rows: LeadListRow[];
@@ -81,33 +86,43 @@ export async function listLeads(filter: LeadListFilter): Promise<{
   const page = Math.max(1, filter.page ?? 1);
   const from = (page - 1) * LEADS_PAGE_SIZE;
 
-  let query = supabase
-    .from('consultation_leads')
-    .select(
-      'id, applicant_name, applicant_phone, applicant_kind, source_form, road_addr_part1, status, inflow_source, created_at',
-      { count: 'exact' }
-    )
-    .order('created_at', { ascending: false })
-    .range(from, from + LEADS_PAGE_SIZE - 1);
+  function buildQuery(columns: string) {
+    let query = supabase
+      .from('consultation_leads')
+      .select(columns, { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, from + LEADS_PAGE_SIZE - 1);
 
-  if (filter.status) {
-    query = query.eq('status', filter.status);
-  }
-  if (filter.q) {
-    // PostgREST or() 인자에 들어가는 사용자 입력은 예약문자를 제거해 필터 주입을 막는다.
-    const term = filter.q.replaceAll(/[,()"\\]/g, ' ').trim();
-    if (term) {
-      query = query.or(
-        `applicant_name.ilike.*${term}*,applicant_phone.ilike.*${term}*,road_addr_part1.ilike.*${term}*`
-      );
+    if (filter.status) {
+      query = query.eq('status', filter.status);
     }
+    if (filter.q) {
+      // PostgREST or() 인자에 들어가는 사용자 입력은 예약문자를 제거해 필터 주입을 막는다.
+      const term = filter.q.replaceAll(/[,()"\\]/g, ' ').trim();
+      if (term) {
+        query = query.or(
+          `applicant_name.ilike.*${term}*,applicant_phone.ilike.*${term}*,road_addr_part1.ilike.*${term}*`
+        );
+      }
+    }
+    return query;
   }
 
-  const { data, count, error } = await query;
+  // 담당자 컬럼(0012)은 미적용 환경에 없을 수 있다 — undefined column(42703)이면
+  // 담당자 없이 재조회해 리스트 자체는 항상 동작하게 한다.
+  let { data, count, error } = await buildQuery(`${LIST_COLUMNS_BASE}, assigned_admin_id`);
+  if (error && error.code === '42703') {
+    ({ data, count, error } = await buildQuery(LIST_COLUMNS_BASE));
+  }
   if (error) {
     throw new Error(`상담 리드 조회 실패: ${error.message}`);
   }
-  return { rows: (data ?? []) as LeadListRow[], total: count ?? 0, page, pageSize: LEADS_PAGE_SIZE };
+  return {
+    rows: (data ?? []) as unknown as LeadListRow[],
+    total: count ?? 0,
+    page,
+    pageSize: LEADS_PAGE_SIZE
+  };
 }
 
 export async function getLead(id: string): Promise<LeadDetail | null> {

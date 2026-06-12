@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table';
-import { listLeads } from '@/lib/data/leads';
+import { listAdminOptions, listLeads } from '@/lib/data/leads';
 import {
   APPLICANT_KIND_LABELS,
   INFLOW_SOURCE_LABELS,
@@ -39,12 +39,12 @@ export default async function LeadsPage({
 }) {
   const params = await searchParams;
   const page = Math.max(1, Number(params.page) || 1);
-  const { rows, total, pageSize } = await listLeads({
-    status: params.status,
-    q: params.q,
-    page
-  });
+  const [{ rows, total, pageSize }, admins] = await Promise.all([
+    listLeads({ status: params.status, q: params.q, page }),
+    listAdminOptions()
+  ]);
   const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  const adminNameById = new Map((admins ?? []).map((admin) => [admin.id, admin.name]));
 
   return (
     <div className="flex flex-col gap-5">
@@ -68,13 +68,14 @@ export default async function LeadsPage({
               <TableHead>유입</TableHead>
               <TableHead>경로</TableHead>
               <TableHead>상태</TableHead>
+              <TableHead>담당자</TableHead>
               <TableHead className="text-right">신청일</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground h-24 text-center">
+                <TableCell colSpan={8} className="text-muted-foreground h-24 text-center">
                   조건에 맞는 상담 신청이 없습니다.
                 </TableCell>
               </TableRow>
@@ -108,6 +109,17 @@ export default async function LeadsPage({
                   </TableCell>
                   <TableCell>
                     <LeadStatusSelect leadId={lead.id} status={lead.status} />
+                  </TableCell>
+                  <TableCell>
+                    {lead.assigned_admin_id ? (
+                      (adminNameById.get(lead.assigned_admin_id) ?? (
+                        <span className="font-mono text-xs">
+                          {lead.assigned_admin_id.slice(0, 8)}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-muted-foreground">미배정</span>
+                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground text-right text-xs tabular-nums">
                     {formatDateTime(lead.created_at)}

@@ -55,18 +55,13 @@ def _require_supabase_settings(settings: Settings) -> tuple[str, str, str]:
     )
 
 
-async def verify_supabase_request_token(
+async def _decode_supabase_claims(
     access_token: str,
     *,
     http_client: httpx.AsyncClient,
     settings: Settings | None = None,
-) -> RequestUser:
-    """Verify a Supabase access token for request authentication.
-
-    Unlike ``verify_supabase_access_token`` (conversion bridge), anonymous
-    tokens are accepted — the caller is the Phase A main-flow router whose
-    ownership key is ``auth.users.id`` regardless of anonymous/permanent.
-    """
+) -> dict[str, object]:
+    """JWKS 검증을 통과한 Supabase access token 의 claims 를 반환한다."""
 
     settings = settings or get_settings()
     jwks_url, issuer, audience = _require_supabase_settings(settings)
@@ -101,6 +96,10 @@ async def verify_supabase_request_token(
             http_status=401,
         ) from exc
 
+    return claims
+
+
+def _request_user_from_claims(claims: dict[str, object]) -> RequestUser:
     subject = claims.get("sub")
     if not subject:
         raise ZippinException(
@@ -121,6 +120,25 @@ async def verify_supabase_request_token(
         user_id=user_id,
         is_anonymous=claims.get("is_anonymous") is True,
     )
+
+
+async def verify_supabase_request_token(
+    access_token: str,
+    *,
+    http_client: httpx.AsyncClient,
+    settings: Settings | None = None,
+) -> RequestUser:
+    """Verify a Supabase access token for request authentication.
+
+    Unlike ``verify_supabase_access_token`` (conversion bridge), anonymous
+    tokens are accepted — the caller is the Phase A main-flow router whose
+    ownership key is ``auth.users.id`` regardless of anonymous/permanent.
+    """
+
+    claims = await _decode_supabase_claims(
+        access_token, http_client=http_client, settings=settings
+    )
+    return _request_user_from_claims(claims)
 
 
 async def require_supabase_request_user(request: Request) -> RequestUser:
@@ -146,5 +164,33 @@ async def require_supabase_request_user(request: Request) -> RequestUser:
     request.state.user = {
         "id": str(principal.user_id),
         "is_anonymous": principal.is_anonymous,
+    }
+    return principal
+
+
+async def require_supabase_admin_user(request: Request) -> RequestUser:
+    """관리자 콘솔(apps/admin) 전용 의존성 — ``app_metadata.role == 'admin'`` 필수.
+
+    관리자 판별 SSOT 는 service_role 로만 수정 가능한 ``app_metadata.role`` 클레임이다
+    (apps/admin `lib/auth.ts` 와 동일 기준). 일반 회원/익명 토큰은 403 으로 거부한다.
+    """
+
+    access_token = parse_bearer_token(request.headers.get("authorization"))
+    async with httpx.AsyncClient(timeout=10.0) as http_client:
+        claims = await _decode_supabase_claims(access_token, http_client=http_client)
+
+    app_metadata = claims.get("app_metadata")
+    role = app_metadata.get("role") if isinstance(app_metadata, dict) else None
+    if claims.get("is_anonymous") is True or role != "admin":
+        raise ZippinException(
+            "관리자 권한이 필요합니다.",
+            code="AUTH_ADMIN_REQUIRED",
+            http_status=403,
+        )
+
+    principal = _request_user_from_claims(claims)
+    request.state.user = {
+        "id": str(principal.user_id),
+        "is_anonymous": False,
     }
     return principal

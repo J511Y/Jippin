@@ -185,6 +185,22 @@ async def list_leads_for_user(*, user_id: uuid.UUID) -> list[dict[str, Any]]:
     return [dict(row._mapping) for row in rows]
 
 
+async def get_lead_contact(*, lead_id: uuid.UUID) -> dict[str, Any] | None:
+    """알림톡 발송용 최소 연락 정보(이름/전화번호)만 조회한다 — 그 외 PII 는 읽지 않는다."""
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(
+                    ConsultationLead.id,
+                    ConsultationLead.applicant_name,
+                    ConsultationLead.applicant_phone,
+                ).where(ConsultationLead.id == lead_id)
+            )
+        ).first()
+    return dict(row._mapping) if row else None
+
+
 # ---------------------------------------------------------------------------
 # 도로명주소 검색 프록시 (business.juso.go.kr addrLinkApi.do)
 # ---------------------------------------------------------------------------

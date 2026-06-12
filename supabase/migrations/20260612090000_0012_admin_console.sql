@@ -146,14 +146,22 @@ as $$
 $$;
 
 -- 담당자 배정 드롭다운용 관리자 목록 (app_metadata.role='admin').
+-- name 은 알림톡 #{담당자명} 치환에도 쓰인다 — user_metadata.name 이 없으면
+-- 이메일 local-part 로 폴백한다(관리자가 직접 이름을 설정할 때까지의 기본값).
 create or replace function public.admin_list_admins()
-returns table (id uuid, email text)
+returns table (id uuid, email text, name text)
 language sql
 stable
 security definer
 set search_path = public, pg_temp
 as $$
-  select u.id, u.email::text
+  select
+    u.id,
+    u.email::text,
+    coalesce(
+      nullif(btrim(u.raw_user_meta_data ->> 'name'), ''),
+      split_part(u.email::text, '@', 1)
+    ) as name
   from auth.users as u
   where u.raw_app_meta_data ->> 'role' = 'admin'
   order by u.email;
