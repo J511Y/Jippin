@@ -217,6 +217,7 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - 색·폰트의 **의미가 바뀌는 변경**(역할 변경, 새 토큰 도입, 톤 재정의) 은 SSOT 문서를 먼저 갱신하고 PR 본문에 영향 범위(`BRAND` / `DESIGN` / `DOCS` / 필요 시 `WEB`) 를 명시한다. 필요 시 ADR 또는 `docs/design/decisions/` 결정 기록을 함께 남긴다.
 - 리포트·다운로드·공유링크 OG 의 시각/문구 변경은 `§4.6` 법적 고지 누락 금지와 교차 검증한다 (`COLOR_SYSTEM.md §5`, `TYPOGRAPHY.md §4.5` 참조).
 - 디자인 SSOT 의 §1 브랜드 약속·금지 톤·법적 고지는 **CEO 봉인 영역**이며, 변경하려면 새 CEO 브리프 리비전이 필요하다.
+- **레이아웃 컨테이너 폭은 기본 `lg`** 다. 기능/리포트/사용자 대면 페이지는 헤더와 같은 `lg`(= `SiteShell.WIDE_ROUTE_PREFIXES`)를 쓰고, `sm` 은 "단일 입력 폼" 한정 명시적 예외(`NARROW_FORM_PREFIXES`)다 — "폼이니까 sm" 을 기본값으로 적용하지 않는다. 정본: [`docs/design/DESIGN.md §4.5`](docs/design/DESIGN.md).
 
 ---
 
