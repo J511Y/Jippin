@@ -8,7 +8,7 @@ import {
   Text,
   Title
 } from '@mantine/core';
-import { IconChevronRight } from '@tabler/icons-react';
+import { IconArrowLeft, IconChevronRight } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
@@ -124,126 +124,136 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
         dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }}
       />
 
-      {/* 빵부스러기(좌) + 뒤로가기(우) — 보조 내비게이션이라 중립 색으로 둔다. */}
-      <Group justify="space-between" align="center">
-        <Group gap={6}>
-          <Anchor href="/faq" size="sm" c="dimmed" underline="hover">
-            자주묻는질문
-          </Anchor>
-          <Text span size="sm" c="dimmed">
-            /
-          </Text>
-          <Text span size="sm" c="dimmed">
-            {item.categories
-              .map((slug) => FAQ_CATEGORY_LABELS[slug])
-              .join(' · ')}
-          </Text>
-        </Group>
+      {/* 빵부스러기 — 보조 내비게이션이라 중립 색으로 둔다. 목록으로 링크는
+          페이지 하단(관련 질문 아래)으로 이동했다. */}
+      <Group gap={6}>
         <Anchor href="/faq" size="sm" c="dimmed" underline="hover">
-          ← 목록으로
+          자주묻는질문
         </Anchor>
+        <Text span size="sm" c="dimmed">
+          /
+        </Text>
+        <Text span size="sm" c="dimmed">
+          {item.categories.map((slug) => FAQ_CATEGORY_LABELS[slug]).join(' · ')}
+        </Text>
       </Group>
 
-      {/* 본문 카드 — 흰 표면으로 페이지 배경과 구분한다. */}
-      <Box
-        p={{ base: 'lg', sm: 'xl' }}
-        style={{
-          background: 'var(--jippin-brand-surface-alt)',
-          border: '1px solid var(--jippin-brand-border)',
-          borderRadius: 'var(--mantine-radius-lg)'
-        }}
-      >
-        <Stack gap="md">
-          <Title
-            order={1}
-            c="var(--jippin-brand-ink)"
-            style={{ wordBreak: 'keep-all' }}
-          >
-            {item.question}
-          </Title>
-          <Divider color="var(--jippin-brand-border)" />
-          <FaqAnswer markdown={item.answer} />
-        </Stack>
-      </Box>
-
-      <Divider color="var(--jippin-brand-border)" />
-
-      {/* 상담 유도 — 카드 없이 본문 흐름에 둔다. 강조(primary)는 버튼 하나에만. */}
-      <Stack gap="sm" component="section">
-        <Title order={2} fz="h3" c="var(--jippin-brand-ink)">
-          더 궁금한 점이 있으신가요?
-        </Title>
-        <Text
-          size="sm"
-          c="var(--jippin-brand-copy)"
-          style={{ wordBreak: 'keep-all' }}
+      {/* 본문(QnA) · 더 궁금한 점 · 관련 질문 세 블록은 40px 간격으로 띄운다.
+          구분선 없이 여백만으로 리듬을 준다. */}
+      <Stack gap={40}>
+        {/* 본문 카드 — 흰 표면으로 페이지 배경과 구분한다. */}
+        <Box
+          p={{ base: 'lg', sm: 'xl' }}
+          style={{
+            background: 'var(--jippin-brand-surface-alt)',
+            border: '1px solid var(--jippin-brand-border)',
+            borderRadius: 'var(--mantine-radius-lg)'
+          }}
         >
-          평면도 한 장이면 1분 안에 철거·확장 가능성을 무료로 확인할 수 있어요.
-          자세한 내용은 전문가 상담으로 이어가세요.
-        </Text>
-        <Group gap="sm">
-          <Button component="a" href="/sessions/new" radius="md">
-            무료로 사전검토 시작
-          </Button>
-          <LeadCtaButton cta="faq_detail" variant="default" radius="md">
-            전문가 상담
-          </LeadCtaButton>
-        </Group>
-      </Stack>
+          <Stack gap="md">
+            <Title
+              order={1}
+              c="var(--jippin-brand-ink)"
+              style={{ wordBreak: 'keep-all' }}
+            >
+              {item.question}
+            </Title>
+            <Divider color="var(--jippin-brand-border)" />
+            <FaqAnswer markdown={item.answer} />
+          </Stack>
+        </Box>
 
-      <Divider color="var(--jippin-brand-border)" />
-
-      {/* 관련 질문 — 같은 카테고리 내부 링크, 표처럼 행 구분선으로 나눈다. */}
-      {related.length > 0 ? (
+        {/* 상담 유도 — 카드 없이 본문 흐름에 둔다. 강조(primary)는 버튼 하나에만. */}
         <Stack gap="sm" component="section">
           <Title order={2} fz="h3" c="var(--jippin-brand-ink)">
-            관련 질문
+            더 궁금한 점이 있으신가요?
           </Title>
-          <Stack
-            gap={0}
-            style={{
-              background: 'var(--jippin-brand-surface-alt)',
-              border: '1px solid var(--jippin-brand-border)',
-              borderRadius: 'var(--mantine-radius-lg)',
-              overflow: 'hidden'
-            }}
+          <Text
+            size="sm"
+            c="var(--jippin-brand-copy)"
+            style={{ wordBreak: 'keep-all' }}
           >
-            {related.map((other, index) => (
-              <Box
-                key={other.id}
-                component="a"
-                href={`/faq/${other.id}`}
-                data-faq-row
-                px="lg"
-                py="sm"
-                style={{
-                  display: 'block',
-                  textDecoration: 'none',
-                  borderTop:
-                    index === 0
-                      ? undefined
-                      : '1px solid var(--jippin-brand-border)'
-                }}
-              >
-                <Group gap="sm" wrap="nowrap" justify="space-between" align="center">
-                  <Text
-                    fw={500}
-                    c="var(--jippin-brand-copy)"
-                    style={{ wordBreak: 'keep-all' }}
-                  >
-                    {other.question}
-                  </Text>
-                  <IconChevronRight
-                    size={16}
-                    aria-hidden
-                    style={{ flexShrink: 0, color: 'var(--jippin-brand-copy)' }}
-                  />
-                </Group>
-              </Box>
-            ))}
-          </Stack>
+            평면도 한 장이면 1분 안에 철거·확장 가능성을 무료로 확인할 수 있어요.
+            자세한 내용은 전문가 상담으로 이어가세요.
+          </Text>
+          <Group gap="sm">
+            <Button component="a" href="/sessions/new" radius="md">
+              무료로 사전검토 시작
+            </Button>
+            <LeadCtaButton cta="faq_detail" variant="default" radius="md">
+              전문가 상담
+            </LeadCtaButton>
+          </Group>
         </Stack>
-      ) : null}
+
+        {/* 관련 질문 — 같은 카테고리 내부 링크, 표처럼 행 구분선으로 나눈다. */}
+        {related.length > 0 ? (
+          <Stack gap="sm" component="section">
+            <Title order={2} fz="h3" c="var(--jippin-brand-ink)">
+              관련 질문
+            </Title>
+            <Stack
+              gap={0}
+              style={{
+                background: 'var(--jippin-brand-surface-alt)',
+                border: '1px solid var(--jippin-brand-border)',
+                borderRadius: 'var(--mantine-radius-lg)',
+                overflow: 'hidden'
+              }}
+            >
+              {related.map((other, index) => (
+                <Box
+                  key={other.id}
+                  component="a"
+                  href={`/faq/${other.id}`}
+                  data-faq-row
+                  px="lg"
+                  py="sm"
+                  style={{
+                    display: 'block',
+                    textDecoration: 'none',
+                    borderTop:
+                      index === 0
+                        ? undefined
+                        : '1px solid var(--jippin-brand-border)'
+                  }}
+                >
+                  <Group gap="sm" wrap="nowrap" justify="space-between" align="center">
+                    <Text
+                      fz="sm"
+                      fw={500}
+                      c="var(--jippin-brand-ink)"
+                      style={{ wordBreak: 'keep-all' }}
+                    >
+                      {other.question}
+                    </Text>
+                    <IconChevronRight
+                      size={16}
+                      aria-hidden
+                      style={{ flexShrink: 0, color: 'var(--jippin-brand-copy)' }}
+                    />
+                  </Group>
+                </Box>
+              ))}
+            </Stack>
+          </Stack>
+        ) : null}
+      </Stack>
+
+      {/* 목록으로 — 페이지 최하단(관련 질문 아래)에 둔다. 화살표는 아이콘으로
+          통일(관련 질문 행의 chevron 패턴과 동일하게 aria-hidden). */}
+      <Group justify="center">
+        <Anchor
+          href="/faq"
+          size="sm"
+          c="dimmed"
+          underline="hover"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+        >
+          <IconArrowLeft size={16} aria-hidden />
+          목록으로
+        </Anchor>
+      </Group>
     </Stack>
   );
 }
