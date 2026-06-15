@@ -19,6 +19,7 @@ from .routers.chat import router as chat_router
 from .routers.faq import router as faq_router
 from .routers.floorplans import router as floorplans_router
 from .routers.healthz import router as healthz_router
+from .routers.home_check import router as home_check_router
 from .routers.leads import router as leads_router
 from .routers.sessions import router as sessions_router
 from .services.phone_verification import close_phone_verification_store
@@ -75,6 +76,10 @@ def create_app() -> FastAPI:
     # 자주묻는질문(FAQ) — 공개 콘텐츠 읽기 전용(GET /faqs). DB-backed 실 기능이므로
     # phase_a 플래그와 무관하게 항상 등록한다(CMP-DIRECT).
     app.include_router(faq_router)
+    # 우리집 체크(home-check) — 집합건축물대장 전유부+표제부 CODEF 비동기 조회(ADR-0008).
+    # DB-backed 실 기능이므로 phase_a 플래그와 무관하게 항상 등록한다. 비회원(익명
+    # Supabase 토큰)도 조회 가능하고, /mine 이력은 로그인 회원만 가능하다.
+    app.include_router(home_check_router)
     # Phase A 메인 흐름 (CMP-609 skeleton → CMP-608 상당 DB 영속화 완료).
     # services.main_flow 는 실 Phase A 테이블 (migration 0008) 에 기록한다.
     # 기능 자체가 아직 미공개 (주소 정규화/도면 파이프라인 미구현) 이므로

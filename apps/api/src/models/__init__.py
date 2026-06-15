@@ -32,6 +32,7 @@ from .consultation_lead import (  # noqa: E402
     ConsultationLeadAttachment,
 )
 from .faq import FAQ_CATEGORIES, Faq  # noqa: E402
+from .home_check import HomeCheck, HomeCheckDocument  # noqa: E402
 from .main_feature import (  # noqa: E402
     ChatMessage,
     ChatToolCall,
@@ -56,6 +57,8 @@ __all__ = [
     "CreatedByMixin",
     "FAQ_CATEGORIES",
     "Faq",
+    "HomeCheck",
+    "HomeCheckDocument",
     "Floorplan",
     "FloorplanAsset",
     "FloorplanCandidate",

@@ -23,7 +23,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SourceForm = Literal["main_page", "lead_page"]
+SourceForm = Literal["main_page", "lead_page", "property_check"]
 ApplicantKind = Literal["individual", "company"]
 OwnershipStatus = Literal["in_transaction", "owner"]
 InflowSource = Literal["naver_search", "blog", "acquaintance", "cafe", "etc"]
@@ -92,6 +92,9 @@ class LeadCreateRequest(BaseModel):
     construction_end_date: date | None = None
     inflow_source: InflowSource | None = None
     message: str | None = Field(default=None, max_length=_MAX_MESSAGE_LEN)
+    # 우리집 체크(home-check) 인입이면 원천 잡 id — 생성 후 home_checks.consultation_lead_id
+    # 를 채워 귀속을 연결한다(ADR-0008). 그 외 신청은 None.
+    home_check_id: uuid.UUID | None = None
     attachments: list[LeadAttachmentInput] = Field(
         default_factory=list, max_length=_MAX_ATTACHMENTS
     )

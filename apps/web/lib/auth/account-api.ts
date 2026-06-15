@@ -11,6 +11,7 @@
 
 import { apiBaseUrl } from '@/lib/api-base-url';
 import { createClient } from '@/lib/supabase/client';
+import type { HomeCheckJob } from '@contracts/home-check';
 
 export class AccountApiError extends Error {
   code: string;
@@ -170,6 +171,18 @@ export interface MyLead {
 
 export async function listMyLeads(): Promise<MyLead[]> {
   const { items } = await authedRequest<{ items: MyLead[] }>('/leads/mine', {
+    method: 'GET'
+  });
+  return items;
+}
+
+/**
+ * 내 우리집 체크 이력(로그인 필수). `/home-check/mine` 은 `require_supabase_request_user`
+ * 라, apiClient 의 메모리 토큰(하드 리프레시 후 비어있을 수 있음) 대신 현재 Supabase 세션
+ * access token 을 명시적으로 Bearer 로 싣는다(listMyLeads 와 동일 경로).
+ */
+export async function listMyHomeChecks(): Promise<HomeCheckJob[]> {
+  const { items } = await authedRequest<{ items: HomeCheckJob[] }>('/home-check/mine', {
     method: 'GET'
   });
   return items;
