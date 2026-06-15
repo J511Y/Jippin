@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 import httpx
+import redis.asyncio as aioredis
 import sqlalchemy as sa
 
 from ..config import Settings, get_settings
@@ -175,13 +176,30 @@ async def get_home_check_documents(*, home_check_id: uuid.UUID) -> list[dict[str
 # 걸릴 수 있다. v1 은 BackgroundTasks(같은 워커 프로세스)로 수용하되, 출시 후 부하/타임아웃
 # 지표를 보고 전용 큐(예: Redis 큐 + 별도 워커)로 분리한다.
 # ---------------------------------------------------------------------------
+# 2-way resume 토큰·OAuth 토큰·서킷 상태를 **백그라운드 잡과 /continue 재개 사이**에서
+# 공유해야 한다(요청마다 새 클라이언트가 생성되므로). in-process dict 폴백이면 토큰을
+# 저장한 클라이언트가 폐기된 뒤 resume 가 항상 만료로 떨어진다 → 프로세스 공유 Redis 사용.
+_codef_redis: aioredis.Redis | None = None
+
+
+def _get_codef_redis() -> aioredis.Redis:
+    """프로세스 공유 async Redis(지연 생성). OAuth state store 와 동일 URL 규칙."""
+
+    global _codef_redis
+    if _codef_redis is None:
+        settings = get_settings()
+        url = settings.codef_token_redis_url or settings.redis_url
+        _codef_redis = aioredis.from_url(url)
+    return _codef_redis
+
+
 def _new_client() -> CodefBuildingRegisterClient:
-    """백그라운드 처리용 CODEF 클라이언트 — 자체 httpx/Redis 자원을 쓴다.
+    """백그라운드 처리용 CODEF 클라이언트 — 공유 Redis(토큰/2-way/서킷)를 주입한다.
 
     테스트는 ``src.services.home_check._new_client`` 를 monkeypatch 해 외부 호출을 막는다.
     """
 
-    return CodefBuildingRegisterClient(get_settings())
+    return CodefBuildingRegisterClient(get_settings(), redis_client=_get_codef_redis())
 
 
 async def run_home_check(

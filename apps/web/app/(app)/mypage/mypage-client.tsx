@@ -33,11 +33,12 @@ import {
   AccountApiError,
   changePassword,
   deleteAccount,
+  listMyHomeChecks,
   listMyLeads,
   type MyLead
 } from '@/lib/auth/account-api';
 import { changePasswordSchema, type ChangePasswordValues } from '@/lib/auth/validation';
-import { listMyHomeChecks, type HomeCheckJob } from '@/lib/home-check/api';
+import { type HomeCheckJob } from '@/lib/home-check/api';
 import { jobAddressLabel, SIGNAL_META, STATUS_META } from '@/lib/home-check/display';
 import { parseApiError } from '@/lib/api/error';
 import { createClient } from '@/lib/supabase/client';

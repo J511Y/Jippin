@@ -30,6 +30,8 @@ export interface LeadPayload {
   construction_end_date?: string | null;
   inflow_source?: InflowSource | null;
   message?: string | null;
+  /** 우리집 체크 인입이면 원천 잡 id — 백엔드가 home_checks.consultation_lead_id 를 채운다. */
+  home_check_id?: string | null;
   attachments?: UploadedAttachment[];
 }
 

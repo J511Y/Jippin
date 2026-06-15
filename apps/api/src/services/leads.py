@@ -25,7 +25,7 @@ from ..config import get_settings
 from ..db import get_engine
 from ..errors import ZippinException
 from ..logging import log_http_call
-from ..models import ConsultationLead, ConsultationLeadAttachment
+from ..models import ConsultationLead, ConsultationLeadAttachment, HomeCheck
 
 # consultation_leads 로 그대로 들어가는 컬럼 화이트리스트(서비스/인증 제어 컬럼 제외).
 _LEAD_FIELDS: tuple[str, ...] = (
@@ -138,7 +138,31 @@ async def create_lead(
         user_id=user_id,
         default_bucket=settings.lead_floorplan_bucket,
     )
-    return await _insert_lead(lead_values, attachments)
+    row = await _insert_lead(lead_values, attachments)
+    # 우리집 체크 인입이면 원천 잡에 귀속 연결(소유자 본인 잡만, best-effort).
+    home_check_id = payload.get("home_check_id")
+    if home_check_id:
+        await _link_home_check(
+            home_check_id=home_check_id, lead_id=row["id"], user_id=user_id
+        )
+    return row
+
+
+async def _link_home_check(
+    *, home_check_id: uuid.UUID, lead_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """우리집 체크 잡(home_checks)에 생성된 상담 리드를 연결한다.
+
+    소유자(user_id) 본인의 잡만 갱신한다 — 타인 잡은 조용히 무시(IDOR 방지). 연결 실패가
+    상담 접수 자체를 막지 않도록 별도 트랜잭션의 best-effort 다.
+    """
+
+    async with get_engine().begin() as conn:
+        await conn.execute(
+            sa.update(HomeCheck)
+            .where(HomeCheck.id == home_check_id, HomeCheck.user_id == user_id)
+            .values(consultation_lead_id=lead_id)
+        )
 
 
 async def reassign_leads_owner(

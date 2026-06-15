@@ -83,6 +83,8 @@ export function ConsultationLeadForm() {
   // 우리집 체크(ADR-0008) 인입 여부 — ?from=home-check 면 source_form 을 'property_check'
   // 으로 보내고 조회 주소를 prefill 한다.
   const [fromHomeCheck, setFromHomeCheck] = useState(false);
+  // 우리집 체크 원천 잡 id(?checkId=) — 상담 접수 시 백엔드로 보내 귀속 연결한다.
+  const [homeCheckId, setHomeCheckId] = useState<string | null>(null);
 
   const form = useForm<FullLeadValues>({
     initialValues: INITIAL_VALUES,
@@ -145,6 +147,7 @@ export function ConsultationLeadForm() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('from') !== 'home-check') return;
     setFromHomeCheck(true);
+    setHomeCheckId(params.get('checkId'));
     const address = (params.get('address') ?? '').trim();
     if (address) {
       form.setFieldValue('road_addr_part1', address);
@@ -178,6 +181,7 @@ export function ConsultationLeadForm() {
       await createLead({
         // 우리집 체크 인입은 'property_check'(ADR-0008), 그 외 일반 신청은 'lead_page'.
         source_form: fromHomeCheck ? 'property_check' : 'lead_page',
+        home_check_id: fromHomeCheck ? homeCheckId : null,
         applicant_kind: values.applicant_kind,
         applicant_name: values.applicant_name.trim(),
         applicant_phone: normalizeKoreanPhone(values.applicant_phone) ?? values.applicant_phone,

@@ -304,7 +304,9 @@ class CodefBuildingRegisterClient:
         _log_two_way_shape("exclusive", extra)
 
         if has_secure_no(extra):
-            token = await self._save_resume("exclusive", first_body, data, two_way_info)
+            token = await self._save_resume(
+                "exclusive", first_body, data, two_way_info, dong=dong, ho=ho
+            )
             raise CodefNeedsUserInput("secure_no", token, "보안문자 입력이 필요합니다.")
 
         addr_choice = _pick_single_address(extra)
@@ -312,7 +314,9 @@ class CodefBuildingRegisterClient:
         ho_match = match_ho(extra.get("reqHoNumList") or [], ho)
 
         if dong_match is None or ho_match is None or addr_choice is None:
-            token = await self._save_resume("exclusive", first_body, data, two_way_info)
+            token = await self._save_resume(
+                "exclusive", first_body, data, two_way_info, dong=dong, ho=ho
+            )
             raise CodefNeedsUserInput("dong_ho", token, "동·호를 선택해 주세요.")
 
         second_body = _build_exclusive_second_body(
@@ -342,17 +346,24 @@ class CodefBuildingRegisterClient:
         first_body = self._rebuild_credentials(ctx["first_body"], product="exclusive")
         extra = ctx["extra_info"]
         two_way_info = ctx["two_way_info"]
+        # 보안문자만 재개하는 경우 동·호가 안 올 수 있다 → 1차에 저장한 값으로 보강.
+        dong = dong or ctx.get("dong") or ""
+        ho = ho or ctx.get("ho") or ""
 
-        addr_choice = _pick_single_address(extra) or _first(extra.get("reqAddrList"))
-        dong_match = match_dong(extra.get("reqDongNumList") or [], dong or "")
-        ho_match = match_ho(extra.get("reqHoNumList") or [], ho or "")
-        if dong_match is None or ho_match is None:
+        # 주소 후보가 복수면 동·호만으로는 건물을 특정할 수 없다 → 임의로 첫 후보를
+        # 고르면 다른 건물 리포트를 낼 위험이 있으므로 추정하지 않고 입력을 다시 요구한다.
+        addr_choice = _pick_single_address(extra)
+        dong_match = match_dong(extra.get("reqDongNumList") or [], dong)
+        ho_match = match_ho(extra.get("reqHoNumList") or [], ho)
+        if addr_choice is None or dong_match is None or ho_match is None:
             raise CodefNeedsUserInput(
-                "dong_ho", resume_token, "동·호 선택이 유효하지 않습니다."
+                "dong_ho",
+                resume_token,
+                "동·호 또는 주소 후보가 모호해 자동 선택할 수 없습니다. 다시 확인해 주세요.",
             )
 
         second_body = _build_exclusive_second_body(
-            first_body, addr_choice or {}, dong_match, ho_match, two_way_info
+            first_body, addr_choice, dong_match, ho_match, two_way_info
         )
         if secure_no:
             second_body["secureNo"] = secure_no
@@ -407,13 +418,17 @@ class CodefBuildingRegisterClient:
         _log_two_way_shape("heading", extra)
 
         if has_secure_no(extra):
-            token = await self._save_resume("heading", first_body, data, two_way_info)
+            token = await self._save_resume(
+                "heading", first_body, data, two_way_info, dong=dong, ho=""
+            )
             raise CodefNeedsUserInput("secure_no", token, "보안문자 입력이 필요합니다.")
 
         addr_choice = _pick_single_address(extra)
         dong_match = match_dong(extra.get("reqDongNumList") or [], dong)
         if dong_match is None or addr_choice is None:
-            token = await self._save_resume("heading", first_body, data, two_way_info)
+            token = await self._save_resume(
+                "heading", first_body, data, two_way_info, dong=dong, ho=""
+            )
             raise CodefNeedsUserInput("dong_ho", token, "동을 선택해 주세요.")
 
         second_body = _build_heading_second_body(
@@ -442,16 +457,21 @@ class CodefBuildingRegisterClient:
         first_body = self._rebuild_credentials(ctx["first_body"], product="heading")
         extra = ctx["extra_info"]
         two_way_info = ctx["two_way_info"]
+        # 보안문자만 재개하는 경우 동이 안 올 수 있다 → 1차에 저장한 값으로 보강.
+        dong = dong or ctx.get("dong") or ""
 
-        addr_choice = _pick_single_address(extra) or _first(extra.get("reqAddrList"))
-        dong_match = match_dong(extra.get("reqDongNumList") or [], dong or "")
-        if dong_match is None:
+        # 주소 후보가 복수면 임의로 첫 후보를 고르지 않는다(다른 건물 리포트 방지).
+        addr_choice = _pick_single_address(extra)
+        dong_match = match_dong(extra.get("reqDongNumList") or [], dong)
+        if addr_choice is None or dong_match is None:
             raise CodefNeedsUserInput(
-                "dong_ho", resume_token, "동 선택이 유효하지 않습니다."
+                "dong_ho",
+                resume_token,
+                "동 또는 주소 후보가 모호해 자동 선택할 수 없습니다. 다시 확인해 주세요.",
             )
 
         second_body = _build_heading_second_body(
-            first_body, addr_choice or {}, dong_match, two_way_info
+            first_body, addr_choice, dong_match, two_way_info
         )
         if secure_no:
             second_body["secureNo"] = secure_no
@@ -474,6 +494,9 @@ class CodefBuildingRegisterClient:
         first_body: dict[str, Any],
         data: dict[str, Any],
         two_way_info: dict[str, Any],
+        *,
+        dong: str = "",
+        ho: str = "",
     ) -> str:
         # 자격증명(password/암호화값)은 토큰 payload 에서 제거 — resume 시 재구성한다.
         sanitized = {
@@ -486,6 +509,10 @@ class CodefBuildingRegisterClient:
             "first_body": sanitized,
             "extra_info": data.get("extraInfo") or {},
             "two_way_info": two_way_info,
+            # 사용자가 1차에 입력한 동·호를 보존한다 — 보안문자(secure_no) 재개 시
+            # 프론트가 동·호를 다시 안 보내도 서버가 매칭할 수 있게(PII 아님).
+            "dong": dong,
+            "ho": ho,
         }
         return await self._resume.save(payload)
 
@@ -515,12 +542,6 @@ def _log_two_way_shape(product: str, extra: dict[str, Any]) -> None:
         ho_candidates=len(extra.get("reqHoNumList") or []),
         secure_no_refresh=extra.get("reqSecureNoRefresh"),
     )
-
-
-def _first(seq: Any) -> dict[str, Any] | None:
-    if isinstance(seq, list) and seq and isinstance(seq[0], dict):
-        return seq[0]
-    return None
 
 
 def _pick_single_address(extra: dict[str, Any]) -> dict[str, Any] | None:

@@ -51,8 +51,6 @@ export async function continueHomeCheck(
   return response.data;
 }
 
-/** 내 우리집 체크 이력(로그인 필수). 목록 응답의 잡은 `report` 가 생략될 수 있다. */
-export async function listMyHomeChecks(): Promise<HomeCheckJob[]> {
-  const response = await apiClient.get<{ items: HomeCheckJob[] }>('/home-check/mine');
-  return response.data.items;
-}
+// 내 우리집 체크 이력(`/home-check/mine`)은 로그인 필수이고 하드 리프레시 후 apiClient
+// 메모리 토큰이 비어있을 수 있어, Supabase 세션 토큰을 명시적으로 싣는
+// `lib/auth/account-api.ts::listMyHomeChecks` 를 사용한다(listMyLeads 와 동일 경로).
