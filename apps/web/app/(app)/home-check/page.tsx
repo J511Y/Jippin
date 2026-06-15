@@ -49,9 +49,9 @@ export default function HomeCheckLandingPage() {
         </Text>
       </Stack>
 
-      <Card withBorder radius="lg" padding="xl">
-        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xl">
-          {/* 지원 대상 */}
+      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+        {/* 지원 대상 */}
+        <Card withBorder radius="lg" padding="xl">
           <Stack gap="md">
             <Group gap="xs" wrap="nowrap" align="center">
               <ThemeIcon color="jippin" variant="light" size={28} radius="xl">
@@ -70,8 +70,10 @@ export default function HomeCheckLandingPage() {
               ))}
             </Stack>
           </Stack>
+        </Card>
 
-          {/* 미지원 대상 */}
+        {/* 미지원 대상 */}
+        <Card withBorder radius="lg" padding="xl">
           <Stack gap="md">
             <Group gap="xs" wrap="nowrap" align="center">
               <ThemeIcon color="gray" variant="light" size={28} radius="xl">
@@ -97,8 +99,8 @@ export default function HomeCheckLandingPage() {
               위 대상은 일반건축물대장 소관이라 현재 우리집 체크에서 조회할 수 없어요.
             </Text>
           </Stack>
-        </SimpleGrid>
-      </Card>
+        </Card>
+      </SimpleGrid>
 
       <Button
         component="a"
