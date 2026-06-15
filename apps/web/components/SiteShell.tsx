@@ -33,7 +33,7 @@ type NavItem = {
 
 // '상담'(/contacts) 메뉴는 제거됨 — 상담 현황은 마이페이지로 이동했다(CMP-DIRECT).
 const NAV_ITEMS: NavItem[] = [
-  { href: '/sessions', label: '검토', match: (p) => p.startsWith('/sessions') },
+  { href: '/sessions', label: '사전검토', match: (p) => p.startsWith('/sessions') },
   { href: '/home-check', label: '우리집 체크', match: (p) => p.startsWith('/home-check') },
   { href: '/prices', label: '가격', match: (p) => p.startsWith('/prices') },
   { href: '/faq', label: '자주묻는질문', match: (p) => p.startsWith('/faq') }
@@ -104,7 +104,7 @@ function NavLink({
         display: 'block',
         padding: '8px 12px',
         borderRadius: 'var(--mantine-radius-md)',
-        fontSize: 'var(--mantine-font-size-sm)',
+        fontSize: 'var(--mantine-font-size-md)',
         fontWeight: active ? 600 : 500,
         color: active
           ? 'var(--jippin-brand-primary)'
@@ -141,7 +141,6 @@ function BrandMark({ onNavigate }: { onNavigate?: () => void }) {
         fz="1.125rem"
         c="var(--jippin-brand-ink)"
         style={{ letterSpacing: '-0.01em' }}
-        visibleFrom="sm"
       >
         집핀
       </Text>

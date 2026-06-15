@@ -27,6 +27,7 @@ export function FaqAnswer({ markdown }: { markdown: string }) {
   return (
     <Typography>
       <Box
+        className="faq-answer"
         fz="md"
         lh={1.7}
         c="var(--jippin-brand-copy)"

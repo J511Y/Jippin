@@ -76,6 +76,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="ko" {...mantineHtmlProps}>
       <head>
         <ColorSchemeScript defaultColorScheme="light" />
+        {/* paint 전 <html> 에 js-reveal 클래스를 붙여, JS 가 있을 때만 진입(reveal)
+            대상을 SSR 단계부터 숨긴다. no-JS 사용자는 클래스가 없어 콘텐츠가 그대로
+            보인다(점진적 향상). 콘텐츠가 보였다가 사라지며 올라오는 깜빡임을 막는다. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{document.documentElement.classList.add('js-reveal')}catch(e){}"
+          }}
+        />
       </head>
       <body>
         <Providers>

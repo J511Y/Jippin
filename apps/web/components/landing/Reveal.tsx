@@ -72,7 +72,7 @@ export function Reveal({
   }, [immediate, itemSelector, y, stagger, delay]);
 
   return (
-    <div ref={scope} style={style}>
+    <div ref={scope} className="reveal-scope" style={style}>
       {children}
     </div>
   );
