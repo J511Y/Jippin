@@ -104,6 +104,13 @@ const ENTRUSTMENT_ROWS: EntrustmentRow[] = [
     transfer: '미국 / 서비스 이용 시점 / 네트워크를 통한 전송',
     items: '접속 로그, 기기·브라우저 정보, 방문 페이지 경로, IP 기반 추정 지역',
     retention: '위탁 계약 종료 또는 보유 목적 달성 시까지'
+  },
+  {
+    trustee: 'CODEF(코드에프)',
+    task: '우리집 체크 — 건축물대장(집합건축물 전유부·표제부) 공개정보 조회 대행',
+    transfer: '국내 처리(국외 이전 없음) / 우리집 체크 조회 시점 / 네트워크를 통한 전송',
+    items: '조회 대상 주소(동·호)',
+    retention: '조회 처리 완료 후 즉시(별도 보관하지 않음)'
   }
 ];
 
@@ -227,6 +234,10 @@ const SECTIONS: Section[] = [
         <Clause marker="라.">
           서비스 품질 개선, 신규 기능 개발 및 통계 분석을 통한 서비스 운영
         </Clause>
+        <Clause marker="마.">
+          우리집 체크 서비스에서 이용자가 입력한 주소의 건축물대장(위반건축물 표시
+          등) 공개정보 조회 대행 및 결과 제공
+        </Clause>
       </Stack>
     )
   },
@@ -247,6 +258,9 @@ const SECTIONS: Section[] = [
         <Clause marker="다.">
           서비스 이용 과정에서 자동으로 수집되는 정보: 접속 로그, 쿠키, 기기 및
           브라우저 정보, 익명 세션 식별자
+        </Clause>
+        <Clause marker="라.">
+          우리집 체크 이용 시: 조회 대상 건물의 주소 및 동·호
         </Clause>
         <Para>회사는 다음의 방법으로 개인정보를 수집합니다.</Para>
         <SubClause marker="1.">

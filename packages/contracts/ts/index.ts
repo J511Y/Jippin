@@ -9,4 +9,5 @@ export * from "./common-judgment-schema";
 export * from "./completion-decision";
 export * from "./error-response";
 export * from "./estimate-result";
+export * from "./home-check";
 export * from "./rule-eval-result";

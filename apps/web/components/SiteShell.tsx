@@ -34,6 +34,7 @@ type NavItem = {
 // '상담'(/contacts) 메뉴는 제거됨 — 상담 현황은 마이페이지로 이동했다(CMP-DIRECT).
 const NAV_ITEMS: NavItem[] = [
   { href: '/sessions', label: '검토', match: (p) => p.startsWith('/sessions') },
+  { href: '/home-check', label: '우리집 체크', match: (p) => p.startsWith('/home-check') },
   { href: '/prices', label: '가격', match: (p) => p.startsWith('/prices') },
   { href: '/faq', label: '자주묻는질문', match: (p) => p.startsWith('/faq') }
 ];

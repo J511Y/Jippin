@@ -80,6 +80,9 @@ export function ConsultationLeadForm() {
   // 로그인 회원은 이름/연락처가 이미 계정에 있으므로 prefill 후 잠근다(개별 잠금).
   const [nameLocked, setNameLocked] = useState(false);
   const [phoneLocked, setPhoneLocked] = useState(false);
+  // 우리집 체크(ADR-0008) 인입 여부 — ?from=home-check 면 source_form 을 'property_check'
+  // 으로 보내고 조회 주소를 prefill 한다.
+  const [fromHomeCheck, setFromHomeCheck] = useState(false);
 
   const form = useForm<FullLeadValues>({
     initialValues: INITIAL_VALUES,
@@ -134,6 +137,24 @@ export function ConsultationLeadForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 우리집 체크 인입 prefill — ?from=home-check&address=... 면 조회 주소를 현장 주소에
+  // 채운다(상세주소는 사용자가 주소 재검색/입력). source_form 분기 플래그도 세운다.
+  // FaqBrowser/mypage 와 같은 패턴 — useSearchParams(Suspense) 대신 location 1회 동기화.
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('from') !== 'home-check') return;
+    setFromHomeCheck(true);
+    const address = (params.get('address') ?? '').trim();
+    if (address) {
+      form.setFieldValue('road_addr_part1', address);
+      form.clearFieldError('road_addr_part1');
+    }
+    /* eslint-enable react-hooks/set-state-in-effect */
+    // 마운트 시 1회만 — form 은 안정적.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function openAddressPopup() {
     // 도로명주소 팝업(useDetailAddr=Y)이 기본주소 + 상세주소를 함께 돌려준다.
     const result = await openJusoAddressPopup();
@@ -155,7 +176,8 @@ export function ConsultationLeadForm() {
       }
       const attachments = uploaded ? [uploaded] : [];
       await createLead({
-        source_form: 'lead_page',
+        // 우리집 체크 인입은 'property_check'(ADR-0008), 그 외 일반 신청은 'lead_page'.
+        source_form: fromHomeCheck ? 'property_check' : 'lead_page',
         applicant_kind: values.applicant_kind,
         applicant_name: values.applicant_name.trim(),
         applicant_phone: normalizeKoreanPhone(values.applicant_phone) ?? values.applicant_phone,

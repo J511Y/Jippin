@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jippin.local/contracts/home-check.schema.json",
+  "title": "HomeCheckJob",
+  "description": "우리집 체크 조회 잡 + 결과 리포트. CODEF 세움터 집합건축물대장 전유부+표제부 응답을 PII-free 로 매핑한 정본. 결정: docs/adr/0008-home-check-building-register.md. 소유자/설계자 성명·주민번호·세움터 password 등 PII 는 절대 포함하지 않는다(원본 PDF 는 Storage 보관).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "status"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "const": "1.0.0",
+      "description": "스키마 버전 (semver)."
+    },
+    "id": {
+      "type": "string",
+      "description": "조회 잡 UUID."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "querying", "needs_input", "completed", "failed"],
+      "description": "잡 상태. needs_input = 동·호 자동매칭 실패 또는 보안문자(reqSecureNo) 발생 폴백."
+    },
+    "signal": {
+      "type": ["string", "null"],
+      "enum": ["violation", "caution", "normal", null],
+      "description": "종합 신호등. status=completed 일 때만 채워진다. violation=🔴, caution=🟡, normal=🟢."
+    },
+    "created_at": {
+      "type": ["string", "null"],
+      "description": "잡 생성 시각 (ISO-8601)."
+    },
+    "updated_at": {
+      "type": ["string", "null"],
+      "description": "잡 갱신 시각 (ISO-8601)."
+    },
+    "error": {
+      "description": "실패 사유 (status=failed).",
+      "anyOf": [{ "$ref": "#/$defs/ErrorInfo" }, { "type": "null" }]
+    },
+    "needs_input": {
+      "description": "추가 입력 요구 (status=needs_input).",
+      "anyOf": [{ "$ref": "#/$defs/NeedsInput" }, { "type": "null" }]
+    },
+    "report": {
+      "description": "결과 리포트 (status=completed).",
+      "anyOf": [{ "$ref": "#/$defs/HomeCheckReport" }, { "type": "null" }]
+    }
+  },
+  "$defs": {
+    "ErrorInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "description": "오류 코드 (예: UPSTREAM_UNAVAILABLE, NOT_FOUND, INVALID_ADDRESS)." },
+        "message": { "type": "string", "description": "사용자 안내용 메시지." }
+      }
+    },
+    "NeedsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["dong_ho", "secure_no"],
+          "description": "폴백 종류. dong_ho=동·호 자동매칭 실패로 선택 필요, secure_no=보안문자 입력 필요."
+        },
+        "message": { "type": "string", "description": "사용자 안내용 메시지." }
+      }
+    },
+    "HomeCheckReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signal", "violation", "address", "disclaimer"],
+      "description": "전유부+표제부 병행 조회 결과의 PII-free 리포트.",
+      "properties": {
+        "signal": {
+          "type": "string",
+          "enum": ["violation", "caution", "normal"],
+          "description": "종합 신호등."
+        },
+        "violation": { "$ref": "#/$defs/Violation" },
+        "address": { "$ref": "#/$defs/AddressInfo" },
+        "exclusive_part": {
+          "description": "전유부분 요약 (전유부 resOwnedList 중 resType='0').",
+          "anyOf": [{ "$ref": "#/$defs/ExclusivePart" }, { "type": "null" }]
+        },
+        "building": {
+          "description": "건물(표제부) 요약.",
+          "anyOf": [{ "$ref": "#/$defs/BuildingHeading" }, { "type": "null" }]
+        },
+        "change_history": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ChangeEntry" },
+          "description": "전유부+표제부 변동사항(resChangeList) 통합 타임라인. 확장 등재 여부 대조의 핵심."
+        },
+        "prices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PriceEntry" },
+          "description": "전유부 공동주택가격(resPriceList)."
+        },
+        "documents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/DocumentRef" },
+          "description": "발급 PDF 다운로드 링크(전유부/표제부)."
+        },
+        "caution_reasons": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "🟡 caution 판정 사유(예: '신고하신 확장이 대장 변동이력에 없음', '전유부 기준이라 건물 위반표시는 별도 확인 필요')."
+        },
+        "meta": {
+          "anyOf": [{ "$ref": "#/$defs/ReportMeta" }, { "type": "null" }],
+          "description": "발급 메타데이터."
+        },
+        "disclaimer": {
+          "type": "string",
+          "description": "면책 고지(참고용·최종판단은 관할 행정청/전문가)."
+        }
+      }
+    },
+    "Violation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["is_violation"],
+      "description": "노란딱지(위반건축물) 판정. is_violation = 전유부 OR 표제부 resViolationStatus=='위반건축물'.",
+      "properties": {
+        "is_violation": { "type": "boolean", "description": "종합 위반 여부." },
+        "exclusive": { "type": ["boolean", "null"], "description": "전유부 위반표시." },
+        "heading": { "type": ["boolean", "null"], "description": "표제부(건물) 위반표시." },
+        "raw": { "type": ["string", "null"], "description": "원본 resViolationStatus 값(예: '위반건축물')." }
+      }
+    },
+    "AddressInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "road_addr": { "type": ["string", "null"], "description": "도로명주소." },
+        "jibun_addr": { "type": ["string", "null"], "description": "지번주소." },
+        "dong": { "type": ["string", "null"], "description": "동." },
+        "ho": { "type": ["string", "null"], "description": "호." }
+      }
+    },
+    "ExclusivePart": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "area_m2": { "type": ["number", "null"], "description": "전유면적(㎡)." },
+        "use_type": { "type": ["string", "null"], "description": "용도(resUseType)." },
+        "structure": { "type": ["string", "null"], "description": "구조(resStructure)." },
+        "floor": { "type": ["string", "null"], "description": "층(resFloor)." }
+      }
+    },
+    "BuildingHeading": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "main_use": { "type": ["string", "null"], "description": "주용도." },
+        "floors": { "type": ["string", "null"], "description": "층수(예: '지하 1층 지상 12층')." },
+        "approval_date": { "type": ["string", "null"], "description": "사용승인일." },
+        "permit_date": { "type": ["string", "null"], "description": "허가일." },
+        "comm_unique_no": { "type": ["string", "null"], "description": "표제부 고유번호." }
+      }
+    },
+    "ChangeEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "source"],
+      "properties": {
+        "date": { "type": ["string", "null"], "description": "변동일자(정규화 문자열)." },
+        "reason": { "type": "string", "description": "변동내용 및 원인(resChangeReason)." },
+        "source": {
+          "type": "string",
+          "enum": ["exclusive", "heading"],
+          "description": "출처 대장(전유부/표제부)."
+        }
+      }
+    },
+    "PriceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reference_date": { "type": ["string", "null"], "description": "기준일자." },
+        "base_price": { "type": ["integer", "null"], "description": "공동주택가격(원, 정수)." }
+      }
+    },
+    "DocumentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["exclusive_part", "building_heading"],
+          "description": "PDF 종류."
+        },
+        "url": { "type": ["string", "null"], "description": "백엔드 서명 다운로드 URL(단기 만료)." }
+      }
+    },
+    "ReportMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "comm_unique_no": { "type": ["string", "null"], "description": "전유부 고유번호." },
+        "res_doc_no": { "type": ["string", "null"], "description": "전유부 문서확인번호." },
+        "issue_date": { "type": ["string", "null"], "description": "발급일자." },
+        "issue_org": { "type": ["string", "null"], "description": "발급기관." },
+        "queried_at": { "type": ["string", "null"], "description": "조회(스크래핑) 시각." }
+      }
+    }
+  }
+}

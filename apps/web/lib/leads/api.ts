@@ -9,7 +9,9 @@
 import { apiClient } from '@/lib/api-client';
 import type { UploadedAttachment } from './upload';
 
-export type SourceForm = 'main_page' | 'lead_page';
+// 'property_check' = 우리집 체크(ADR-0008) 결과에서 인입된 상담. DB CHECK · contracts ·
+// 본 유니온 3곳이 함께 변경된다(백엔드가 enum 반영을 담당).
+export type SourceForm = 'main_page' | 'lead_page' | 'property_check';
 export type ApplicantKind = 'individual' | 'company';
 export type OwnershipStatus = 'in_transaction' | 'owner';
 export type InflowSource = 'naver_search' | 'blog' | 'acquaintance' | 'cafe' | 'etc';
