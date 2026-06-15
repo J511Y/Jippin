@@ -1,14 +1,21 @@
 import {
-  Alert,
   Button,
   Card,
+  Divider,
   Group,
+  SimpleGrid,
   Stack,
   Text,
   ThemeIcon,
   Title
 } from '@mantine/core';
-import { IconArrowRight, IconBuildingCommunity, IconCheck, IconHome } from '@tabler/icons-react';
+import {
+  IconArrowRight,
+  IconBuildingCommunity,
+  IconCheck,
+  IconHome,
+  IconX
+} from '@tabler/icons-react';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
@@ -43,37 +50,54 @@ export default function HomeCheckLandingPage() {
       </Stack>
 
       <Card withBorder radius="lg" padding="xl">
-        <Stack gap="md">
-          <Group gap="xs" wrap="nowrap" align="center">
-            <ThemeIcon color="jippin" variant="light" size={28} radius="xl">
-              <IconBuildingCommunity size={18} />
-            </ThemeIcon>
-            <Text fw={600}>지원 대상 — 집합건물 세대</Text>
-          </Group>
-          <Stack gap="xs">
-            {SUPPORTED.map((item) => (
-              <Group key={item} gap="xs" wrap="nowrap" align="center">
-                <ThemeIcon color="teal" variant="light" size={20} radius="xl">
-                  <IconCheck size={12} />
-                </ThemeIcon>
-                <Text size="sm">{item}</Text>
-              </Group>
-            ))}
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xl">
+          {/* 지원 대상 */}
+          <Stack gap="md">
+            <Group gap="xs" wrap="nowrap" align="center">
+              <ThemeIcon color="jippin" variant="light" size={28} radius="xl">
+                <IconBuildingCommunity size={18} />
+              </ThemeIcon>
+              <Text fw={600}>지원 대상 — 집합건물</Text>
+            </Group>
+            <Stack gap="xs">
+              {SUPPORTED.map((item) => (
+                <Group key={item} gap="xs" wrap="nowrap" align="center">
+                  <ThemeIcon color="teal.7" variant="transparent" size={20}>
+                    <IconCheck size={16} stroke={2.5} />
+                  </ThemeIcon>
+                  <Text size="sm">{item}</Text>
+                </Group>
+              ))}
+            </Stack>
           </Stack>
 
-          <Group gap="xs" wrap="nowrap" align="center" mt="xs">
-            <ThemeIcon color="gray" variant="light" size={28} radius="xl">
-              <IconHome size={18} />
-            </ThemeIcon>
-            <Text fw={600} c="dimmed">
-              지원하지 않는 대상
+          {/* 미지원 대상 */}
+          <Stack gap="md">
+            <Group gap="xs" wrap="nowrap" align="center">
+              <ThemeIcon color="gray" variant="light" size={28} radius="xl">
+                <IconHome size={18} />
+              </ThemeIcon>
+              <Text fw={600} c="dimmed">
+                지원하지 않는 대상
+              </Text>
+            </Group>
+            <Stack gap="xs">
+              {NOT_SUPPORTED.map((item) => (
+                <Group key={item} gap="xs" wrap="nowrap" align="center">
+                  <ThemeIcon color="gray.5" variant="transparent" size={20}>
+                    <IconX size={16} stroke={2.5} />
+                  </ThemeIcon>
+                  <Text size="sm" c="dimmed">
+                    {item}
+                  </Text>
+                </Group>
+              ))}
+            </Stack>
+            <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+              위 대상은 일반건축물대장 소관이라 현재 우리집 체크에서 조회할 수 없어요.
             </Text>
-          </Group>
-          <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-            {NOT_SUPPORTED.join(' · ')}는 일반건축물대장 대상이라 현재 우리집 체크에서
-            조회할 수 없어요.
-          </Text>
-        </Stack>
+          </Stack>
+        </SimpleGrid>
       </Card>
 
       <Button
@@ -88,12 +112,12 @@ export default function HomeCheckLandingPage() {
         내 집 체크 시작
       </Button>
 
-      <Alert color="jippin" variant="light" radius="md">
-        <Text size="xs" style={{ wordBreak: 'keep-all' }}>
-          본 서비스는 건축물대장 기재사항을 조회 시점 기준으로 제공하는 참고용
-          정보이며, 위법 여부의 최종 판단은 관할 행정청·전문가 확인이 필요합니다.
-        </Text>
-      </Alert>
+      <Divider />
+
+      <Text size="xs" fw={400} c="dimmed" style={{ wordBreak: 'keep-all' }}>
+        본 서비스는 건축물대장 기재사항을 조회 시점 기준으로 제공하는 참고용 정보이며,
+        위법 여부의 최종 판단은 관할 행정청·전문가 확인이 필요합니다.
+      </Text>
     </Stack>
   );
 }
