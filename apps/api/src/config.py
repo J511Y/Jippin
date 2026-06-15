@@ -44,6 +44,36 @@ class Settings(BaseSettings):
     # 평면도 첨부 Supabase Storage 버킷명 (migration 0009 와 정합).
     lead_floorplan_bucket: str = Field(default="lead-floorplans")
 
+    # 우리집 체크(home-check) — CODEF 세움터 집합건축물대장 전유부+표제부 조회.
+    # 결정 정본: docs/adr/0008-home-check-building-register.md.
+    # 인증 = loginType=1 (서비스 소유 단일 세움터 계정). id/password·RSA키·세움터
+    # 자격증명은 전부 서버 전용 시크릿(프론트 비노출). 미설정 시 home-check 503.
+    codef_client_id: str | None = Field(default=None)
+    codef_client_secret: str | None = Field(default=None)
+    # CODEF RSA 공개키(PEM 또는 Base64) — password 암호화용(cryptography PKCS1 v1.5).
+    codef_public_key: str | None = Field(default=None)
+    codef_oauth_url: str = Field(default="https://oauth.codef.io/oauth/token")
+    # 정식 base. demo(development.codef.io)는 codef_use_demo=true 로만 전환.
+    codef_api_base_url: str = Field(default="https://api.codef.io")
+    codef_demo_base_url: str = Field(default="https://development.codef.io")
+    codef_use_demo: bool = Field(default=False)
+    # 전유부/표제부 공통 기관코드(고정 0008).
+    codef_organization: str = Field(default="0008")
+    # 서비스 소유 세움터 계정(loginType=1). password 는 RSA 암호화 후 전송 즉시 폐기.
+    seumter_id: str | None = Field(default=None)
+    seumter_password: str | None = Field(default=None)
+    # OAuth access_token 캐시 Redis. 미설정 시 redis_url 공유(OAuth state 패턴과 동일).
+    codef_token_redis_url: str | None = Field(default=None)
+    # 스크래핑 응답이 느려 1차 300s / 2차(추가인증) 170s 까지 허용.
+    codef_request_timeout_first_seconds: int = Field(default=300)
+    codef_request_timeout_two_way_seconds: int = Field(default=170)
+    # 단일 세움터 계정 보호 서킷브레이커(자격증명/계정잠금 오류 누적 시 차단).
+    codef_breaker_error_threshold: int = Field(default=5)
+    codef_breaker_window_seconds: int = Field(default=300)
+    codef_breaker_open_seconds: int = Field(default=600)
+    # 발급 PDF 보관 Supabase Storage 버킷명 (migration 0014 와 정합).
+    home_check_doc_bucket: str = Field(default="home-check-docs")
+
     # CMP-609 Phase A 라우터 (sessions/floorplans/chat) 의 운영 노출 가드.
     # `services.main_flow` 는 DB-backed (CMP-608 상당) 로 전환되어 세션 유실
     # 위험은 없지만, Phase A 기능 자체가 미공개 상태이므로 운영 default 는

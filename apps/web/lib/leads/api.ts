@@ -9,7 +9,9 @@
 import { apiClient } from '@/lib/api-client';
 import type { UploadedAttachment } from './upload';
 
-export type SourceForm = 'main_page' | 'lead_page';
+// 'property_check' = 우리집 체크(ADR-0008) 결과에서 인입된 상담. DB CHECK · contracts ·
+// 본 유니온 3곳이 함께 변경된다(백엔드가 enum 반영을 담당).
+export type SourceForm = 'main_page' | 'lead_page' | 'property_check';
 export type ApplicantKind = 'individual' | 'company';
 export type OwnershipStatus = 'in_transaction' | 'owner';
 export type InflowSource = 'naver_search' | 'blog' | 'acquaintance' | 'cafe' | 'etc';
@@ -28,6 +30,8 @@ export interface LeadPayload {
   construction_end_date?: string | null;
   inflow_source?: InflowSource | null;
   message?: string | null;
+  /** 우리집 체크 인입이면 원천 잡 id — 백엔드가 home_checks.consultation_lead_id 를 채운다. */
+  home_check_id?: string | null;
   attachments?: UploadedAttachment[];
 }
 

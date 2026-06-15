@@ -20,6 +20,7 @@ import { useDisclosure } from '@mantine/hooks';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   IconClipboardList,
+  IconHomeCheck,
   IconInbox,
   IconUser
 } from '@tabler/icons-react';
@@ -32,10 +33,14 @@ import {
   AccountApiError,
   changePassword,
   deleteAccount,
+  listMyHomeChecks,
   listMyLeads,
   type MyLead
 } from '@/lib/auth/account-api';
 import { changePasswordSchema, type ChangePasswordValues } from '@/lib/auth/validation';
+import { type HomeCheckJob } from '@/lib/home-check/api';
+import { jobAddressLabel, SIGNAL_META, STATUS_META } from '@/lib/home-check/display';
+import { parseApiError } from '@/lib/api/error';
 import { createClient } from '@/lib/supabase/client';
 
 /**
@@ -46,12 +51,12 @@ import { createClient } from '@/lib/supabase/client';
  * 지원한다.
  */
 
-type MyPageTab = 'profile' | 'consultations';
+type MyPageTab = 'profile' | 'consultations' | 'home-check';
 
 const DEFAULT_TAB: MyPageTab = 'profile';
 
 function isMyPageTab(value: string | null): value is MyPageTab {
-  return value === 'profile' || value === 'consultations';
+  return value === 'profile' || value === 'consultations' || value === 'home-check';
 }
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
@@ -139,6 +144,9 @@ export function MyPageClient() {
           <Tabs.Tab value="consultations" leftSection={<IconClipboardList size={16} />}>
             상담 현황
           </Tabs.Tab>
+          <Tabs.Tab value="home-check" leftSection={<IconHomeCheck size={16} />}>
+            우리집 체크
+          </Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="profile" pt="lg">
@@ -157,6 +165,10 @@ export function MyPageClient() {
 
         <Tabs.Panel value="consultations" pt="lg">
           <ConsultationsSection />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="home-check" pt="lg">
+          <HomeChecksSection />
         </Tabs.Panel>
       </Tabs>
     </Stack>
@@ -286,6 +298,110 @@ function ConsultationsSection() {
                     <Text size="xs" c="dimmed">
                       {lead.created_at.slice(0, 10)} 신청
                     </Text>
+                  </Group>
+                </Stack>
+              </Card>
+            );
+          })}
+        </Stack>
+      )}
+    </Stack>
+  );
+}
+
+function HomeChecksSection() {
+  const [jobs, setJobs] = useState<HomeCheckJob[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    listMyHomeChecks()
+      .then((items) => {
+        if (active) setJobs(items);
+      })
+      .catch((err) => {
+        if (active) setError(parseApiError(err).message);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <Stack gap="sm">
+      <Group justify="space-between" align="center">
+        <Title order={2} fz="h3">
+          우리집 체크
+        </Title>
+        <Button component="a" href="/home-check/new" color="coral" radius="md" size="xs">
+          새 체크
+        </Button>
+      </Group>
+
+      {error ? (
+        <Alert color="danger" variant="light">
+          {error}
+        </Alert>
+      ) : jobs === null ? (
+        <Group justify="center" py="lg">
+          <Loader size="sm" />
+        </Group>
+      ) : jobs.length === 0 ? (
+        <Card withBorder padding="xl">
+          <Stack align="center" gap="sm" ta="center" py="md">
+            <ThemeIcon size={48} radius="xl" variant="light" color="gray">
+              <IconHomeCheck size={24} />
+            </ThemeIcon>
+            <Text fw={600}>아직 체크한 집이 없어요</Text>
+            <Text size="sm" c="dimmed">
+              내 집의 건축물대장을 조회해 위반표시·변동 등재 여부를 확인해 보세요.
+            </Text>
+            <Button component="a" href="/home-check" color="coral" radius="md" mt="xs">
+              우리집 체크 시작
+            </Button>
+          </Stack>
+        </Card>
+      ) : (
+        <Stack gap="sm">
+          {jobs.map((job) => {
+            const status = STATUS_META[job.status] ?? { label: job.status, color: 'gray' };
+            const signal = job.signal ? SIGNAL_META[job.signal] : null;
+            const address = jobAddressLabel(job) ?? '우리집 체크';
+            return (
+              <Card
+                key={job.id}
+                withBorder
+                radius="lg"
+                padding="lg"
+                component="a"
+                href={`/home-check/${job.id}`}
+                style={{ textDecoration: 'none', color: 'inherit' }}
+              >
+                <Stack gap={6}>
+                  <Group gap="xs" wrap="nowrap" align="center">
+                    {signal ? (
+                      <Text aria-hidden fz="lg" lh={1}>
+                        {signal.emoji}
+                      </Text>
+                    ) : null}
+                    <Text fw={600} style={{ wordBreak: 'keep-all' }}>
+                      {address}
+                    </Text>
+                  </Group>
+                  <Group gap="xs">
+                    <Badge color={status.color} variant="light" radius="sm">
+                      {status.label}
+                    </Badge>
+                    {signal ? (
+                      <Badge color={signal.color} variant="light" radius="sm">
+                        {signal.label}
+                      </Badge>
+                    ) : null}
+                    {job.created_at ? (
+                      <Text size="xs" c="dimmed">
+                        {job.created_at.slice(0, 10)} 조회
+                      </Text>
+                    ) : null}
                   </Group>
                 </Stack>
               </Card>

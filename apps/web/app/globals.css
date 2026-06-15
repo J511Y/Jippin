@@ -28,32 +28,77 @@ a {
   color: var(--jippin-brand-primary);
 }
 
+/* 진입(reveal) 모션 FOUC 방지 — JS 가 있고 모션을 허용하는 사용자에 한해 SSR/첫 paint
+   단계부터 대상([data-reveal])을 숨긴다. 그래야 콘텐츠가 잠깐 보였다가 사라지며 다시
+   올라오는 깜빡임이 사라진다. GSAP(landing/Reveal)가 진입 시 opacity 를 인라인으로
+   덮어쓰며 드러낸다. js-reveal 클래스는 paint 전 인라인 스크립트(layout)가 붙이므로
+   no-JS 사용자는 콘텐츠가 그대로 보이고, reduced-motion 사용자도 숨기지 않는다. */
+@media (prefers-reduced-motion: no-preference) {
+  html.js-reveal .reveal-scope [data-reveal] {
+    opacity: 0;
+  }
+}
+
 .mantine-active:active {
   transform: translateY(1px);
 }
 
-/* FAQ 목록 행 hover — 흰 표면(#FFF) 대비 브랜드 surface(#F7FBFA)는 거의 식별이
-   안 되므로, 확실히 보이는 jippin-0 틴트를 쓴다. */
+/* FAQ 목록 행 hover/focus — 흰 표면(#FFF) 대비 브랜드 surface(#F7FBFA)는 거의 식별이
+   안 되므로, 확실히 보이는 jippin-0 틴트를 쓴다. 키보드 포커스에는 primary 링도 둔다. */
 a[data-faq-row]:hover {
   background-color: var(--mantine-color-jippin-0);
 }
 
-/* 비활성(disabled) 입력 가독성 — 기본 Mantine 은 opacity 0.6 + 옅은 회색이라 텍스트가
-   흐릿하다. 로그인 시 자동입력되거나 주소검색으로 채워진 값이 또렷이 보이도록 색/배경을
-   COLOR_SYSTEM.md §3.1 의 form.* 토큰(--jippin-form-disabled-*)으로 고정한다.
-   globals.css 는 @mantine/core/styles.css 뒤에 임포트되어 동일 명시도에서 우선한다.
-   -webkit-text-fill-color 는 WebKit 이 disabled 텍스트를 자체로 흐리게 처리하는 것을 막는다. */
+a[data-faq-row]:focus-visible {
+  background-color: var(--mantine-color-jippin-0);
+  outline: 2px solid var(--jippin-brand-primary);
+  outline-offset: -2px;
+}
+
+/* FAQ 답변 마크다운 수직 리듬 — 표·소제목·목록 간격을 브라우저 기본값에 맡기지 않고
+   브랜드 토큰으로 고정한다(표면과 어긋나는 UA 회색 선 방지). 색은 전부 브랜드 토큰. */
+.faq-answer h2,
+.faq-answer h3,
+.faq-answer h4 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  color: var(--jippin-brand-ink);
+}
+
+.faq-answer ul,
+.faq-answer ol {
+  margin-block: 0.75em;
+  padding-left: 1.25em;
+}
+
+.faq-answer table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-block: 1em;
+}
+
+.faq-answer th,
+.faq-answer td {
+  border: 1px solid var(--jippin-brand-border);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.faq-answer th {
+  background-color: var(--jippin-brand-surface);
+  color: var(--jippin-brand-ink);
+  font-weight: 600;
+}
+
+/* 비활성(disabled) 입력 — 비활성 상태임이 한눈에 드러나도록 opacity 0.6 을 쓴다
+   (2026-06-15 디자인 결정: 활성/비활성 대비를 명확히). 배경/텍스트 색은 그대로
+   COLOR_SYSTEM.md §3.1 의 form.* 토큰을 유지해 채워진 값의 식별성은 남긴다.
+   globals.css 는 @mantine/core/styles.css 뒤에 임포트되어 동일 명시도에서 우선한다. */
 .mantine-Input-input:disabled,
 .mantine-Input-input[data-disabled] {
-  opacity: 1;
+  opacity: 0.6;
   background-color: var(--jippin-form-disabled-surface);
   color: var(--jippin-form-disabled-text);
   -webkit-text-fill-color: var(--jippin-form-disabled-text);
-}
-
-.mantine-Input-input:disabled::placeholder,
-.mantine-Input-input[data-disabled]::placeholder {
-  color: var(--jippin-form-disabled-text);
-  -webkit-text-fill-color: var(--jippin-form-disabled-text);
-  opacity: 1;
 }
