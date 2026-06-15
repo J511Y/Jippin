@@ -8,11 +8,9 @@ import {
   Card,
   Divider,
   Group,
-  List,
   Stack,
   Text,
   ThemeIcon,
-  Timeline,
   Title
 } from '@mantine/core';
 import {
@@ -143,11 +141,18 @@ export function HomeCheckReportView({
       {/* caution 사유 */}
       {cautionReasons.length > 0 ? (
         <Alert color="yellow" variant="light" radius="md" title="추가 확인이 필요해요">
-          <List spacing={4} size="sm">
+          <Stack gap={4}>
             {cautionReasons.map((reason, i) => (
-              <List.Item key={i}>{reason}</List.Item>
+              <Group key={i} gap="xs" wrap="nowrap" align="flex-start">
+                <Text size="sm" c="dimmed" style={{ flexShrink: 0 }}>
+                  ·
+                </Text>
+                <Text size="sm" style={{ wordBreak: 'keep-all' }}>
+                  {reason}
+                </Text>
+              </Group>
             ))}
-          </List>
+          </Stack>
         </Alert>
       ) : null}
 
@@ -197,11 +202,19 @@ export function HomeCheckReportView({
                 변동사항 이력
               </Title>
             </Group>
-            <Timeline active={changes.length} bulletSize={14} lineWidth={2} color="jippin">
+            <Stack gap="md">
               {changes.map((entry, i) => (
-                <Timeline.Item
+                <Group
                   key={i}
-                  title={
+                  gap="sm"
+                  wrap="nowrap"
+                  align="flex-start"
+                  style={{
+                    borderLeft: '2px solid var(--mantine-color-default-border)',
+                    paddingLeft: 'var(--mantine-spacing-md)'
+                  }}
+                >
+                  <Stack gap={4} style={{ flex: 1 }}>
                     <Group gap="xs" wrap="nowrap">
                       <Text size="sm" fw={500}>
                         {isoDate(entry.date) ?? '일자 미상'}
@@ -210,14 +223,13 @@ export function HomeCheckReportView({
                         {entry.source === 'heading' ? '표제부' : '전유부'}
                       </Badge>
                     </Group>
-                  }
-                >
-                  <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-                    {entry.reason}
-                  </Text>
-                </Timeline.Item>
+                    <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                      {entry.reason}
+                    </Text>
+                  </Stack>
+                </Group>
               ))}
-            </Timeline>
+            </Stack>
           </Stack>
         </Card>
       ) : null}

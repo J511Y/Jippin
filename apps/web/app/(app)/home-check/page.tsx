@@ -3,7 +3,6 @@ import {
   Button,
   Card,
   Group,
-  List,
   Stack,
   Text,
   ThemeIcon,
@@ -51,19 +50,16 @@ export default function HomeCheckLandingPage() {
             </ThemeIcon>
             <Text fw={600}>지원 대상 — 집합건물 세대</Text>
           </Group>
-          <List
-            spacing="xs"
-            size="sm"
-            icon={
-              <ThemeIcon color="teal" variant="light" size={20} radius="xl">
-                <IconCheck size={12} />
-              </ThemeIcon>
-            }
-          >
+          <Stack gap="xs">
             {SUPPORTED.map((item) => (
-              <List.Item key={item}>{item}</List.Item>
+              <Group key={item} gap="xs" wrap="nowrap" align="center">
+                <ThemeIcon color="teal" variant="light" size={20} radius="xl">
+                  <IconCheck size={12} />
+                </ThemeIcon>
+                <Text size="sm">{item}</Text>
+              </Group>
             ))}
-          </List>
+          </Stack>
 
           <Group gap="xs" wrap="nowrap" align="center" mt="xs">
             <ThemeIcon color="gray" variant="light" size={28} radius="xl">
