@@ -156,7 +156,11 @@ def test_create_returns_202_querying_job(monkeypatch) -> None:
         response = client.post(
             "/home-check",
             headers={"authorization": f"Bearer {token}"},
-            json={"road_addr": "서울특별시 강남구 테헤란로 1", "dong": "101", "ho": "1001"},
+            json={
+                "road_addr": "서울특별시 강남구 테헤란로 1",
+                "dong": "101",
+                "ho": "1001",
+            },
         )
     assert response.status_code == 202
     body = response.json()
@@ -170,7 +174,9 @@ def test_create_returns_202_querying_job(monkeypatch) -> None:
 # 백그라운드 처리 — 판정 (a)~(d)
 # ---------------------------------------------------------------------------
 class _FakeClient:
-    def __init__(self, *, exclusive=None, heading=None, exclusive_exc=None, heading_exc=None):
+    def __init__(
+        self, *, exclusive=None, heading=None, exclusive_exc=None, heading_exc=None
+    ):
         self._exclusive = exclusive
         self._heading = heading
         self._exclusive_exc = exclusive_exc
@@ -215,7 +221,11 @@ def test_signal_violation_when_heading_violation(monkeypatch) -> None:
         "_new_client",
         lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading("위반건축물")),
     )
-    _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"))
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
     values = captured[str(hid)]
     assert values["status"] == "completed"
     assert values["signal"] == "violation"
@@ -232,7 +242,11 @@ def test_signal_normal_when_both_clean(monkeypatch) -> None:
         "_new_client",
         lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
     )
-    _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"))
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
     values = captured[str(hid)]
     assert values["status"] == "completed"
     assert values["signal"] == "normal"
@@ -256,7 +270,11 @@ def test_signal_caution_when_heading_fails(monkeypatch) -> None:
             heading_exc=CodefNotFound("표제부 없음"),
         ),
     )
-    _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"))
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
     values = captured[str(hid)]
     assert values["status"] == "completed"
     assert values["signal"] == "caution"
@@ -273,7 +291,9 @@ def test_needs_input_records_resume_token(monkeypatch) -> None:
         svc,
         "_new_client",
         lambda: _FakeClient(
-            exclusive_exc=CodefNeedsUserInput("dong_ho", "RESUME-XYZ", "동·호를 선택해 주세요.")
+            exclusive_exc=CodefNeedsUserInput(
+                "dong_ho", "RESUME-XYZ", "동·호를 선택해 주세요."
+            )
         ),
     )
     _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="", ho="1001"))
@@ -338,7 +358,9 @@ def test_serialize_completed_report_validates_against_contract() -> None:
         "res_doc_no": "DOC-1",
         "res_issue_date": None,
         "queried_at": datetime.now(UTC),
-        "change_list": [{"date": "20200101", "reason": "신규작성", "source": "exclusive"}],
+        "change_list": [
+            {"date": "20200101", "reason": "신규작성", "source": "exclusive"}
+        ],
         "price_list": [{"reference_date": "20230101", "base_price": 500000000}],
         "result_fields": {"caution_reasons": None},
     }
@@ -453,7 +475,11 @@ def test_completed_even_if_pdf_upload_fails(monkeypatch) -> None:
         "_new_client",
         lambda: _FakeClient(exclusive=exclusive, heading=_heading(None)),
     )
-    _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"))
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
     values = updates[str(hid)]
     assert values["status"] == "completed"
     assert values["signal"] == "normal"

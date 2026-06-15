@@ -150,9 +150,7 @@ async def list_home_checks_for_user(*, user_id: uuid.UUID) -> list[dict[str, Any
     return [dict(row._mapping) for row in rows]
 
 
-async def _load_documents(
-    conn: Any, home_check_id: uuid.UUID
-) -> list[dict[str, Any]]:
+async def _load_documents(conn: Any, home_check_id: uuid.UUID) -> list[dict[str, Any]]:
     rows = (
         await conn.execute(
             sa.select(
@@ -165,9 +163,7 @@ async def _load_documents(
     return [dict(row._mapping) for row in rows]
 
 
-async def get_home_check_documents(
-    *, home_check_id: uuid.UUID
-) -> list[dict[str, Any]]:
+async def get_home_check_documents(*, home_check_id: uuid.UUID) -> list[dict[str, Any]]:
     async with get_engine().begin() as conn:
         return await _load_documents(conn, home_check_id)
 
@@ -288,7 +284,9 @@ async def _process(
     except Exception:  # noqa: BLE001
         heading_error = True
 
-    await _mark_completed(home_check_id, exclusive, heading, heading_error=heading_error)
+    await _mark_completed(
+        home_check_id, exclusive, heading, heading_error=heading_error
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +555,9 @@ async def _mark_needs_input(
 async def _mark_failed(home_check_id: uuid.UUID, exc: CodefError) -> None:
     name = type(exc).__name__
     code = _ERROR_CODES.get(name, "UPSTREAM_UNAVAILABLE")
-    message = _ERROR_MESSAGES.get(name, "조회에 실패했습니다. 잠시 후 다시 시도해 주세요.")
+    message = _ERROR_MESSAGES.get(
+        name, "조회에 실패했습니다. 잠시 후 다시 시도해 주세요."
+    )
     await _update_row(
         home_check_id,
         {
@@ -602,9 +602,7 @@ async def reset_for_resume(home_check_id: uuid.UUID) -> None:
 async def _update_row(home_check_id: uuid.UUID, values: dict[str, Any]) -> None:
     async with get_engine().begin() as conn:
         await conn.execute(
-            sa.update(HomeCheck)
-            .where(HomeCheck.id == home_check_id)
-            .values(**values)
+            sa.update(HomeCheck).where(HomeCheck.id == home_check_id).values(**values)
         )
 
 
@@ -743,9 +741,7 @@ async def _sign_document_url(
             return await client.post(url, json={"expiresIn": 3600}, headers=headers)
 
     try:
-        response = await log_http_call(
-            "supabase_storage", "sign_home_check_pdf", _do
-        )
+        response = await log_http_call("supabase_storage", "sign_home_check_pdf", _do)
     except httpx.HTTPError:
         return None
     if response.status_code != 200:
@@ -792,9 +788,7 @@ async def serialize_job(
 
     if status == "completed":
         job_kwargs["signal"] = row.get("signal")
-        job_kwargs["report"] = await _build_report(
-            row, with_documents=with_documents
-        )
+        job_kwargs["report"] = await _build_report(row, with_documents=with_documents)
     elif status == "needs_input":
         fields = row.get("result_fields") or {}
         job_kwargs["needs_input"] = NeedsInput(

@@ -45,7 +45,15 @@ _HEADING_PATH = "/v1/kr/public/lt/eais/building-ledger-heading"
 
 # result.code 기반 오류 분류는 error_codes.classify(정본 표) 를 1순위로 쓰고,
 # 미등록 코드만 메시지 substring 으로 보수적 보강한다.
-_AUTH_FAIL_HINTS = ("로그인", "아이디", "비밀번호", "패스워드", "인증서", "잠금", "계정")
+_AUTH_FAIL_HINTS = (
+    "로그인",
+    "아이디",
+    "비밀번호",
+    "패스워드",
+    "인증서",
+    "잠금",
+    "계정",
+)
 _NOT_FOUND_HINTS = ("없는", "존재하지", "조회되지", "확인되지", "해당", "일치하는")
 _UPSTREAM_HINTS = ("점검", "지연", "시간", "timeout", "초과", "서버", "오류가 발생")
 _INVALID_HINTS = ("형식", "잘못", "유효하지", "필수", "올바르지")
@@ -190,7 +198,9 @@ class CodefBuildingRegisterClient:
         # 1순위: 정본 코드 표.
         category = error_codes.classify(code)
         if category == error_codes.AUTH:
-            raise CodefAuthError(envelope.message or "세움터 로그인에 실패했습니다.", code=code)
+            raise CodefAuthError(
+                envelope.message or "세움터 로그인에 실패했습니다.", code=code
+            )
         if category == error_codes.NOT_FOUND:
             raise CodefNotFound(
                 envelope.message or "해당 건축물대장을 찾을 수 없습니다.", code=code
@@ -209,7 +219,9 @@ class CodefBuildingRegisterClient:
             return any(h.lower() in message.lower() for h in hints)
 
         if _hit(_AUTH_FAIL_HINTS):
-            raise CodefAuthError(envelope.message or "세움터 로그인에 실패했습니다.", code=code)
+            raise CodefAuthError(
+                envelope.message or "세움터 로그인에 실패했습니다.", code=code
+            )
         if _hit(_NOT_FOUND_HINTS):
             raise CodefNotFound(
                 envelope.message or "해당 건축물대장을 찾을 수 없습니다.", code=code
@@ -225,7 +237,10 @@ class CodefBuildingRegisterClient:
         # 미분류 → 보수적으로 상류 오류로 본다(재시도 가능, 서킷 미카운트).
         # dev 스모크에서 분류 누락을 발견하도록 WARNING.
         _log.warning(
-            "codef.unclassified_error", operation=operation, code=code, message=envelope.message
+            "codef.unclassified_error",
+            operation=operation,
+            code=code,
+            message=envelope.message,
         )
         raise CodefUpstreamError(
             envelope.message or "CODEF 오류가 발생했습니다.", code=code
@@ -262,7 +277,10 @@ class CodefBuildingRegisterClient:
             "address": query.road_addr.strip(),
         }
         envelope = await self._request_guarded(
-            _EXCLUSIVE_PATH, body, operation="exclusive_first", timeout=self._first_timeout
+            _EXCLUSIVE_PATH,
+            body,
+            operation="exclusive_first",
+            timeout=self._first_timeout,
         )
         if envelope.is_success:
             return _parse_exclusive(envelope.data_dict())
@@ -286,24 +304,16 @@ class CodefBuildingRegisterClient:
         _log_two_way_shape("exclusive", extra)
 
         if has_secure_no(extra):
-            token = await self._save_resume(
-                "exclusive", first_body, data, two_way_info
-            )
-            raise CodefNeedsUserInput(
-                "secure_no", token, "보안문자 입력이 필요합니다."
-            )
+            token = await self._save_resume("exclusive", first_body, data, two_way_info)
+            raise CodefNeedsUserInput("secure_no", token, "보안문자 입력이 필요합니다.")
 
         addr_choice = _pick_single_address(extra)
         dong_match = match_dong(extra.get("reqDongNumList") or [], dong)
         ho_match = match_ho(extra.get("reqHoNumList") or [], ho)
 
         if dong_match is None or ho_match is None or addr_choice is None:
-            token = await self._save_resume(
-                "exclusive", first_body, data, two_way_info
-            )
-            raise CodefNeedsUserInput(
-                "dong_ho", token, "동·호를 선택해 주세요."
-            )
+            token = await self._save_resume("exclusive", first_body, data, two_way_info)
+            raise CodefNeedsUserInput("dong_ho", token, "동·호를 선택해 주세요.")
 
         second_body = _build_exclusive_second_body(
             first_body, addr_choice, dong_match, ho_match, two_way_info
@@ -315,7 +325,9 @@ class CodefBuildingRegisterClient:
             timeout=self._two_way_timeout,
         )
         if not envelope2.is_success:
-            raise CodefNotFound("2차 조회 결과를 찾을 수 없습니다.", code=envelope2.code)
+            raise CodefNotFound(
+                "2차 조회 결과를 찾을 수 없습니다.", code=envelope2.code
+            )
         return _parse_exclusive(envelope2.data_dict())
 
     async def resume_exclusive_part(
@@ -335,7 +347,9 @@ class CodefBuildingRegisterClient:
         dong_match = match_dong(extra.get("reqDongNumList") or [], dong or "")
         ho_match = match_ho(extra.get("reqHoNumList") or [], ho or "")
         if dong_match is None or ho_match is None:
-            raise CodefNeedsUserInput("dong_ho", resume_token, "동·호 선택이 유효하지 않습니다.")
+            raise CodefNeedsUserInput(
+                "dong_ho", resume_token, "동·호 선택이 유효하지 않습니다."
+            )
 
         second_body = _build_exclusive_second_body(
             first_body, addr_choice or {}, dong_match, ho_match, two_way_info
@@ -412,7 +426,9 @@ class CodefBuildingRegisterClient:
             timeout=self._two_way_timeout,
         )
         if not envelope2.is_success:
-            raise CodefNotFound("2차 조회 결과를 찾을 수 없습니다.", code=envelope2.code)
+            raise CodefNotFound(
+                "2차 조회 결과를 찾을 수 없습니다.", code=envelope2.code
+            )
         return _parse_heading(envelope2.data_dict())
 
     async def resume_building_heading(
@@ -430,7 +446,9 @@ class CodefBuildingRegisterClient:
         addr_choice = _pick_single_address(extra) or _first(extra.get("reqAddrList"))
         dong_match = match_dong(extra.get("reqDongNumList") or [], dong or "")
         if dong_match is None:
-            raise CodefNeedsUserInput("dong_ho", resume_token, "동 선택이 유효하지 않습니다.")
+            raise CodefNeedsUserInput(
+                "dong_ho", resume_token, "동 선택이 유효하지 않습니다."
+            )
 
         second_body = _build_heading_second_body(
             first_body, addr_choice or {}, dong_match, two_way_info
@@ -540,7 +558,9 @@ def _build_exclusive_second_body(
 ) -> dict[str, Any]:
     body = dict(first_body)
     body["reqAddress"] = _req_address(addr_choice)
-    body["dongNum"] = str(dong_match.get("commDongNum") or dong_match.get("reqDong") or "")
+    body["dongNum"] = str(
+        dong_match.get("commDongNum") or dong_match.get("reqDong") or ""
+    )
     body["hoNum"] = str(ho_match.get("commHoNum") or ho_match.get("reqHo") or "")
     body["is2Way"] = True
     body["twoWayInfo"] = two_way_info
@@ -555,7 +575,9 @@ def _build_heading_second_body(
 ) -> dict[str, Any]:
     body = dict(first_body)
     body["reqAddress"] = _req_address(addr_choice)
-    body["dongNum"] = str(dong_match.get("commDongNum") or dong_match.get("reqDong") or "")
+    body["dongNum"] = str(
+        dong_match.get("commDongNum") or dong_match.get("reqDong") or ""
+    )
     body["is2Way"] = True
     body["twoWayInfo"] = two_way_info
     return body

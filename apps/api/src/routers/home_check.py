@@ -81,9 +81,7 @@ async def list_my_home_checks(
             code="AUTH_ANONYMOUS_TOKEN_NOT_ALLOWED",
             http_status=403,
         )
-    rows = await home_check_service.list_home_checks_for_user(
-        user_id=requester.user_id
-    )
+    rows = await home_check_service.list_home_checks_for_user(user_id=requester.user_id)
     # 목록은 외부 서명 URL 발급을 생략하되(with_documents=False), report 의 address+signal 은
     # serialize_job 가 채운다.
     items = [

@@ -104,9 +104,9 @@ class _FakeHttpClient:
         return self._product_responses.pop(0)
 
 
-def _make_client(responses: list[_FakeResponse]) -> tuple[
-    CodefBuildingRegisterClient, _FakeHttpClient
-]:
+def _make_client(
+    responses: list[_FakeResponse],
+) -> tuple[CodefBuildingRegisterClient, _FakeHttpClient]:
     fake_http = _FakeHttpClient(responses)
     client = CodefBuildingRegisterClient(
         _Settings(), redis_client=None, http_client=fake_http
@@ -126,9 +126,11 @@ def test_encrypt_password_returns_base64_and_roundtrips() -> None:
 
 
 def test_encrypt_password_accepts_pem() -> None:
-    pem = _PRIVATE_KEY.public_key().public_bytes(
-        Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
-    ).decode("ascii")
+    pem = (
+        _PRIVATE_KEY.public_key()
+        .public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+        .decode("ascii")
+    )
     cipher_b64 = encrypt_password("x", pem)
     assert base64.b64decode(cipher_b64)
 

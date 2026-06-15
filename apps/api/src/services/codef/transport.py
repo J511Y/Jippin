@@ -118,7 +118,9 @@ class CodefTransport:
         try:
             response = await log_http_call("codef", operation, _do)
         except httpx.TimeoutException as exc:
-            raise CodefUpstreamError("CODEF 응답이 시간 내 도착하지 않았습니다.") from exc
+            raise CodefUpstreamError(
+                "CODEF 응답이 시간 내 도착하지 않았습니다."
+            ) from exc
         except httpx.HTTPError as exc:
             raise CodefUpstreamError("CODEF 호출에 실패했습니다.") from exc
 
