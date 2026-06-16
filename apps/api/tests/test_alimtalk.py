@@ -57,7 +57,9 @@ async def test_lead_received_uses_expert_template_for_lead_page() -> None:
     kakao = msg.kakao_options
     assert kakao is not None
     assert kakao.pf_id == _CHANNEL_ID
-    assert kakao.template_id == alimtalk.TEMPLATE_ID_EXPERT_LEAD_RECEIVED
+    assert (
+        kakao.template_id == _alimtalk_settings().solapi_template_expert_lead_received
+    )
     assert kakao.variables == {"#{고객명}": "홍길동"}
     assert kakao.disable_sms is True
 
@@ -73,7 +75,7 @@ async def test_lead_received_uses_quick_template_for_main_page() -> None:
     )
     assert (
         service.sent[0].kakao_options.template_id
-        == alimtalk.TEMPLATE_ID_QUICK_LEAD_RECEIVED
+        == _alimtalk_settings().solapi_template_quick_lead_received
     )
 
 
@@ -98,7 +100,7 @@ async def test_assignee_assigned_sends_both_variables() -> None:
         settings=_alimtalk_settings(),
     )
     kakao = service.sent[0].kakao_options
-    assert kakao.template_id == alimtalk.TEMPLATE_ID_ASSIGNEE_ASSIGNED
+    assert kakao.template_id == _alimtalk_settings().solapi_template_assignee_assigned
     assert kakao.variables == {"#{고객명}": "홍길동", "#{담당자명}": "김매니저"}
 
 
@@ -106,7 +108,7 @@ async def test_send_alimtalk_raises_503_when_not_configured() -> None:
     with pytest.raises(ZippinException) as exc:
         await alimtalk.send_alimtalk(
             phone="010-1234-5678",
-            template_id=alimtalk.TEMPLATE_ID_ASSIGNEE_ASSIGNED,
+            template_id=_alimtalk_settings().solapi_template_assignee_assigned,
             variables={"고객명": "홍길동"},
             service=_FakeService(),
             settings=_alimtalk_settings(solapi_channel_id=None),

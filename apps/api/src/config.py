@@ -3,7 +3,13 @@ from __future__ import annotations
 from functools import lru_cache
 from urllib.parse import urlparse
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Sealed APP_ENV enum; DB branch selection comes from environment URLs.
@@ -11,6 +17,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ALLOWED_APP_ENVS: frozenset[str] = frozenset(
     {"development", "test", "staging", "production"}
 )
+
+# 알림톡 템플릿 ID 기본값(현재 SOLAPI 콘솔 승인본). 환경변수로 override 가능하되,
+# 빈 문자열은 이 기본값으로 되돌린다(Settings._blank_template_to_default).
+_DEFAULT_SOLAPI_TEMPLATE_EXPERT_LEAD_RECEIVED = "KA01TP260615064637638M5QKDCkV5cY"
+_DEFAULT_SOLAPI_TEMPLATE_QUICK_LEAD_RECEIVED = "KA01TP260615064659016yiyiJPMBPAp"
+_DEFAULT_SOLAPI_TEMPLATE_ASSIGNEE_ASSIGNED = "KA01TP260615064924018oPQFFMUCshw"
 
 
 class Settings(BaseSettings):
@@ -175,6 +187,19 @@ class Settings(BaseSettings):
     # 카카오 알림톡 채널 ID(pfId) — SOLAPI 콘솔에 연동된 카카오 비즈니스 채널. 미설정 시
     # 알림톡 발송이 비활성화된다(상담 접수 알림은 skip, 직접 발송은 503).
     solapi_channel_id: str | None = Field(default=None)
+    # 알림톡 템플릿 ID — SOLAPI 콘솔에 등록·검수 승인된 것만 발송된다. 기본값은 현재
+    # 승인본이며, 콘솔에서 템플릿을 재등록(ID 변경)하면 코드 배포 없이 환경변수로 교체한다.
+    # 변수 목록이 달라지면 services/alimtalk.py 의 variables 도 함께 맞춰야 한다.
+    # 빈 문자열 override(예: `SOLAPI_TEMPLATE_...=`)는 기본값으로 되돌린다(아래 validator).
+    solapi_template_expert_lead_received: str = Field(
+        default=_DEFAULT_SOLAPI_TEMPLATE_EXPERT_LEAD_RECEIVED  # 전문가 상담 접수
+    )
+    solapi_template_quick_lead_received: str = Field(
+        default=_DEFAULT_SOLAPI_TEMPLATE_QUICK_LEAD_RECEIVED  # 빠른 상담 접수
+    )
+    solapi_template_assignee_assigned: str = Field(
+        default=_DEFAULT_SOLAPI_TEMPLATE_ASSIGNEE_ASSIGNED  # 담당자 배정
+    )
 
     # 휴대폰 OTP — Redis 저장. OAuth state store 와 같은 Redis 를 공유한다.
     phone_otp_code_length: int = Field(default=6)
@@ -211,6 +236,20 @@ class Settings(BaseSettings):
                 "See AGENTS.md §4.4 and docs/runbooks/neon-branches.md."
             )
         return normalized
+
+    @field_validator(
+        "solapi_template_expert_lead_received",
+        "solapi_template_quick_lead_received",
+        "solapi_template_assignee_assigned",
+        mode="before",
+    )
+    @classmethod
+    def _blank_template_to_default(cls, v: object, info: ValidationInfo) -> object:
+        # 빈/공백 override 는 미설정과 동일하게 취급해 승인본 기본값으로 되돌린다.
+        # (빈 template_id 로 발송하면 SOLAPI 가 전건 거부한다.)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return cls.model_fields[info.field_name].default
+        return v
 
     @field_validator("auth_oauth_state_ttl_seconds")
     @classmethod
