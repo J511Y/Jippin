@@ -40,12 +40,16 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 // 목록·상세 중심 페이지(검토/자주묻는질문/마이페이지)는 PC 에서 lg 로 넓게,
-// 입력 폼(로그인·상담 신청·새 검토)과 약관류는 가독성을 위해 sm 을 유지한다.
+// 메인 컨테이너 폭 규칙(정본: docs/design/DESIGN.md §"레이아웃 컨테이너 폭").
+// 기능 페이지(목록·상세·리포트·우리집 체크 전반)는 헤더와 같은 lg 를 쓴다.
+// sm 은 "단일 입력 폼" 한정 — 좁은 폭이 입력 가독성에 유리한 경우에만 명시적으로 좁힌다.
 const WIDE_ROUTE_PREFIXES = ['/sessions', '/faq', '/mypage', '/home-check'];
 
+// sm 으로 좁히는 예외 경로(단일 입력 폼). 여기에 없으면 WIDE 매칭 시 lg, 그 외 sm.
+const NARROW_FORM_PREFIXES = ['/sessions/new'];
+
 function mainContainerSize(pathname: string): 'sm' | 'lg' {
-  // 입력 폼 페이지는 가독성을 위해 좁게(sm) 유지한다.
-  if (pathname.startsWith('/sessions/new') || pathname.startsWith('/home-check/new')) {
+  if (NARROW_FORM_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
     return 'sm';
   }
   return WIDE_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))

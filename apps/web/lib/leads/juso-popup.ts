@@ -68,7 +68,19 @@ export const JUSO_CHANNEL = 'juso-address';
  *   2) `window.opener.jusoCallBack` — juso 표준 경로(동작 시 더 빠름).
  * 먼저 도착한 쪽으로 한 번만 resolve 한다.
  */
-export function openJusoAddressPopup(): Promise<JusoAddressResult> {
+export interface JusoPopupOptions {
+  /**
+   * 팝업 내부에서 상세주소(동/호)까지 입력받을지 여부. 기본 true(Y, 상담 폼).
+   * 우리집 체크처럼 동·호를 자체 입력칸으로 받는 화면은 false(N) 로 호출해
+   * 사용자가 팝업 상세주소에 동·호를 중복 입력하는 혼동을 없앤다.
+   */
+  useDetailAddr?: boolean;
+}
+
+export function openJusoAddressPopup(
+  options: JusoPopupOptions = {}
+): Promise<JusoAddressResult> {
+  const useDetailAddr = options.useDetailAddr ?? true;
   return new Promise((resolve) => {
     const mobile = isMobileOrTablet();
     const confmKey =
@@ -128,8 +140,8 @@ export function openJusoAddressPopup(): Promise<JusoAddressResult> {
       confmKey,
       returnUrl,
       resultType: '4',
-      // 팝업 내부에서 상세주소(동/호)를 직접 입력받아 돌려준다.
-      useDetailAddr: 'Y',
+      // 상세주소(동/호) 입력 단계 노출 여부. 호출부 옵션으로 제어한다(기본 Y).
+      useDetailAddr: useDetailAddr ? 'Y' : 'N',
     };
     for (const [name, value] of Object.entries(fields)) {
       const input = document.createElement('input');
