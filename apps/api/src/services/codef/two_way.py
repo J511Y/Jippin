@@ -134,9 +134,7 @@ def candidate_value(field: str, candidate: dict[str, Any]) -> str:
     if field == "dong":
         return str(candidate.get("commDongNum") or candidate.get("reqDong") or "")
     return str(
-        candidate.get("commAddrLotNumber")
-        or candidate.get("commAddrRoadName")
-        or ""
+        candidate.get("commAddrLotNumber") or candidate.get("commAddrRoadName") or ""
     )
 
 
@@ -148,9 +146,7 @@ def candidate_label(field: str, candidate: dict[str, Any]) -> str:
     if field == "dong":
         return str(candidate.get("reqDong") or candidate.get("commDongNum") or "")
     return str(
-        candidate.get("commAddrRoadName")
-        or candidate.get("commAddrLotNumber")
-        or ""
+        candidate.get("commAddrRoadName") or candidate.get("commAddrLotNumber") or ""
     )
 
 
@@ -226,7 +222,9 @@ _SELECT_MESSAGES = {
 def select_message(field: str) -> str:
     """축별 사용자 안내 메시지."""
 
-    return _SELECT_MESSAGES.get(field, "추가 선택이 필요합니다. 목록에서 선택해 주세요.")
+    return _SELECT_MESSAGES.get(
+        field, "추가 선택이 필요합니다. 목록에서 선택해 주세요."
+    )
 
 
 class ResumeStore:

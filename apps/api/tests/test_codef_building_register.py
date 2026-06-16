@@ -278,7 +278,11 @@ async def test_exclusive_ho_only_no_dong_auto_match() -> None:
                     "method": "hoNum",
                     "extraInfo": {
                         "reqHoNumList": [
-                            {"reqHo": "B101", "commHoNum": "X-B101", "reqArea": "90.72"},
+                            {
+                                "reqHo": "B101",
+                                "commHoNum": "X-B101",
+                                "reqArea": "90.72",
+                            },
                             {"reqHo": "101", "commHoNum": "X-101", "reqArea": "57.96"},
                             {"reqHo": "102", "commHoNum": "X-102", "reqArea": "57.96"},
                         ],
@@ -408,8 +412,14 @@ async def test_exclusive_staged_address_then_ho() -> None:
                     "method": "reqAddress",
                     "extraInfo": {
                         "reqAddrList": [
-                            {"commAddrRoadName": "양천로 400-12", "commAddrLotNumber": "신정동 1"},
-                            {"commAddrRoadName": "양천로 400-12", "commAddrLotNumber": "신정동 2"},
+                            {
+                                "commAddrRoadName": "양천로 400-12",
+                                "commAddrLotNumber": "신정동 1",
+                            },
+                            {
+                                "commAddrRoadName": "양천로 400-12",
+                                "commAddrLotNumber": "신정동 2",
+                            },
                         ]
                     },
                 },
@@ -423,7 +433,9 @@ async def test_exclusive_staged_address_then_ho() -> None:
                 "data": {
                     "jti": "jti-stage2",
                     "method": "hoNum",
-                    "extraInfo": {"reqHoNumList": [{"reqHo": "101", "commHoNum": "H1"}]},
+                    "extraInfo": {
+                        "reqHoNumList": [{"reqHo": "101", "commHoNum": "H1"}]
+                    },
                 },
             }
         )
