@@ -28,19 +28,17 @@ from .solapi_client import build_message_service
 
 logger = get_logger("zippin.alimtalk")
 
-# SOLAPI 콘솔에 등록·검수 승인된 알림톡 템플릿 ID. 콘솔에서 템플릿 본문을 수정해도
-# ID 는 유지되지만, 변수 목록이 달라지면 아래 발송 함수의 variables 도 함께 맞춰야 한다.
-TEMPLATE_ID_EXPERT_LEAD_RECEIVED = (
-    "KA01TP2606120232463085d4S5raEz3E"  # 전문가 상담 접수
-)
-TEMPLATE_ID_QUICK_LEAD_RECEIVED = "KA01TP260612024845677hIQCvmXL44F"  # 빠른 상담 접수
-TEMPLATE_ID_ASSIGNEE_ASSIGNED = "KA01TP260612025906691FxjXODN8xF7"  # 담당자 배정
+# 알림톡 템플릿 ID 는 환경변수(Settings)로 주입한다. 콘솔에서 템플릿을 재등록해 ID 가
+# 바뀌면 코드 배포 없이 환경변수로 교체할 수 있다. 변수 목록이 달라지면 아래 발송 함수의
+# variables 도 함께 맞춰야 한다. 기본값(현재 승인본)은 config.Settings 에 있다.
 
-# 상담 접수 알림은 신청 경로(source_form)에 따라 템플릿이 갈린다.
-_LEAD_RECEIVED_TEMPLATE_BY_SOURCE_FORM: dict[str, str] = {
-    "lead_page": TEMPLATE_ID_EXPERT_LEAD_RECEIVED,
-    "main_page": TEMPLATE_ID_QUICK_LEAD_RECEIVED,
-}
+
+def _lead_received_template_id(settings: Settings, source_form: str) -> str | None:
+    # 상담 접수 알림은 신청 경로(source_form)에 따라 템플릿이 갈린다.
+    return {
+        "lead_page": settings.solapi_template_expert_lead_received,
+        "main_page": settings.solapi_template_quick_lead_received,
+    }.get(source_form)
 
 
 def is_configured(settings: Settings | None = None) -> bool:
@@ -136,7 +134,8 @@ async def send_lead_received_alimtalk(
 ) -> None:
     """상담 접수 알림톡 — 신청 경로(source_form)에 맞는 템플릿으로 발송한다."""
 
-    template_id = _LEAD_RECEIVED_TEMPLATE_BY_SOURCE_FORM.get(source_form)
+    settings = settings or get_settings()
+    template_id = _lead_received_template_id(settings, source_form)
     if template_id is None:
         raise ValueError(f"알 수 없는 source_form 입니다: {source_form!r}")
     await send_alimtalk(
@@ -158,9 +157,10 @@ async def send_assignee_assigned_alimtalk(
 ) -> None:
     """담당자 배정 알림톡. 추후 관리자 페이지의 담당자 배정 액션에서 호출한다."""
 
+    settings = settings or get_settings()
     await send_alimtalk(
         phone=phone,
-        template_id=TEMPLATE_ID_ASSIGNEE_ASSIGNED,
+        template_id=settings.solapi_template_assignee_assigned,
         variables={"고객명": applicant_name, "담당자명": assignee_name},
         service=service,
         settings=settings,
