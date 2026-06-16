@@ -45,13 +45,17 @@ export function HomeCheckNewForm() {
     }
   });
 
+  // 표시용 전체주소(건물명 포함). API 로 보내는 road_addr 는 깨끗한 part1 만 쓴다.
+  const [displayAddr, setDisplayAddr] = useState('');
+
   async function openAddressPopup() {
-    // juso 팝업이 도로명 기본주소(part1)+부가정보(part2)를 돌려준다. 우리집 체크는 건물
-    // 주소만 필요하므로 두 조각을 합쳐 road_addr 로 쓴다(상세주소는 동·호 필드로 받는다).
-    const result = await openJusoAddressPopup();
-    const roadAddr = [result.roadAddrPart1, result.roadAddrPart2].filter(Boolean).join(' ').trim();
-    form.setFieldValue('road_addr', roadAddr);
+    // 동·호는 아래 전용 입력칸으로 받으므로 팝업 상세주소(동/호) 단계는 끈다(useDetailAddr=N).
+    const result = await openJusoAddressPopup({ useDetailAddr: false });
+    // CODEF address 는 "동·호 전 도로명" 만 받는다 → 건물명 괄호(part2)는 제외하고 part1 만
+    // 보낸다(part2 까지 합치면 세움터 조회가 실패한다). 표시는 건물명 포함 전체주소로.
+    form.setFieldValue('road_addr', result.roadAddrPart1.trim());
     form.clearFieldError('road_addr');
+    setDisplayAddr(result.roadFullAddr.trim() || result.roadAddrPart1.trim());
   }
 
   const handleSubmit = form.onSubmit(async (values) => {
@@ -98,7 +102,7 @@ export function HomeCheckNewForm() {
           <TextInput
             placeholder="주소 검색을 눌러 도로명주소를 선택하세요"
             readOnly
-            value={form.values.road_addr}
+            value={displayAddr}
             error={form.errors.road_addr}
           />
         </Stack>
