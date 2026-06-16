@@ -19,10 +19,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 _MAX_ADDR_LEN = 255
 _MAX_DONG_HO_LEN = 50
 _MAX_SECURE_NO_LEN = 50
+# selection 은 CODEF 식별자(commHoNum 등 14자리) 또는 주소 문자열 → 주소 상한과 동일.
+_MAX_SELECTION_LEN = 255
 
 Status = Literal["pending", "querying", "needs_input", "completed", "failed"]
 Signal = Literal["violation", "caution", "normal"]
 Kind = Literal["dong_ho", "secure_no"]
+# needs_input.field — dong_ho 일 때 선택 축(주소/동/호).
+Field_ = Literal["address", "dong", "ho"]
 Source = Literal["exclusive", "heading"]
 DocKind = Literal["exclusive_part", "building_heading"]
 
@@ -56,13 +60,18 @@ class HomeCheckCreateRequest(BaseModel):
 
 
 class HomeCheckContinueRequest(BaseModel):
-    """``POST /home-check/{id}/continue`` 요청 본문 — needs_input 재개 입력."""
+    """``POST /home-check/{id}/continue`` 요청 본문 — needs_input 재개 입력.
 
+    ``selection`` 은 needs_input.options 에서 사용자가 고른 후보의 value(commHoNum 등)다.
+    동·호 자유입력(dong/ho)도 하위호환으로 받지만, 후보 선택 UX 에서는 selection 을 쓴다.
+    """
+
+    selection: str | None = Field(default=None, max_length=_MAX_SELECTION_LEN)
     dong: str | None = Field(default=None, max_length=_MAX_DONG_HO_LEN)
     ho: str | None = Field(default=None, max_length=_MAX_DONG_HO_LEN)
     secure_no: str | None = Field(default=None, max_length=_MAX_SECURE_NO_LEN)
 
-    @field_validator("dong", "ho", "secure_no", mode="before")
+    @field_validator("selection", "dong", "ho", "secure_no", mode="before")
     @classmethod
     def _strip_optional(cls, value: object) -> object:
         if isinstance(value, str):
@@ -81,11 +90,21 @@ class ErrorInfo(BaseModel):
     message: str
 
 
+class NeedsInputOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: str
+    label: str
+    area: str | None = None
+
+
 class NeedsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Kind
     message: str
+    field: Field_ | None = None
+    options: list[NeedsInputOption] | None = None
 
 
 class Violation(BaseModel):
@@ -176,8 +195,8 @@ class HomeCheckReport(BaseModel):
 class HomeCheckJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0.0"] = Field(
-        default="1.0.0", pattern=r"^\d+\.\d+\.\d+$"
+    schema_version: Literal["1.1.0"] = Field(
+        default="1.1.0", pattern=r"^\d+\.\d+\.\d+$"
     )
     id: str
     status: Status

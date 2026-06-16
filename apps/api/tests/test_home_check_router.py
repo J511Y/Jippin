@@ -284,6 +284,33 @@ def test_signal_caution_when_heading_fails(monkeypatch) -> None:
     assert any("표제부" in r for r in reasons)
 
 
+def test_heading_needs_input_absorbed_as_caution(monkeypatch) -> None:
+    """표제부 needs_input 은 사용자 재질문 대신 caution 으로 흡수 → 잡은 completed."""
+
+    captured = _capture_updates(monkeypatch)
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(
+            exclusive=_exclusive(None),
+            heading_exc=CodefNeedsUserInput(
+                "dong_ho", "RESUME-H", "동을 선택해 주세요."
+            ),
+        ),
+    )
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+    values = captured[str(hid)]
+    assert values["status"] == "completed"
+    assert values["signal"] == "caution"
+    reasons = values["result_fields"]["caution_reasons"]
+    assert any("표제부" in r for r in reasons)
+
+
 def test_needs_input_records_resume_token(monkeypatch) -> None:
     captured = _capture_updates(monkeypatch)
     hid = uuid.uuid4()
@@ -329,6 +356,37 @@ def test_serialize_needs_input_job() -> None:
     contract = ContractHomeCheckJob.model_validate(payload)
     assert contract.needs_input is not None
     assert contract.needs_input.kind.value == "secure_no"
+
+
+def test_serialize_needs_input_with_options_validates_against_contract() -> None:
+    row = {
+        "id": uuid.uuid4(),
+        "status": "needs_input",
+        "created_at": datetime.now(UTC),
+        "updated_at": datetime.now(UTC),
+        "result_fields": {
+            "resume_token": "RESUME-2",
+            "product": "exclusive",
+            "kind": "dong_ho",
+            "message": "조회된 호 목록에서 해당 호를 선택해 주세요.",
+            "field": "ho",
+            "options": [
+                {"value": "A", "label": "101", "area": "59"},
+                {"value": "B", "label": "101", "area": "84"},
+            ],
+        },
+    }
+    job = _run(svc.serialize_job(row))
+    payload = job.model_dump(mode="json")
+    assert payload["needs_input"]["field"] == "ho"
+    assert len(payload["needs_input"]["options"]) == 2
+    assert payload["needs_input"]["options"][1]["area"] == "84"
+    # resume_token 은 응답에 노출되지 않는다.
+    assert "resume_token" not in str(payload["needs_input"])
+    contract = ContractHomeCheckJob.model_validate(payload)
+    assert contract.needs_input is not None
+    assert contract.needs_input.field.value == "ho"
+    assert contract.needs_input.options[1].value == "B"
 
 
 def test_serialize_completed_report_validates_against_contract() -> None:

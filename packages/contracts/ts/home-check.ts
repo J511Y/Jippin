@@ -10,9 +10,9 @@
  */
 export interface HomeCheckJob {
   /**
-   * 스키마 버전 (semver).
+   * 스키마 버전 (semver). 1.1.0: NeedsInput 에 field/options(주소·동·호 후보) 추가(하위호환 — 추가 선택 필드).
    */
-  schema_version: "1.0.0";
+  schema_version: "1.1.0";
   /**
    * 조회 잡 UUID.
    */
@@ -58,13 +58,38 @@ export interface ErrorInfo {
 }
 export interface NeedsInput {
   /**
-   * 폴백 종류. dong_ho=동·호 자동매칭 실패로 선택 필요, secure_no=보안문자 입력 필요.
+   * 폴백 종류. dong_ho=주소·동·호 후보 선택 필요, secure_no=보안문자 입력 필요.
    */
   kind: "dong_ho" | "secure_no";
   /**
    * 사용자 안내용 메시지.
    */
   message: string;
+  /**
+   * kind=dong_ho 일 때 사용자가 골라야 하는 축(address=주소, dong=동, ho=호). options 와 함께 채워진다.
+   */
+  field?: "address" | "dong" | "ho" | null;
+  /**
+   * 선택 후보 목록(CODEF reqAddrList/reqDongNumList/reqHoNumList 정규화). 사용자가 하나를 골라 재개한다. CODEF 자동매칭이 0건/복수건일 때만 채워진다.
+   */
+  options?: NeedsInputOption[] | null;
+}
+/**
+ * 동·호·주소 선택 후보 1건.
+ */
+export interface NeedsInputOption {
+  /**
+   * 재개(continue) 시 selection 으로 그대로 전송할 CODEF 식별자(호=commHoNum, 동=commDongNum, 주소=지번/도로명).
+   */
+  value: string;
+  /**
+   * 사용자 표시용 명칭(호=reqHo, 동=reqDong, 주소=도로명/지번).
+   */
+  label: string;
+  /**
+   * 전유면적(㎡, reqArea). 호 후보에만 제공 — 같은 번호의 호를 면적으로 구분하는 데 쓴다.
+   */
+  area?: string | null;
 }
 /**
  * 전유부+표제부 병행 조회 결과의 PII-free 리포트.
