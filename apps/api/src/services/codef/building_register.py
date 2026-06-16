@@ -369,30 +369,9 @@ class CodefBuildingRegisterClient:
         )
         return _parse_heading(data)
 
-    async def resume_building_heading(
-        self,
-        resume_token: str,
-        *,
-        selection: str | None = None,
-        dong: str | None = None,
-        secure_no: str | None = None,
-    ) -> BuildingHeadingResult:
-        ctx = await self._resume.load(resume_token)
-        first_body = self._rebuild_credentials(ctx["first_body"], product="heading")
-        dong = dong or ctx.get("dong") or ""
-        data = await self._drive_two_way(
-            product="heading",
-            path=_HEADING_PATH,
-            operation="heading_resume",
-            first_body=first_body,
-            data=_resume_data(ctx),
-            dong=dong,
-            ho="",
-            resolved=ctx.get("resolved") or {},
-            selections=_resume_selections(ctx, selection),
-            secure_no=secure_no,
-        )
-        return _parse_heading(data)
+    # 참고: 표제부는 best-effort 라 home-check 오케스트레이터가 2-way 추가입력을 caution 으로
+    # 흡수한다(사용자 재질문 안 함). 따라서 heading 전용 resume 진입점은 두지 않는다 —
+    # 재개는 전유부(resume_exclusive_part)에서만 일어난다.
 
     # ------------------------------------------------------------------
     # 2-way 자동매칭 루프 (전유부/표제부 공용) — method/후보 기반 (ADR-0008 §2.2).
@@ -427,34 +406,27 @@ class CodefBuildingRegisterClient:
             secure_needed = has_secure_no(extra)
             _log_two_way_step(product, extra, present, secure_needed=secure_needed)
 
-            round_params: dict[str, Any] = dict(resolved)
-
-            if secure_needed:
-                if not secure_no:
-                    token = await self._save_resume(
-                        product,
-                        first_body,
-                        extra,
-                        two_way_info,
-                        resolved,
-                        dong=dong,
-                        ho=ho,
-                    )
-                    raise CodefNeedsUserInput(
-                        "secure_no", token, "보안문자를 입력해 주세요."
-                    )
-                round_params["secureNo"] = secure_no
-                refresh = extra.get("reqSecureNoRefresh")
-                if refresh:
-                    round_params["secureNoRefresh"] = refresh
-                secure_no = None
+            if secure_needed and not secure_no:
+                token = await self._save_resume(
+                    product, first_body, extra, two_way_info, resolved, dong=dong, ho=ho
+                )
+                raise CodefNeedsUserInput(
+                    "secure_no", token, "보안문자를 입력해 주세요."
+                )
 
             if not present and not secure_needed:
                 # 2-way 인데 처리할 후보 축도 보안문자도 없다 → 분류 불가.
                 _log.warning("codef.two_way_unresolvable", product=product)
                 raise CodefUpstreamError("추가인증 응답을 해석할 수 없습니다.")
 
+            # acc = 지금까지 확정된 후보 축 파라미터(이전 라운드/재개 선택 포함). 같은 응답에
+            # 여러 축이 모호할 때, 앞 축을 확정한 뒤 뒤 축에서 needs_input 이 나도 앞 선택을
+            # 잃지 않도록 acc 를 저장한다(저장 후 재개하면 이미 확정된 축은 다시 묻지 않음).
+            acc: dict[str, Any] = dict(resolved)
             for field in present:
+                key = field_param_key(field)
+                if key in acc:
+                    continue  # 이전 라운드/재개에서 이미 확정 — 다시 매칭/질문하지 않는다.
                 candidates = field_candidates(extra, field)
                 chosen = resolve_candidate(
                     field,
@@ -469,7 +441,7 @@ class CodefBuildingRegisterClient:
                         first_body,
                         extra,
                         two_way_info,
-                        resolved,
+                        acc,  # 이번 라운드에서 앞서 확정한 축까지 보존.
                         pending_field=field,
                         dong=dong,
                         ho=ho,
@@ -496,19 +468,20 @@ class CodefBuildingRegisterClient:
                         field=field,  # type: ignore[arg-type]
                         options=options,
                     )
-                round_params[field_param_key(field)] = candidate_value(field, chosen)
+                acc[key] = candidate_value(field, chosen)
 
-            # 다음 단계로 넘길 때 보안문자는 일회성 — 후보 축 파라미터만 누적한다.
-            resolved = {
-                key: round_params[key]
-                for key in (
-                    field_param_key("address"),
-                    field_param_key("dong"),
-                    field_param_key("ho"),
-                )
-                if key in round_params
-            }
+            resolved = acc  # 다음 (단계형) 라운드로 누적.
             selections = {}
+
+            round_params = dict(acc)
+            if secure_needed:
+                round_params["secureNo"] = (
+                    secure_no  # 일회성 — resolved 엔 넣지 않는다.
+                )
+                refresh = extra.get("reqSecureNoRefresh")
+                if refresh:
+                    round_params["secureNoRefresh"] = refresh
+                secure_no = None
 
             body = {
                 **first_body,

@@ -127,10 +127,15 @@ def field_param_key(field: str) -> str:
 
 
 def candidate_value(field: str, candidate: dict[str, Any]) -> str:
-    """후보 → 2차 요청에 그대로 보낼 식별자(호=commHoNum, 동=commDongNum, 주소=지번/도로명)."""
+    """후보 → 2차 요청에 그대로 보낼 식별자(호=commHoNum, 동=commDongNum, 주소=지번/도로명).
+
+    호/동은 식별번호(comm*)가 비면 명칭(req*)으로 폴백한다 — CODEF 가 commHoNum 없이
+    reqHo 만 주는 후보도 있고, match_ho/match_dong 도 req* 를 매칭키로 인정하므로 빈
+    식별자로 2차를 보내 실패하는 걸 막는다.
+    """
 
     if field == "ho":
-        return str(candidate.get("commHoNum") or "")
+        return str(candidate.get("commHoNum") or candidate.get("reqHo") or "")
     if field == "dong":
         return str(candidate.get("commDongNum") or candidate.get("reqDong") or "")
     return str(
@@ -139,15 +144,21 @@ def candidate_value(field: str, candidate: dict[str, Any]) -> str:
 
 
 def candidate_label(field: str, candidate: dict[str, Any]) -> str:
-    """후보 → 사용자 표시용 명칭. 식별자만 있고 명칭이 없으면 식별자로 폴백한다."""
+    """후보 → 사용자 표시용 명칭. 식별자만 있고 명칭이 없으면 식별자로 폴백한다.
+
+    주소는 같은 도로명에 지번만 다른 후보가 섞일 수 있어, 도로명+지번을 함께 보여줘
+    드롭다운에서 구분 가능하게 한다(둘 다 있으면 "도로명 (지번)").
+    """
 
     if field == "ho":
         return str(candidate.get("reqHo") or candidate.get("commHoNum") or "")
     if field == "dong":
         return str(candidate.get("reqDong") or candidate.get("commDongNum") or "")
-    return str(
-        candidate.get("commAddrRoadName") or candidate.get("commAddrLotNumber") or ""
-    )
+    road = str(candidate.get("commAddrRoadName") or "").strip()
+    lot = str(candidate.get("commAddrLotNumber") or "").strip()
+    if road and lot:
+        return f"{road} ({lot})"
+    return road or lot
 
 
 # 후보 목록이 비정상적으로 클 때의 안전 상한(직렬화/렌더 보호). 실무 reqHoNumList 는

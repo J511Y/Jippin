@@ -10,9 +10,9 @@
  */
 export interface HomeCheckJob {
   /**
-   * 스키마 버전 (semver).
+   * 스키마 버전 (semver). 1.1.0: NeedsInput 에 field/options(주소·동·호 후보) 추가(하위호환 — 추가 선택 필드).
    */
-  schema_version: "1.0.0";
+  schema_version: "1.1.0";
   /**
    * 조회 잡 UUID.
    */

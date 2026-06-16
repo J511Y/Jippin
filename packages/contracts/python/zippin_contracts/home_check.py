@@ -365,9 +365,9 @@ class HomeCheckJob(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.0.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.1.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver).
+    스키마 버전 (semver). 1.1.0: NeedsInput 에 field/options(주소·동·호 후보) 추가(하위호환 — 추가 선택 필드).
     """
     id: str
     """

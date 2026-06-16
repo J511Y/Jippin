@@ -195,8 +195,8 @@ class HomeCheckReport(BaseModel):
 class HomeCheckJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0.0"] = Field(
-        default="1.0.0", pattern=r"^\d+\.\d+\.\d+$"
+    schema_version: Literal["1.1.0"] = Field(
+        default="1.1.0", pattern=r"^\d+\.\d+\.\d+$"
     )
     id: str
     status: Status

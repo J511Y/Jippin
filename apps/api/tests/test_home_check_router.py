@@ -284,6 +284,33 @@ def test_signal_caution_when_heading_fails(monkeypatch) -> None:
     assert any("표제부" in r for r in reasons)
 
 
+def test_heading_needs_input_absorbed_as_caution(monkeypatch) -> None:
+    """표제부 needs_input 은 사용자 재질문 대신 caution 으로 흡수 → 잡은 completed."""
+
+    captured = _capture_updates(monkeypatch)
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(
+            exclusive=_exclusive(None),
+            heading_exc=CodefNeedsUserInput(
+                "dong_ho", "RESUME-H", "동을 선택해 주세요."
+            ),
+        ),
+    )
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+    values = captured[str(hid)]
+    assert values["status"] == "completed"
+    assert values["signal"] == "caution"
+    reasons = values["result_fields"]["caution_reasons"]
+    assert any("표제부" in r for r in reasons)
+
+
 def test_needs_input_records_resume_token(monkeypatch) -> None:
     captured = _capture_updates(monkeypatch)
     hid = uuid.uuid4()

@@ -60,7 +60,7 @@ DISCLAIMER = (
 )
 
 _VIOLATION_VALUE = "위반건축물"
-_SCHEMA_VERSION = "1.0.0"
+_SCHEMA_VERSION = "1.1.0"
 
 # re-export 로 라우터가 services 경유로 응답 모델을 쓰게 한다(기존 컨벤션 유지).
 __all__ = ["MyHomeChecksResponse"]
@@ -228,7 +228,6 @@ async def resume_home_check(
     home_check_id: uuid.UUID,
     *,
     resume_token: str,
-    product: str,
     selection: str | None,
     dong: str | None,
     ho: str | None,
@@ -238,7 +237,12 @@ async def resume_home_check(
     other_dong: str,
     other_ho: str,
 ) -> None:
-    """needs_input 재개 — 폴백이 났던 제품은 resume_*, 다른 제품은 정상 fetch 로 다시 호출한다."""
+    """needs_input 재개 — 전유부 resume + 표제부 재조회.
+
+    needs_input(추가입력)은 **전유부에서만** 발생한다 — 표제부는 best-effort 라
+    2-way 자동매칭 실패를 사용자 재질문 대신 caution 으로 흡수한다(``_process``).
+    따라서 재개는 항상 전유부 resume 이고, 표제부는 정상 fetch 로 다시 시도한다.
+    """
 
     client = _new_client()
     query = BuildingRegisterQuery(
@@ -247,20 +251,12 @@ async def resume_home_check(
         ho=other_ho,
         jibun_addr=other_jibun_addr,
     )
-    if product == "heading":
-        heading_factory = lambda: client.resume_building_heading(  # noqa: E731
-            resume_token, selection=selection, dong=dong, secure_no=secure_no
-        )
-        exclusive_factory = lambda: client.fetch_exclusive_part(query)  # noqa: E731
-    else:
-        exclusive_factory = lambda: client.resume_exclusive_part(  # noqa: E731
-            resume_token, selection=selection, dong=dong, ho=ho, secure_no=secure_no
-        )
-        heading_factory = lambda: client.fetch_building_heading(query)  # noqa: E731
     await _process(
         home_check_id,
-        exclusive_factory=exclusive_factory,
-        heading_factory=heading_factory,
+        exclusive_factory=lambda: client.resume_exclusive_part(
+            resume_token, selection=selection, dong=dong, ho=ho, secure_no=secure_no
+        ),
+        heading_factory=lambda: client.fetch_building_heading(query),
     )
 
 
@@ -290,16 +286,16 @@ async def _process(
         await _mark_unexpected(home_check_id)
         return
 
-    # 표제부 — needs_input 은 사용자 입력 필요라 전체 잡을 needs_input 으로, 그 외 오류는
-    # caution 사유로 흡수(표제부 실패 시 heading=None 으로 진행).
+    # 표제부 — best-effort. 모든 실패(2-way 추가입력 포함)를 caution 으로 흡수한다.
+    # needs_input 까지 사용자에게 되묻지 않는 이유: ① 표제부는 건물 위반표시 보조신호일
+    # 뿐이고(ADR-0008 §2.4), ② 전유부에서 이미 주소·동·호를 받았는데 표제부 때문에 또
+    # 묻는 건 UX 후퇴이며, ③ 전유부·표제부가 둘 다 주소 모호일 때 재질문이 서로 맞물려
+    # 루프가 된다. heading=None → "건물 위반표시 미확인" caution 사유로 표시된다.
     heading: BuildingHeadingResult | None = None
     heading_error = False
     try:
         heading = await heading_factory()
-    except CodefNeedsUserInput as exc:
-        await _mark_needs_input(home_check_id, exc, product="heading")
-        return
-    except CodefError:
+    except CodefError:  # CodefNeedsUserInput(서브클래스) 포함.
         heading_error = True
     except Exception:  # noqa: BLE001
         heading_error = True

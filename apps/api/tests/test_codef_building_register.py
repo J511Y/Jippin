@@ -399,6 +399,82 @@ async def test_exclusive_ambiguous_ho_surfaces_options_then_resume() -> None:
 
 
 # ---------------------------------------------------------------------------
+# (b4b) commHoNum 없이 reqHo 만 있는 후보도 hoNum 으로 reqHo 를 보낸다(빈값 회귀 방지).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_exclusive_ho_value_falls_back_to_reqho() -> None:
+    first = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-03002", "message": "성공"},
+                "data": {
+                    "jti": "jti-fb",
+                    "method": "hoNum",
+                    "extraInfo": {
+                        "reqHoNumList": [
+                            {"reqHo": "201", "commHoNum": ""},
+                            {"reqHo": "202", "commHoNum": ""},
+                        ]
+                    },
+                },
+            }
+        )
+    )
+    second = _FakeResponse(
+        _encode_body({"result": {"code": "CF-00000"}, "data": {"commUniqeNo": "U-FB"}})
+    )
+    client, fake = _make_client([first, second])
+    result = await client.fetch_exclusive_part(
+        BuildingRegisterQuery(road_addr="road", dong="", ho="201")
+    )
+    assert result.comm_unique_no == "U-FB"
+    # commHoNum 이 비어도 reqHo 로 매칭·전송한다.
+    assert fake.product_calls[1]["body"]["hoNum"] == "201"
+
+
+# ---------------------------------------------------------------------------
+# (b4c) 같은 응답에 여러 모호 축 — 주소 선택 후 호 질문 시 주소 선택을 잃지 않는다.
+#       (단일 라운드 내 주소 자동확정 + 호 모호 → 재개 시 주소 재질문 루프 방지)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_exclusive_multifield_keeps_prior_choice() -> None:
+    first = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-03002", "message": "성공"},
+                "data": {
+                    "jti": "jti-mf",
+                    "extraInfo": {
+                        # 주소 단일(자동확정) + 호 복수후보(모호) — 한 응답에 두 축.
+                        "reqAddrList": [{"commAddrRoadName": "양천로 400-12"}],
+                        "reqHoNumList": [
+                            {"reqHo": "101", "commHoNum": "A"},
+                            {"reqHo": "101", "commHoNum": "B"},
+                        ],
+                    },
+                },
+            }
+        )
+    )
+    second = _FakeResponse(
+        _encode_body({"result": {"code": "CF-00000"}, "data": {"commUniqeNo": "U-MF"}})
+    )
+    client, fake = _make_client([first, second])
+    with pytest.raises(CodefNeedsUserInput) as exc:
+        await client.fetch_exclusive_part(
+            BuildingRegisterQuery(road_addr="양천로 400-12", dong="", ho="101")
+        )
+    assert exc.value.field == "ho"  # 주소는 자동확정, 호만 묻는다.
+    token = exc.value.resume_token
+    result = await client.resume_exclusive_part(token, selection="B")
+    assert result.comm_unique_no == "U-MF"
+    body = fake.product_calls[1]["body"]
+    # 재개 2차에 자동확정된 주소와 사용자가 고른 호가 함께 실린다(주소 재질문 없음).
+    assert body["reqAddress"] == "양천로 400-12"
+    assert body["hoNum"] == "B"
+
+
+# ---------------------------------------------------------------------------
 # (b5) 단계형 2-way — 주소 복수 → 선택 → 2차가 또 CF-03002(호) → 호 단일 자동 → 성공.
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
@@ -454,6 +530,10 @@ async def test_exclusive_staged_address_then_ho() -> None:
             BuildingRegisterQuery(road_addr="양천로 400-12", dong="", ho="101")
         )
     assert exc.value.field == "address"
+    # 같은 도로명·다른 지번 → 라벨에 지번을 함께 넣어 구분 가능해야 한다.
+    labels = [opt["label"] for opt in exc.value.options]
+    assert labels[0] != labels[1]
+    assert all("신정동" in label for label in labels)
     token = exc.value.resume_token
     # 주소 선택 → 2차(reqAddress) → 응답이 또 호 후보(단일) → 자동 3차 → 성공.
     result = await client.resume_exclusive_part(token, selection="신정동 2")
