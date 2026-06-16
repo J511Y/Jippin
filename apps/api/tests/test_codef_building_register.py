@@ -259,6 +259,198 @@ async def test_exclusive_multiple_ho_needs_user_input() -> None:
 
 
 # ---------------------------------------------------------------------------
+# (b2) 동 없는 집합건물 — reqHoNumList 만(method=hoNum), 동 비움 → 호 유일매칭 자동 2차.
+#      실측 CF-03002(양천로 400-12) 구조: extraInfo 에 reqAddrList/reqDongNumList 가 아예 없다.
+#      과거 코드는 주소·동까지 강제해 영구 needs_input 이었다(이 회귀의 핵심 케이스).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_exclusive_ho_only_no_dong_auto_match() -> None:
+    first = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-03002", "message": "성공"},
+                "data": {
+                    "jobIndex": 0,
+                    "threadIndex": 0,
+                    "jti": "jti-ho",
+                    "twoWayTimestamp": 1781492184739,
+                    "continue2Way": True,
+                    "method": "hoNum",
+                    "extraInfo": {
+                        "reqHoNumList": [
+                            {"reqHo": "B101", "commHoNum": "X-B101", "reqArea": "90.72"},
+                            {"reqHo": "101", "commHoNum": "X-101", "reqArea": "57.96"},
+                            {"reqHo": "102", "commHoNum": "X-102", "reqArea": "57.96"},
+                        ],
+                        "commHoNum": "",
+                    },
+                },
+            }
+        )
+    )
+    second = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-00000", "message": "성공"},
+                "data": {"commUniqeNo": "U-HO", "resViolationStatus": ""},
+            }
+        )
+    )
+    client, fake = _make_client([first, second])
+    result = await client.fetch_exclusive_part(
+        BuildingRegisterQuery(road_addr="양천로 400-12", dong="", ho="101")
+    )
+    assert result.comm_unique_no == "U-HO"
+    # 2차는 호만 보낸다 — 없는 축(주소/동)을 임의로 채우지 않는다.
+    second_body = fake.product_calls[1]["body"]
+    assert second_body["hoNum"] == "X-101"
+    assert "dongNum" not in second_body
+    assert "reqAddress" not in second_body
+    assert second_body["is2Way"] is True
+
+
+# ---------------------------------------------------------------------------
+# (b3) 호 후보가 단일이면 사용자가 호를 비워도 자동선택한다.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_exclusive_single_ho_candidate_auto_selected() -> None:
+    first = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-03002", "message": "성공"},
+                "data": {
+                    "jti": "jti-single",
+                    "method": "hoNum",
+                    "extraInfo": {
+                        "reqHoNumList": [{"reqHo": "101", "commHoNum": "ONLY"}]
+                    },
+                },
+            }
+        )
+    )
+    second = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-00000", "message": "성공"},
+                "data": {"commUniqeNo": "U-SINGLE"},
+            }
+        )
+    )
+    client, fake = _make_client([first, second])
+    result = await client.fetch_exclusive_part(
+        BuildingRegisterQuery(road_addr="road", dong="", ho="")
+    )
+    assert result.comm_unique_no == "U-SINGLE"
+    assert fake.product_calls[1]["body"]["hoNum"] == "ONLY"
+
+
+# ---------------------------------------------------------------------------
+# (b4) 호 복수후보 매칭 실패 → needs_input 에 후보 options 동봉 → selection 으로 재개.
+#      같은 번호의 호가 여럿(정규화 충돌)이라 자유입력으론 못 풀고, 사용자가 골라야 한다.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_exclusive_ambiguous_ho_surfaces_options_then_resume() -> None:
+    first = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-03002", "message": "성공"},
+                "data": {
+                    "jti": "jti-dup",
+                    "method": "hoNum",
+                    "extraInfo": {
+                        "reqHoNumList": [
+                            {"reqHo": "101", "commHoNum": "A", "reqArea": "59"},
+                            {"reqHo": "101", "commHoNum": "B", "reqArea": "84"},
+                        ]
+                    },
+                },
+            }
+        )
+    )
+    second = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-00000", "message": "성공"},
+                "data": {"commUniqeNo": "U-PICK"},
+            }
+        )
+    )
+    client, fake = _make_client([first, second])
+    with pytest.raises(CodefNeedsUserInput) as exc:
+        await client.fetch_exclusive_part(
+            BuildingRegisterQuery(road_addr="road", dong="", ho="101")
+        )
+    assert exc.value.kind == "dong_ho"
+    assert exc.value.field == "ho"
+    # CODEF 후보를 그대로 노출 — 사용자는 면적으로 구분해 고른다.
+    values = {opt["value"] for opt in exc.value.options}
+    assert values == {"A", "B"}
+    assert any(opt.get("area") == "84" for opt in exc.value.options)
+
+    # 사용자가 B(84㎡)를 골라 재개 → 2차는 hoNum=B.
+    token = exc.value.resume_token
+    result = await client.resume_exclusive_part(token, selection="B")
+    assert result.comm_unique_no == "U-PICK"
+    assert fake.product_calls[1]["body"]["hoNum"] == "B"
+
+
+# ---------------------------------------------------------------------------
+# (b5) 단계형 2-way — 주소 복수 → 선택 → 2차가 또 CF-03002(호) → 호 단일 자동 → 성공.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_exclusive_staged_address_then_ho() -> None:
+    first = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-03002", "message": "성공"},
+                "data": {
+                    "jti": "jti-stage1",
+                    "method": "reqAddress",
+                    "extraInfo": {
+                        "reqAddrList": [
+                            {"commAddrRoadName": "양천로 400-12", "commAddrLotNumber": "신정동 1"},
+                            {"commAddrRoadName": "양천로 400-12", "commAddrLotNumber": "신정동 2"},
+                        ]
+                    },
+                },
+            }
+        )
+    )
+    second = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-03002", "message": "성공"},
+                "data": {
+                    "jti": "jti-stage2",
+                    "method": "hoNum",
+                    "extraInfo": {"reqHoNumList": [{"reqHo": "101", "commHoNum": "H1"}]},
+                },
+            }
+        )
+    )
+    third = _FakeResponse(
+        _encode_body(
+            {
+                "result": {"code": "CF-00000", "message": "성공"},
+                "data": {"commUniqeNo": "U-STAGE"},
+            }
+        )
+    )
+    client, fake = _make_client([first, second, third])
+    with pytest.raises(CodefNeedsUserInput) as exc:
+        await client.fetch_exclusive_part(
+            BuildingRegisterQuery(road_addr="양천로 400-12", dong="", ho="101")
+        )
+    assert exc.value.field == "address"
+    token = exc.value.resume_token
+    # 주소 선택 → 2차(reqAddress) → 응답이 또 호 후보(단일) → 자동 3차 → 성공.
+    result = await client.resume_exclusive_part(token, selection="신정동 2")
+    assert result.comm_unique_no == "U-STAGE"
+    assert fake.product_calls[1]["body"]["reqAddress"] == "신정동 2"
+    assert fake.product_calls[2]["body"]["hoNum"] == "H1"
+
+
+# ---------------------------------------------------------------------------
 # (c) 표제부 동 직접조회 성공 (2-way 미발생)
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio

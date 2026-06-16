@@ -22,6 +22,8 @@ export interface CreateHomeCheckPayload {
 }
 
 export interface ContinueHomeCheckPayload {
+  /** needs_input.options 에서 고른 후보 value(commHoNum/commDongNum/주소). 후보 선택 UX 의 기본 경로. */
+  selection?: string;
   dong?: string;
   ho?: string;
   secure_no?: string;

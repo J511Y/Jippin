@@ -140,6 +140,7 @@ async def continue_home_check(
         home_check_id,
         resume_token=resume_token,
         product=product,
+        selection=payload.selection,
         dong=payload.dong,
         ho=payload.ho,
         secure_no=payload.secure_no,

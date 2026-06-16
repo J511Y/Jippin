@@ -38,6 +38,7 @@ from ..schemas.home_check import (
     HomeCheckReport,
     MyHomeChecksResponse,
     NeedsInput,
+    NeedsInputOption,
     PriceEntry,
     ReportMeta,
     Violation,
@@ -228,6 +229,7 @@ async def resume_home_check(
     *,
     resume_token: str,
     product: str,
+    selection: str | None,
     dong: str | None,
     ho: str | None,
     secure_no: str | None,
@@ -247,12 +249,12 @@ async def resume_home_check(
     )
     if product == "heading":
         heading_factory = lambda: client.resume_building_heading(  # noqa: E731
-            resume_token, dong=dong, secure_no=secure_no
+            resume_token, selection=selection, dong=dong, secure_no=secure_no
         )
         exclusive_factory = lambda: client.fetch_exclusive_part(query)  # noqa: E731
     else:
         exclusive_factory = lambda: client.resume_exclusive_part(  # noqa: E731
-            resume_token, dong=dong, ho=ho, secure_no=secure_no
+            resume_token, selection=selection, dong=dong, ho=ho, secure_no=secure_no
         )
         heading_factory = lambda: client.fetch_building_heading(query)  # noqa: E731
     await _process(
@@ -552,12 +554,15 @@ async def _mark_needs_input(
         {
             "status": "needs_input",
             # resume_token 은 PII 가 아니다(1차 결과 복원용 핸들) — 보안문자 이미지 등 PII 는
-            # 저장하지 않는다.
+            # 저장하지 않는다. field/options 는 CODEF 후보(주소/동/호)로, 프론트가 드롭다운으로
+            # 제시한다(동·호 번호 자체는 PII 가 아님).
             "result_fields": {
                 "resume_token": exc.resume_token,
                 "product": product,
                 "kind": exc.kind,
                 "message": exc.message,
+                "field": exc.field,
+                "options": exc.options,
             },
             "queried_at": datetime.now(timezone.utc),
         },
@@ -567,6 +572,8 @@ async def _mark_needs_input(
         home_check_id=str(home_check_id),
         product=product,
         kind=exc.kind,
+        field=exc.field,
+        option_count=len(exc.options or []),
     )
 
 
@@ -809,9 +816,15 @@ async def serialize_job(
         job_kwargs["report"] = await _build_report(row, with_documents=with_documents)
     elif status == "needs_input":
         fields = row.get("result_fields") or {}
+        raw_options = fields.get("options") or None
+        options = (
+            [NeedsInputOption(**opt) for opt in raw_options] if raw_options else None
+        )
         job_kwargs["needs_input"] = NeedsInput(
             kind=fields.get("kind") or "dong_ho",
             message=fields.get("message") or "추가 입력이 필요합니다.",
+            field=fields.get("field"),
+            options=options,
         )
     elif status == "failed":
         job_kwargs["error"] = ErrorInfo(
