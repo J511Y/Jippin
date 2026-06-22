@@ -37,16 +37,7 @@
       "description": "LangGraph 체크포인터 thread_id (= session_id)."
     },
     "status": {
-      "type": "string",
-      "enum": [
-        "pending",
-        "running",
-        "awaiting_input",
-        "interrupted",
-        "succeeded",
-        "failed",
-        "cancelled"
-      ],
+      "$ref": "#/$defs/AgentRunStatusValue",
       "description": "런 상태 머신."
     },
     "model": {
@@ -83,6 +74,21 @@
       "type": "string",
       "format": "date-time",
       "description": "row 생성 시각."
+    }
+  },
+  "$defs": {
+    "AgentRunStatusValue": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "awaiting_input",
+        "interrupted",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "description": "런 상태 머신. 패키지 루트에서 home-check 의 Status 와 충돌하지 않도록 고유 이름으로 둔다."
     }
   }
 }

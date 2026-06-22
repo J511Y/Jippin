@@ -383,3 +383,37 @@ async def test_runner_finalizes_when_startup_projection_fails(
     ]
     assert fake.agent_runs[run["id"]]["status"] == "failed"
     assert any(ev == "error" for ev, _ in _parse(frames))
+
+
+async def test_cancel_agent_run_preserves_terminal(fake: FakeMainFlowDb) -> None:
+    # #interrupt-race: 자연 종료된 런을 interrupt 가 cancelled 로 덮어쓰지 않는다.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    await main_flow.update_agent_run(
+        run_id=run["id"], status="succeeded", finished_at=main_flow._now()
+    )
+    row = await main_flow.cancel_agent_run(
+        session_id=session["id"], run_id=run["id"], owner_user_id=owner
+    )
+    assert row["status"] == "succeeded"
+    assert fake.agent_runs[run["id"]]["status"] == "succeeded"
+
+
+async def test_cancel_agent_run_cancels_active(fake: FakeMainFlowDb) -> None:
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    row = await main_flow.cancel_agent_run(
+        session_id=session["id"], run_id=run["id"], owner_user_id=owner
+    )
+    assert row["status"] == "cancelled"
+    assert fake.agent_runs[run["id"]]["finished_at"] is not None

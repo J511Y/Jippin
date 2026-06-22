@@ -12,6 +12,11 @@
     { "$ref": "#/$defs/DoneEvent" }
   ],
   "$defs": {
+    "ToolStepStatus": {
+      "type": "string",
+      "enum": ["started", "succeeded", "failed"],
+      "description": "도구 라이프사이클 상태. 패키지 루트의 Status 충돌을 피해 고유 이름."
+    },
     "TokenEvent": {
       "type": "object",
       "additionalProperties": false,
@@ -48,8 +53,7 @@
           "description": "도구 분류 (chat_tool_calls.tool_kind 와 정합)."
         },
         "status": {
-          "type": "string",
-          "enum": ["started", "succeeded", "failed"],
+          "$ref": "#/$defs/ToolStepStatus",
           "description": "도구 라이프사이클 상태."
         },
         "summary": { "type": ["string", "null"], "description": "사용자 노출용 짧은 진행 요약." },

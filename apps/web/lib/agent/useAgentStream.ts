@@ -53,6 +53,27 @@ function saveResumeId(sessionId: string, id: string | null): void {
   }
 }
 
+// 런이 terminal(succeeded/failed/cancelled) 이거나 없는지 서버에 확인한다. resume
+// 실패 시 id 를 비워도 되는지 판단용 — 아직 running(미마감)이면 false(=id 유지).
+async function isRunTerminalOrMissing(
+  base: string,
+  sessionId: string,
+  runId: string,
+  token: string,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${base}/sessions/${sessionId}/agent/runs/${runId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 404) return true;
+    if (!res.ok) return false;
+    const data = (await res.json()) as { status?: string };
+    return ['succeeded', 'failed', 'cancelled'].includes(data?.status ?? '');
+  } catch {
+    return false; // 확인 실패 시 보수적으로 id 유지
+  }
+}
+
 function toDynamic(component: Record<string, unknown>): DynamicComponentSpec | undefined {
   const kind = typeof component.kind === 'string' ? component.kind : undefined;
   if (!kind) return undefined;
@@ -141,9 +162,15 @@ export function useAgentStream(sessionId: string): UseAgentStream {
           signal: controller.signal,
         });
         if (!res.ok || !res.body) {
-          // resume 시도가 실패(예: 런이 이미 종료돼 409)하면 저장된 id 를 비워
-          // 다음 send 가 새 런을 시작하게 한다(stale resume 복구).
-          if (resumeRunId) setResumeId(null);
+          // resume 실패 시, 서버가 런이 terminal/missing 임을 확인한 경우에만 id 를
+          // 비운다 — 아직 running(예: disconnect 직후 미마감)이면 유지해 다음에 다시
+          // resume 한다(새 런이 AGENT_RUN_ALREADY_ACTIVE 로 막히는 것 방지).
+          if (
+            resumeRunId &&
+            (await isRunTerminalOrMissing(base, sessionId, resumeRunId, token))
+          ) {
+            setResumeId(null);
+          }
           throw new Error(`에이전트 요청에 실패했습니다 (HTTP ${res.status}).`);
         }
         setResumeId(res.headers.get('X-Agent-Run-Id') ?? resumeRunId);

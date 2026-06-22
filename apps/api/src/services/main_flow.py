@@ -455,6 +455,32 @@ async def _db_update_agent_run(
     return dict(row._mapping) if row is not None else None
 
 
+async def _db_cancel_agent_run(run_id: uuid.UUID) -> dict[str, Any] | None:
+    """비-terminal 런만 원자적으로 cancelled 로 전이.
+
+    status read 이후 런이 자연 종료되는 race 에서, 무조건 UPDATE 가 terminal
+    succeeded/failed 를 cancelled 로 덮어쓰는 것을 막는다 — 조건부라 no-op 이면 None.
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_AGENT_RUNS)
+                .where(
+                    _AGENT_RUNS.c.id == run_id,
+                    _AGENT_RUNS.c.status.not_in(["succeeded", "failed", "cancelled"]),
+                )
+                .values(
+                    status="cancelled",
+                    finished_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                )
+                .returning(*_AGENT_RUNS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
 async def _db_claim_resumable_agent_run(
     run_id: uuid.UUID,
 ) -> dict[str, Any] | None:
@@ -1114,6 +1140,33 @@ async def update_agent_run(*, run_id: uuid.UUID, **fields: Any) -> dict[str, Any
     row = await _db_update_agent_run(run_id, values)
     if row is None:
         raise _not_found("Agent run not found.", code="AGENT_RUN_NOT_FOUND")
+    return row
+
+
+async def cancel_agent_run(
+    *,
+    session_id: uuid.UUID,
+    run_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """런을 cancelled 로 전이(소유 세션만). 이미 terminal 이면 그 row 를 그대로 반환.
+
+    조건부 UPDATE 라, interrupt 호출과 자연 종료가 겹쳐도 terminal 상태를 덮어쓰지
+    않는다(idempotent).
+    """
+
+    current = await get_agent_run(
+        session_id=session_id,
+        run_id=run_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    row = await _db_cancel_agent_run(run_id)
+    if row is None:
+        # 이미 terminal(race) — 최신 row 를 다시 읽어 반환.
+        refreshed = await _db_select_agent_run(run_id)
+        return refreshed or current
     return row
 
 

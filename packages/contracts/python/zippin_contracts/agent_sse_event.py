@@ -13,6 +13,16 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
+class ToolStepStatus(Enum):
+    """
+    도구 라이프사이클 상태. 패키지 루트의 Status 충돌을 피해 고유 이름.
+    """
+
+    started = "started"
+    succeeded = "succeeded"
+    failed = "failed"
+
+
 class TokenEvent(BaseModel):
     """
     LLM 토큰 스트리밍 조각. 영속화되지 않으며 최종 message 이벤트만 저장된다.
@@ -48,16 +58,6 @@ class ToolKind(Enum):
     other = "other"
 
 
-class Status(Enum):
-    """
-    도구 라이프사이클 상태.
-    """
-
-    started = "started"
-    succeeded = "succeeded"
-    failed = "failed"
-
-
 class ToolStepEvent(BaseModel):
     """
     도구 호출 진행 상황. 원장(chat_tool_calls) 의 사용자 친화 투영.
@@ -77,7 +77,7 @@ class ToolStepEvent(BaseModel):
     """
     도구 분류 (chat_tool_calls.tool_kind 와 정합).
     """
-    status: Status
+    status: ToolStepStatus
     """
     도구 라이프사이클 상태.
     """

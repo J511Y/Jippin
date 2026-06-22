@@ -40,8 +40,6 @@ _SSE_HEADERS = {
     "Connection": "keep-alive",
 }
 
-_TERMINAL = {"succeeded", "failed", "cancelled"}
-
 
 def _require_agent_ready(request: Request) -> None:
     """체크포인터 스키마 누락 등 fail-safe 비활성화 시 503(lifespan 이 설정)."""
@@ -134,20 +132,16 @@ async def interrupt_agent_run(
     run_id: uuid.UUID = Path(...),
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> AgentRunStatusResponse:
-    run = await main_flow.get_agent_run(
+    # 조건부 취소 — status read 이후 자연 종료되는 race 에서 terminal 을 덮어쓰지
+    # 않는다(이미 terminal 이면 그 row 를 그대로 반환, idempotent).
+    row = await main_flow.cancel_agent_run(
         session_id=session_id,
         run_id=run_id,
         owner_user_id=requester.user_id,
         owner_is_anonymous=requester.is_anonymous,
     )
-    if run["status"] in _TERMINAL:
-        # 이미 종료된 런 — idempotent.
-        return AgentRunStatusResponse.model_validate(run)
-    updated = await main_flow.update_agent_run(
-        run_id=run_id, status="cancelled", finished_at=main_flow._now()
-    )
     logger.info("agent_run_interrupted", session_id=str(session_id), run_id=str(run_id))
-    return AgentRunStatusResponse.model_validate(updated)
+    return AgentRunStatusResponse.model_validate(row)
 
 
 @router.get(

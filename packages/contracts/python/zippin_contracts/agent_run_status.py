@@ -14,9 +14,9 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class Status(Enum):
+class AgentRunStatusValue(Enum):
     """
-    런 상태 머신.
+    런 상태 머신. 패키지 루트에서 home-check 의 Status 와 충돌하지 않도록 고유 이름으로 둔다.
     """
 
     pending = "pending"
@@ -52,7 +52,7 @@ class AgentRunStatus(BaseModel):
     """
     LangGraph 체크포인터 thread_id (= session_id).
     """
-    status: Status
+    status: AgentRunStatusValue
     """
     런 상태 머신.
     """
