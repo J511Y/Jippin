@@ -4,7 +4,7 @@
 
 from .agent_run_request import AgentRunRequest, UserMessage
 from .agent_run_status import AgentRunStatus, AgentRunStatusValue
-from .agent_sse_event import AgentSseEvent, CompletionDecision, DoneEvent, ErrorEvent, MessageEvent, Role, RunStatus, SessionStatus, StateChangeEvent, TokenEvent, ToolKind, ToolStepEvent, ToolStepStatus
+from .agent_sse_event import AgentSseEvent, DoneEvent, ErrorEvent, MessageEvent, Role, RunStatus, SessionStatus, StateChangeDecision, StateChangeEvent, TokenEvent, ToolKind, ToolStepEvent, ToolStepStatus
 from .common_judgment_schema import BuildingInfo, BuildingType, CommonJudgmentSchema, JudgmentValues, MaskCoord, Provider, Reclassification, SelectedWall, SourceEngine, SourceEngine1, SpaceObject, Type, VlmSupplement, WallObject, WallType, WindowForm
 from .completion_decision import Channel, CompletionDecision, ConfidenceSummary, ConflictFlag, Decision, Kind, MissingField, NextAction
 from .error_response import ErrorBody, ErrorResponse
@@ -74,6 +74,7 @@ __all__ = [
     "SourceEngine",
     "SourceEngine1",
     "SpaceObject",
+    "StateChangeDecision",
     "StateChangeEvent",
     "Status",
     "TokenEvent",

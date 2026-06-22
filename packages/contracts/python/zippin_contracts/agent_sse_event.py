@@ -23,6 +23,18 @@ class ToolStepStatus(Enum):
     failed = "failed"
 
 
+class StateChangeDecision(Enum):
+    """
+    FLOW_GUARD 결정. completion_decision 계약의 CompletionDecision 모델과 루트 이름 충돌을 피해 고유 이름.
+    """
+
+    ASK_MORE = "ASK_MORE"
+    REQUEST_OVERLAY_REVIEW = "REQUEST_OVERLAY_REVIEW"
+    PROCEED_RULE = "PROCEED_RULE"
+    HOLD_OR_HANDOFF = "HOLD_OR_HANDOFF"
+    NoneType_None = None
+
+
 class TokenEvent(BaseModel):
     """
     LLM 토큰 스트리밍 조각. 영속화되지 않으며 최종 message 이벤트만 저장된다.
@@ -109,18 +121,6 @@ class SessionStatus(Enum):
     deleted = "deleted"
 
 
-class CompletionDecision(Enum):
-    """
-    FLOW_GUARD 결정 (completion-decision 계약의 decision enum 재사용).
-    """
-
-    ASK_MORE = "ASK_MORE"
-    REQUEST_OVERLAY_REVIEW = "REQUEST_OVERLAY_REVIEW"
-    PROCEED_RULE = "PROCEED_RULE"
-    HOLD_OR_HANDOFF = "HOLD_OR_HANDOFF"
-    NoneType_None = None
-
-
 class StateChangeEvent(BaseModel):
     """
     세션 status / completion_decision 전이 알림.
@@ -136,7 +136,7 @@ class StateChangeEvent(BaseModel):
     """
     세션 상태 머신의 새 상태.
     """
-    completion_decision: CompletionDecision | None = None
+    completion_decision: StateChangeDecision | None = None
     """
     FLOW_GUARD 결정 (completion-decision 계약의 decision enum 재사용).
     """

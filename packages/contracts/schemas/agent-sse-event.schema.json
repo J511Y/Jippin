@@ -17,6 +17,11 @@
       "enum": ["started", "succeeded", "failed"],
       "description": "도구 라이프사이클 상태. 패키지 루트의 Status 충돌을 피해 고유 이름."
     },
+    "StateChangeDecision": {
+      "type": ["string", "null"],
+      "enum": ["ASK_MORE", "REQUEST_OVERLAY_REVIEW", "PROCEED_RULE", "HOLD_OR_HANDOFF", null],
+      "description": "FLOW_GUARD 결정. completion_decision 계약의 CompletionDecision 모델과 루트 이름 충돌을 피해 고유 이름."
+    },
     "TokenEvent": {
       "type": "object",
       "additionalProperties": false,
@@ -87,8 +92,7 @@
           "description": "세션 상태 머신의 새 상태."
         },
         "completion_decision": {
-          "type": ["string", "null"],
-          "enum": ["ASK_MORE", "REQUEST_OVERLAY_REVIEW", "PROCEED_RULE", "HOLD_OR_HANDOFF", null],
+          "$ref": "#/$defs/StateChangeDecision",
           "description": "FLOW_GUARD 결정 (completion-decision 계약의 decision enum 재사용)."
         }
       },

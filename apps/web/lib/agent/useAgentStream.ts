@@ -142,13 +142,8 @@ export function useAgentStream(sessionId: string): UseAgentStream {
       try {
         const token = await resolveToken();
         const base = apiBaseUrl();
-        // 직전 런이 resumable 이면 같은 런을 /resume 로 이어 간다 — 아니면 새 런 시작.
-        // (활성 런 부분 유니크 때문에 새로 시작하면 AGENT_RUN_ALREADY_ACTIVE 가 난다.)
-        const resumeRunId = resumableRunIdRef.current;
-        const url = resumeRunId
-          ? `${base}/sessions/${sessionId}/agent/runs/${resumeRunId}/resume`
-          : `${base}/sessions/${sessionId}/agent/runs`;
-        const res = await fetch(url, {
+        const startUrl = `${base}/sessions/${sessionId}/agent/runs`;
+        const init: RequestInit = {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -160,20 +155,34 @@ export function useAgentStream(sessionId: string): UseAgentStream {
             message: { role: 'user', content: text },
           }),
           signal: controller.signal,
-        });
+        };
+
+        // 직전 런이 resumable 이면 같은 런을 /resume 로 이어 간다 — 아니면 새 런 시작.
+        // (활성 런 부분 유니크 때문에 새로 시작하면 AGENT_RUN_ALREADY_ACTIVE 가 난다.)
+        const resumeRunId = resumableRunIdRef.current;
+        let res = await fetch(
+          resumeRunId
+            ? `${base}/sessions/${sessionId}/agent/runs/${resumeRunId}/resume`
+            : startUrl,
+          init,
+        );
+
+        // resume 실패 시: 서버가 런이 terminal/missing 임을 확인하면 id 를 비우고
+        // 같은 메시지로 새 런을 1회 재시도한다(메시지 유실 방지). 아직 running(미마감)
+        // 이면 id 를 유지해 사용자가 나중에 다시 resume 할 수 있게 한다.
+        if (
+          (!res.ok || !res.body) &&
+          resumeRunId &&
+          (await isRunTerminalOrMissing(base, sessionId, resumeRunId, token))
+        ) {
+          setResumeId(null);
+          res = await fetch(startUrl, init);
+        }
+
         if (!res.ok || !res.body) {
-          // resume 실패 시, 서버가 런이 terminal/missing 임을 확인한 경우에만 id 를
-          // 비운다 — 아직 running(예: disconnect 직후 미마감)이면 유지해 다음에 다시
-          // resume 한다(새 런이 AGENT_RUN_ALREADY_ACTIVE 로 막히는 것 방지).
-          if (
-            resumeRunId &&
-            (await isRunTerminalOrMissing(base, sessionId, resumeRunId, token))
-          ) {
-            setResumeId(null);
-          }
           throw new Error(`에이전트 요청에 실패했습니다 (HTTP ${res.status}).`);
         }
-        setResumeId(res.headers.get('X-Agent-Run-Id') ?? resumeRunId);
+        setResumeId(res.headers.get('X-Agent-Run-Id') ?? resumableRunIdRef.current);
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
