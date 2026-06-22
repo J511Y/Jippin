@@ -54,7 +54,14 @@ def _safe_error(exc: Exception, fallback_code: str, *, tool: str) -> dict[str, A
 
     if isinstance(exc, ZippinException):
         return _err(getattr(exc, "code", None) or fallback_code, exc.message)
-    log.exception("agent_tool_failed", tool=tool, error_code=fallback_code)
+    # raw 메시지·트레이스백(주소·SQL·URL 가능)은 redaction 안 된 로그에 남기지 않는다 —
+    # 안정적 코드/타입만(#no-raw-exc-log).
+    log.error(
+        "agent_tool_failed",
+        tool=tool,
+        error_code=fallback_code,
+        error_type=type(exc).__name__,
+    )
     return _err(fallback_code, _SAFE_TOOL_ERROR_MESSAGE)
 
 

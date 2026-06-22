@@ -30,7 +30,7 @@ export interface UserMessage {
    */
   role: "user";
   /**
-   * 사용자 발화 본문.
+   * 사용자 발화 본문. 요청 메모리/DB row/LLM 호출 비대화를 막기 위해 최대 8000자.
    */
   content: string;
 }

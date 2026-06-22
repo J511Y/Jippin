@@ -393,11 +393,16 @@ class AgentRunner:
                 # 마감하고 finally 가 런을 풀어 준다(#startup-finalize). 재연결이면
                 # 새 턴을 만들지 않고 체크포인트(input=None)에서 이어 돌린다.
                 if not reconnect:
-                    # user 턴을 run 단위로 멱등하게 투영한다. pre-checkpoint resume 는
-                    # 같은 run_id 로 메시지를 다시 보내므로(프롬프트 유실 방지), 그냥
-                    # append 하면 chat_messages 에 동일 user row 가 중복된다 — lc id
-                    # `user-turn:{run_id}` 로 키잉해 한 번만 기록한다(#dup-user-turn).
-                    lc_user_id = f"user-turn:{self.run_id}"
+                    # user 턴을 (run_id + 내용) 단위로 멱등하게 투영한다. pre-checkpoint
+                    # resume 는 같은 run_id 로 같은 메시지를 다시 보내므로(프롬프트 유실
+                    # 방지) 동일 내용은 dedupe 되어야 하지만, awaiting_input 후속 답변은
+                    # 같은 run_id 라도 내용이 다른 새 턴이라 별도로 기록돼야 한다. 그래서
+                    # 내용 해시를 키에 포함한다 — 재전송(동일 내용)은 1건, 후속(다른 내용)은
+                    # 새 row(#per-turn-user-id). 동일 내용 2턴이 합쳐지는 드문 손실은 허용.
+                    content_key = hashlib.sha256(
+                        user_message.encode("utf-8")
+                    ).hexdigest()[:16]
+                    lc_user_id = f"user-turn:{self.run_id}:{content_key}"
                     existing_turn = await main_flow.find_chat_message_by_lc_id(
                         session_id=self.session_id, lc_message_id=lc_user_id
                     )
@@ -465,13 +470,18 @@ class AgentRunner:
                         recoverable=True,
                     )
             except Exception as exc:  # noqa: BLE001 - 어떤 실패든 런을 마감하고 통지
-                log.exception(
-                    "agent_run_failed", run_id=str(self.run_id), error=str(exc)
+                # str(exc)/traceback 은 SQL 파라미터·업스트림 URL·프롬프트/주소 PII 를
+                # 담을 수 있다. 로그 싱크가 redaction 되지 않으므로 안정적 코드/타입/run
+                # id 만 남기고 raw 메시지·트레이스백은 기록하지 않는다(#no-raw-exc-log).
+                log.error(
+                    "agent_run_failed",
+                    run_id=str(self.run_id),
+                    error_type=type(exc).__name__,
                 )
                 run_status = "failed"
                 # raw 예외 문자열(SQL 파라미터·업스트림 텍스트·사용자 프롬프트/주소 등
-                # PII 가능)을 status 메타에 저장하지 않는다 — 안정적 메시지만 영속하고
-                # 원본은 위 log.exception 에만 남긴다(계약: error_message 에 raw 금지).
+                # PII 가능)을 status 메타에 저장하지 않는다 — 안정적 메시지만 영속한다
+                # (계약: error_message 에 raw 금지).
                 await main_flow.update_agent_run(
                     run_id=self.run_id,
                     error_code="AGENT_RUNTIME_ERROR",

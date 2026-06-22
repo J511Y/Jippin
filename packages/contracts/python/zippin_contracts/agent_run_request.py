@@ -19,9 +19,9 @@ class UserMessage(BaseModel):
     """
     공개 endpoint 에서 클라이언트가 만들 수 있는 유일한 role.
     """
-    content: str = Field(..., min_length=1)
+    content: str = Field(..., max_length=8000, min_length=1)
     """
-    사용자 발화 본문.
+    사용자 발화 본문. 요청 메모리/DB row/LLM 호출 비대화를 막기 위해 최대 8000자.
     """
 
 

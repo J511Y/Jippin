@@ -13,6 +13,9 @@ import { Alert, Group, Loader, Stack, Text } from '@mantine/core';
 import { type ChatMessage, MessageInput, MessageList } from '@/components/a2ui';
 import { useAgentStream } from '@/lib/agent/useAgentStream';
 
+// 서버측 AgentUserMessage.content max_length(8000)와 일치시키는 클라이언트 입력 cap.
+const AGENT_MESSAGE_MAX_CHARS = 8000;
+
 export function AgentChat({ sessionId }: { sessionId: string }) {
   const { messages, streamingText, toolActivity, status, error, send } =
     useAgentStream(sessionId);
@@ -58,6 +61,7 @@ export function AgentChat({ sessionId }: { sessionId: string }) {
       <MessageInput
         onSubmit={send}
         disabled={status === 'streaming'}
+        maxLength={AGENT_MESSAGE_MAX_CHARS}
         placeholder="메시지를 입력하세요 (예: 우리집 내력벽 확인해줘)"
       />
     </Stack>

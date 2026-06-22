@@ -9,13 +9,16 @@ type Props = {
   disabled?: boolean;
   placeholder?: string;
   className?: string;
+  /** 서버측 상한과 맞추는 입력 글자수 cap(초과 입력·과대 LLM 호출 방지). */
+  maxLength?: number;
 };
 
 export function MessageInput({
   onSubmit,
   disabled,
   placeholder = '메시지를 입력하세요...',
-  className
+  className,
+  maxLength
 }: Props) {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
@@ -24,6 +27,7 @@ export function MessageInput({
     event.preventDefault();
     const trimmed = value.trim();
     if (!trimmed || busy || disabled) return;
+    if (maxLength !== undefined && trimmed.length > maxLength) return;
     setBusy(true);
     try {
       await onSubmit(trimmed);
@@ -44,6 +48,7 @@ export function MessageInput({
           aria-label="메시지 입력"
           autoComplete="off"
           disabled={disabled || busy}
+          maxLength={maxLength}
           onChange={(event) => setValue(event.currentTarget.value)}
           placeholder={placeholder}
           radius="md"

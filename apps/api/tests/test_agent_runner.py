@@ -8,6 +8,7 @@ deepagents/LLM 을 mock 한 fake agent 의 astream 청크를 주입해, 번역�
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 import uuid
@@ -555,27 +556,40 @@ async def test_runner_create_run_marks_and_finalizes(fake: FakeMainFlowDb) -> No
     assert events[-1][0] == "done" and events[-1][1]["run_status"] == "succeeded"
 
 
-async def test_runner_create_run_honors_precreated_cancel(
-    fake: FakeMainFlowDb,
-) -> None:
-    # #early-interrupt-race: 라우터가 만든 row 를 이른 /interrupt 가 취소하면, generator
-    # 의 멱등 create 는 그 row 를 그대로 받고 mark_running 이 None → done(cancelled).
+async def test_cancel_before_create_writes_tombstone(fake: FakeMainFlowDb) -> None:
+    # #early-interrupt-race: 헤더로 노출된 run_id 로 generator insert 전에 /interrupt 가
+    # 오면, row 가 없어도 cancelled 톰스톤을 남긴다(소유 세션 검증됨).
     owner = uuid.uuid4()
     session = await main_flow.create_session(
         user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
     )
-    run = await main_flow.create_agent_run(
-        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    run_id = uuid.uuid4()
+    row = await main_flow.cancel_agent_run(
+        session_id=session["id"], run_id=run_id, owner_user_id=owner
     )
-    # 이른 interrupt 가 시작 전에 취소.
+    assert row["status"] == "cancelled"
+    assert run_id in fake.agent_runs
+
+
+async def test_runner_create_run_honors_precreated_cancel(
+    fake: FakeMainFlowDb,
+) -> None:
+    # #early-interrupt-race: 이른 /interrupt 가 만든 cancelled 톰스톤을 generator 의 멱등
+    # create 가 그대로 받고 mark_running 이 None → done(cancelled).
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run_id = uuid.uuid4()
+    # generator 시작 전에 취소 톰스톤 생성.
     await main_flow.cancel_agent_run(
-        session_id=session["id"], run_id=run["id"], owner_user_id=owner
+        session_id=session["id"], run_id=run_id, owner_user_id=owner
     )
     runner = AgentRunner(
         session_id=session["id"],
         owner_user_id=owner,
         owner_is_anonymous=False,
-        run_id=run["id"],
+        run_id=run_id,
     )
     frames = [
         f
@@ -585,7 +599,7 @@ async def test_runner_create_run_honors_precreated_cancel(
     ]
     events = _parse(frames)
     assert events[-1][0] == "done" and events[-1][1]["run_status"] == "cancelled"
-    assert fake.agent_runs[run["id"]]["status"] == "cancelled"
+    assert fake.agent_runs[run_id]["status"] == "cancelled"
 
 
 async def test_runner_create_run_conflict_emits_error(fake: FakeMainFlowDb) -> None:
@@ -791,6 +805,53 @@ async def test_runner_resume_awaiting_input_appends_turn(
     assert after == before + 1
 
 
+async def test_runner_awaiting_input_followup_is_distinct_turn(
+    fake: FakeMainFlowDb,
+) -> None:
+    # #per-turn-user-id: 같은 run 이라도 awaiting_input 후속(다른 내용)은 별도 user row.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    await main_flow.update_agent_run(run_id=run["id"], status="awaiting_input")
+    # 이미 같은 run 의 초기 턴("처음")이 투영돼 있다.
+    first_key = hashlib.sha256("처음".encode()).hexdigest()[:16]
+    await main_flow.append_chat_message(
+        session_id=session["id"],
+        owner_user_id=owner,
+        payload={
+            "content": "처음",
+            "metadata": {"lc_message_id": f"user-turn:{run['id']}:{first_key}"},
+        },
+    )
+    before = sum(
+        1
+        for m in fake.chat_messages.values()
+        if m["session_id"] == session["id"] and m["role"] == "user"
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    agent = _CapturingAgent(_chunks())
+    # 후속 답변(다른 내용)은 같은 run 이라도 새 row 로 기록된다.
+    _ = [
+        f
+        async for f in runner.stream(user_message="추가답변", agent=agent, resume=True)
+    ]
+    after = sum(
+        1
+        for m in fake.chat_messages.values()
+        if m["session_id"] == session["id"] and m["role"] == "user"
+    )
+    assert after == before + 1
+
+
 async def test_runner_interrupted_before_checkpoint_resends(
     fake: FakeMainFlowDb,
 ) -> None:
@@ -808,13 +869,14 @@ async def test_runner_interrupted_before_checkpoint_resends(
     await main_flow.update_agent_run(
         run_id=run["id"], status="interrupted", current_step="submitting"
     )
-    # 원래 런이 이미 user 턴을 투영했었다(lc id = user-turn:{run_id}).
+    # 원래 런이 이미 같은 내용의 user 턴을 투영했었다(lc id = user-turn:{run_id}:{hash}).
+    content_key = hashlib.sha256("계속".encode()).hexdigest()[:16]
     await main_flow.append_chat_message(
         session_id=session["id"],
         owner_user_id=owner,
         payload={
             "content": "계속",
-            "metadata": {"lc_message_id": f"user-turn:{run['id']}"},
+            "metadata": {"lc_message_id": f"user-turn:{run['id']}:{content_key}"},
         },
     )
     before = sum(

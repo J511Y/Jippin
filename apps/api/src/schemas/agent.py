@@ -12,6 +12,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# 요청 메모리/chat_messages row/LLM 호출 비대화 방지용 서버측 상한(계약 maxLength 와 동일).
+MAX_AGENT_MESSAGE_CHARS = 8000
+
 
 class AgentUserMessage(BaseModel):
     """클라이언트가 만들 수 있는 유일한 메시지 — role=user.
@@ -24,7 +27,7 @@ class AgentUserMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: Literal["user"] = Field(...)
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=MAX_AGENT_MESSAGE_CHARS)
 
 
 class AgentRunStartRequest(BaseModel):

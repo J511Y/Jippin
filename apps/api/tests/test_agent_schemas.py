@@ -67,6 +67,26 @@ def test_message_forbids_extra_fields() -> None:
         )
 
 
+def test_message_rejects_oversize_content() -> None:
+    from src.schemas.agent import MAX_AGENT_MESSAGE_CHARS
+
+    with pytest.raises(ValidationError):
+        AgentRunStartRequest(
+            schema_version="1.0.0",
+            message={"role": "user", "content": "x" * (MAX_AGENT_MESSAGE_CHARS + 1)},
+        )
+
+
+def test_message_accepts_max_content() -> None:
+    from src.schemas.agent import MAX_AGENT_MESSAGE_CHARS
+
+    req = AgentRunStartRequest(
+        schema_version="1.0.0",
+        message={"role": "user", "content": "x" * MAX_AGENT_MESSAGE_CHARS},
+    )
+    assert len(req.message.content) == MAX_AGENT_MESSAGE_CHARS
+
+
 def test_start_request_accepts_metadata() -> None:
     req = AgentRunStartRequest(
         schema_version="1.0.0",

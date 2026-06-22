@@ -1308,12 +1308,41 @@ async def cancel_agent_run(
     않는다(idempotent).
     """
 
-    current = await get_agent_run(
-        session_id=session_id,
-        run_id=run_id,
-        owner_user_id=owner_user_id,
-        owner_is_anonymous=owner_is_anonymous,
-    )
+    try:
+        current = await get_agent_run(
+            session_id=session_id,
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
+    except ZippinException as exc:
+        if getattr(exc, "code", None) != "AGENT_RUN_NOT_FOUND":
+            raise
+        # run_id 는 헤더로 노출됐지만 start generator 가 아직 row 를 안 만든 창에서의
+        # /interrupt — 취소 의도를 cancelled 톰스톤으로 남긴다. generator 의 멱등 create
+        # (ON CONFLICT id DO NOTHING)가 이 row 를 받아 mark_running→None→done(cancelled)
+        # 로 멈춘다. 톰스톤은 terminal 이라 active 부분유니크를 차지하지 않아 다음 send 를
+        # 막지 않고, row 를 미리 만들지 않으므로 pre-stream orphan 도 없다(#early-interrupt).
+        tombstone = await _db_insert_agent_run(
+            {
+                "id": run_id,
+                "session_id": session_id,
+                "user_id": owner_user_id,
+                "thread_id": session_id,
+                "status": "cancelled",
+                "model": get_settings().agent_model,
+                "finished_at": _now(),
+            }
+        )
+        if tombstone is not None:
+            return tombstone
+        # 그새 generator 가 같은 id 로 만들었다(ON CONFLICT→None) — 정상 취소 경로로.
+        current = await get_agent_run(
+            session_id=session_id,
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
     row = await _db_cancel_agent_run(run_id)
     if row is None:
         # 이미 terminal(race) — 최신 row 를 다시 읽어 반환.
