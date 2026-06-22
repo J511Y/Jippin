@@ -241,13 +241,14 @@ class AgentRunner:
         agent: Any | None = None,
         is_disconnected: Callable[[], Awaitable[bool]] | None = None,
         create_run: bool = False,
+        resume: bool = False,
     ) -> AsyncIterator[str]:
         """SSE 프레임 async generator. agent 를 주입하면 LLM 없이 테스트 가능.
 
-        ``create_run=True`` 면 row 를 **generator 안에서** 만든다 — try/finally 가
-        늘 감싸므로, 스트림이 시작되기 전 disconnect 로 row 가 pending 으로 고아가
-        되는 일을 막는다(#pre-stream-orphan). resume/테스트(create_run=False)는 row 가
-        이미 존재한다고 본다.
+        런 row 의 생성/점유는 **generator 안에서** 한다 — try/finally 가 늘 감싸므로,
+        스트림이 시작되기 전 disconnect 로 row 가 고아(pending/running)가 되는 일을
+        막는다(#pre-stream-orphan). ``create_run=True``=새 런 생성, ``resume=True``=
+        resumable 런 점유. 둘 다 아니면(테스트) row 가 이미 존재한다고 본다.
         """
 
         settings = get_settings()
@@ -288,6 +289,26 @@ class AgentRunner:
                     ):
                         finalized = True
                         yield sse.done(run_status="cancelled")
+                        return
+                elif resume:
+                    # resumable 런을 generator 안에서 원자적으로 점유한다 — 스트림이
+                    # 시작 안 되면 finally 가 running 으로 남은 row 를 풀어 준다
+                    # (#resume-claim-orphan). 점유 실패는 SSE error 로 알린다.
+                    try:
+                        await main_flow.claim_resumable_agent_run(
+                            session_id=self.session_id,
+                            run_id=self.run_id,
+                            owner_user_id=self.owner_user_id,
+                            owner_is_anonymous=self.owner_is_anonymous,
+                        )
+                    except ZippinException as exc:
+                        owns_run = False
+                        yield sse.error(
+                            error_code=exc.code,
+                            message="재개할 수 없는 런입니다.",
+                            recoverable=False,
+                        )
+                        yield sse.done(run_status="failed")
                         return
                 # 사용자 메시지 투영(공개 경로와 동일하게 owner-gated user 메시지).
                 # 여기서 실패(삭제/만료 세션, 일시 DB 오류)해도 except 가 failed 로
@@ -448,8 +469,10 @@ class AgentRunner:
     async def _finalize(self, run_status: str) -> str:
         """런을 terminal 상태로 마감하고 실제 최종 상태를 돌려준다.
 
-        스트리밍 도중 /interrupt 가 런을 cancelled 로 마감했을 수 있다 — 그 경우
-        로컬 run_status(보통 succeeded)로 덮어쓰지 않고 cancelled 를 보존한다(#1).
+        이미 terminal(succeeded/failed/cancelled) 이면 덮어쓰지 않고 그 상태를
+        보존한다 — /interrupt 가 cancelled 로 마감한 경우(#1)뿐 아니라, 정상
+        finalize 직후 finalized=True 전에 disconnect cleanup 이 끼어드는 race 에서
+        완료된 런이 interrupted 로 강등되는 것도 막는다(#preserve-terminal).
         """
 
         current = await main_flow.get_agent_run(
@@ -458,8 +481,9 @@ class AgentRunner:
             owner_user_id=self.owner_user_id,
             owner_is_anonymous=self.owner_is_anonymous,
         )
-        if current.get("status") == "cancelled":
-            return "cancelled"
+        current_status = current.get("status")
+        if current_status in ("succeeded", "failed", "cancelled"):
+            return current_status
 
         status_map = {
             "succeeded": "succeeded",

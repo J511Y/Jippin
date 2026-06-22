@@ -104,14 +104,22 @@ async def resume_agent_run(
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> StreamingResponse:
     _require_agent_ready(request)
-    # resumable 런을 원자적으로 점유한다 — 동시 resume(두 탭/더블서브밋) 중 하나만
-    # 성공하고 나머지는 409(같은 row 라 활성-런 유니크로는 못 막는다).
-    await main_flow.claim_resumable_agent_run(
+    # 빠른 사전판정(읽기) — resumable 아니거나 없으면 409/404. 실제 원자적 점유는
+    # generator 안에서 한다(claim_resumable_agent_run) — 스트림이 시작 안 되면
+    # finally 가 running 으로 남은 row 를 풀어 주도록(#resume-claim-orphan). 동시
+    # resume race 는 generator 의 조건부 claim 이 최종적으로 막는다.
+    run = await main_flow.get_agent_run(
         session_id=session_id,
         run_id=run_id,
         owner_user_id=requester.user_id,
         owner_is_anonymous=requester.is_anonymous,
     )
+    if run["status"] not in ("awaiting_input", "interrupted"):
+        raise ZippinException(
+            "Run is not resumable.",
+            code="AGENT_RUN_NOT_RESUMABLE",
+            http_status=409,
+        )
     logger.info("agent_run_resumed", session_id=str(session_id), run_id=str(run_id))
     runner = AgentRunner(
         session_id=session_id,
@@ -122,6 +130,7 @@ async def resume_agent_run(
     generator = runner.stream(
         user_message=payload.message.content,
         is_disconnected=request.is_disconnected,
+        resume=True,
     )
     return StreamingResponse(
         generator,

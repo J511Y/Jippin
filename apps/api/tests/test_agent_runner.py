@@ -504,3 +504,82 @@ async def test_get_active_and_mark_running(fake: FakeMainFlowDb) -> None:
     await main_flow.update_agent_run(run_id=run["id"], status="cancelled")
     assert await main_flow.mark_agent_run_running(run_id=run["id"]) is None
     assert fake.agent_runs[run["id"]]["status"] == "cancelled"
+
+
+async def test_runner_resume_claims_in_generator(fake: FakeMainFlowDb) -> None:
+    # #resume-claim-orphan: resume 점유를 generator 안에서 한다.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    await main_flow.update_agent_run(run_id=run["id"], status="interrupted")
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    frames = [
+        f
+        async for f in runner.stream(
+            user_message="계속", agent=_FakeAgent(_chunks()), resume=True
+        )
+    ]
+    assert fake.agent_runs[run["id"]]["status"] == "succeeded"
+    events = _parse(frames)
+    assert events[-1][0] == "done" and events[-1][1]["run_status"] == "succeeded"
+
+
+async def test_runner_resume_not_resumable_errors(fake: FakeMainFlowDb) -> None:
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    # pending 은 resumable 아님 → claim 실패.
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    frames = [
+        f
+        async for f in runner.stream(
+            user_message="계속", agent=_FakeAgent(_chunks()), resume=True
+        )
+    ]
+    events = _parse(frames)
+    assert any(
+        ev == "error" and d["error_code"] == "AGENT_RUN_NOT_RESUMABLE"
+        for ev, d in events
+    )
+    assert events[-1][0] == "done" and events[-1][1]["run_status"] == "failed"
+
+
+async def test_finalize_preserves_succeeded_terminal(fake: FakeMainFlowDb) -> None:
+    # #preserve-terminal: 완료된 런을 disconnect cleanup 이 interrupted 로 강등하지 않음.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    await main_flow.update_agent_run(
+        run_id=run["id"], status="succeeded", finished_at=main_flow._now()
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    final = await runner._finalize("interrupted")
+    assert final == "succeeded"
+    assert fake.agent_runs[run["id"]]["status"] == "succeeded"
