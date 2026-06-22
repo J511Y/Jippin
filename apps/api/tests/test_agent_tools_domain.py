@@ -7,6 +7,7 @@ monkeypatch 로 대체하고, rule_engine 은 순수 함수라 실호출한다.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from src.agent.tools import domain
@@ -36,28 +37,20 @@ async def test_search_address_degrades_on_service_error(monkeypatch) -> None:
     assert res["error_code"] == "JUSO_CONFM_KEY_MISSING"
 
 
-async def test_check_building_register_returns_serialized_job(monkeypatch) -> None:
+async def test_check_building_register_starts_background_job(monkeypatch) -> None:
+    # CODEF 는 느리고 취소-취약하므로 잡만 만들고 처리는 백그라운드로 돌린다.
     job_id = uuid.uuid4()
     owner = uuid.uuid4()
+    ran: dict[str, object] = {}
 
     async def fake_create(**_: object) -> dict[str, object]:
         return {"id": job_id, "status": "querying"}
 
     async def fake_run(_id: uuid.UUID, **__: object) -> None:
-        return None
-
-    async def fake_get_row(*, home_check_id: uuid.UUID, user_id: uuid.UUID):
-        assert home_check_id == job_id and user_id == owner
-        return {"id": job_id, "status": "completed"}
-
-    async def fake_serialize(row: dict, *, with_documents: bool = True):
-        # 실제 serialize_job 은 async — fake 도 async 로 둬 await 누락을 잡는다.
-        return {"schema_version": "1.1.0", "id": str(row["id"]), "status": "completed"}
+        ran["id"] = _id
 
     monkeypatch.setattr(home_check, "create_home_check", fake_create)
     monkeypatch.setattr(home_check, "run_home_check", fake_run)
-    monkeypatch.setattr(home_check, "get_home_check_row", fake_get_row)
-    monkeypatch.setattr(home_check, "serialize_job", fake_serialize)
 
     res = await domain.check_building_register_impl(
         owner_user_id=owner,
@@ -67,8 +60,11 @@ async def test_check_building_register_returns_serialized_job(monkeypatch) -> No
         ho="1502",
     )
     assert res["ok"] is True
+    assert res["status"] == "querying"
     assert res["home_check_id"] == str(job_id)
-    assert res["job"]["status"] == "completed"
+    # 백그라운드 태스크가 실행되도록 한 틱 양보.
+    await asyncio.sleep(0)
+    assert ran.get("id") == job_id
 
 
 async def test_check_building_register_degrades_on_codef_error(monkeypatch) -> None:

@@ -120,3 +120,50 @@ async def test_200_non_json_is_bad_response() -> None:
             image_url="x", settings=_settings(), client=client
         )
     assert res["error_code"] == "SEGMENTATION_BAD_RESPONSE"
+
+
+async def test_request_error_is_upstream() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise httpx.ReadError("connection reset", request=req)
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url="x", settings=_settings(), client=client
+        )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_UPSTREAM_ERROR"
+
+
+async def test_200_drops_out_of_range_confidence() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "instances": [
+                    {"label": "door", "count": 1, "mean_confidence": 1.4},
+                    {"label": "window", "count": 1, "mean_confidence": 0.5},
+                ]
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url="x", settings=_settings(), client=client
+        )
+    by_label = {i["label"]: i for i in res["instances"]}
+    assert "mean_confidence" not in by_label["door"]  # 1.4 는 드롭
+    assert by_label["window"]["mean_confidence"] == 0.5
+
+
+async def test_200_preserves_mask_asset_id() -> None:
+    mask_id = "11111111-1111-1111-1111-111111111111"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"instances": [], "mask_asset_id": mask_id})
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url="x", settings=_settings(), client=client
+        )
+    assert res["ok"] is True
+    assert res["mask_asset_id"] == mask_id

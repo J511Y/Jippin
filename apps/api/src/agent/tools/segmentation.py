@@ -107,7 +107,9 @@ def _parse_ok(data: Any) -> dict[str, Any]:
                 continue
             entry: dict[str, Any] = {"label": label, "count": count}
             conf = item.get("mean_confidence")
-            if isinstance(conf, (int, float)):
+            # 계약은 mean_confidence 를 [0,1] 로 제한한다 — 범위 밖(모델/버전 불일치)
+            # 값은 fabricate 하지 않고 드롭한다.
+            if isinstance(conf, (int, float)) and 0 <= conf <= 1:
                 entry["mean_confidence"] = float(conf)
             instances.append(entry)
 
@@ -118,7 +120,12 @@ def _parse_ok(data: Any) -> dict[str, Any]:
         if instances
         else "세그멘테이션 완료(인스턴스 요약 없음)."
     )
-    return _result(True, summary=summary, instances=instances)
+    # 성공 응답이 마스크 자산 id 를 주면 보존한다(downstream 오버레이/리포트용).
+    mask = data.get("mask_asset_id")
+    mask_asset_id = mask if isinstance(mask, str) and mask else None
+    return _result(
+        True, summary=summary, instances=instances, mask_asset_id=mask_asset_id
+    )
 
 
 async def segment_floorplan_impl(
@@ -163,6 +170,14 @@ async def segment_floorplan_impl(
                     False,
                     error_code="SEGMENTATION_TIMEOUT",
                     summary="추론 시간이 초과되었습니다.",
+                )
+            except httpx.RequestError:
+                # ReadError/RemoteProtocolError 등(연결 리셋·중도 끊김) 도 raise 하지
+                # 않고 구조화 에러로 degrade — 런 전체가 AGENT_RUNTIME_ERROR 되지 않게.
+                return _result(
+                    False,
+                    error_code="SEGMENTATION_UPSTREAM_ERROR",
+                    summary="세그멘테이션 요청이 전송/응답 중 실패했습니다.",
                 )
 
             status = resp.status_code

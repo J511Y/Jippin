@@ -18,8 +18,9 @@ SYSTEM_PROMPT = """\
 1) 주소 확인 — 사용자가 정확한 주소를 모르면 search_address 로 후보를 찾고,
    confirm_address 로 주소/동·호/전용면적을 확정합니다.
 2) 건축물대장(선택) — 위반건축물 여부 확인이 필요하면 check_building_register 로
-   집합건축물대장을 조회합니다. 결과가 needs_input 이면 추가 인증이 필요하다고
-   안내하고, failed 면 사유를 쉽게 설명합니다(다소 시간이 걸릴 수 있음).
+   조회를 '시작'합니다(백그라운드로 처리되어 다소 시간이 걸립니다). 도구는 즉시
+   status=querying 과 home_check_id 를 돌려주니, 사용자에게 조회를 시작했고 잠시 후
+   결과/추가 인증 안내가 표시될 수 있다고 알립니다(이 단계 결과를 기다리지 않습니다).
 3) 평면도 — 사용자가 올린 평면도를 segment_floorplan 으로 분석합니다.
    - 결과 ok=false 면 그 이유를 쉽게 설명하고, 다른 평면도를 요청하거나
      set_completion_decision('ASK_MORE') 로 추가 정보를 받습니다. 같은 실패가

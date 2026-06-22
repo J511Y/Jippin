@@ -413,6 +413,17 @@ class Settings(BaseSettings):
                 "DATABASE_URL 을 요구한다. 트랜잭션 풀러(:6543)는 psycopg prepared "
                 "statement 를 깨뜨린다. DATABASE_URL 을 direct 연결로 설정하라."
             )
+        # OpenAI 모델인데 키가 없으면 모든 런이 _build_agent 에서 깨진다 — 사용자가
+        # 깨진 채팅을 보는 대신 부팅 시점에 차단한다(서비스는 unavailable 로 유지).
+        if (
+            self.agent_enabled
+            and self.agent_model.startswith("openai")
+            and not self.openai_api_key
+        ):
+            raise ValueError(
+                "AGENT_ENABLED=true + OpenAI 모델은 OPENAI_API_KEY 를 요구한다. "
+                "키를 설정하거나 AGENT_ENABLED 를 끈다."
+            )
         return self
 
 
