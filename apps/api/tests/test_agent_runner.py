@@ -241,9 +241,7 @@ async def test_runner_dedupes_replayed_message(fake: FakeMainFlowDb) -> None:
     ]
     message_events = [ev for ev, _ in _parse(frames) if ev == "message"]
     assert len(message_events) == 1
-    assistant = [
-        r for r in fake.chat_messages.values() if r["role"] == "assistant"
-    ]
+    assistant = [r for r in fake.chat_messages.values() if r["role"] == "assistant"]
     assert len(assistant) == 1
 
 
