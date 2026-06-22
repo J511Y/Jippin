@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 
 from ..agent.runner import AgentRunner
 from ..auth.request_token import RequestUser, require_supabase_request_user
+from ..config import get_settings
 from ..errors import ZippinException
 from ..logging import get_logger
 from ..schemas.agent import (
@@ -59,24 +60,42 @@ async def start_agent_run(
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> StreamingResponse:
     _require_agent_ready(request)
-    # 활성 런 빠른 409 사전판정(읽기). 실제 row 는 generator 안에서 만든다 —
-    # 스트림이 시작 안 되면 try/finally 로 정리되도록(#pre-stream-orphan). 최종
-    # 경합은 generator insert 의 부분 유니크가 막는다.
-    active = await main_flow.get_active_agent_run(
-        session_id=session_id,
-        owner_user_id=requester.user_id,
-        owner_is_anonymous=requester.is_anonymous,
-    )
-    if active is not None:
-        # 활성 런 id/상태를 details 로 알려 클라이언트가 resume/interrupt 로 복구할 수
-        # 있게 한다(헤더를 못 받은 새 탭/유실 케이스 #active-run-recovery).
-        raise ZippinException(
-            "An agent run is already active for this session.",
-            code="AGENT_RUN_ALREADY_ACTIVE",
-            http_status=409,
-            details={"active_run_id": str(active["id"]), "status": active["status"]},
-        )
     run_id = uuid.uuid4()
+    # row 를 헤더(X-Agent-Run-Id) 노출 **전에** 생성한다. StreamingResponse 는 본문
+    # iterate 전에 헤더를 보내므로, generator 안에서만 만들면 헤더를 읽은 다른 탭이
+    # generator insert 전에 /interrupt 를 호출했을 때 그 id 의 row 가 아직 없어
+    # 취소가 유실된다(#early-interrupt-race). 미리 만들어 두면 이른 interrupt 가
+    # 그 row 를 취소하고, generator 의 멱등 create→mark_running 이 None→cancelled 로
+    # 안전히 멈춘다. 스트림이 시작 안 돼도 generator finally 가 row 를 풀어 준다.
+    try:
+        await main_flow.create_agent_run(
+            run_id=run_id,
+            session_id=session_id,
+            owner_user_id=requester.user_id,
+            model=get_settings().agent_model,
+            input_summary={"content_chars": len(payload.message.content)},
+            owner_is_anonymous=requester.is_anonymous,
+        )
+    except ZippinException as exc:
+        if exc.code == "AGENT_RUN_ALREADY_ACTIVE":
+            # 활성 런 id/상태를 details 로 알려 클라이언트가 resume/interrupt 로 복구할
+            # 수 있게 한다(헤더를 못 받은 새 탭/유실 케이스 #active-run-recovery).
+            active = await main_flow.get_active_agent_run(
+                session_id=session_id,
+                owner_user_id=requester.user_id,
+                owner_is_anonymous=requester.is_anonymous,
+            )
+            raise ZippinException(
+                "An agent run is already active for this session.",
+                code="AGENT_RUN_ALREADY_ACTIVE",
+                http_status=409,
+                details=(
+                    {"active_run_id": str(active["id"]), "status": active["status"]}
+                    if active is not None
+                    else None
+                ),
+            ) from exc
+        raise
     logger.info("agent_run_started", session_id=str(session_id), run_id=str(run_id))
     runner = AgentRunner(
         session_id=session_id,

@@ -116,6 +116,39 @@ async def test_translate_stream_emits_expected_signals() -> None:
     assert messages[0].content == "분석을 마쳤습니다."
 
 
+async def test_translate_stream_uses_stable_id_when_message_id_absent() -> None:
+    # #stable-projection-id: id 없는 메시지는 내용 기반 결정적 id → replay 시 동일.
+    def chunks() -> list[Any]:
+        return [
+            (
+                "updates",
+                {
+                    "agent": {
+                        "messages": [
+                            SimpleNamespace(
+                                content="결과입니다", tool_calls=[], type="ai"
+                            )
+                        ]
+                    }
+                },
+            ),
+        ]
+
+    first = [
+        s
+        async for s in translate_stream(_aiter(chunks()), tool_kinds={})
+        if isinstance(s, AssistantMessage)
+    ]
+    second = [
+        s
+        async for s in translate_stream(_aiter(chunks()), tool_kinds={})
+        if isinstance(s, AssistantMessage)
+    ]
+    assert first[0].lc_message_id == second[0].lc_message_id
+    assert "uuid" not in first[0].lc_message_id
+    assert first[0].lc_message_id.startswith("assistant:")
+
+
 async def test_runner_streams_sse_and_finalizes(fake: FakeMainFlowDb) -> None:
     owner = uuid.uuid4()
     session = await main_flow.create_session(
@@ -522,6 +555,39 @@ async def test_runner_create_run_marks_and_finalizes(fake: FakeMainFlowDb) -> No
     assert events[-1][0] == "done" and events[-1][1]["run_status"] == "succeeded"
 
 
+async def test_runner_create_run_honors_precreated_cancel(
+    fake: FakeMainFlowDb,
+) -> None:
+    # #early-interrupt-race: 라우터가 만든 row 를 이른 /interrupt 가 취소하면, generator
+    # 의 멱등 create 는 그 row 를 그대로 받고 mark_running 이 None → done(cancelled).
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    # 이른 interrupt 가 시작 전에 취소.
+    await main_flow.cancel_agent_run(
+        session_id=session["id"], run_id=run["id"], owner_user_id=owner
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    frames = [
+        f
+        async for f in runner.stream(
+            user_message="x", agent=_FakeAgent(_chunks()), create_run=True
+        )
+    ]
+    events = _parse(frames)
+    assert events[-1][0] == "done" and events[-1][1]["run_status"] == "cancelled"
+    assert fake.agent_runs[run["id"]]["status"] == "cancelled"
+
+
 async def test_runner_create_run_conflict_emits_error(fake: FakeMainFlowDb) -> None:
     owner = uuid.uuid4()
     session = await main_flow.create_session(
@@ -742,6 +808,15 @@ async def test_runner_interrupted_before_checkpoint_resends(
     await main_flow.update_agent_run(
         run_id=run["id"], status="interrupted", current_step="submitting"
     )
+    # 원래 런이 이미 user 턴을 투영했었다(lc id = user-turn:{run_id}).
+    await main_flow.append_chat_message(
+        session_id=session["id"],
+        owner_user_id=owner,
+        payload={
+            "content": "계속",
+            "metadata": {"lc_message_id": f"user-turn:{run['id']}"},
+        },
+    )
     before = sum(
         1
         for m in fake.chat_messages.values()
@@ -755,14 +830,15 @@ async def test_runner_interrupted_before_checkpoint_resends(
     )
     agent = _CapturingAgent(_chunks())
     _ = [f async for f in runner.stream(user_message="계속", agent=agent, resume=True)]
-    # 재전송이므로 None 이 아니라 메시지를 그래프에 넘기고 user 턴을 append 한다.
+    # 재전송이므로 None 이 아니라 메시지를 그래프에 넘긴다(프롬프트 유실 방지).
     assert agent.payloads[0] == {"messages": [{"role": "user", "content": "계속"}]}
+    # 그러나 user 턴은 run_id 로 멱등 투영 → 중복 append 되지 않는다(#dup-user-turn).
     after = sum(
         1
         for m in fake.chat_messages.values()
         if m["session_id"] == session["id"] and m["role"] == "user"
     )
-    assert after == before + 1
+    assert after == before
 
 
 async def test_runner_resume_not_resumable_errors(fake: FakeMainFlowDb) -> None:

@@ -15,9 +15,19 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from ...errors import ZippinException
+from ...logging import get_logger
 from ...services import home_check, leads, main_flow, rule_engine
 
+log = get_logger("zippin.agent.tools.domain")
+
 SCHEMA_VERSION = "1.0.0"
+
+# 비-도메인 예외에 노출하는 안정적 사용자 메시지(원본 str(exc) 는 SQL 파라미터·업스트림
+# URL·주소 PII 를 담을 수 있어 tool 결과로 반환/영속하지 않는다).
+_SAFE_TOOL_ERROR_MESSAGE = (
+    "요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+)
 
 
 def _ok(**fields: Any) -> dict[str, Any]:
@@ -33,10 +43,19 @@ def _err(error_code: str, message: str) -> dict[str, Any]:
     }
 
 
-def _zippin_error(exc: Exception, fallback_code: str) -> dict[str, Any]:
-    code = getattr(exc, "code", None) or fallback_code
-    message = str(getattr(exc, "message", None) or exc)
-    return _err(code, message)
+def _safe_error(exc: Exception, fallback_code: str, *, tool: str) -> dict[str, Any]:
+    """예외를 구조화 tool 에러로 변환하되 message 를 정제한다.
+
+    ZippinException(도메인 에러)의 message 는 통제된 사용자 문구라 그대로 노출하지만,
+    그 외 예외의 ``str(exc)`` 는 PII/내부 정보를 담을 수 있어 안정적 문구만 반환하고
+    원본은 redacted 로그에만 남긴다(runner 가 message 를 output_summary 로 승격해
+    영속하므로, #sanitize-tool-message).
+    """
+
+    if isinstance(exc, ZippinException):
+        return _err(getattr(exc, "code", None) or fallback_code, exc.message)
+    log.exception("agent_tool_failed", tool=tool, error_code=fallback_code)
+    return _err(fallback_code, _SAFE_TOOL_ERROR_MESSAGE)
 
 
 async def confirm_address_impl(
@@ -75,8 +94,7 @@ async def confirm_address_impl(
             owner_is_anonymous=owner_is_anonymous,
         )
     except Exception as exc:  # noqa: BLE001 - 구조화 에러로 변환(에이전트 degrade)
-        code = getattr(exc, "code", "ADDRESS_UPSERT_FAILED")
-        return _err(code, str(getattr(exc, "message", exc)))
+        return _safe_error(exc, "ADDRESS_UPSERT_FAILED", tool="confirm_address")
     return _ok(
         address={
             "road_address": row.get("road_address"),
@@ -108,8 +126,7 @@ async def set_completion_decision_impl(
             session_id=session_id, completion_decision=completion_decision
         )
     except Exception as exc:  # noqa: BLE001
-        code = getattr(exc, "code", "SET_DECISION_FAILED")
-        return _err(code, str(getattr(exc, "message", exc)))
+        return _safe_error(exc, "SET_DECISION_FAILED", tool="set_completion_decision")
     return _ok(
         completion_decision=row.get("completion_decision"),
         status=row.get("status"),
@@ -123,7 +140,7 @@ async def search_address_impl(*, keyword: str) -> dict[str, Any]:
     try:
         result = await leads.search_addresses(keyword=keyword)
     except Exception as exc:  # noqa: BLE001 - 구조화 에러로 degrade
-        return _zippin_error(exc, "ADDRESS_SEARCH_FAILED")
+        return _safe_error(exc, "ADDRESS_SEARCH_FAILED", tool="search_address")
     items = result.get("items", [])
     return _ok(
         total_count=result.get("total_count", len(items)),
@@ -156,6 +173,17 @@ async def check_building_register_impl(
     """
 
     try:
+        # 같은 입력으로 이미 진행 중인 잡이 있으면 재사용한다(tool replay 시 중복 CODEF
+        # 작업/잡 방지, #codef-idempotent). 새 백그라운드 run 도 띄우지 않는다.
+        existing = await home_check.find_reusable_home_check(
+            user_id=owner_user_id, road_addr=road_addr, dong=dong, ho=ho
+        )
+        if existing is not None:
+            return _ok(
+                home_check_id=str(existing["id"]),
+                status=existing["status"],
+                summary="이미 진행 중인 건축물대장 조회를 이어서 보여드릴게요.",
+            )
         job = await home_check.create_home_check(
             user_id=owner_user_id,
             is_anonymous=owner_is_anonymous,
@@ -165,7 +193,9 @@ async def check_building_register_impl(
             ho=ho,
         )
     except Exception as exc:  # noqa: BLE001 - 구조화 에러로 degrade
-        return _zippin_error(exc, "BUILDING_REGISTER_FAILED")
+        return _safe_error(
+            exc, "BUILDING_REGISTER_FAILED", tool="check_building_register"
+        )
 
     task = asyncio.ensure_future(
         home_check.run_home_check(
@@ -197,7 +227,7 @@ def evaluate_rules_impl(*, judgment_values: dict[str, Any]) -> dict[str, Any]:
     except rule_engine.RuleInputError as exc:
         return _err("RULE_INPUT_INVALID", str(exc))
     except Exception as exc:  # noqa: BLE001
-        return _zippin_error(exc, "RULE_EVAL_FAILED")
+        return _safe_error(exc, "RULE_EVAL_FAILED", tool="evaluate_rules")
     result = verdict.to_contract_dict(evaluated_at=datetime.now(UTC))
     return _ok(result=result, summary=f"룰 평가 결과: {result.get('verdict')}")
 

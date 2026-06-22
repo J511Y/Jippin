@@ -417,19 +417,23 @@ async def _db_update_session_fields(
     return dict(row._mapping) if row is not None else None
 
 
-async def _db_insert_agent_run(values: dict[str, Any]) -> dict[str, Any]:
-    """`agent_runs` INSERT. 활성 런 1개 부분 유니크 위반(IntegrityError)은 호출자
-    (``create_agent_run``)가 409 로 매핑한다 — seam 이 fake 로 교체돼도 매핑이
-    유지되도록 매핑을 public 함수에 둔다.
+async def _db_insert_agent_run(values: dict[str, Any]) -> dict[str, Any] | None:
+    """`agent_runs` INSERT(멱등). 같은 ``id`` 가 이미 있으면 ON CONFLICT DO NOTHING 으로
+    None 을 반환한다 — 라우터가 헤더 노출 전에 만든 placeholder 나 이른 ``/interrupt``
+    가 만든 취소 row 위로 generator 가 다시 create 해도 충돌하지 않게(#early-interrupt-
+    race). 활성 런 1개 부분 유니크 위반(IntegrityError)은 호출자(``create_agent_run``)가
+    409 로 매핑한다 — seam 이 fake 로 교체돼도 매핑이 유지되도록 public 함수에 둔다.
     """
 
+    stmt = (
+        pg_insert(_AGENT_RUNS)
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=["id"])
+        .returning(*_AGENT_RUNS.c)
+    )
     async with get_engine().begin() as conn:
-        row = (
-            await conn.execute(
-                sa.insert(_AGENT_RUNS).values(**values).returning(*_AGENT_RUNS.c)
-            )
-        ).one()
-    return dict(row._mapping)
+        row = (await conn.execute(stmt)).one_or_none()
+    return dict(row._mapping) if row is not None else None
 
 
 async def _db_select_agent_run(run_id: uuid.UUID) -> dict[str, Any] | None:
@@ -1171,7 +1175,7 @@ async def create_agent_run(
     if run_id is not None:
         values["id"] = run_id
     try:
-        return await _db_insert_agent_run(values)
+        row = await _db_insert_agent_run(values)
     except IntegrityError as exc:
         sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
         if sqlstate == "23503":
@@ -1186,6 +1190,19 @@ async def create_agent_run(
             "An agent run is already active for this session.",
             code="AGENT_RUN_ALREADY_ACTIVE",
         ) from exc
+    if row is None:
+        # id 충돌(ON CONFLICT DO NOTHING) — 라우터 placeholder 또는 이른 interrupt 의
+        # 취소 row 가 같은 id 로 먼저 만들어졌다. 그 row 를 그대로 반환해 멱등 보장한다
+        # (취소 row 면 이후 mark_agent_run_running 이 None 을 돌려 런이 멈춘다).
+        if run_id is not None:
+            existing = await _db_select_agent_run(run_id)
+            if existing is not None:
+                return existing
+        raise _conflict(
+            "An agent run is already active for this session.",
+            code="AGENT_RUN_ALREADY_ACTIVE",
+        )
+    return row
 
 
 async def get_active_agent_run(

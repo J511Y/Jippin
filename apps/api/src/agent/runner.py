@@ -16,12 +16,15 @@ from __future__ import annotations
 import ast
 import asyncio
 import contextlib
+import hashlib
 import json
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
+
+from sqlalchemy.exc import IntegrityError
 
 from ..config import get_settings
 from ..errors import ZippinException
@@ -41,6 +44,19 @@ _CANCEL_POLL_SECONDS = 15.0
 #  _STEP_STREAMING : 그래프가 첫 출력을 냄 = 입력이 체크포인트됨(재개 시 reconnect 가능).
 _STEP_SUBMITTING = "submitting"
 _STEP_STREAMING = "streaming"
+
+
+def _stable_lc_id(prefix: str, *parts: str) -> str:
+    """LC 메시지/툴콜 id 가 없을 때 쓰는 결정적 fallback.
+
+    랜덤 uuid 를 쓰면 reconnect/resume 가 같은 체크포인트 메시지를 다시 흘릴 때마다
+    id 가 바뀌어, ``find_*_by_lc_id`` 가 직전 row 를 못 찾고 중복 투영한다. 내용 해시로
+    결정적 id 를 만들면 동일 내용은 동일 id → 멱등 투영 + 클라이언트 dedupe 가능
+    (동일 내용 2건이 1건으로 합쳐지는 드문 손실은 중복보다 안전, #stable-projection-id).
+    """
+
+    digest = hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()[:32]
+    return f"{prefix}:{digest}"
 
 
 @dataclass
@@ -175,18 +191,27 @@ async def _translate_message(
     if tool_calls:  # AIMessage with tool calls → tool starts
         for tc in tool_calls:
             name = tc.get("name", "")
+            args = dict(tc.get("args") or {})
+            tc_id = tc.get("id")
             yield ToolStart(
-                lc_tool_call_id=str(tc.get("id") or uuid.uuid4()),
+                lc_tool_call_id=(
+                    str(tc_id)
+                    if tc_id
+                    else _stable_lc_id(
+                        "toolcall", name, json.dumps(args, sort_keys=True)
+                    )
+                ),
                 tool_name=name,
                 tool_kind=tool_kinds.get(name, "other"),
-                input=dict(tc.get("args") or {}),
+                input=args,
             )
 
     text = _message_text(getattr(msg, "content", ""))
     msg_type = getattr(msg, "type", None)
     if text and msg_type in (None, "ai", "AIMessageChunk", "assistant"):
+        msg_id = getattr(msg, "id", None)
         yield AssistantMessage(
-            lc_message_id=str(getattr(msg, "id", None) or uuid.uuid4()),
+            lc_message_id=(str(msg_id) if msg_id else _stable_lc_id("assistant", text)),
             content=text,
             role="assistant",
         )
@@ -368,12 +393,28 @@ class AgentRunner:
                 # 마감하고 finally 가 런을 풀어 준다(#startup-finalize). 재연결이면
                 # 새 턴을 만들지 않고 체크포인트(input=None)에서 이어 돌린다.
                 if not reconnect:
-                    await main_flow.append_chat_message(
-                        session_id=self.session_id,
-                        owner_user_id=self.owner_user_id,
-                        payload={"content": user_message},
-                        owner_is_anonymous=self.owner_is_anonymous,
+                    # user 턴을 run 단위로 멱등하게 투영한다. pre-checkpoint resume 는
+                    # 같은 run_id 로 메시지를 다시 보내므로(프롬프트 유실 방지), 그냥
+                    # append 하면 chat_messages 에 동일 user row 가 중복된다 — lc id
+                    # `user-turn:{run_id}` 로 키잉해 한 번만 기록한다(#dup-user-turn).
+                    lc_user_id = f"user-turn:{self.run_id}"
+                    existing_turn = await main_flow.find_chat_message_by_lc_id(
+                        session_id=self.session_id, lc_message_id=lc_user_id
                     )
+                    if existing_turn is None:
+                        try:
+                            await main_flow.append_chat_message(
+                                session_id=self.session_id,
+                                owner_user_id=self.owner_user_id,
+                                payload={
+                                    "content": user_message,
+                                    "metadata": {"lc_message_id": lc_user_id},
+                                },
+                                owner_is_anonymous=self.owner_is_anonymous,
+                            )
+                        except IntegrityError:
+                            # 부분 유니크 백스톱 — 동시/replay race 로 이미 투영됨.
+                            pass
                     # 새 턴 제출 직전 마커. 여기서부터 astream 첫 출력 전까지 disconnect
                     # 되면 _STEP_STREAMING 이 아니라 _STEP_SUBMITTING 으로 남아, 재개가
                     # reconnect 가 아니라 재전송으로 처리된다(프롬프트 유실 방지).

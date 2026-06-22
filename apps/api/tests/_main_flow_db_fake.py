@@ -345,7 +345,13 @@ class FakeMainFlowDb:
 
     # -- agent_runs ----------------------------------------------------------
 
-    async def _db_insert_agent_run(self, values: dict[str, Any]) -> dict[str, Any]:
+    async def _db_insert_agent_run(
+        self, values: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        # ON CONFLICT (id) DO NOTHING — 같은 id 가 이미 있으면 None(멱등 재생성).
+        run_id = values.get("id")
+        if run_id is not None and run_id in self.agent_runs:
+            return None
         # 세션당 활성 런 1개 부분 유니크 백스톱.
         if any(
             r["session_id"] == values["session_id"]

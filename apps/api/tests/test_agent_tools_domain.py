@@ -12,7 +12,7 @@ import uuid
 
 from src.agent.tools import domain
 from src.errors import ZippinException
-from src.services import home_check, leads
+from src.services import home_check, leads, main_flow
 
 
 async def test_search_address_wraps_results(monkeypatch) -> None:
@@ -49,6 +49,10 @@ async def test_check_building_register_starts_background_job(monkeypatch) -> Non
     async def fake_run(_id: uuid.UUID, **__: object) -> None:
         ran["id"] = _id
 
+    async def no_reuse(**_: object) -> None:
+        return None
+
+    monkeypatch.setattr(home_check, "find_reusable_home_check", no_reuse)
     monkeypatch.setattr(home_check, "create_home_check", fake_create)
     monkeypatch.setattr(home_check, "run_home_check", fake_run)
 
@@ -67,10 +71,47 @@ async def test_check_building_register_starts_background_job(monkeypatch) -> Non
     assert ran.get("id") == job_id
 
 
+async def test_check_building_register_reuses_active_job(monkeypatch) -> None:
+    # #codef-idempotent: 같은 입력으로 진행 중 잡이 있으면 재사용(중복 생성/run 없음).
+    job_id = uuid.uuid4()
+    created = False
+
+    async def reuse(**_: object) -> dict[str, object]:
+        return {"id": job_id, "status": "querying"}
+
+    async def fake_create(**_: object) -> dict[str, object]:
+        nonlocal created
+        created = True
+        return {"id": uuid.uuid4(), "status": "querying"}
+
+    async def fake_run(_id: uuid.UUID, **__: object) -> None:
+        raise AssertionError("재사용 시 새 run 을 띄우면 안 된다")
+
+    monkeypatch.setattr(home_check, "find_reusable_home_check", reuse)
+    monkeypatch.setattr(home_check, "create_home_check", fake_create)
+    monkeypatch.setattr(home_check, "run_home_check", fake_run)
+
+    res = await domain.check_building_register_impl(
+        owner_user_id=uuid.uuid4(),
+        owner_is_anonymous=False,
+        road_addr="서울시 강남구 테헤란로 1",
+        dong="101",
+        ho="1502",
+    )
+    assert res["ok"] is True
+    assert res["home_check_id"] == str(job_id)
+    assert created is False
+    await asyncio.sleep(0)
+
+
 async def test_check_building_register_degrades_on_codef_error(monkeypatch) -> None:
+    async def no_reuse(**_: object) -> None:
+        return None
+
     async def fake_create(**_: object) -> dict[str, object]:
         raise ZippinException("점검중", code="UPSTREAM_UNAVAILABLE", http_status=502)
 
+    monkeypatch.setattr(home_check, "find_reusable_home_check", no_reuse)
     monkeypatch.setattr(home_check, "create_home_check", fake_create)
     res = await domain.check_building_register_impl(
         owner_user_id=uuid.uuid4(),
@@ -81,6 +122,27 @@ async def test_check_building_register_degrades_on_codef_error(monkeypatch) -> N
     )
     assert res["ok"] is False
     assert res["error_code"] == "UPSTREAM_UNAVAILABLE"
+
+
+async def test_confirm_address_sanitizes_non_domain_exception(monkeypatch) -> None:
+    # #sanitize-tool-message: 비-도메인 예외의 str(exc)(주소·SQL·URL 가능)를 노출하지 않고
+    # 안정적 문구만 반환한다. message 는 runner 가 output_summary 로 승격해 영속하므로.
+    secret = "강남구 테헤란로 99, password=hunter2"
+
+    async def boom(**_: object) -> dict[str, object]:
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(main_flow, "upsert_session_address", boom)
+    res = await domain.confirm_address_impl(
+        session_id=uuid.uuid4(),
+        owner_user_id=uuid.uuid4(),
+        owner_is_anonymous=False,
+        road_address="강남구 테헤란로 99",
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "ADDRESS_UPSERT_FAILED"
+    assert secret not in res["message"]
+    assert "hunter2" not in res["message"]
 
 
 def test_evaluate_rules_load_bearing_denies() -> None:
