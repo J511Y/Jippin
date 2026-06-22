@@ -156,3 +156,43 @@ def test_public_web_origin_allows_port() -> None:
     settings = Settings(public_web_origin="http://localhost:3000")
     assert settings.cors_allow_origins == ["http://localhost:3000"]
     assert settings.frontend_auth_success_url == "http://localhost:3000/auth/success"
+
+
+# --- 에이전트 활성화 fail-safe (CMP-DIRECT) ---------------------------------
+
+
+def test_agent_enabled_requires_phase_a() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(agent_enabled=True, phase_a_skeleton_enabled=False)
+    assert "PHASE_A_SKELETON_ENABLED" in str(exc.value)
+
+
+def test_agent_enabled_requires_openai_key() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(
+            agent_enabled=True,
+            phase_a_skeleton_enabled=True,
+            openai_api_key=None,
+        )
+    assert "OPENAI_API_KEY" in str(exc.value)
+
+
+def test_agent_enabled_rejects_pooler_url() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(
+            agent_enabled=True,
+            phase_a_skeleton_enabled=True,
+            openai_api_key="sk-test",
+            database_url="postgresql://u:p@host:6543/db",
+        )
+    assert ":6543" in str(exc.value)
+
+
+def test_agent_enabled_boots_with_valid_config() -> None:
+    settings = Settings(
+        agent_enabled=True,
+        phase_a_skeleton_enabled=True,
+        openai_api_key="sk-test",
+        database_url="postgresql://u:p@host:5432/db",
+    )
+    assert settings.agent_enabled is True

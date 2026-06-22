@@ -21,16 +21,20 @@ class AgentUserMessage(BaseModel):
 
 
 class AgentRunStartRequest(BaseModel):
-    """`POST /sessions/{id}/agent/runs` body — agent-run-request 계약 정합."""
+    """`POST /sessions/{id}/agent/runs` body — agent-run-request 계약 정합.
 
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    ``schema_version`` 은 계약상 required 다 — default 를 두지 않아 누락 요청을
+    422 로 거절한다(미래 incompatible 버전도 boundary 에서 reject).
+    """
+
+    schema_version: Literal["1.0.0"] = Field(...)
     message: AgentUserMessage
 
 
 class AgentRunResumeRequest(BaseModel):
     """`POST /sessions/{id}/agent/runs/{run_id}/resume` body — 후속 사용자 입력."""
 
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    schema_version: Literal["1.0.0"] = Field(...)
     message: AgentUserMessage
 
 

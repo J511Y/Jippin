@@ -167,3 +167,25 @@ async def test_200_preserves_mask_asset_id() -> None:
         )
     assert res["ok"] is True
     assert res["mask_asset_id"] == mask_id
+
+
+async def test_200_drops_invalid_counts() -> None:
+    # 음수·bool count 는 계약(count>=0) 위반이라 드롭한다.
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "instances": [
+                    {"label": "door", "count": -1},
+                    {"label": "window", "count": True},
+                    {"label": "wall_other", "count": 2},
+                ]
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url="x", settings=_settings(), client=client
+        )
+    labels = {i["label"]: i["count"] for i in res["instances"]}
+    assert labels == {"wall_other": 2}

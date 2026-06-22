@@ -407,6 +407,14 @@ class Settings(BaseSettings):
         실패가 정상 동작이다.
         """
 
+        # agent 라우터는 phase_a_skeleton_enabled 블록 안에서만 등록된다(main.py).
+        # phase_a 없이 agent 만 켜면 채팅 UI 는 보이는데 /agent/runs 가 404 난다 —
+        # 부팅 시점에 차단한다.
+        if self.agent_enabled and not self.phase_a_skeleton_enabled:
+            raise ValueError(
+                "AGENT_ENABLED=true 는 PHASE_A_SKELETON_ENABLED=true 를 요구한다 "
+                "(agent 라우터가 phase A 게이트 안에서 등록되기 때문)."
+            )
         if self.agent_enabled and self.database_url and ":6543" in self.database_url:
             raise ValueError(
                 "AGENT_ENABLED=true 는 LangGraph 체크포인터용 direct(:5432) "

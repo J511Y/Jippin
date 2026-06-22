@@ -103,7 +103,9 @@ def _parse_ok(data: Any) -> dict[str, Any]:
                 continue
             label = item.get("label")
             count = item.get("count")
-            if label not in _KNOWN_LABELS or not isinstance(count, int):
+            # 계약은 count>=0. bool(True/False)은 int subclass 라 type() 로 배제하고
+            # 음수도 드롭한다(모델/버전 불일치 시 잘못된 음수 카운트 방지).
+            if label not in _KNOWN_LABELS or type(count) is not int or count < 0:
                 continue
             entry: dict[str, Any] = {"label": label, "count": count}
             conf = item.get("mean_confidence")
