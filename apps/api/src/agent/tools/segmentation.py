@@ -1,0 +1,215 @@
+"""평면도 세그멘테이션 도구(HuggingFace 엣지 엔드포인트) — 실패 처리 핵심.
+
+모델은 STR 5클래스(door/window/wall_reinforced_concrete/wall_other/wall_unknown)
++ SPA 13 공간클래스를 낸다(floor-plan-model-train 정합). 엔드포인트는 아직 배포
+전일 수 있으므로 **절대 uncaught raise 하지 않고** segmentation-result 계약 형태의
+구조화 dict 를 반환한다 — 미배포/콜드스타트/타임아웃도 ok=false 로 표현된다.
+에이전트는 ok=false 면 ASK_MORE 로 degrade, 반복 실패 시 HOLD_OR_HANDOFF 한다.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING, Any
+
+import httpx
+
+from ...logging import get_logger
+
+if TYPE_CHECKING:
+    from ...config import Settings
+
+log = get_logger("zippin.agent.tools.segmentation")
+
+SCHEMA_VERSION = "1.0.0"
+
+# segmentation-result 계약의 라벨 enum(검증·요약용).
+_KNOWN_LABELS: frozenset[str] = frozenset(
+    {
+        "door",
+        "window",
+        "wall_reinforced_concrete",
+        "wall_other",
+        "wall_unknown",
+        "space_multipurpose",
+        "space_elevator_hall",
+        "space_stairwell",
+        "space_living_room",
+        "space_bedroom",
+        "space_kitchen",
+        "space_entrance",
+        "space_balcony",
+        "space_bathroom",
+        "space_ac_room",
+        "space_dress_room",
+        "space_other",
+        "space_elevator",
+    }
+)
+
+# 콜드스타트(503) 재시도 대기 상한(초). Retry-After 가 더 커도 이 값으로 캡한다.
+_MAX_RETRY_DELAY_SECONDS = 30.0
+
+
+def _result(
+    ok: bool,
+    *,
+    error_code: str | None = None,
+    summary: str | None = None,
+    instances: list[dict[str, Any]] | None = None,
+    mask_asset_id: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "ok": ok,
+        "error_code": error_code,
+        "mask_asset_id": mask_asset_id,
+        "instances": instances or [],
+        "summary": summary,
+    }
+
+
+def _retry_delay(resp: httpx.Response) -> float:
+    raw = resp.headers.get("Retry-After")
+    if raw is not None:
+        try:
+            return min(float(raw), _MAX_RETRY_DELAY_SECONDS)
+        except ValueError:
+            pass
+    # HF 추론 엔드포인트는 503 body 에 estimated_time(초)을 주기도 한다.
+    try:
+        body = resp.json()
+        est = body.get("estimated_time")
+        if isinstance(est, (int, float)):
+            return min(float(est), _MAX_RETRY_DELAY_SECONDS)
+    except Exception:  # noqa: BLE001 - body 파싱 실패는 무시
+        pass
+    return 2.0
+
+
+def _parse_ok(data: Any) -> dict[str, Any]:
+    """200 응답 파싱 — 모델 출력 포맷이 확정 전이라 방어적으로 요약만 만든다."""
+
+    if not isinstance(data, dict):
+        return _result(
+            False, error_code="SEGMENTATION_BAD_RESPONSE", summary="응답 형식 오류."
+        )
+
+    raw_instances = data.get("instances")
+    instances: list[dict[str, Any]] = []
+    if isinstance(raw_instances, list):
+        for item in raw_instances:
+            if not isinstance(item, dict):
+                continue
+            label = item.get("label")
+            count = item.get("count")
+            if label not in _KNOWN_LABELS or not isinstance(count, int):
+                continue
+            entry: dict[str, Any] = {"label": label, "count": count}
+            conf = item.get("mean_confidence")
+            if isinstance(conf, (int, float)):
+                entry["mean_confidence"] = float(conf)
+            instances.append(entry)
+
+    wall_other = sum(i["count"] for i in instances if i["label"] == "wall_other")
+    rc = sum(i["count"] for i in instances if i["label"] == "wall_reinforced_concrete")
+    summary = (
+        f"세그멘테이션 완료 — 비내력벽 후보 {wall_other}, 내력(RC)벽 후보 {rc}."
+        if instances
+        else "세그멘테이션 완료(인스턴스 요약 없음)."
+    )
+    return _result(True, summary=summary, instances=instances)
+
+
+async def segment_floorplan_impl(
+    *,
+    image_url: str,
+    settings: "Settings",
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """엔드포인트 호출 + 실패 분류. segmentation-result 형태 dict 반환(raise 안 함)."""
+
+    endpoint = settings.hf_segmentation_endpoint_url
+    if not endpoint:
+        return _result(
+            False,
+            error_code="SEGMENTATION_ENDPOINT_UNAVAILABLE",
+            summary="세그멘테이션 엔드포인트가 설정되지 않았습니다(미배포).",
+        )
+
+    headers: dict[str, str] = {}
+    if settings.hf_segmentation_token:
+        headers["Authorization"] = f"Bearer {settings.hf_segmentation_token}"
+
+    max_retries = settings.hf_segmentation_cold_start_max_retries
+    owns_client = client is None
+    if client is None:
+        client = httpx.AsyncClient(timeout=settings.hf_segmentation_timeout_seconds)
+    try:
+        attempt = 0
+        while True:
+            try:
+                resp = await client.post(
+                    endpoint, json={"image_url": image_url}, headers=headers
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                return _result(
+                    False,
+                    error_code="SEGMENTATION_ENDPOINT_UNAVAILABLE",
+                    summary="엔드포인트에 연결할 수 없습니다(미배포/DNS).",
+                )
+            except httpx.TimeoutException:
+                return _result(
+                    False,
+                    error_code="SEGMENTATION_TIMEOUT",
+                    summary="추론 시간이 초과되었습니다.",
+                )
+
+            status = resp.status_code
+            if status == 404:
+                return _result(
+                    False,
+                    error_code="SEGMENTATION_ENDPOINT_UNAVAILABLE",
+                    summary="엔드포인트가 아직 배포되지 않았습니다(404).",
+                )
+            if status == 503:
+                if attempt >= max_retries:
+                    return _result(
+                        False,
+                        error_code="SEGMENTATION_COLD_START_TIMEOUT",
+                        summary="콜드스타트 대기 한도를 초과했습니다.",
+                    )
+                attempt += 1
+                await asyncio.sleep(_retry_delay(resp))
+                continue
+            if status in (400, 422):
+                return _result(
+                    False,
+                    error_code="SEGMENTATION_BAD_REQUEST",
+                    summary="세그멘테이션 요청이 거부되었습니다.",
+                )
+            if status >= 500:
+                return _result(
+                    False,
+                    error_code="SEGMENTATION_UPSTREAM_ERROR",
+                    summary=f"세그멘테이션 업스트림 오류({status}).",
+                )
+            if status >= 400:
+                return _result(
+                    False,
+                    error_code="SEGMENTATION_BAD_REQUEST",
+                    summary=f"세그멘테이션 요청 오류({status}).",
+                )
+
+            try:
+                data = resp.json()
+            except Exception:  # noqa: BLE001
+                return _result(
+                    False,
+                    error_code="SEGMENTATION_BAD_RESPONSE",
+                    summary="응답 JSON 파싱에 실패했습니다.",
+                )
+            return _parse_ok(data)
+    finally:
+        if owns_client:
+            await client.aclose()

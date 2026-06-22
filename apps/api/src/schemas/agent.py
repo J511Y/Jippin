@@ -1,0 +1,51 @@
+"""에이전트 세션 라우터 Pydantic 계약 (CMP-DIRECT).
+
+JSON Schema 정본은 ``packages/contracts/schemas/agent-*.schema.json`` 이다. 본
+모듈은 라우터 입출력용 서버측 모델로, chat.py 와 같은 패턴을 따른다.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class AgentUserMessage(BaseModel):
+    """클라이언트가 만들 수 있는 유일한 메시지 — role=user."""
+
+    role: Literal["user"] = "user"
+    content: str = Field(min_length=1)
+
+
+class AgentRunStartRequest(BaseModel):
+    """`POST /sessions/{id}/agent/runs` body."""
+
+    message: AgentUserMessage
+
+
+class AgentRunResumeRequest(BaseModel):
+    """`POST /sessions/{id}/agent/runs/{run_id}/resume` body — 후속 사용자 입력."""
+
+    message: AgentUserMessage
+
+
+class AgentRunStatusResponse(BaseModel):
+    """`GET /sessions/{id}/agent/runs/{run_id}` — agent_runs row 투영."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: uuid.UUID
+    session_id: uuid.UUID
+    thread_id: uuid.UUID
+    status: str
+    model: str
+    current_step: str | None
+    langsmith_run_url: str | None
+    error_code: str | None
+    error_message: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime

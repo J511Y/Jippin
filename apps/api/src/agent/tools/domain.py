@@ -1,0 +1,235 @@
+"""우리집 체크 플로우 도메인 도구 impl — langchain 없이 테스트 가능한 순수 async.
+
+각 impl 은 세션 컨텍스트(session_id/owner_user_id)와 런 컨텍스트(UI 버퍼)를 명시적
+인자로 받는다. langchain ``@tool`` 래핑은 ``build_tools()`` 가 closure 로 바인딩한다.
+
+도구는 실제 서비스(services.leads 주소검색, services.home_check CODEF 건축물대장,
+services.rule_engine 룰 평가, services.main_flow 세션/도면)에 연결된다. 어떤 도구도
+uncaught raise 하지 않고 {ok, error_code} 구조화 결과를 돌려 에이전트가 degrade 한다.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from ...services import home_check, leads, main_flow, rule_engine
+
+SCHEMA_VERSION = "1.0.0"
+
+
+def _ok(**fields: Any) -> dict[str, Any]:
+    return {"schema_version": SCHEMA_VERSION, "ok": True, **fields}
+
+
+def _err(error_code: str, message: str) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "ok": False,
+        "error_code": error_code,
+        "message": message,
+    }
+
+
+def _zippin_error(exc: Exception, fallback_code: str) -> dict[str, Any]:
+    code = getattr(exc, "code", None) or fallback_code
+    message = str(getattr(exc, "message", None) or exc)
+    return _err(code, message)
+
+
+def _to_plain(obj: Any) -> Any:
+    """dataclass/pydantic 모델을 JSON 직렬화 가능한 형태로."""
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(mode="json")
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return dataclasses.asdict(obj)
+    return obj
+
+
+async def confirm_address_impl(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool,
+    road_address: str | None = None,
+    jibun_address: str | None = None,
+    apartment_name: str | None = None,
+    building_dong: str | None = None,
+    unit_ho: str | None = None,
+    floor_no: int | None = None,
+    exclusive_area_m2: float | None = None,
+) -> dict[str, Any]:
+    """세션 주소를 확정/갱신한다(부분 upsert). 충분하면 status 가 address_ready 로 전이."""
+
+    payload = {
+        key: value
+        for key, value in {
+            "road_address": road_address,
+            "jibun_address": jibun_address,
+            "apartment_name": apartment_name,
+            "building_dong": building_dong,
+            "unit_ho": unit_ho,
+            "floor_no": floor_no,
+            "exclusive_area_m2": exclusive_area_m2,
+        }.items()
+        if value is not None
+    }
+    try:
+        row = await main_flow.upsert_session_address(
+            session_id=session_id,
+            owner_user_id=owner_user_id,
+            payload=payload,
+            owner_is_anonymous=owner_is_anonymous,
+        )
+    except Exception as exc:  # noqa: BLE001 - 구조화 에러로 변환(에이전트 degrade)
+        code = getattr(exc, "code", "ADDRESS_UPSERT_FAILED")
+        return _err(code, str(getattr(exc, "message", exc)))
+    return _ok(
+        address={
+            "road_address": row.get("road_address"),
+            "jibun_address": row.get("jibun_address"),
+            "apartment_name": row.get("apartment_name"),
+            "building_dong": row.get("building_dong"),
+            "unit_ho": row.get("unit_ho"),
+        },
+        summary="주소가 확정되었습니다.",
+    )
+
+
+async def set_completion_decision_impl(
+    *,
+    session_id: uuid.UUID,
+    completion_decision: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """FLOW_GUARD 결정을 세션에 기록한다(ASK_MORE/REQUEST_OVERLAY_REVIEW/...)."""
+
+    allowed = {"ASK_MORE", "REQUEST_OVERLAY_REVIEW", "PROCEED_RULE", "HOLD_OR_HANDOFF"}
+    if completion_decision not in allowed:
+        return _err(
+            "INVALID_COMPLETION_DECISION",
+            f"completion_decision 는 {sorted(allowed)} 중 하나여야 합니다.",
+        )
+    try:
+        row = await main_flow.set_session_decision(
+            session_id=session_id, completion_decision=completion_decision
+        )
+    except Exception as exc:  # noqa: BLE001
+        code = getattr(exc, "code", "SET_DECISION_FAILED")
+        return _err(code, str(getattr(exc, "message", exc)))
+    return _ok(
+        completion_decision=row.get("completion_decision"),
+        status=row.get("status"),
+        reason=reason,
+    )
+
+
+async def search_address_impl(*, keyword: str) -> dict[str, Any]:
+    """도로명주소 API(juso)로 주소 후보를 검색한다(services.leads.search_addresses)."""
+
+    try:
+        result = await leads.search_addresses(keyword=keyword)
+    except Exception as exc:  # noqa: BLE001 - 구조화 에러로 degrade
+        return _zippin_error(exc, "ADDRESS_SEARCH_FAILED")
+    items = result.get("items", [])
+    return _ok(
+        total_count=result.get("total_count", len(items)),
+        items=items[:10],
+        summary=f"주소 후보 {len(items)}건을 찾았습니다.",
+    )
+
+
+async def check_building_register_impl(
+    *,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool,
+    road_addr: str,
+    dong: str,
+    ho: str,
+    jibun_addr: str | None = None,
+) -> dict[str, Any]:
+    """CODEF 집합건축물대장(전유부+표제부)을 조회해 위반건축물 신호를 확인한다.
+
+    주의: CODEF 스크래핑은 느릴 수 있고(최대 ~300s) 추가 인증(needs_input)이 필요할
+    수 있다. 결과(job)는 completed/needs_input/failed 를 그대로 돌려준다(런 wall-clock
+    가드 안에서 실행). 추가 인증 재개(two-way)는 /home-check/{id}/continue 가 담당한다.
+    """
+
+    try:
+        job = await home_check.create_home_check(
+            user_id=owner_user_id,
+            is_anonymous=owner_is_anonymous,
+            road_addr=road_addr,
+            jibun_addr=jibun_addr,
+            dong=dong,
+            ho=ho,
+        )
+        await home_check.run_home_check(
+            job["id"],
+            road_addr=road_addr,
+            jibun_addr=jibun_addr,
+            dong=dong,
+            ho=ho,
+        )
+        row = await home_check.get_home_check_row(
+            home_check_id=job["id"], user_id=owner_user_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _zippin_error(exc, "BUILDING_REGISTER_FAILED")
+    if row is None:
+        return _err("BUILDING_REGISTER_NOT_FOUND", "조회 결과를 찾을 수 없습니다.")
+    return _ok(
+        home_check_id=str(job["id"]),
+        job=_to_plain(home_check.serialize_job(row)),
+    )
+
+
+def evaluate_rules_impl(*, judgment_values: dict[str, Any]) -> dict[str, Any]:
+    """리모델링 룰 엔진 평가(rule-eval-result 계약). 동기 순수 함수.
+
+    evaluated_at 은 직렬화 시점(지금)에 주입한다.
+    """
+
+    try:
+        verdict = rule_engine.evaluate_judgment_values(judgment_values)
+    except rule_engine.RuleInputError as exc:
+        return _err("RULE_INPUT_INVALID", str(exc))
+    except Exception as exc:  # noqa: BLE001
+        return _zippin_error(exc, "RULE_EVAL_FAILED")
+    result = verdict.to_contract_dict(evaluated_at=datetime.now(UTC))
+    return _ok(result=result, summary=f"룰 평가 결과: {result.get('verdict')}")
+
+
+def emit_ui_component_impl(
+    *,
+    run_context: "RunContext",
+    components: list[dict[str, Any]],
+    judgment_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """다음 assistant 메시지에 첨부할 A2UI payload 를 런 컨텍스트에 버퍼링한다.
+
+    실제 첨부는 런너가 최종 assistant 메시지를 투영할 때 drain 한다(자유 텍스트
+    파싱 대신 명시적 도구 채널을 쓴다 — 코드베이스 규칙).
+    """
+
+    run_context.pending_ui_components = list(components or [])
+    if judgment_snapshot is not None:
+        run_context.pending_judgment_snapshot = dict(judgment_snapshot)
+    return _ok(buffered=len(components or []))
+
+
+class RunContext:
+    """런 1회 동안 도구↔런너가 공유하는 가변 상태(UI 버퍼)."""
+
+    def __init__(self) -> None:
+        self.pending_ui_components: list[dict[str, Any]] = []
+        self.pending_judgment_snapshot: dict[str, Any] | None = None
+
+    def drain_ui(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        ui = self.pending_ui_components
+        snapshot = self.pending_judgment_snapshot
+        self.pending_ui_components = []
+        self.pending_judgment_snapshot = None
+        return ui, snapshot

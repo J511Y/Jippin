@@ -249,7 +249,9 @@ class FloorplanAsset(TimestampMixin, Base):
             "scan_status IN ('pending', 'clean', 'infected', 'failed', 'not_required')",
             name="floorplan_assets_scan_status_allowed",
         ),
-        sa.CheckConstraint("byte_size >= 0", name="floorplan_assets_byte_size_nonnegative"),
+        sa.CheckConstraint(
+            "byte_size >= 0", name="floorplan_assets_byte_size_nonnegative"
+        ),
         sa.UniqueConstraint("bucket", "object_key"),
     )
 
@@ -300,7 +302,9 @@ class FloorplanCandidate(CreatedAtMixin, Base):
 
     __tablename__ = "floorplan_candidates"
     __table_args__ = (
-        sa.CheckConstraint("lookup_revision > 0", name="floorplan_candidates_lookup_revision_positive"),
+        sa.CheckConstraint(
+            "lookup_revision > 0", name="floorplan_candidates_lookup_revision_positive"
+        ),
         sa.CheckConstraint("rank > 0", name="floorplan_candidates_rank_positive"),
         sa.CheckConstraint(
             "confidence >= 0 AND confidence <= 1",
@@ -479,6 +483,68 @@ class ChatToolCall(Base):
     )
 
 
+class AgentRun(TimestampMixin, Base):
+    """Lifecycle/metadata row for one deepagents run (CMP-DIRECT, migration 0015).
+
+    Conversation state lives in ``langgraph.*`` (checkpointer SoT) and is
+    projected into ``chat_messages`` / ``chat_tool_calls``. This table only
+    tracks the run's lifecycle, LangSmith link, and error state. Backend
+    service-role only — no ``authenticated`` write grant.
+    """
+
+    __tablename__ = "agent_runs"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ("
+            "'pending', 'running', 'awaiting_input', 'interrupted', "
+            "'succeeded', 'failed', 'cancelled'"
+            ")",
+            name="agent_runs_status_allowed",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        sa.ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        sa.ForeignKey("auth.users.id", ondelete="SET NULL"),
+    )
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        sa.Text,
+        nullable=False,
+        server_default=sa.text("'pending'"),
+    )
+    model: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    current_step: Mapped[str | None] = mapped_column(sa.Text)
+    langsmith_run_id: Mapped[str | None] = mapped_column(sa.Text)
+    langsmith_run_url: Mapped[str | None] = mapped_column(sa.Text)
+    error_code: Mapped[str | None] = mapped_column(sa.Text)
+    error_message: Mapped[str | None] = mapped_column(sa.Text)
+    input_summary: Mapped[dict[str, object]] = mapped_column(
+        postgresql.JSONB,
+        nullable=False,
+        server_default=jsonb_empty_object,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        postgresql.TIMESTAMP(timezone=True)
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        postgresql.TIMESTAMP(timezone=True)
+    )
+
+
 sa.Index(None, Session.user_id, Session.created_at.desc())
 sa.Index(None, Session.status, Session.last_activity_at)
 sa.Index(None, Session.address_id)
@@ -492,7 +558,12 @@ sa.Index(
 )
 
 sa.Index(None, SessionAddress.user_id, SessionAddress.created_at.desc())
-sa.Index(None, SessionAddress.apartment_name, SessionAddress.building_dong, SessionAddress.size_type)
+sa.Index(
+    None,
+    SessionAddress.apartment_name,
+    SessionAddress.building_dong,
+    SessionAddress.size_type,
+)
 sa.Index(None, SessionAddress.session_id)
 
 sa.Index(None, Floorplan.apartment_name, Floorplan.building_dong, Floorplan.size_type)
@@ -543,3 +614,14 @@ sa.Index(None, ChatToolCall.tool_name, ChatToolCall.started_at.desc())
 sa.Index(None, ChatToolCall.status, ChatToolCall.started_at.desc())
 sa.Index(None, ChatToolCall.parent_tool_call_id)
 sa.Index(None, ChatToolCall.user_id)
+
+sa.Index(None, AgentRun.session_id, AgentRun.created_at.desc())
+sa.Index(None, AgentRun.status, AgentRun.started_at.desc())
+sa.Index(
+    "uq_agent_runs_one_active_per_session",
+    AgentRun.session_id,
+    unique=True,
+    postgresql_where=AgentRun.status.in_(
+        ["pending", "running", "awaiting_input", "interrupted"]
+    ),
+)

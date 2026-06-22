@@ -1,6 +1,8 @@
 import { Badge, Button, Card, Group, Stack, Text, Title } from '@mantine/core';
 import type { Metadata } from 'next';
 
+import { AgentChat } from '@/components/agent/AgentChat';
+
 type SessionPageProps = {
   params: Promise<{ sessionId: string }>;
 };
@@ -56,10 +58,10 @@ export default async function SessionDetailPage({ params }: SessionPageProps) {
       </Card>
 
       <Card withBorder radius="md" padding="md">
-        <Text size="sm" c="dimmed">
-          placeholder 화면입니다. 실제 분석 상태/WebSocket 갱신은 후속 이슈에서
-          연결됩니다.
-        </Text>
+        <Stack gap="sm">
+          <Text fw={600}>AI 도우미와 대화</Text>
+          <AgentChat sessionId={sessionId} />
+        </Stack>
       </Card>
 
       <Button

@@ -93,6 +93,40 @@ class Settings(BaseSettings):
     # 별도 이슈로 켠다.
     phase_a_skeleton_enabled: bool = Field(default=False)
 
+    # ── 에이전트 세션 (우리집 체크 대화형 에이전트) — CMP-DIRECT ────────────────
+    # deepagents(LangGraph) 런타임. 운영 default 는 False — main.py 에서
+    # phase_a_skeleton_enabled 와 함께 켜져야 agent 라우터가 등록된다. LLM/추적/HF
+    # 시크릿은 Fly secrets 로 주입한다(.env.example 의 agent 섹션 참조).
+    agent_enabled: bool = Field(default=False)
+    agent_model: str = Field(default="openai:gpt-5.4-mini")
+    # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
+    agent_run_wallclock_timeout_seconds: int = Field(default=600)
+
+    openai_api_key: str | None = Field(default=None)
+
+    # LangSmith 트레이싱 — env-var 자동 계측. langchain_tracing_v2=true 일 때만 동작.
+    langchain_tracing_v2: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING"),
+    )
+    langsmith_api_key: str | None = Field(default=None)
+    langsmith_project: str = Field(default="jippin-agent")
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com")
+
+    # LangGraph 체크포인터 — 전용 langgraph 스키마(migration 0015). 체크포인터는
+    # psycopg prepared statement 때문에 트랜잭션 풀러(6543)에서 깨지므로 direct
+    # (5432) database_url 을 쓴다(아래 _validate_agent_checkpointer_url).
+    langgraph_db_schema: str = Field(default="langgraph")
+    checkpointer_pool_min_size: int = Field(default=1)
+    checkpointer_pool_max_size: int = Field(default=5)
+
+    # HuggingFace 평면도 세그멘테이션 엣지 엔드포인트. 미설정/미배포 시 도구가
+    # SEGMENTATION_ENDPOINT_UNAVAILABLE 로 degrade 한다(에이전트 흐름은 유지).
+    hf_segmentation_endpoint_url: str | None = Field(default=None)
+    hf_segmentation_token: str | None = Field(default=None)
+    hf_segmentation_timeout_seconds: int = Field(default=60)
+    hf_segmentation_cold_start_max_retries: int = Field(default=2)
+
     oauth_state_redis_url: str | None = Field(default=None)
     auth_oauth_state_ttl_seconds: int = Field(
         default=600,
@@ -361,6 +395,24 @@ class Settings(BaseSettings):
                 self.frontend_auth_terms_url = f"{origin}/auth/terms"
             if "cors_allow_origins" not in provided:
                 self.cors_allow_origins = [origin]
+        return self
+
+    @model_validator(mode="after")
+    def _validate_agent_checkpointer_url(self) -> "Settings":
+        """fail-safe: agent 활성화 시 체크포인터는 direct(:5432) DATABASE_URL 만 허용.
+
+        LangGraph Postgres 체크포인터(psycopg)는 prepared statement 를 쓰므로
+        Supabase 트랜잭션 풀러(:6543)에서 ``prepared statement already exists`` 로
+        깨진다. 운영 사고를 부팅 시점에 차단한다 — pooler URL 로 agent 를 켜면 boot
+        실패가 정상 동작이다.
+        """
+
+        if self.agent_enabled and self.database_url and ":6543" in self.database_url:
+            raise ValueError(
+                "AGENT_ENABLED=true 는 LangGraph 체크포인터용 direct(:5432) "
+                "DATABASE_URL 을 요구한다. 트랜잭션 풀러(:6543)는 psycopg prepared "
+                "statement 를 깨뜨린다. DATABASE_URL 을 direct 연결로 설정하라."
+            )
         return self
 
 

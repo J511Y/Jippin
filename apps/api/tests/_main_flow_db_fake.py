@@ -18,6 +18,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from src.services import main_flow
 
 # main_flow 의 seam 이 이름 변경/추가되면 monkeypatch 가 즉시 실패하도록
@@ -36,7 +38,23 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_select_chat_tool_call",
     "_db_insert_chat_tool_call",
     "_db_complete_chat_tool_call",
+    # agent projection / runs (CMP-DIRECT)
+    "_db_select_chat_message_by_lc_id",
+    "_db_select_chat_tool_call_by_lc_id",
+    "_db_update_session_fields",
+    "_db_insert_agent_run",
+    "_db_select_agent_run",
+    "_db_update_agent_run",
 )
+
+# agent_runs 의 활성(=세션당 1개 부분 유니크) 상태 집합.
+_ACTIVE_RUN_STATUSES: frozenset[str] = frozenset(
+    {"pending", "running", "awaiting_input", "interrupted"}
+)
+
+
+def _fake_integrity_error(message: str) -> IntegrityError:
+    return IntegrityError(message, None, Exception(message))
 
 
 def _now() -> datetime:
@@ -56,6 +74,7 @@ class FakeMainFlowDb:
         ] = {}
         self.chat_messages: dict[uuid.UUID, dict[str, Any]] = {}
         self.chat_tool_calls: dict[uuid.UUID, dict[str, Any]] = {}
+        self.agent_runs: dict[uuid.UUID, dict[str, Any]] = {}
 
     # -- helpers ---------------------------------------------------------
 
@@ -202,6 +221,14 @@ class FakeMainFlowDb:
     async def _db_insert_chat_message(
         self, values: dict[str, Any], *, session_id: uuid.UUID
     ) -> dict[str, Any]:
+        # 부분 유니크(session_id, metadata->>'lc_message_id') 백스톱 — resume race.
+        lc_id = (values.get("metadata") or {}).get("lc_message_id")
+        if lc_id is not None and any(
+            r["session_id"] == values["session_id"]
+            and (r.get("metadata") or {}).get("lc_message_id") == lc_id
+            for r in self.chat_messages.values()
+        ):
+            raise _fake_integrity_error("duplicate lc_message_id")
         row: dict[str, Any] = {
             "id": uuid.uuid4(),
             "created_at": _now(),
@@ -217,6 +244,17 @@ class FakeMainFlowDb:
         row = self.chat_messages.get(message_id)
         return dict(row) if row is not None else None
 
+    async def _db_select_chat_message_by_lc_id(
+        self, session_id: uuid.UUID, lc_message_id: str
+    ) -> dict[str, Any] | None:
+        for row in self.chat_messages.values():
+            if (
+                row["session_id"] == session_id
+                and (row.get("metadata") or {}).get("lc_message_id") == lc_message_id
+            ):
+                return dict(row)
+        return None
+
     # -- chat_tool_calls -----------------------------------------------------
 
     async def _db_select_chat_tool_call(
@@ -225,9 +263,29 @@ class FakeMainFlowDb:
         row = self.chat_tool_calls.get(tool_call_id)
         return dict(row) if row is not None else None
 
+    async def _db_select_chat_tool_call_by_lc_id(
+        self, session_id: uuid.UUID, lc_tool_call_id: str
+    ) -> dict[str, Any] | None:
+        for row in self.chat_tool_calls.values():
+            if (
+                row["session_id"] == session_id
+                and (row.get("metadata") or {}).get("lc_tool_call_id")
+                == lc_tool_call_id
+            ):
+                return dict(row)
+        return None
+
     async def _db_insert_chat_tool_call(
         self, values: dict[str, Any], *, session_id: uuid.UUID
     ) -> dict[str, Any]:
+        # 부분 유니크(session_id, metadata->>'lc_tool_call_id') 백스톱 — resume race.
+        lc_id = (values.get("metadata") or {}).get("lc_tool_call_id")
+        if lc_id is not None and any(
+            r["session_id"] == values["session_id"]
+            and (r.get("metadata") or {}).get("lc_tool_call_id") == lc_id
+            for r in self.chat_tool_calls.values()
+        ):
+            raise _fake_integrity_error("duplicate lc_tool_call_id")
         row: dict[str, Any] = {
             "id": uuid.uuid4(),
             "output": None,
@@ -257,6 +315,61 @@ class FakeMainFlowDb:
         row.update(values)
         row["completed_at"] = _now()
         self._touch_session(session_id)
+        return dict(row)
+
+    # -- sessions (service-field update) ------------------------------------
+
+    async def _db_update_session_fields(
+        self, session_id: uuid.UUID, values: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        row = self.sessions.get(session_id)
+        if row is None:
+            return None
+        row.update(values)
+        self._touch_session(session_id)
+        return dict(row)
+
+    # -- agent_runs ----------------------------------------------------------
+
+    async def _db_insert_agent_run(self, values: dict[str, Any]) -> dict[str, Any]:
+        # 세션당 활성 런 1개 부분 유니크 백스톱.
+        if any(
+            r["session_id"] == values["session_id"]
+            and r["status"] in _ACTIVE_RUN_STATUSES
+            for r in self.agent_runs.values()
+        ):
+            raise _fake_integrity_error("agent run already active for session")
+        now = _now()
+        row: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "status": "pending",
+            "current_step": None,
+            "langsmith_run_id": None,
+            "langsmith_run_url": None,
+            "error_code": None,
+            "error_message": None,
+            "input_summary": {},
+            "started_at": None,
+            "finished_at": None,
+            "created_at": now,
+            "updated_at": now,
+            **values,
+        }
+        self.agent_runs[row["id"]] = row
+        return dict(row)
+
+    async def _db_select_agent_run(self, run_id: uuid.UUID) -> dict[str, Any] | None:
+        row = self.agent_runs.get(run_id)
+        return dict(row) if row is not None else None
+
+    async def _db_update_agent_run(
+        self, run_id: uuid.UUID, values: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return None
+        row.update(values)
+        row["updated_at"] = _now()
         return dict(row)
 
 
