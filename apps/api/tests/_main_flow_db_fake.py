@@ -45,6 +45,7 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_insert_agent_run",
     "_db_select_agent_run",
     "_db_update_agent_run",
+    "_db_claim_resumable_agent_run",
 )
 
 # agent_runs 의 활성(=세션당 1개 부분 유니크) 상태 집합.
@@ -369,6 +370,18 @@ class FakeMainFlowDb:
         if row is None:
             return None
         row.update(values)
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_claim_resumable_agent_run(
+        self, run_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        # 조건부 UPDATE: status IN (awaiting_input, interrupted) → running.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] not in {"awaiting_input", "interrupted"}:
+            return None
+        row["status"] = "running"
+        row["started_at"] = _now()
         row["updated_at"] = _now()
         return dict(row)
 

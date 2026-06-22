@@ -321,3 +321,65 @@ async def test_consume_emits_heartbeat_while_waiting(fake: FakeMainFlowDb) -> No
     ]
     assert any(f.startswith(": heartbeat") for f in frames)
     assert any("event: message" in f for f in frames)
+
+
+async def test_claim_resumable_run_is_atomic(fake: FakeMainFlowDb) -> None:
+    # #resume-atomic: 동시 resume 중 단 하나만 running 으로 점유, 나머지는 409.
+    from src.errors import ZippinException
+
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    # pending 은 resumable 아님 → 409.
+    with pytest.raises(ZippinException) as e1:
+        await main_flow.claim_resumable_agent_run(
+            session_id=session["id"], run_id=run["id"], owner_user_id=owner
+        )
+    assert e1.value.code == "AGENT_RUN_NOT_RESUMABLE"
+
+    await main_flow.update_agent_run(run_id=run["id"], status="interrupted")
+    claimed = await main_flow.claim_resumable_agent_run(
+        session_id=session["id"], run_id=run["id"], owner_user_id=owner
+    )
+    assert claimed["status"] == "running"
+    # 두 번째 점유는 이미 running 이라 409.
+    with pytest.raises(ZippinException) as e2:
+        await main_flow.claim_resumable_agent_run(
+            session_id=session["id"], run_id=run["id"], owner_user_id=owner
+        )
+    assert e2.value.code == "AGENT_RUN_NOT_RESUMABLE"
+
+
+async def test_runner_finalizes_when_startup_projection_fails(
+    fake: FakeMainFlowDb, monkeypatch
+) -> None:
+    # #startup-finalize: 사용자 메시지 투영이 실패해도 런이 running 으로 멈추지 않는다.
+    from src.errors import ZippinException
+
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+
+    async def _boom(**_: Any) -> dict[str, Any]:
+        raise ZippinException("gone", code="SESSION_NOT_FOUND", http_status=404)
+
+    monkeypatch.setattr(main_flow, "append_chat_message", _boom)
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    frames = [
+        f async for f in runner.stream(user_message="x", agent=_FakeAgent(_chunks()))
+    ]
+    assert fake.agent_runs[run["id"]]["status"] == "failed"
+    assert any(ev == "error" for ev, _ in _parse(frames))

@@ -40,7 +40,6 @@ _SSE_HEADERS = {
     "Connection": "keep-alive",
 }
 
-_ACTIVE_RESUMABLE = {"awaiting_input", "interrupted"}
 _TERMINAL = {"succeeded", "failed", "cancelled"}
 
 
@@ -100,18 +99,14 @@ async def resume_agent_run(
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> StreamingResponse:
     _require_agent_ready(request)
-    run = await main_flow.get_agent_run(
+    # resumable 런을 원자적으로 점유한다 — 동시 resume(두 탭/더블서브밋) 중 하나만
+    # 성공하고 나머지는 409(같은 row 라 활성-런 유니크로는 못 막는다).
+    await main_flow.claim_resumable_agent_run(
         session_id=session_id,
         run_id=run_id,
         owner_user_id=requester.user_id,
         owner_is_anonymous=requester.is_anonymous,
     )
-    if run["status"] not in _ACTIVE_RESUMABLE:
-        raise ZippinException(
-            "Run is not resumable.",
-            code="AGENT_RUN_NOT_RESUMABLE",
-            http_status=409,
-        )
     logger.info("agent_run_resumed", session_id=str(session_id), run_id=str(run_id))
     runner = AgentRunner(
         session_id=session_id,

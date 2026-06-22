@@ -180,10 +180,9 @@ async def check_building_register_impl(
         return _zippin_error(exc, "BUILDING_REGISTER_FAILED")
     if row is None:
         return _err("BUILDING_REGISTER_NOT_FOUND", "조회 결과를 찾을 수 없습니다.")
-    return _ok(
-        home_check_id=str(job["id"]),
-        job=_to_plain(home_check.serialize_job(row)),
-    )
+    # serialize_job 은 async (서명 URL 발급 등) — await 해야 한다.
+    serialized = await home_check.serialize_job(row)
+    return _ok(home_check_id=str(job["id"]), job=_to_plain(serialized))
 
 
 def evaluate_rules_impl(*, judgment_values: dict[str, Any]) -> dict[str, Any]:

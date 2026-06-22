@@ -455,6 +455,34 @@ async def _db_update_agent_run(
     return dict(row._mapping) if row is not None else None
 
 
+async def _db_claim_resumable_agent_run(
+    run_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """resumable(awaiting_input/interrupted) 런을 원자적으로 running 으로 전이.
+
+    조건부 UPDATE 라 동시 resume(두 탭/재시도/더블서브밋) 중 단 하나만 성공한다 —
+    진 쪽은 None 을 받아 409 로 매핑된다. 같은 row 라 활성-런 유니크는 못 막는다.
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_AGENT_RUNS)
+                .where(
+                    _AGENT_RUNS.c.id == run_id,
+                    _AGENT_RUNS.c.status.in_(["awaiting_input", "interrupted"]),
+                )
+                .values(
+                    status="running",
+                    started_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                )
+                .returning(*_AGENT_RUNS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
 # ---------------------------------------------------------------------------
 # ownership helpers
 # ---------------------------------------------------------------------------
@@ -1086,6 +1114,35 @@ async def update_agent_run(*, run_id: uuid.UUID, **fields: Any) -> dict[str, Any
     row = await _db_update_agent_run(run_id, values)
     if row is None:
         raise _not_found("Agent run not found.", code="AGENT_RUN_NOT_FOUND")
+    return row
+
+
+async def claim_resumable_agent_run(
+    *,
+    session_id: uuid.UUID,
+    run_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """resume 시작 전 resumable 런을 원자적으로 점유한다(동시 resume race 방지).
+
+    소유 세션의 런만(아니면 404). resumable 상태가 아니거나 이미 running 이면 409.
+    """
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    existing = await _db_select_agent_run(run_id)
+    if existing is None or existing["session_id"] != session_id:
+        raise _not_found("Agent run not found.", code="AGENT_RUN_NOT_FOUND")
+    row = await _db_claim_resumable_agent_run(run_id)
+    if row is None:
+        raise _conflict(
+            "Run is not resumable or already running.",
+            code="AGENT_RUN_NOT_RESUMABLE",
+        )
     return row
 
 

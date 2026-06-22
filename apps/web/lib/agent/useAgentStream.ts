@@ -8,7 +8,7 @@
  * token/tool_step/state_change/message/error/done 이벤트를 받아 채팅 상태로 환원한다.
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { ChatMessage, DynamicComponentSpec } from '@/components/a2ui';
 import { apiBaseUrl } from '@/lib/api-base-url';
@@ -28,6 +28,29 @@ async function resolveToken(): Promise<string> {
   if (existing) return existing;
   const session = await ensureAnonymousSession();
   return session.token;
+}
+
+// resumable run id 를 세션별 sessionStorage 에 보존한다 — 컴포넌트 remount/새로고침
+// 후에도 다음 send 가 /resume 로 이어갈 수 있게(없으면 새 런이 AGENT_RUN_ALREADY_ACTIVE).
+const resumeKey = (sessionId: string) => `jippin:agent-resume:${sessionId}`;
+
+function loadResumeId(sessionId: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage.getItem(resumeKey(sessionId));
+  } catch {
+    return null;
+  }
+}
+
+function saveResumeId(sessionId: string, id: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (id) window.sessionStorage.setItem(resumeKey(sessionId), id);
+    else window.sessionStorage.removeItem(resumeKey(sessionId));
+  } catch {
+    /* sessionStorage 비가용(SSR/프라이빗) — 무시 */
+  }
 }
 
 function toDynamic(component: Record<string, unknown>): DynamicComponentSpec | undefined {
@@ -61,6 +84,19 @@ export function useAgentStream(sessionId: string): UseAgentStream {
   // 직전 런이 resumable(interrupted/awaiting_input)로 끝났으면 그 run_id 를 들고
   // 있다가 다음 send 에서 /resume 로 보낸다. 그렇지 않으면 null(=새 런 시작).
   const resumableRunIdRef = useRef<string | null>(null);
+
+  // remount/새로고침 시 sessionStorage 에서 resumable run id 를 복원한다.
+  useEffect(() => {
+    resumableRunIdRef.current = loadResumeId(sessionId);
+  }, [sessionId]);
+
+  const setResumeId = useCallback(
+    (id: string | null) => {
+      resumableRunIdRef.current = id;
+      saveResumeId(sessionId, id);
+    },
+    [sessionId],
+  );
 
   const send = useCallback(
     async (content: string) => {
@@ -105,9 +141,12 @@ export function useAgentStream(sessionId: string): UseAgentStream {
           signal: controller.signal,
         });
         if (!res.ok || !res.body) {
+          // resume 시도가 실패(예: 런이 이미 종료돼 409)하면 저장된 id 를 비워
+          // 다음 send 가 새 런을 시작하게 한다(stale resume 복구).
+          if (resumeRunId) setResumeId(null);
           throw new Error(`에이전트 요청에 실패했습니다 (HTTP ${res.status}).`);
         }
-        resumableRunIdRef.current = res.headers.get('X-Agent-Run-Id') ?? resumeRunId;
+        setResumeId(res.headers.get('X-Agent-Run-Id') ?? resumeRunId);
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -158,10 +197,10 @@ export function useAgentStream(sessionId: string): UseAgentStream {
           // /resume 한다. 입력 가능 상태로 둔다.
           setStatus('done');
         } else if (runStatus === 'succeeded' || runStatus === 'cancelled') {
-          resumableRunIdRef.current = null;
+          setResumeId(null);
           setStatus('done');
         } else if (runStatus === 'failed') {
-          resumableRunIdRef.current = null;
+          setResumeId(null);
           setStatus('error');
         } else {
           // runStatus === null: done 프레임 없이 스트림이 끊김(네트워크/프록시). run id 를
@@ -181,7 +220,7 @@ export function useAgentStream(sessionId: string): UseAgentStream {
         abortRef.current = null;
       }
     },
-    [sessionId],
+    [sessionId, setResumeId],
   );
 
   const stop = useCallback(() => {

@@ -233,19 +233,21 @@ class AgentRunner:
         run_status = "succeeded"
         finalized = False
 
-        await main_flow.update_agent_run(
-            run_id=self.run_id, status="running", started_at=main_flow._now()
-        )
-        # 사용자 메시지 투영(공개 경로와 동일하게 owner-gated user 메시지).
-        await main_flow.append_chat_message(
-            session_id=self.session_id,
-            owner_user_id=self.owner_user_id,
-            payload={"content": user_message},
-            owner_is_anonymous=self.owner_is_anonymous,
-        )
-
         try:
             try:
+                # running 표시 + 사용자 메시지 투영을 inner try 안에 둔다 — 여기서
+                # 실패(삭제/만료 세션, 일시 DB 오류)해도 except 가 failed 로 마감하고
+                # finally 가 런을 풀어 준다(#startup-finalize).
+                await main_flow.update_agent_run(
+                    run_id=self.run_id, status="running", started_at=main_flow._now()
+                )
+                # 사용자 메시지 투영(공개 경로와 동일하게 owner-gated user 메시지).
+                await main_flow.append_chat_message(
+                    session_id=self.session_id,
+                    owner_user_id=self.owner_user_id,
+                    payload={"content": user_message},
+                    owner_is_anonymous=self.owner_is_anonymous,
+                )
                 if agent is None:
                     agent = await self._build_agent()
                 raw = agent.astream(

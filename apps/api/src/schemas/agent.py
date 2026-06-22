@@ -21,14 +21,16 @@ class AgentUserMessage(BaseModel):
 
 
 class AgentRunStartRequest(BaseModel):
-    """`POST /sessions/{id}/agent/runs` body."""
+    """`POST /sessions/{id}/agent/runs` body — agent-run-request 계약 정합."""
 
+    schema_version: Literal["1.0.0"] = "1.0.0"
     message: AgentUserMessage
 
 
 class AgentRunResumeRequest(BaseModel):
     """`POST /sessions/{id}/agent/runs/{run_id}/resume` body — 후속 사용자 입력."""
 
+    schema_version: Literal["1.0.0"] = "1.0.0"
     message: AgentUserMessage
 
 

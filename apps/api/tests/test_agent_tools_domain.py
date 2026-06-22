@@ -50,7 +50,8 @@ async def test_check_building_register_returns_serialized_job(monkeypatch) -> No
         assert home_check_id == job_id and user_id == owner
         return {"id": job_id, "status": "completed"}
 
-    def fake_serialize(row: dict, *, with_documents: bool = True):
+    async def fake_serialize(row: dict, *, with_documents: bool = True):
+        # 실제 serialize_job 은 async — fake 도 async 로 둬 await 누락을 잡는다.
         return {"schema_version": "1.1.0", "id": str(row["id"]), "status": "completed"}
 
     monkeypatch.setattr(home_check, "create_home_check", fake_create)
