@@ -13,6 +13,9 @@
 
 from __future__ import annotations
 
+import ast
+import asyncio
+import json
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -54,30 +57,47 @@ def _message_text(content: Any) -> str:
     return str(content) if content is not None else ""
 
 
-def _tool_end_status(msg: Any) -> str:
-    status = getattr(msg, "status", None)
-    if status == "error":
-        return "failed"
-    # 우리 도구는 {"ok": bool, ...} 를 반환한다 — artifact/content 에서 ok 를 본다.
+def _tool_result_dict(msg: Any) -> dict[str, Any] | None:
+    """도구 결과 dict 를 복원한다.
+
+    plain ``@tool`` 은 dict 반환을 ToolMessage.content(JSON 문자열)로 싣는다
+    (artifact 아님). 그래서 artifact 우선, 없으면 content 를 JSON→파이썬 리터럴
+    순으로 파싱해 ``{"ok": ..., "error_code": ...}`` 를 복원한다 — 그렇지 않으면
+    ok=false degrade 가 succeeded 로 오기록된다.
+    """
+
     artifact = getattr(msg, "artifact", None)
-    if isinstance(artifact, dict) and artifact.get("ok") is False:
+    if isinstance(artifact, dict):
+        return artifact
+    content = _message_text(getattr(msg, "content", None))
+    if not content:
+        return None
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(content)
+        except (ValueError, SyntaxError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _tool_end_status(msg: Any, result: dict[str, Any] | None) -> str:
+    if getattr(msg, "status", None) == "error":
+        return "failed"
+    if isinstance(result, dict) and result.get("ok") is False:
         return "failed"
     return "succeeded"
 
 
-def _tool_end_payload(msg: Any) -> dict[str, Any]:
-    artifact = getattr(msg, "artifact", None)
-    content = getattr(msg, "content", None)
-    output: dict[str, Any] | None = None
-    error_code: str | None = None
-    summary: str | None = None
-    if isinstance(artifact, dict):
-        output = artifact
-        error_code = artifact.get("error_code")
-        summary = artifact.get("summary") or artifact.get("message")
-    text = _message_text(content)
-    if summary is None and text:
-        summary = text[:280]
+def _tool_end_payload(msg: Any, result: dict[str, Any] | None) -> dict[str, Any]:
+    output = result if isinstance(result, dict) else None
+    error_code = output.get("error_code") if output else None
+    summary = (output.get("summary") or output.get("message")) if output else None
+    if summary is None:
+        text = _message_text(getattr(msg, "content", None))
+        if text:
+            summary = text[:280]
     return {"output": output, "output_summary": summary, "error_code": error_code}
 
 
@@ -129,10 +149,11 @@ async def _translate_message(
 ) -> AsyncIterator[Signal]:
     tool_call_id = getattr(msg, "tool_call_id", None)
     if tool_call_id:  # ToolMessage → tool end
-        payload = _tool_end_payload(msg)
+        result = _tool_result_dict(msg)
+        payload = _tool_end_payload(msg, result)
         yield ToolEnd(
             lc_tool_call_id=str(tool_call_id),
-            status=_tool_end_status(msg),
+            status=_tool_end_status(msg, result),
             output=payload["output"],
             output_summary=payload["output_summary"],
             error_code=payload["error_code"],
@@ -229,19 +250,20 @@ class AgentRunner:
                 config={"configurable": {"thread_id": str(self.session_id)}},
                 stream_mode=["updates", "messages", "custom"],
             )
-            async for frame in self._consume(raw, sse):
-                yield frame
-                if is_disconnected is not None and await is_disconnected():
-                    run_status = "interrupted"
-                    break
-                if time.monotonic() > deadline:
-                    run_status = "interrupted"
-                    yield sse.error(
-                        error_code="AGENT_RUN_TIMEOUT",
-                        message="런 제한 시간을 초과했습니다.",
-                        recoverable=True,
-                    )
-                    break
+            try:
+                async for frame in self._consume(raw, sse, deadline):
+                    yield frame
+                    if is_disconnected is not None and await is_disconnected():
+                        run_status = "interrupted"
+                        break
+            except TimeoutError:
+                # 다음 청크를 기다리다 wall-clock 초과 — stall 도 잡힌다(#7).
+                run_status = "interrupted"
+                yield sse.error(
+                    error_code="AGENT_RUN_TIMEOUT",
+                    message="런 제한 시간을 초과했습니다.",
+                    recoverable=True,
+                )
         except Exception as exc:  # noqa: BLE001 - 어떤 실패든 런을 마감하고 통지
             log.exception("agent_run_failed", run_id=str(self.run_id), error=str(exc))
             run_status = "failed"
@@ -256,7 +278,7 @@ class AgentRunner:
                 recoverable=False,
             )
 
-        await self._finalize(sse, run_status)
+        final_status = await self._finalize(run_status)
         # 최종 세션 상태 통지.
         session = await main_flow.get_owned_session(
             self.session_id,
@@ -267,12 +289,22 @@ class AgentRunner:
             session_status=session["status"],
             completion_decision=session.get("completion_decision"),
         )
-        yield sse.done(run_status=run_status)
+        yield sse.done(run_status=final_status)
 
     async def _consume(
-        self, raw: AsyncIterator[Any], sse: SseEventStream
+        self, raw: AsyncIterator[Any], sse: SseEventStream, deadline: float
     ) -> AsyncIterator[str]:
-        async for sig in translate_stream(raw, tool_kinds=TOOL_KINDS):
+        # translate_stream 을 수동 구동해, 다음 청크 await 를 남은 wall-clock 으로
+        # 제한한다 — LLM/툴이 청크 사이에서 멈춰도 deadline 이 발동한다(#7).
+        signals = translate_stream(raw, tool_kinds=TOOL_KINDS)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            try:
+                sig = await asyncio.wait_for(signals.__anext__(), timeout=remaining)
+            except StopAsyncIteration:
+                break
             if isinstance(sig, TokenSignal):
                 yield sse.token(sig.delta)
             elif isinstance(sig, ToolStart):
@@ -285,7 +317,7 @@ class AgentRunner:
             elif isinstance(sig, ToolEnd):
                 await self._writer.project_tool_end(sig)
                 yield sse.tool_step(
-                    tool_name=_tool_name_for(self._writer, sig) or "tool",
+                    tool_name="tool",
                     tool_kind="other",
                     status="succeeded" if sig.status == "succeeded" else "failed",
                     error_code=sig.error_code,
@@ -294,29 +326,41 @@ class AgentRunner:
                 ui, snapshot = self._run_context.drain_ui()
                 sig.ui_components = ui
                 sig.judgment_snapshot = snapshot
-                row = await self._writer.project_message(sig)
-                yield sse.message(
-                    role=sig.role,
-                    content=sig.content,
-                    message_id=str(row["id"]) if row else None,
-                    ui_components=ui,
-                )
+                row, created = await self._writer.project_message(sig)
+                # resume replay 로 이미 투영된 메시지는 SSE 를 다시 보내지 않는다 —
+                # 클라이언트 중복 버블 방지(#5).
+                if created:
+                    yield sse.message(
+                        role=sig.role,
+                        content=sig.content,
+                        message_id=str(row["id"]) if row else None,
+                        ui_components=ui,
+                    )
 
-    async def _finalize(self, sse: SseEventStream, run_status: str) -> None:
+    async def _finalize(self, run_status: str) -> str:
+        """런을 terminal 상태로 마감하고 실제 최종 상태를 돌려준다.
+
+        스트리밍 도중 /interrupt 가 런을 cancelled 로 마감했을 수 있다 — 그 경우
+        로컬 run_status(보통 succeeded)로 덮어쓰지 않고 cancelled 를 보존한다(#1).
+        """
+
+        current = await main_flow.get_agent_run(
+            session_id=self.session_id,
+            run_id=self.run_id,
+            owner_user_id=self.owner_user_id,
+            owner_is_anonymous=self.owner_is_anonymous,
+        )
+        if current.get("status") == "cancelled":
+            return "cancelled"
+
         status_map = {
             "succeeded": "succeeded",
             "failed": "failed",
             "interrupted": "interrupted",
             "cancelled": "cancelled",
         }
+        final = status_map.get(run_status, "succeeded")
         await main_flow.update_agent_run(
-            run_id=self.run_id,
-            status=status_map.get(run_status, "succeeded"),
-            finished_at=main_flow._now(),
+            run_id=self.run_id, status=final, finished_at=main_flow._now()
         )
-
-
-def _tool_name_for(writer: ProjectionWriter, sig: ToolEnd) -> str | None:
-    # ToolEnd 자체엔 이름이 없다 — ledger 에서 이름을 못 얻어도 SSE 는 generic
-    # 라벨로 보낸다(투영 정확성에는 영향 없음). 향후 lc id→name 캐시로 보강 가능.
-    return None
+        return final

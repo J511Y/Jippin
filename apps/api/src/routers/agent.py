@@ -82,8 +82,12 @@ async def start_agent_run(
         user_message=payload.message.content,
         is_disconnected=request.is_disconnected,
     )
+    # 클라이언트가 resumable 종료(interrupted/awaiting_input) 후 /resume 를 호출할 수
+    # 있도록 run_id 를 헤더로 노출한다(SSE 본문 파싱 전에 읽힘). CORS expose 필요.
     return StreamingResponse(
-        generator, media_type="text/event-stream", headers=_SSE_HEADERS
+        generator,
+        media_type="text/event-stream",
+        headers={**_SSE_HEADERS, "X-Agent-Run-Id": str(run["id"])},
     )
 
 
@@ -120,7 +124,9 @@ async def resume_agent_run(
         is_disconnected=request.is_disconnected,
     )
     return StreamingResponse(
-        generator, media_type="text/event-stream", headers=_SSE_HEADERS
+        generator,
+        media_type="text/event-stream",
+        headers={**_SSE_HEADERS, "X-Agent-Run-Id": str(run_id)},
     )
 
 

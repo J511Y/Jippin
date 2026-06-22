@@ -192,3 +192,77 @@ async def test_runner_one_active_run_per_session(fake: FakeMainFlowDb) -> None:
             session_id=session_id, owner_user_id=owner, model="openai:gpt-5.4-mini"
         )
     assert excinfo.value.code == "AGENT_RUN_ALREADY_ACTIVE"
+
+
+def _tool_message_degraded() -> SimpleNamespace:
+    # plain @tool 은 dict 반환을 content(JSON 문자열)로 싣고 status=success, artifact=None.
+    return SimpleNamespace(
+        tool_call_id="tc1",
+        content=(
+            '{"ok": false, "error_code": "SEGMENTATION_ENDPOINT_UNAVAILABLE", '
+            '"summary": "미배포"}'
+        ),
+        status="success",
+    )
+
+
+async def test_translate_tool_content_failure_maps_to_failed() -> None:
+    # #6: artifact 가 아니라 content(JSON) 의 ok=false 를 읽어 failed 로 매핑.
+    chunks = [("updates", {"tools": {"messages": [_tool_message_degraded()]}})]
+    signals = [s async for s in translate_stream(_aiter(chunks), tool_kinds={})]
+    ends = [s for s in signals if isinstance(s, ToolEnd)]
+    assert len(ends) == 1
+    assert ends[0].status == "failed"
+    assert ends[0].error_code == "SEGMENTATION_ENDPOINT_UNAVAILABLE"
+
+
+async def test_runner_dedupes_replayed_message(fake: FakeMainFlowDb) -> None:
+    # #5: 같은 lc_message_id 가 두 번 와도(resume replay) message SSE 는 1회만.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    final = _final_ai()
+    chunks = [
+        ("updates", {"agent": {"messages": [final]}}),
+        ("updates", {"agent": {"messages": [final]}}),
+    ]
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    frames = [
+        f async for f in runner.stream(user_message="x", agent=_FakeAgent(chunks))
+    ]
+    message_events = [ev for ev, _ in _parse(frames) if ev == "message"]
+    assert len(message_events) == 1
+    assistant = [
+        r for r in fake.chat_messages.values() if r["role"] == "assistant"
+    ]
+    assert len(assistant) == 1
+
+
+async def test_finalize_preserves_cancelled_run(fake: FakeMainFlowDb) -> None:
+    # #1: 스트리밍 중 /interrupt 가 cancelled 로 마감했으면 finalize 가 덮어쓰지 않음.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    await main_flow.update_agent_run(run_id=run["id"], status="cancelled")
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    final = await runner._finalize("succeeded")
+    assert final == "cancelled"
+    assert fake.agent_runs[run["id"]]["status"] == "cancelled"

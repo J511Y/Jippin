@@ -58,10 +58,16 @@ export default async function SessionDetailPage({ params }: SessionPageProps) {
       </Card>
 
       <Card withBorder radius="md" padding="md">
-        <Stack gap="sm">
-          <Text fw={600}>AI 도우미와 대화</Text>
-          <AgentChat sessionId={sessionId} />
-        </Stack>
+        {process.env.NEXT_PUBLIC_AGENT_ENABLED === 'true' ? (
+          <Stack gap="sm">
+            <Text fw={600}>AI 도우미와 대화</Text>
+            <AgentChat sessionId={sessionId} />
+          </Stack>
+        ) : (
+          <Text size="sm" c="dimmed">
+            AI 도우미 채팅은 곧 제공됩니다. (현재 비활성화)
+          </Text>
+        )}
       </Card>
 
       <Button

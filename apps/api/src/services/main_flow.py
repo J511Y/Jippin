@@ -359,12 +359,14 @@ async def _db_select_chat_message_by_lc_id(
 ) -> dict[str, Any] | None:
     """같은 세션에서 ``metadata->>'lc_message_id'`` 로 기존 투영 메시지 조회."""
 
+    # Table.c 는 컬럼 *이름*("metadata")으로 키된다 — ORM 속성명(metadata_)이 아니다.
     async with get_engine().begin() as conn:
         row = (
             await conn.execute(
                 sa.select(_CHAT_MESSAGES).where(
                     _CHAT_MESSAGES.c.session_id == session_id,
-                    _CHAT_MESSAGES.c.metadata_["lc_message_id"].astext == lc_message_id,
+                    _CHAT_MESSAGES.c["metadata"]["lc_message_id"].astext
+                    == lc_message_id,
                 )
             )
         ).one_or_none()
@@ -381,7 +383,7 @@ async def _db_select_chat_tool_call_by_lc_id(
             await conn.execute(
                 sa.select(_CHAT_TOOL_CALLS).where(
                     _CHAT_TOOL_CALLS.c.session_id == session_id,
-                    _CHAT_TOOL_CALLS.c.metadata_["lc_tool_call_id"].astext
+                    _CHAT_TOOL_CALLS.c["metadata"]["lc_tool_call_id"].astext
                     == lc_tool_call_id,
                 )
             )

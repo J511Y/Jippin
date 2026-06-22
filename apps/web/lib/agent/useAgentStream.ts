@@ -58,6 +58,9 @@ export function useAgentStream(sessionId: string): UseAgentStream {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamingRef = useRef(false);
+  // 직전 런이 resumable(interrupted/awaiting_input)로 끝났으면 그 run_id 를 들고
+  // 있다가 다음 send 에서 /resume 로 보낸다. 그렇지 않으면 null(=새 런 시작).
+  const resumableRunIdRef = useRef<string | null>(null);
 
   const send = useCallback(
     async (content: string) => {
@@ -78,10 +81,18 @@ export function useAgentStream(sessionId: string): UseAgentStream {
       abortRef.current = controller;
       let assembled = '';
       let finalStatus: AgentStreamStatus = 'done';
+      let runStatus: string | null = null;
 
       try {
         const token = await resolveToken();
-        const res = await fetch(`${apiBaseUrl()}/sessions/${sessionId}/agent/runs`, {
+        const base = apiBaseUrl();
+        // 직전 런이 resumable 이면 같은 런을 /resume 로 이어 간다 — 아니면 새 런 시작.
+        // (활성 런 부분 유니크 때문에 새로 시작하면 AGENT_RUN_ALREADY_ACTIVE 가 난다.)
+        const resumeRunId = resumableRunIdRef.current;
+        const url = resumeRunId
+          ? `${base}/sessions/${sessionId}/agent/runs/${resumeRunId}/resume`
+          : `${base}/sessions/${sessionId}/agent/runs`;
+        const res = await fetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -97,6 +108,7 @@ export function useAgentStream(sessionId: string): UseAgentStream {
         if (!res.ok || !res.body) {
           throw new Error(`에이전트 요청에 실패했습니다 (HTTP ${res.status}).`);
         }
+        resumableRunIdRef.current = res.headers.get('X-Agent-Run-Id') ?? resumeRunId;
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -134,9 +146,17 @@ export function useAgentStream(sessionId: string): UseAgentStream {
             } else if (ev.type === 'error') {
               setError(ev.message);
             } else if (ev.type === 'done') {
+              runStatus = ev.run_status;
               finalStatus = ev.run_status === 'failed' ? 'error' : 'done';
             }
           }
+        }
+        // resumable(interrupted/awaiting_input)로 끝났으면 run_id 를 유지해 다음
+        // send 가 /resume 하도록 한다. 종료 상태면 비워 새 런을 시작한다.
+        if (runStatus === 'interrupted' || runStatus === 'awaiting_input') {
+          // resumableRunIdRef 는 이미 X-Agent-Run-Id 로 채워져 있다.
+        } else {
+          resumableRunIdRef.current = null;
         }
         setToolActivity(null);
         setStreamingText('');

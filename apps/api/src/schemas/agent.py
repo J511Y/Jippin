@@ -37,6 +37,7 @@ class AgentRunStatusResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
+    schema_version: Literal["1.0.0"] = "1.0.0"
     id: uuid.UUID
     session_id: uuid.UUID
     thread_id: uuid.UUID

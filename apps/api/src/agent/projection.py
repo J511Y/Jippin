@@ -150,15 +150,23 @@ class ProjectionWriter:
                 return row
             raise
 
-    async def project_message(self, ev: AssistantMessage) -> dict[str, Any] | None:
+    async def project_message(
+        self, ev: AssistantMessage
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """메시지를 투영하고 ``(row, created)`` 를 돌려준다.
+
+        ``created=False`` 면 (resume replay 등으로) 이미 투영된 메시지다 — 런너는
+        이 경우 SSE message 프레임을 재전송하지 않는다(클라이언트 중복 방지).
+        """
+
         existing = await main_flow.find_chat_message_by_lc_id(
             session_id=self.session_id, lc_message_id=ev.lc_message_id
         )
         if existing is not None:
-            return existing
+            return existing, False
         snapshot = _validate_judgment_snapshot(ev.judgment_snapshot)
         try:
-            return await main_flow.append_internal_chat_message(
+            row = await main_flow.append_internal_chat_message(
                 session_id=self.session_id,
                 role=ev.role,
                 content=ev.content,
@@ -166,10 +174,12 @@ class ProjectionWriter:
                 judgment_snapshot=snapshot,
                 metadata={"lc_message_id": ev.lc_message_id},
             )
+            return row, True
         except IntegrityError:
-            return await main_flow.find_chat_message_by_lc_id(
+            row = await main_flow.find_chat_message_by_lc_id(
                 session_id=self.session_id, lc_message_id=ev.lc_message_id
             )
+            return row, False
 
     async def project_decision(self, ev: DecisionChange) -> dict[str, Any] | None:
         if ev.status is None and ev.completion_decision is _UNSET:

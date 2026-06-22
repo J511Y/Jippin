@@ -75,7 +75,8 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=[settings.request_id_header],
+        # 에이전트 SSE 시작 응답의 X-Agent-Run-Id 를 브라우저가 읽어 resume 에 쓴다.
+        expose_headers=[settings.request_id_header, "X-Agent-Run-Id"],
     )
     app.add_middleware(RequestIDMiddleware)
     # Last added wraps first: request logging sees the final response while
