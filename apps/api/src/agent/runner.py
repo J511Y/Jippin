@@ -248,6 +248,7 @@ class AgentRunner:
             owner_user_id=self.owner_user_id,
             owner_is_anonymous=self.owner_is_anonymous,
             run_context=self._run_context,
+            run_id=self.run_id,
             settings=settings,
         )
         checkpointer = await get_checkpointer()
@@ -268,7 +269,7 @@ class AgentRunner:
     async def stream(
         self,
         *,
-        user_message: str,
+        user_message: str | None,
         agent: Any | None = None,
         is_disconnected: Callable[[], Awaitable[bool]] | None = None,
         create_run: bool = False,
@@ -392,6 +393,10 @@ class AgentRunner:
                 # 여기서 실패(삭제/만료 세션, 일시 DB 오류)해도 except 가 failed 로
                 # 마감하고 finally 가 런을 풀어 준다(#startup-finalize). 재연결이면
                 # 새 턴을 만들지 않고 체크포인트(input=None)에서 이어 돌린다.
+                # no-message reconnect(user_message=None)도 새 턴이 없으므로 reconnect 와
+                # 동일하게 다룬다 — append/재전송 없이 체크포인트에서 이어 받는다.
+                if user_message is None:
+                    reconnect = True
                 if not reconnect:
                     # user 턴을 (run_id + 내용) 단위로 멱등하게 투영한다. pre-checkpoint
                     # resume 는 같은 run_id 로 같은 메시지를 다시 보내므로(프롬프트 유실
@@ -461,6 +466,11 @@ class AgentRunner:
                             if await self._is_cancelled():
                                 run_status = "cancelled"
                                 break
+                    else:
+                        # 스트림이 break 없이 정상 소진됨 — 아직 첨부 안 된 A2UI 버퍼를
+                        # 마지막에 flush 한다(빈 assistant·resume 잔여, #drain-without-text).
+                        async for frame in self._flush_pending_ui(sse):
+                            yield frame
                 except TimeoutError:
                     # 다음 청크를 기다리다 wall-clock 초과 — stall 도 잡힌다(#7).
                     run_status = "interrupted"
@@ -518,6 +528,48 @@ class AgentRunner:
                 except Exception:  # noqa: BLE001
                     log.warning("agent_run_release_failed", run_id=str(self.run_id))
 
+    async def _drain_ui(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        """A2UI 버퍼를 drain 한다 — 메모리(같은 스트림) 우선, 비었으면 내구 버퍼(resume).
+
+        항상 내구 버퍼를 비워 stale carry-over 를 막는다. 같은 스트림에선 메모리·내구가
+        동일 내용이라 메모리를 택하고 내구는 버린다(중복 방지). resume 에선 메모리가
+        비어 있어 내구 버퍼가 사용된다(#a2ui-durable).
+        """
+
+        ui_mem, snap_mem = self._run_context.drain_ui()
+        ui_db, snap_db = await main_flow.take_pending_ui(run_id=self.run_id)
+        ui = ui_mem or ui_db
+        snapshot = snap_mem if snap_mem is not None else snap_db
+        return ui, snapshot
+
+    async def _flush_pending_ui(self, sse: SseEventStream) -> AsyncIterator[str]:
+        """스트림 정상 종료 후 아직 첨부 안 된 A2UI 버퍼를 마지막 메시지로 내보낸다.
+
+        모델이 결과를 emit_ui_component 로만 내고 빈 assistant 메시지를 낸 경우, 텍스트
+        가드로 AssistantMessage 시그널이 억제돼 drain 이 안 일어난다. 그 버퍼가 유실되지
+        않도록 스트림 끝에서 한 번 더 drain 해 UI-only 메시지로 투영/emit 한다
+        (#drain-without-text).
+        """
+
+        ui, snapshot = await self._drain_ui()
+        if not ui and snapshot is None:
+            return
+        msg = AssistantMessage(
+            lc_message_id=f"ui-flush:{self.run_id}",
+            content="",
+            role="assistant",
+            ui_components=ui,
+            judgment_snapshot=snapshot,
+        )
+        row, _created = await self._writer.project_message(msg)
+        if row is not None:
+            yield sse.message(
+                role=row.get("role", "assistant"),
+                content=row.get("content", ""),
+                message_id=str(row["id"]),
+                ui_components=row.get("ui_components") or [],
+            )
+
     async def _consume(
         self,
         raw: AsyncIterator[Any],
@@ -568,7 +620,7 @@ class AgentRunner:
                         error_code=sig.error_code,
                     )
                 elif isinstance(sig, AssistantMessage):
-                    ui, snapshot = self._run_context.drain_ui()
+                    ui, snapshot = await self._drain_ui()
                     sig.ui_components = ui
                     sig.judgment_snapshot = snapshot
                     row, _created = await self._writer.project_message(sig)

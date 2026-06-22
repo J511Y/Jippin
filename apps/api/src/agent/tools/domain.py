@@ -239,24 +239,30 @@ def evaluate_rules_impl(*, judgment_values: dict[str, Any]) -> dict[str, Any]:
     return _ok(result=result, summary=f"룰 평가 결과: {result.get('verdict')}")
 
 
-def emit_ui_component_impl(
+async def emit_ui_component_impl(
     *,
     run_context: "RunContext",
+    run_id: uuid.UUID,
     components: list[dict[str, Any]],
     judgment_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """다음 assistant 메시지에 첨부할 A2UI payload 를 런 컨텍스트에 버퍼링한다.
+    """다음 assistant 메시지에 첨부할 A2UI payload 를 버퍼링한다.
 
     실제 첨부는 런너가 최종 assistant 메시지를 투영할 때 drain 한다(자유 텍스트
     파싱 대신 명시적 도구 채널을 쓴다 — 코드베이스 규칙).
 
-    한 턴에 여러 번 호출되면(결과 카드 + 별도 CTA 등) **누적**한다 — 직전 payload 를
-    덮어쓰지 않는다(#multi-emit). drain 시 전부 첨부된다.
+    버퍼는 두 곳에 쌓는다: 같은 스트림 빠른 경로용 in-memory ``run_context`` 와,
+    SSE 가 끊겨 resume 로 이어질 때(도구는 이미 체크포인트돼 재실행되지 않음)도 살아남는
+    런 단위 **내구 버퍼**(agent_runs.pending_ui). drain 은 메모리를 우선하고, 비었으면
+    내구 버퍼에서 가져온다(#a2ui-durable). 한 턴에 여러 번 호출되면 **누적**한다(#multi-emit).
     """
 
     run_context.pending_ui_components.extend(components or [])
     if judgment_snapshot is not None:
         run_context.pending_judgment_snapshot = dict(judgment_snapshot)
+    await main_flow.append_pending_ui(
+        run_id=run_id, components=components or [], snapshot=judgment_snapshot
+    )
     return _ok(buffered=len(run_context.pending_ui_components))
 
 

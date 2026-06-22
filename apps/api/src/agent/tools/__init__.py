@@ -45,6 +45,7 @@ def build_tools(
     owner_user_id: uuid.UUID,
     owner_is_anonymous: bool,
     run_context: RunContext,
+    run_id: uuid.UUID,
     settings: "Settings",
 ) -> list[Any]:
     """impl 함수를 langchain ``@tool`` 로 래핑(런별 세션 컨텍스트 closure 바인딩).
@@ -117,8 +118,9 @@ def build_tools(
         judgment_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """다음 답변에 첨부할 A2UI 컴포넌트/판단 스냅샷을 등록한다(자유 텍스트로 렌더하지 말 것)."""
-        return emit_ui_component_impl(
+        return await emit_ui_component_impl(
             run_context=run_context,
+            run_id=run_id,
             components=components,
             judgment_snapshot=judgment_snapshot,
         )

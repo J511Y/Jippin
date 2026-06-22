@@ -23,6 +23,8 @@ from ..auth.request_token import RequestUser, require_supabase_request_user
 from ..errors import ZippinException
 from ..logging import get_logger
 from ..schemas.agent import (
+    AgentMessageHistoryResponse,
+    AgentMessageItem,
     AgentRunResumeRequest,
     AgentRunStartRequest,
     AgentRunStatusResponse,
@@ -133,7 +135,8 @@ async def resume_agent_run(
         run_id=run_id,
     )
     generator = runner.stream(
-        user_message=payload.message.content,
+        # message 없음(no-message reconnect) → 끊긴 런을 이어 받기만 한다.
+        user_message=payload.message.content if payload.message else None,
         is_disconnected=request.is_disconnected,
         resume=True,
     )
@@ -187,6 +190,26 @@ async def get_active_agent_run_status(
             http_status=404,
         )
     return AgentRunStatusResponse.model_validate(active)
+
+
+@router.get(
+    "/{session_id}/agent/messages",
+    response_model=AgentMessageHistoryResponse,
+)
+async def get_agent_message_history(
+    session_id: uuid.UUID = Path(...),
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> AgentMessageHistoryResponse:
+    # 마운트/새로고침 시 과거 transcript 복원 — 완료된 런은 resume 스트림이 없어 SSE 로
+    # 다시 받을 수 없으므로 영속된 user/assistant 메시지를 돌려준다(#load-history-on-mount).
+    rows = await main_flow.list_session_chat_messages(
+        session_id=session_id,
+        owner_user_id=requester.user_id,
+        owner_is_anonymous=requester.is_anonymous,
+    )
+    return AgentMessageHistoryResponse(
+        messages=[AgentMessageItem.model_validate(row) for row in rows]
+    )
 
 
 @router.get(

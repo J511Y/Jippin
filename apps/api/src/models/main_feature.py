@@ -537,6 +537,16 @@ class AgentRun(TimestampMixin, Base):
         nullable=False,
         server_default=jsonb_empty_object,
     )
+    # A2UI 버퍼 내구화 — emit_ui_component payload 를 런에 보관(resume 생존), 메시지
+    # 투영 시 drain 한다(#a2ui-durable).
+    pending_ui: Mapped[list[object]] = mapped_column(
+        postgresql.JSONB,
+        nullable=False,
+        server_default=jsonb_empty_array,
+    )
+    pending_judgment_snapshot: Mapped[dict[str, object] | None] = mapped_column(
+        postgresql.JSONB
+    )
     started_at: Mapped[datetime | None] = mapped_column(
         postgresql.TIMESTAMP(timezone=True)
     )

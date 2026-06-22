@@ -45,13 +45,37 @@ class AgentRunStartRequest(BaseModel):
 
 
 class AgentRunResumeRequest(BaseModel):
-    """`POST /sessions/{id}/agent/runs/{run_id}/resume` body — 후속 사용자 입력."""
+    """`POST /sessions/{id}/agent/runs/{run_id}/resume` body.
+
+    ``message`` 는 선택이다: 값이 있으면 awaiting_input 후속 입력으로 처리하고, 없으면
+    (no-message reconnect) 끊긴 in-flight 런을 체크포인트에서 이어 받기만 한다 —
+    클라이언트가 drop 복구(reconnect)와 새 입력(reply)을 명확히 구분하게 한다(#reconnect).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["1.0.0"] = Field(...)
-    message: AgentUserMessage
+    message: AgentUserMessage | None = None
     metadata: dict[str, Any] | None = None
+
+
+class AgentMessageItem(BaseModel):
+    """채팅 transcript 한 줄(마운트 복원용). chat_messages 투영의 안전 필드만 노출."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    role: str
+    content: str
+    ui_components: list[Any] = Field(default_factory=list)
+    created_at: datetime
+
+
+class AgentMessageHistoryResponse(BaseModel):
+    """`GET /sessions/{id}/agent/messages` — 시간순 user/assistant 메시지."""
+
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    messages: list[AgentMessageItem]
 
 
 class AgentRunStatusResponse(BaseModel):

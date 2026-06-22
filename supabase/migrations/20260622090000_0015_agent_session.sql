@@ -98,6 +98,11 @@ create table public.agent_runs (
   error_code text,
   error_message text,
   input_summary jsonb not null default '{}'::jsonb,
+  -- A2UI 버퍼 내구화: emit_ui_component 가 등록한 컴포넌트/판단 스냅샷을 런에 보관해,
+  -- SSE 가 끊겨 resume 로 이어질 때(도구는 이미 체크포인트됨)도 최종 assistant 메시지에
+  -- 첨부되도록 한다. 메시지 투영 시 drain 하며 비운다(#a2ui-durable).
+  pending_ui jsonb not null default '[]'::jsonb,
+  pending_judgment_snapshot jsonb,
   started_at timestamp with time zone,
   finished_at timestamp with time zone,
   created_at timestamp with time zone not null default now(),

@@ -41,6 +41,7 @@ _SEAM_NAMES: tuple[str, ...] = (
     # agent projection / runs (CMP-DIRECT)
     "_db_select_chat_message_by_lc_id",
     "_db_select_chat_tool_call_by_lc_id",
+    "_db_list_chat_messages",
     "_db_update_session_fields",
     "_db_insert_agent_run",
     "_db_select_agent_run",
@@ -50,6 +51,8 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_cancel_agent_run",
     "_db_finalize_agent_run",
     "_db_claim_resumable_agent_run",
+    "_db_append_pending_ui",
+    "_db_take_pending_ui",
 )
 
 # agent_runs 의 활성(=세션당 1개 부분 유니크) 상태 집합.
@@ -269,6 +272,17 @@ class FakeMainFlowDb:
                 return dict(row)
         return None
 
+    async def _db_list_chat_messages(
+        self, session_id: uuid.UUID, limit: int
+    ) -> list[dict[str, Any]]:
+        rows = [
+            r
+            for r in self.chat_messages.values()
+            if r["session_id"] == session_id and r.get("role") in ("user", "assistant")
+        ]
+        rows.sort(key=lambda r: r.get("created_at"))
+        return [dict(r) for r in rows[:limit]]
+
     # -- chat_tool_calls -----------------------------------------------------
 
     async def _db_select_chat_tool_call(
@@ -369,6 +383,8 @@ class FakeMainFlowDb:
             "error_code": None,
             "error_message": None,
             "input_summary": {},
+            "pending_ui": [],
+            "pending_judgment_snapshot": None,
             "started_at": None,
             "finished_at": None,
             "created_at": now,
@@ -453,6 +469,33 @@ class FakeMainFlowDb:
         row["error_code"] = None
         row["error_message"] = None
         return dict(row)
+
+    async def _db_append_pending_ui(
+        self,
+        run_id: uuid.UUID,
+        components: list[dict[str, Any]],
+        snapshot: dict[str, Any] | None,
+    ) -> None:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return
+        row["pending_ui"] = list(row.get("pending_ui") or []) + list(components or [])
+        if snapshot is not None:
+            row["pending_judgment_snapshot"] = snapshot
+        row["updated_at"] = _now()
+
+    async def _db_take_pending_ui(
+        self, run_id: uuid.UUID
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return [], None
+        ui = list(row.get("pending_ui") or [])
+        snap = row.get("pending_judgment_snapshot")
+        row["pending_ui"] = []
+        row["pending_judgment_snapshot"] = None
+        row["updated_at"] = _now()
+        return ui, snap
 
 
 def install_main_flow_fake(monkeypatch) -> FakeMainFlowDb:

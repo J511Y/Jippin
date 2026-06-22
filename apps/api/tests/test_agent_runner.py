@@ -212,6 +212,48 @@ async def test_runner_streams_sse_and_finalizes(fake: FakeMainFlowDb) -> None:
     assert tool_calls[0]["status"] == "succeeded"
 
 
+def _token_only_chunks() -> list[Any]:
+    # assistant 메시지 없이 토큰만 — 모델이 결과를 emit_ui_component 로만 낸 경우 모사.
+    return [("messages", (SimpleNamespace(content="음", tool_calls=None), {}))]
+
+
+async def test_runner_flushes_durable_ui_without_assistant_text(
+    fake: FakeMainFlowDb,
+) -> None:
+    # #drain-without-text + #a2ui-durable: assistant 텍스트가 없어도 내구 A2UI 버퍼를
+    # 스트림 끝에서 flush 해 UI-only 메시지로 투영/emit 한다(resume 도 같은 경로).
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    # 도구가 등록한(체크포인트된) A2UI 가 내구 버퍼에만 있고 메모리엔 없는 상태(resume 모사).
+    await main_flow.append_pending_ui(
+        run_id=run["id"], components=[{"kind": "result"}], snapshot={"v": 1}
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    frames = [
+        f
+        async for f in runner.stream(
+            user_message="x", agent=_FakeAgent(_token_only_chunks())
+        )
+    ]
+    events = _parse(frames)
+    msgs = [d for ev, d in events if ev == "message"]
+    assert len(msgs) == 1
+    assert msgs[0]["ui_components"] == [{"kind": "result"}]
+    # drain 후 내구 버퍼는 비워진다.
+    assert fake.agent_runs[run["id"]]["pending_ui"] == []
+    assert fake.agent_runs[run["id"]]["pending_judgment_snapshot"] is None
+
+
 async def test_runner_one_active_run_per_session(fake: FakeMainFlowDb) -> None:
     owner = uuid.uuid4()
     session = await main_flow.create_session(
@@ -901,6 +943,66 @@ async def test_runner_interrupted_before_checkpoint_resends(
         if m["session_id"] == session["id"] and m["role"] == "user"
     )
     assert after == before
+
+
+async def test_list_session_chat_messages_history(fake: FakeMainFlowDb) -> None:
+    # #load-history-on-mount: user/assistant 메시지를 시간순으로 복원(tool/system 제외).
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    await main_flow.append_chat_message(
+        session_id=session["id"], owner_user_id=owner, payload={"content": "안녕"}
+    )
+    await main_flow.append_internal_chat_message(
+        session_id=session["id"], role="assistant", content="네 도와드릴게요"
+    )
+    await main_flow.append_internal_chat_message(
+        session_id=session["id"], role="tool", content="(내부)"
+    )
+    history = await main_flow.list_session_chat_messages(
+        session_id=session["id"], owner_user_id=owner
+    )
+    roles = [m["role"] for m in history]
+    assert roles == ["user", "assistant"]  # tool 제외, 시간순
+    assert history[0]["content"] == "안녕"
+
+
+async def test_runner_no_message_reconnect_drains_without_append(
+    fake: FakeMainFlowDb,
+) -> None:
+    # #reconnect: user_message=None(no-message reconnect)은 새 턴을 append/전송하지 않고
+    # 체크포인트에서 이어 받는다(astream None).
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    await main_flow.update_agent_run(
+        run_id=run["id"], status="awaiting_input", current_step="streaming"
+    )
+    before = sum(
+        1
+        for m in fake.chat_messages.values()
+        if m["session_id"] == session["id"] and m["role"] == "user"
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    agent = _CapturingAgent(_chunks())
+    _ = [f async for f in runner.stream(user_message=None, agent=agent, resume=True)]
+    assert agent.payloads == [None]  # 메시지 없이 체크포인트 이어 받기
+    after = sum(
+        1
+        for m in fake.chat_messages.values()
+        if m["session_id"] == session["id"] and m["role"] == "user"
+    )
+    assert after == before  # 새 user 턴 없음
 
 
 async def test_runner_resume_not_resumable_errors(fake: FakeMainFlowDb) -> None:

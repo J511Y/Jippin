@@ -174,15 +174,34 @@ def test_evaluate_rules_invalid_input_is_structured_error() -> None:
     assert res["error_code"] == "RULE_INPUT_INVALID"
 
 
-def test_emit_ui_component_accumulates_across_calls() -> None:
-    # #multi-emit: 한 턴에 여러 번 호출하면 누적(덮어쓰지 않음).
+async def test_emit_ui_component_accumulates_across_calls(monkeypatch) -> None:
+    # #multi-emit: 한 턴에 여러 번 호출하면 메모리·내구 버퍼 모두에 누적.
+    from tests._main_flow_db_fake import install_main_flow_fake
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
     ctx = domain.RunContext()
-    domain.emit_ui_component_impl(run_context=ctx, components=[{"kind": "result"}])
-    domain.emit_ui_component_impl(
-        run_context=ctx, components=[{"kind": "cta"}], judgment_snapshot={"v": 1}
+    await domain.emit_ui_component_impl(
+        run_context=ctx, run_id=run["id"], components=[{"kind": "result"}]
+    )
+    await domain.emit_ui_component_impl(
+        run_context=ctx,
+        run_id=run["id"],
+        components=[{"kind": "cta"}],
+        judgment_snapshot={"v": 1},
     )
     ui, snapshot = ctx.drain_ui()
     assert [c["kind"] for c in ui] == ["result", "cta"]
     assert snapshot == {"v": 1}
-    # drain 후 비워진다.
-    assert ctx.drain_ui() == ([], None)
+    # 내구 버퍼에도 동일하게 누적되어 resume 에서 살아남는다.
+    assert [c["kind"] for c in fake.agent_runs[run["id"]]["pending_ui"]] == [
+        "result",
+        "cta",
+    ]
+    assert fake.agent_runs[run["id"]]["pending_judgment_snapshot"] == {"v": 1}

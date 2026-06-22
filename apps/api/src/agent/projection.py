@@ -91,7 +91,9 @@ def _validate_judgment_snapshot(
     try:
         CommonJudgmentSchema.model_validate(snapshot)
     except Exception as exc:  # noqa: BLE001 - 검증 실패는 드롭 + 로그
-        log.warning("judgment_snapshot_invalid", error=str(exc))
+        # Pydantic 에러 문자열은 위반 입력값(주소·건물 필드)을 담을 수 있다 — 비-
+        # redaction 로그에 raw 를 남기지 않고 안정적 타입만 기록한다(#no-raw-judgment-log).
+        log.warning("judgment_snapshot_invalid", error_type=type(exc).__name__)
         return None
     return snapshot
 

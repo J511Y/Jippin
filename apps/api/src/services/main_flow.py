@@ -1107,6 +1107,45 @@ async def find_chat_message_by_lc_id(
     return await _db_select_chat_message_by_lc_id(session_id, lc_message_id)
 
 
+async def _db_list_chat_messages(
+    session_id: uuid.UUID, limit: int
+) -> list[dict[str, Any]]:
+    async with get_engine().begin() as conn:
+        rows = (
+            await conn.execute(
+                sa.select(_CHAT_MESSAGES)
+                .where(
+                    _CHAT_MESSAGES.c.session_id == session_id,
+                    _CHAT_MESSAGES.c.role.in_(("user", "assistant")),
+                )
+                .order_by(_CHAT_MESSAGES.c.created_at.asc())
+                .limit(limit)
+            )
+        ).all()
+    return [dict(r._mapping) for r in rows]
+
+
+async def list_session_chat_messages(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """소유 세션의 user/assistant 메시지를 시간순으로 반환(채팅 UI 마운트 복원용).
+
+    런이 끝나면 resume 스트림이 없어 영속된 transcript 를 다시 흘릴 수 없으므로,
+    프론트가 마운트 시 이 GET 으로 과거 메시지를 채운다(#load-history-on-mount).
+    """
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    return await _db_list_chat_messages(session_id, limit)
+
+
 async def find_chat_tool_call_by_lc_id(
     *, session_id: uuid.UUID, lc_tool_call_id: str
 ) -> dict[str, Any] | None:
@@ -1378,6 +1417,75 @@ async def claim_resumable_agent_run(
             code="AGENT_RUN_NOT_RESUMABLE",
         )
     return row
+
+
+async def _db_append_pending_ui(
+    run_id: uuid.UUID,
+    components: list[dict[str, Any]],
+    snapshot: dict[str, Any] | None,
+) -> None:
+    # read-modify-write(한 트랜잭션) — 한 런의 emit 은 그래프 실행상 순차라 안전.
+    async with get_engine().begin() as conn:
+        sel = (
+            await conn.execute(
+                sa.select(_AGENT_RUNS.c.pending_ui).where(_AGENT_RUNS.c.id == run_id)
+            )
+        ).one_or_none()
+        if sel is None:
+            return
+        merged = list(sel.pending_ui or []) + list(components or [])
+        values: dict[str, Any] = {"pending_ui": merged, "updated_at": sa.func.now()}
+        if snapshot is not None:
+            values["pending_judgment_snapshot"] = snapshot
+        await conn.execute(
+            sa.update(_AGENT_RUNS).where(_AGENT_RUNS.c.id == run_id).values(**values)
+        )
+
+
+async def _db_take_pending_ui(
+    run_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    # read + clear(한 트랜잭션) — drain 후 비워 stale carry-over 를 막는다.
+    async with get_engine().begin() as conn:
+        sel = (
+            await conn.execute(
+                sa.select(
+                    _AGENT_RUNS.c.pending_ui,
+                    _AGENT_RUNS.c.pending_judgment_snapshot,
+                ).where(_AGENT_RUNS.c.id == run_id)
+            )
+        ).one_or_none()
+        if sel is None:
+            return [], None
+        await conn.execute(
+            sa.update(_AGENT_RUNS)
+            .where(_AGENT_RUNS.c.id == run_id)
+            .values(
+                pending_ui=[],
+                pending_judgment_snapshot=None,
+                updated_at=sa.func.now(),
+            )
+        )
+    return list(sel.pending_ui or []), sel.pending_judgment_snapshot
+
+
+async def append_pending_ui(
+    *,
+    run_id: uuid.UUID,
+    components: list[dict[str, Any]],
+    snapshot: dict[str, Any] | None = None,
+) -> None:
+    """A2UI 버퍼를 런에 내구적으로 누적한다(resume 생존용). runtime-only."""
+
+    await _db_append_pending_ui(run_id, components, snapshot)
+
+
+async def take_pending_ui(
+    *, run_id: uuid.UUID
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """런의 내구 A2UI 버퍼를 읽고 비운다(메시지 투영 시 drain). runtime-only."""
+
+    return await _db_take_pending_ui(run_id)
 
 
 # ---------------------------------------------------------------------------
