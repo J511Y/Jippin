@@ -14,9 +14,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentUserMessage(BaseModel):
-    """클라이언트가 만들 수 있는 유일한 메시지 — role=user."""
+    """클라이언트가 만들 수 있는 유일한 메시지 — role=user.
 
-    role: Literal["user"] = "user"
+    계약상 ``role`` 은 required(const "user") 다 — default 를 두지 않아 누락/오류
+    role 을 422 로 거절한다(서버 경계를 계약과 일치시킨다).
+    """
+
+    role: Literal["user"] = Field(...)
     content: str = Field(min_length=1)
 
 

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -69,6 +70,17 @@ def _result(
     }
 
 
+def _valid_uuid(value: Any) -> str | None:
+    """UUID 로 파싱되는 문자열만 반환(아니면 None) — 계약의 mask_asset_id 형식 보장."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return None
+    return value
+
+
 def _retry_delay(resp: httpx.Response) -> float:
     raw = resp.headers.get("Retry-After")
     if raw is not None:
@@ -123,11 +135,10 @@ def _parse_ok(data: Any) -> dict[str, Any]:
         else "세그멘테이션 완료(인스턴스 요약 없음)."
     )
     # 성공 응답이 마스크 자산 id 를 주면 보존한다(downstream 오버레이/리포트용).
-    mask = data.get("mask_asset_id")
-    mask_asset_id = mask if isinstance(mask, str) and mask else None
-    return _result(
-        True, summary=summary, instances=instances, mask_asset_id=mask_asset_id
-    )
+    # 계약은 UUID 형식이므로 UUID 로 파싱되는 값만 통과시키고, 잘못된 값(스토리지 키·
+    # placeholder 등)은 드롭한다.
+    mask = _valid_uuid(data.get("mask_asset_id"))
+    return _result(True, summary=summary, instances=instances, mask_asset_id=mask)
 
 
 async def segment_floorplan_impl(

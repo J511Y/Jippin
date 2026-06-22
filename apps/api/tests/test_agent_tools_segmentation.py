@@ -169,6 +169,20 @@ async def test_200_preserves_mask_asset_id() -> None:
     assert res["mask_asset_id"] == mask_id
 
 
+async def test_200_drops_non_uuid_mask_asset_id() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"instances": [], "mask_asset_id": "storage/key/not-a-uuid"}
+        )
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url="x", settings=_settings(), client=client
+        )
+    assert res["ok"] is True
+    assert res["mask_asset_id"] is None
+
+
 async def test_200_drops_invalid_counts() -> None:
     # 음수·bool count 는 계약(count>=0) 위반이라 드롭한다.
     def handler(req: httpx.Request) -> httpx.Response:

@@ -35,3 +35,16 @@ def test_start_request_accepts_versioned() -> None:
     )
     assert req.schema_version == "1.0.0"
     assert req.message.content == "hi"
+
+
+def test_message_role_is_required() -> None:
+    with pytest.raises(ValidationError):
+        AgentRunStartRequest(schema_version="1.0.0", message={"content": "hi"})
+
+
+def test_message_role_rejects_non_user() -> None:
+    with pytest.raises(ValidationError):
+        AgentRunStartRequest(
+            schema_version="1.0.0",
+            message={"role": "assistant", "content": "hi"},
+        )
