@@ -581,6 +581,11 @@ async def _db_claim_resumable_agent_run(
                     status="running",
                     started_at=sa.func.now(),
                     updated_at=sa.func.now(),
+                    # 이전 마감의 stale terminal 메타를 지운다 — running 인데 finished_at
+                    # 이 남아 lifecycle 소비자가 "이미 끝남"으로 오해하지 않게.
+                    finished_at=None,
+                    error_code=None,
+                    error_message=None,
                 )
                 .returning(*_AGENT_RUNS.c)
             )

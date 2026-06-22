@@ -287,20 +287,32 @@ export function useAgentStream(sessionId: string): UseAgentStream {
               const dynamics = (ev.ui_components ?? [])
                 .map(toDynamic)
                 .filter((d): d is DynamicComponentSpec => d !== undefined);
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: ev.message_id ?? uid(),
-                  role: 'assistant',
-                  content: ev.content,
-                  createdAt: new Date().toISOString(),
-                  dynamics,
-                },
-              ]);
+              const msgId = ev.message_id ?? uid();
+              // resume 재연결 시 서버가 이미 영속된 메시지를 다시 보낼 수 있다 —
+              // message_id 로 dedupe 한다(#replay-on-resume).
+              setMessages((prev) =>
+                prev.some((m) => m.id === msgId)
+                  ? prev
+                  : [
+                      ...prev,
+                      {
+                        id: msgId,
+                        role: 'assistant',
+                        content: ev.content,
+                        createdAt: new Date().toISOString(),
+                        dynamics,
+                      },
+                    ],
+              );
               assembled = '';
               setStreamingText('');
             } else if (ev.type === 'error') {
               setError(ev.message);
+              // generator insert race(AGENT_RUN_ALREADY_ACTIVE)면 활성 런 id 로 복구 —
+              // 다음 send 가 그 런을 resume 한다(#active-run-on-race).
+              if (ev.error_code === 'AGENT_RUN_ALREADY_ACTIVE' && ev.active_run_id) {
+                setResumeId(ev.active_run_id);
+              }
             } else if (ev.type === 'done') {
               runStatus = ev.run_status;
             }

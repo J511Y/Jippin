@@ -74,11 +74,21 @@ class SseEventStream:
         data["ui_components"] = ui_components or []
         return _frame("message", data)
 
-    def error(self, *, error_code: str, message: str, recoverable: bool) -> str:
+    def error(
+        self,
+        *,
+        error_code: str,
+        message: str,
+        recoverable: bool,
+        active_run_id: str | None = None,
+        active_run_status: str | None = None,
+    ) -> str:
         data = self._base("error")
         data["error_code"] = error_code
         data["message"] = message
         data["recoverable"] = recoverable
+        data["active_run_id"] = active_run_id
+        data["active_run_status"] = active_run_status
         return _frame("error", data)
 
     def done(self, *, run_status: str) -> str:

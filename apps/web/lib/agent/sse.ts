@@ -33,7 +33,15 @@ export type AgentSseEvent =
       message_id: string | null;
       ui_components?: Array<Record<string, unknown>>;
     }
-  | { type: 'error'; seq: number; error_code: string; message: string; recoverable: boolean }
+  | {
+      type: 'error';
+      seq: number;
+      error_code: string;
+      message: string;
+      recoverable: boolean;
+      active_run_id?: string | null;
+      active_run_status?: string | null;
+    }
   | { type: 'done'; seq: number; run_status: string };
 
 export type RawSseFrame = { event: string; data: unknown };

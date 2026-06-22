@@ -434,6 +434,9 @@ class FakeMainFlowDb:
         row["status"] = "running"
         row["started_at"] = _now()
         row["updated_at"] = _now()
+        row["finished_at"] = None
+        row["error_code"] = None
+        row["error_message"] = None
         return dict(row)
 
 

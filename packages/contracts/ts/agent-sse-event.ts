@@ -144,6 +144,14 @@ export interface ErrorEvent {
    * true 면 스트림이 계속될 수 있고, false 면 done 이 뒤따른다.
    */
   recoverable: boolean;
+  /**
+   * AGENT_RUN_ALREADY_ACTIVE 등 충돌 시 세션의 현재 활성 런 id(복구용).
+   */
+  active_run_id?: string | null;
+  /**
+   * 위 활성 런의 상태(resumable 여부 판단용).
+   */
+  active_run_status?: string | null;
 }
 /**
  * 스트림 종료 신호. 항상 마지막 이벤트.

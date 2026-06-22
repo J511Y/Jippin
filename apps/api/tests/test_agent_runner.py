@@ -219,8 +219,11 @@ async def test_translate_tool_content_failure_maps_to_failed() -> None:
     assert ends[0].error_code == "SEGMENTATION_ENDPOINT_UNAVAILABLE"
 
 
-async def test_runner_dedupes_replayed_message(fake: FakeMainFlowDb) -> None:
-    # #5: 같은 lc_message_id 가 두 번 와도(resume replay) message SSE 는 1회만.
+async def test_runner_replayed_message_persists_once_with_stable_id(
+    fake: FakeMainFlowDb,
+) -> None:
+    # #replay-on-resume: 같은 lc_message_id 가 두 번 와도 DB row 는 1개고, SSE message
+    # 는 같은 message_id 로 재방출된다(resume 재연결 시 누락 방지 — 클라이언트가 dedupe).
     owner = uuid.uuid4()
     session = await main_flow.create_session(
         user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
@@ -242,8 +245,19 @@ async def test_runner_dedupes_replayed_message(fake: FakeMainFlowDb) -> None:
     frames = [
         f async for f in runner.stream(user_message="x", agent=_FakeAgent(chunks))
     ]
-    message_events = [ev for ev, _ in _parse(frames) if ev == "message"]
-    assert len(message_events) == 1
+    msg_ids = [
+        data["message_id"] for ev, data in _parse(frames) if ev == "message" and data
+    ]
+    # 두 번 emit 되지만 같은 message_id (클라이언트가 dedupe).
+    assert len(msg_ids) == 2
+    assert msg_ids[0] == msg_ids[1] and msg_ids[0] is not None
+    # DB 에는 assistant row 가 1개만.
+    assistant = [
+        r
+        for r in fake.chat_messages.values()
+        if r["session_id"] == session["id"] and r["role"] == "assistant"
+    ]
+    assert len(assistant) == 1
     assistant = [r for r in fake.chat_messages.values() if r["role"] == "assistant"]
     assert len(assistant) == 1
 
@@ -452,7 +466,7 @@ async def test_runner_create_run_conflict_emits_error(fake: FakeMainFlowDb) -> N
         user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
     )
     # 이미 활성 런이 있는 세션.
-    await main_flow.create_agent_run(
+    existing = await main_flow.create_agent_run(
         session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
     )
     run_id = uuid.uuid4()
@@ -469,10 +483,14 @@ async def test_runner_create_run_conflict_emits_error(fake: FakeMainFlowDb) -> N
         )
     ]
     events = _parse(frames)
-    assert any(
-        ev == "error" and d["error_code"] == "AGENT_RUN_ALREADY_ACTIVE"
+    # 에러에 활성 런 id/상태가 실려 클라이언트가 복구할 수 있다(#active-run-on-race).
+    err = next(
+        d
         for ev, d in events
+        if ev == "error" and d["error_code"] == "AGENT_RUN_ALREADY_ACTIVE"
     )
+    assert err["active_run_id"] == str(existing["id"])
+    assert err["active_run_status"] == "pending"
     assert events[-1][0] == "done" and events[-1][1]["run_status"] == "failed"
     assert run_id not in fake.agent_runs  # 우리 row 는 만들어지지 않음
 
@@ -515,7 +533,10 @@ async def test_runner_resume_claims_in_generator(fake: FakeMainFlowDb) -> None:
     run = await main_flow.create_agent_run(
         session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
     )
-    await main_flow.update_agent_run(run_id=run["id"], status="interrupted")
+    # 이전 마감으로 finished_at 이 남아 있다.
+    await main_flow.update_agent_run(
+        run_id=run["id"], status="interrupted", finished_at=main_flow._now()
+    )
     runner = AgentRunner(
         session_id=session["id"],
         owner_user_id=owner,
@@ -531,6 +552,29 @@ async def test_runner_resume_claims_in_generator(fake: FakeMainFlowDb) -> None:
     assert fake.agent_runs[run["id"]]["status"] == "succeeded"
     events = _parse(frames)
     assert events[-1][0] == "done" and events[-1][1]["run_status"] == "succeeded"
+
+
+async def test_claim_clears_stale_finished_at(fake: FakeMainFlowDb) -> None:
+    # #stale-finished-at: resume 점유 시 이전 마감의 finished_at/error 메타를 지운다.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    await main_flow.update_agent_run(
+        run_id=run["id"],
+        status="interrupted",
+        finished_at=main_flow._now(),
+        error_code="X",
+    )
+    claimed = await main_flow.claim_resumable_agent_run(
+        session_id=session["id"], run_id=run["id"], owner_user_id=owner
+    )
+    assert claimed["status"] == "running"
+    assert claimed["finished_at"] is None
+    assert claimed["error_code"] is None
 
 
 async def test_runner_resume_not_resumable_errors(fake: FakeMainFlowDb) -> None:

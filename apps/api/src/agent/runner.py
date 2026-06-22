@@ -273,10 +273,20 @@ class AgentRunner:
                     except ZippinException as exc:
                         if exc.code == "AGENT_RUN_ALREADY_ACTIVE":
                             owns_run = False
+                            # 사전판정 이후 generator insert 직전에 동시 start 가 활성
+                            # 런을 만든 race — 클라이언트가 그 런으로 복구할 수 있도록
+                            # 활성 런 id/상태를 error 에 실어 준다(#active-run-on-race).
+                            active = await main_flow.get_active_agent_run(
+                                session_id=self.session_id,
+                                owner_user_id=self.owner_user_id,
+                                owner_is_anonymous=self.owner_is_anonymous,
+                            )
                             yield sse.error(
                                 error_code="AGENT_RUN_ALREADY_ACTIVE",
                                 message="이미 진행 중인 런이 있습니다.",
                                 recoverable=False,
+                                active_run_id=str(active["id"]) if active else None,
+                                active_run_status=active["status"] if active else None,
                             )
                             yield sse.done(run_status="failed")
                             return
@@ -443,15 +453,16 @@ class AgentRunner:
                     ui, snapshot = self._run_context.drain_ui()
                     sig.ui_components = ui
                     sig.judgment_snapshot = snapshot
-                    row, created = await self._writer.project_message(sig)
-                    # resume replay 로 이미 투영된 메시지는 SSE 를 다시 보내지 않는다 —
-                    # 클라이언트 중복 버블 방지(#5).
-                    if created:
+                    row, _created = await self._writer.project_message(sig)
+                    # 영속된 row 기준으로 항상 emit 한다 — resume 재연결 시(SSE 프레임이
+                    # 도달 전 끊긴 경우) 이미 저장된 답변도 클라이언트가 받도록. 중복은
+                    # 클라이언트가 message_id 로 dedupe 한다(#replay-on-resume).
+                    if row is not None:
                         yield sse.message(
-                            role=sig.role,
-                            content=sig.content,
-                            message_id=str(row["id"]) if row else None,
-                            ui_components=ui,
+                            role=row.get("role", sig.role),
+                            content=row.get("content", sig.content),
+                            message_id=str(row["id"]),
+                            ui_components=row.get("ui_components") or [],
                         )
         finally:
             if pending is not None:
