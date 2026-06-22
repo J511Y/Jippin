@@ -197,6 +197,33 @@ async def test_runner_one_active_run_per_session(fake: FakeMainFlowDb) -> None:
     assert excinfo.value.code == "AGENT_RUN_ALREADY_ACTIVE"
 
 
+async def test_create_run_fk_violation_maps_to_not_found(
+    fake: FakeMainFlowDb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #unique-only-conflict: FK 위반(23503)은 활성 런 충돌이 아니라 not-found 로.
+    from sqlalchemy.exc import IntegrityError
+
+    from src.errors import ZippinException
+
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+
+    class _Orig(Exception):
+        sqlstate = "23503"
+
+    async def _fk_boom(values: dict[str, Any]) -> dict[str, Any]:
+        raise IntegrityError("insert", None, _Orig("fk"))
+
+    monkeypatch.setattr(main_flow, "_db_insert_agent_run", _fk_boom)
+    with pytest.raises(ZippinException) as excinfo:
+        await main_flow.create_agent_run(
+            session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+        )
+    assert excinfo.value.code == "SESSION_NOT_FOUND"
+
+
 def _tool_message_degraded() -> SimpleNamespace:
     # plain @tool 은 dict 반환을 content(JSON 문자열)로 싣고 status=success, artifact=None.
     return SimpleNamespace(
@@ -575,6 +602,89 @@ async def test_claim_clears_stale_finished_at(fake: FakeMainFlowDb) -> None:
     assert claimed["status"] == "running"
     assert claimed["finished_at"] is None
     assert claimed["error_code"] is None
+
+
+class _CapturingAgent:
+    """astream 입력 payload 를 기록하는 fake — 재연결 시 None 검증용."""
+
+    def __init__(self, chunks: list[Any]) -> None:
+        self._chunks = chunks
+        self.payloads: list[Any] = []
+
+    def astream(self, payload: Any, config: Any = None, stream_mode: Any = None):
+        self.payloads.append(payload)
+        return _aiter(self._chunks)
+
+
+async def test_runner_reconnect_does_not_duplicate_turn(fake: FakeMainFlowDb) -> None:
+    # #reconnect-idempotent: interrupted 런 재개는 새 user 턴을 append/전송하지 않는다.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    await main_flow.update_agent_run(run_id=run["id"], status="interrupted")
+    before = sum(
+        1
+        for m in fake.chat_messages.values()
+        if m["session_id"] == session["id"] and m["role"] == "user"
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    agent = _CapturingAgent(_chunks())
+    frames = [
+        f async for f in runner.stream(user_message="계속", agent=agent, resume=True)
+    ]
+    # 재연결이므로 astream 에 새 user 메시지가 아니라 None 을 넘긴다(체크포인트 이어돌림).
+    assert agent.payloads == [None]
+    after = sum(
+        1
+        for m in fake.chat_messages.values()
+        if m["session_id"] == session["id"] and m["role"] == "user"
+    )
+    assert after == before  # user 턴이 중복 append 되지 않음
+    events = _parse(frames)
+    assert events[-1][0] == "done"
+
+
+async def test_runner_resume_awaiting_input_appends_turn(
+    fake: FakeMainFlowDb,
+) -> None:
+    # awaiting_input 재개는 새 user 메시지를 정상 append/전송한다(재연결 아님).
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    await main_flow.update_agent_run(run_id=run["id"], status="awaiting_input")
+    before = sum(
+        1
+        for m in fake.chat_messages.values()
+        if m["session_id"] == session["id"] and m["role"] == "user"
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    agent = _CapturingAgent(_chunks())
+    _ = [f async for f in runner.stream(user_message="네", agent=agent, resume=True)]
+    assert agent.payloads[0] == {"messages": [{"role": "user", "content": "네"}]}
+    after = sum(
+        1
+        for m in fake.chat_messages.values()
+        if m["session_id"] == session["id"] and m["role"] == "user"
+    )
+    assert after == before + 1
 
 
 async def test_runner_resume_not_resumable_errors(fake: FakeMainFlowDb) -> None:

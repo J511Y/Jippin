@@ -1173,6 +1173,15 @@ async def create_agent_run(
     try:
         return await _db_insert_agent_run(values)
     except IntegrityError as exc:
+        sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+        if sqlstate == "23503":
+            # _resolve_owner_session 성공 후 insert 커밋 전에 세션/유저가 삭제되면
+            # 활성-런 유니크가 아니라 FK 위반(23503)이 난다 — 활성 런 복구 경로로
+            # 보내지 말고 깔끔히 not-found 로 매핑한다(#unique-only-conflict).
+            raise _not_found("Session not found.", code="SESSION_NOT_FOUND") from exc
+        if sqlstate not in (None, "23505"):
+            # 활성 런 부분 유니크(23505) 외의 무결성 위반은 삼키지 않고 올린다.
+            raise
         raise _conflict(
             "An agent run is already active for this session.",
             code="AGENT_RUN_ALREADY_ACTIVE",

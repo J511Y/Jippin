@@ -257,6 +257,9 @@ class AgentRunner:
         run_status = "succeeded"
         finalized = False
         owns_run = True  # self.run_id 가 우리가 마감해도 되는 row 인지
+        # interrupted 런의 재개는 "재연결" — 새 user 턴을 append/전송하지 않고
+        # 체크포인트에서 이어 돌린다(#reconnect-idempotent).
+        reconnect = False
 
         try:
             try:
@@ -301,6 +304,21 @@ class AgentRunner:
                         yield sse.done(run_status="cancelled")
                         return
                 elif resume:
+                    # 점유 전 직전 상태를 읽어 재개 의미를 정한다. interrupted(스트림이
+                    # 끊겼지만 턴은 이미 수락/체크포인트됨)면 재연결 — 클라이언트가 같은
+                    # 프롬프트를 다시 보내도 그 턴을 append/재전송하지 않아 chat_messages
+                    # 와 모델 컨텍스트에 중복이 생기지 않는다. awaiting_input(에이전트가
+                    # 추가 입력을 기다림)이면 새 user 메시지를 정상 append/전송한다.
+                    try:
+                        prior = await main_flow.get_agent_run(
+                            session_id=self.session_id,
+                            run_id=self.run_id,
+                            owner_user_id=self.owner_user_id,
+                            owner_is_anonymous=self.owner_is_anonymous,
+                        )
+                        reconnect = prior.get("status") == "interrupted"
+                    except ZippinException:
+                        reconnect = False
                     # resumable 런을 generator 안에서 원자적으로 점유한다 — 스트림이
                     # 시작 안 되면 finally 가 running 으로 남은 row 를 풀어 준다
                     # (#resume-claim-orphan). 점유 실패는 SSE error 로 알린다.
@@ -320,19 +338,26 @@ class AgentRunner:
                         )
                         yield sse.done(run_status="failed")
                         return
-                # 사용자 메시지 투영(공개 경로와 동일하게 owner-gated user 메시지).
+                # 재연결이 아니면 사용자 메시지를 투영(공개 경로와 동일하게 owner-gated).
                 # 여기서 실패(삭제/만료 세션, 일시 DB 오류)해도 except 가 failed 로
-                # 마감하고 finally 가 런을 풀어 준다(#startup-finalize).
-                await main_flow.append_chat_message(
-                    session_id=self.session_id,
-                    owner_user_id=self.owner_user_id,
-                    payload={"content": user_message},
-                    owner_is_anonymous=self.owner_is_anonymous,
-                )
+                # 마감하고 finally 가 런을 풀어 준다(#startup-finalize). 재연결이면
+                # 새 턴을 만들지 않고 체크포인트(input=None)에서 이어 돌린다.
+                if not reconnect:
+                    await main_flow.append_chat_message(
+                        session_id=self.session_id,
+                        owner_user_id=self.owner_user_id,
+                        payload={"content": user_message},
+                        owner_is_anonymous=self.owner_is_anonymous,
+                    )
                 if agent is None:
                     agent = await self._build_agent()
+                astream_input = (
+                    None
+                    if reconnect
+                    else {"messages": [{"role": "user", "content": user_message}]}
+                )
                 raw = agent.astream(
-                    {"messages": [{"role": "user", "content": user_message}]},
+                    astream_input,
                     config={"configurable": {"thread_id": str(self.session_id)}},
                     stream_mode=["updates", "messages", "custom"],
                 )

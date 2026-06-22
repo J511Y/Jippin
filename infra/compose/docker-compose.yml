@@ -150,6 +150,8 @@ services:
       LANGSMITH_PROJECT: "${LANGSMITH_PROJECT:-jippin-agent}"
       HF_SEGMENTATION_ENDPOINT_URL: "${HF_SEGMENTATION_ENDPOINT_URL:-}"
       HF_SEGMENTATION_TOKEN: "${HF_SEGMENTATION_TOKEN:-}"
+      # 세그멘테이션 이미지 URL 허용 호스트(콤마 구분). 비우면 SSRF 가드만 적용.
+      HF_SEGMENTATION_ALLOWED_IMAGE_HOSTS: "${HF_SEGMENTATION_ALLOWED_IMAGE_HOSTS:-}"
     ports:
       - "8000:8000"
     depends_on:

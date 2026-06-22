@@ -62,6 +62,8 @@ async def test_tool_projection_idempotent_on_replay(fake: FakeMainFlowDb) -> Non
     assert rows[0]["status"] == "succeeded"
     assert rows[0]["tool_kind"] == "ai_model"
     assert rows[0]["metadata"]["lc_tool_call_id"] == "tc-1"
+    # 원장에는 redacted 값만 — 원본 image_url(서명 URL 가능)은 저장 안 함.
+    assert rows[0]["input"] == {"image_url": "[redacted]"}
 
 
 async def test_failed_tool_marks_ledger_failed(fake: FakeMainFlowDb) -> None:

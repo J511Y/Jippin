@@ -58,8 +58,17 @@ _ACTIVE_RUN_STATUSES: frozenset[str] = frozenset(
 )
 
 
-def _fake_integrity_error(message: str) -> IntegrityError:
-    return IntegrityError(message, None, Exception(message))
+class _FakeDbError(Exception):
+    """psycopg 의 .sqlstate 를 흉내내는 orig — 호출자가 유니크/FK 위반을 구분."""
+
+    def __init__(self, message: str, sqlstate: str) -> None:
+        super().__init__(message)
+        self.sqlstate = sqlstate
+
+
+def _fake_integrity_error(message: str, sqlstate: str = "23505") -> IntegrityError:
+    # 기본 23505(unique_violation) — 활성 런/lc-id 부분 유니크 위반 재현용.
+    return IntegrityError(message, None, _FakeDbError(message, sqlstate))
 
 
 def _now() -> datetime:
