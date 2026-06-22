@@ -61,7 +61,8 @@ export default async function SessionDetailPage({ params }: SessionPageProps) {
         {process.env.NEXT_PUBLIC_AGENT_ENABLED === 'true' ? (
           <Stack gap="sm">
             <Text fw={600}>AI 도우미와 대화</Text>
-            <AgentChat sessionId={sessionId} />
+            {/* key=sessionId: 세션 변경 시 remount 해 채팅 상태를 깨끗이 리셋한다. */}
+            <AgentChat key={sessionId} sessionId={sessionId} />
           </Stack>
         ) : (
           <Text size="sm" c="dimmed">

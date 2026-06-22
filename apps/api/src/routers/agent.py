@@ -68,10 +68,13 @@ async def start_agent_run(
         owner_is_anonymous=requester.is_anonymous,
     )
     if active is not None:
+        # 활성 런 id/상태를 details 로 알려 클라이언트가 resume/interrupt 로 복구할 수
+        # 있게 한다(헤더를 못 받은 새 탭/유실 케이스 #active-run-recovery).
         raise ZippinException(
             "An agent run is already active for this session.",
             code="AGENT_RUN_ALREADY_ACTIVE",
             http_status=409,
+            details={"active_run_id": str(active["id"]), "status": active["status"]},
         )
     run_id = uuid.uuid4()
     logger.info("agent_run_started", session_id=str(session_id), run_id=str(run_id))
@@ -158,6 +161,30 @@ async def interrupt_agent_run(
     )
     logger.info("agent_run_interrupted", session_id=str(session_id), run_id=str(run_id))
     return AgentRunStatusResponse.model_validate(row)
+
+
+@router.get(
+    "/{session_id}/agent/runs/active",
+    response_model=AgentRunStatusResponse,
+)
+async def get_active_agent_run_status(
+    session_id: uuid.UUID = Path(...),
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> AgentRunStatusResponse:
+    # 세션의 현재 활성 런 조회(재연결/복구용). `/active` 는 `/{run_id}` 보다 먼저
+    # 선언해 uuid path 로 가려지지 않게 한다.
+    active = await main_flow.get_active_agent_run(
+        session_id=session_id,
+        owner_user_id=requester.user_id,
+        owner_is_anonymous=requester.is_anonymous,
+    )
+    if active is None:
+        raise ZippinException(
+            "No active agent run for this session.",
+            code="AGENT_RUN_NOT_ACTIVE",
+            http_status=404,
+        )
+    return AgentRunStatusResponse.model_validate(active)
 
 
 @router.get(

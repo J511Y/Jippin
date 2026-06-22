@@ -116,6 +116,27 @@ async def test_message_projection_idempotent_with_ui(fake: FakeMainFlowDb) -> No
     assert rows[0]["metadata"]["lc_message_id"] == "m-1"
 
 
+async def test_invalid_judgment_snapshot_is_dropped(fake: FakeMainFlowDb) -> None:
+    # fail-closed: 검증 불가/실패 시 미검증 snapshot 을 저장하지 않고 드롭한다.
+    owner = uuid.uuid4()
+    session_id = await _make_session(owner)
+    writer = ProjectionWriter(session_id=session_id, owner_user_id=owner)
+
+    await writer.project_message(
+        AssistantMessage(
+            lc_message_id="m-snap",
+            content="결과",
+            judgment_snapshot={"definitely": "not-a-valid-common-judgment-schema"},
+        )
+    )
+    row = next(
+        r
+        for r in fake.chat_messages.values()
+        if r["session_id"] == session_id and r["role"] == "assistant"
+    )
+    assert row["judgment_snapshot"] is None
+
+
 async def test_decision_projection_sets_completion_decision(
     fake: FakeMainFlowDb,
 ) -> None:

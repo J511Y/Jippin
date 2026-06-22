@@ -72,7 +72,12 @@ _UNSET = main_flow._UNSET
 def _validate_judgment_snapshot(
     snapshot: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """common-judgment-schema 로 검증. 실패하면 드롭(블록하지 않음)."""
+    """common-judgment-schema 로 검증. 검증 불가/실패 시 fail-closed 로 드롭한다.
+
+    contracts 바인딩이 런타임 이미지에 없으면(현재 api 이미지) 미검증 snapshot 을
+    저장하지 않고 드롭한다 — downstream 계약 소비자가 잘못된 payload 를 받지 않도록
+    (fail-closed). 운영에서 검증을 켜려면 zippin_contracts 를 런타임에 번들해야 한다.
+    """
 
     if not snapshot:
         return None
@@ -81,8 +86,8 @@ def _validate_judgment_snapshot(
             CommonJudgmentSchema,
         )
     except ImportError:
-        # 계약 바인딩이 api venv 에 없으면 검증 생략(best-effort).
-        return snapshot
+        log.warning("judgment_snapshot_validation_unavailable_dropped")
+        return None
     try:
         CommonJudgmentSchema.model_validate(snapshot)
     except Exception as exc:  # noqa: BLE001 - 검증 실패는 드롭 + 로그

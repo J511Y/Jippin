@@ -12,8 +12,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { ChatMessage, DynamicComponentSpec } from '@/components/a2ui';
 import { apiBaseUrl } from '@/lib/api-base-url';
-import { getAccessToken } from '@/lib/auth-token';
+import { getAccessToken, setAccessToken } from '@/lib/auth-token';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
+import { createClient } from '@/lib/supabase/client';
 
 import { parseSseFrame, splitSseBuffer, type AgentSseEvent } from './sse';
 
@@ -24,10 +25,43 @@ function uid(): string {
 }
 
 async function resolveToken(): Promise<string> {
+  // Supabase 세션이 토큰 정본 — SDK 가 만료 임박 시 갱신하므로 getSession 으로 현재
+  // 토큰을 받아 메모리에 동기화한다(만료된 메모리 토큰으로 401 나는 것 방지). 세션이
+  // 없으면 익명 세션을 만든다.
+  try {
+    const supabase = createClient();
+    const {
+      data: { session }
+    } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      setAccessToken(session.access_token);
+      return session.access_token;
+    }
+  } catch {
+    /* getSession 실패 — 메모리/익명 폴백 */
+  }
   const existing = getAccessToken();
   if (existing) return existing;
   const session = await ensureAnonymousSession();
   return session.token;
+}
+
+// 401 시 한 번 강제 갱신한다. 직접 fetch 라 apiClient 의 401 refresh 경로를 못 타므로
+// Supabase refreshSession 으로 새 토큰을 받아 메모리에 반영한다.
+async function refreshToken(): Promise<string | null> {
+  try {
+    const supabase = createClient();
+    const {
+      data: { session }
+    } = await supabase.auth.refreshSession();
+    if (session?.access_token) {
+      setAccessToken(session.access_token);
+      return session.access_token;
+    }
+  } catch {
+    /* refresh 실패 */
+  }
+  return null;
 }
 
 // resumable run id 를 세션별 sessionStorage 에 보존한다 — 컴포넌트 remount/새로고침
@@ -74,6 +108,19 @@ async function isRunTerminalOrMissing(
   }
 }
 
+// 409 AGENT_RUN_ALREADY_ACTIVE 응답의 detail.active_run_id 를 읽는다(복구용).
+async function readActiveRunId(res: Response): Promise<string | null> {
+  try {
+    const data = (await res.clone().json()) as {
+      detail?: { active_run_id?: string };
+    };
+    const id = data?.detail?.active_run_id;
+    return typeof id === 'string' && id ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 function toDynamic(component: Record<string, unknown>): DynamicComponentSpec | undefined {
   const kind = typeof component.kind === 'string' ? component.kind : undefined;
   if (!kind) return undefined;
@@ -106,9 +153,17 @@ export function useAgentStream(sessionId: string): UseAgentStream {
   // 있다가 다음 send 에서 /resume 로 보낸다. 그렇지 않으면 null(=새 런 시작).
   const resumableRunIdRef = useRef<string | null>(null);
 
-  // remount/새로고침 시 sessionStorage 에서 resumable run id 를 복원한다.
+  // resumable run id 를 복원하고, 언마운트/세션변경 시 진행 중 스트림을 중단한다 —
+  // 옛 스트림이 프레임을 계속 흘리는 누수를 막는다(#stale-stream-leak). 메시지 등
+  // useState 리셋은 부모가 AgentChat 을 sessionId 로 key 해 remount 시키는 것으로
+  // 처리한다(effect 안 setState 회피).
   useEffect(() => {
     resumableRunIdRef.current = loadResumeId(sessionId);
+    return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      streamingRef.current = false;
+    };
   }, [sessionId]);
 
   const setResumeId = useCallback(
@@ -140,31 +195,40 @@ export function useAgentStream(sessionId: string): UseAgentStream {
       let runStatus: string | null = null;
 
       try {
-        const token = await resolveToken();
+        let token = await resolveToken();
         const base = apiBaseUrl();
         const startUrl = `${base}/sessions/${sessionId}/agent/runs`;
-        const init: RequestInit = {
+        const body = JSON.stringify({
+          schema_version: '1.0.0',
+          message: { role: 'user', content: text },
+        });
+        const makeInit = (tok: string): RequestInit => ({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Accept: 'text/event-stream',
-            Authorization: `Bearer ${token}`,
+            Authorization: `Bearer ${tok}`,
           },
-          body: JSON.stringify({
-            schema_version: '1.0.0',
-            message: { role: 'user', content: text },
-          }),
+          body,
           signal: controller.signal,
+        });
+        // 만료 토큰이면 1회 갱신 후 재시도(직접 fetch 라 apiClient 401 경로를 못 탐).
+        const fetchAuthed = async (url: string): Promise<Response> => {
+          const res = await fetch(url, makeInit(token));
+          if (res.status !== 401) return res;
+          const refreshed = await refreshToken();
+          if (!refreshed) return res;
+          token = refreshed;
+          return fetch(url, makeInit(token));
         };
 
         // 직전 런이 resumable 이면 같은 런을 /resume 로 이어 간다 — 아니면 새 런 시작.
         // (활성 런 부분 유니크 때문에 새로 시작하면 AGENT_RUN_ALREADY_ACTIVE 가 난다.)
         const resumeRunId = resumableRunIdRef.current;
-        let res = await fetch(
+        let res = await fetchAuthed(
           resumeRunId
             ? `${base}/sessions/${sessionId}/agent/runs/${resumeRunId}/resume`
             : startUrl,
-          init,
         );
 
         // resume 실패 시: 서버가 런이 terminal/missing 임을 확인하면 id 를 비우고
@@ -176,7 +240,14 @@ export function useAgentStream(sessionId: string): UseAgentStream {
           (await isRunTerminalOrMissing(base, sessionId, resumeRunId, token))
         ) {
           setResumeId(null);
-          res = await fetch(startUrl, init);
+          res = await fetchAuthed(startUrl);
+        }
+
+        // 새 런 시작이 409(이미 활성 런)면, 서버가 준 active_run_id 를 저장해 다음
+        // send 가 그 런을 resume/이어가게 한다 — 헤더를 못 받은 새 탭/유실 복구.
+        if (res.status === 409) {
+          const activeId = await readActiveRunId(res);
+          if (activeId) setResumeId(activeId);
         }
 
         if (!res.ok || !res.body) {
