@@ -182,8 +182,8 @@ def test_agent_enabled_rejects_pooler_url() -> None:
         Settings(
             agent_enabled=True,
             phase_a_skeleton_enabled=True,
-            openai_api_key="sk-test",
-            database_url="postgresql://u:p@host:6543/db",
+            openai_api_key="test-openai-key",
+            database_url="postgresql://host:6543/db",
         )
     assert ":6543" in str(exc.value)
 
@@ -192,7 +192,7 @@ def test_agent_enabled_boots_with_valid_config() -> None:
     settings = Settings(
         agent_enabled=True,
         phase_a_skeleton_enabled=True,
-        openai_api_key="sk-test",
-        database_url="postgresql://u:p@host:5432/db",
+        openai_api_key="test-openai-key",
+        database_url="postgresql://host:5432/db",
     )
     assert settings.agent_enabled is True
