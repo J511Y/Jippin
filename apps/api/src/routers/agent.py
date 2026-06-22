@@ -20,7 +20,6 @@ from fastapi.responses import StreamingResponse
 
 from ..agent.runner import AgentRunner
 from ..auth.request_token import RequestUser, require_supabase_request_user
-from ..config import get_settings
 from ..errors import ZippinException
 from ..logging import get_logger
 from ..schemas.agent import (
@@ -60,31 +59,39 @@ async def start_agent_run(
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> StreamingResponse:
     _require_agent_ready(request)
-    settings = get_settings()
-    run = await main_flow.create_agent_run(
+    # 활성 런 빠른 409 사전판정(읽기). 실제 row 는 generator 안에서 만든다 —
+    # 스트림이 시작 안 되면 try/finally 로 정리되도록(#pre-stream-orphan). 최종
+    # 경합은 generator insert 의 부분 유니크가 막는다.
+    active = await main_flow.get_active_agent_run(
         session_id=session_id,
         owner_user_id=requester.user_id,
-        model=settings.agent_model,
-        input_summary={"content_chars": len(payload.message.content)},
         owner_is_anonymous=requester.is_anonymous,
     )
-    logger.info("agent_run_started", session_id=str(session_id), run_id=str(run["id"]))
+    if active is not None:
+        raise ZippinException(
+            "An agent run is already active for this session.",
+            code="AGENT_RUN_ALREADY_ACTIVE",
+            http_status=409,
+        )
+    run_id = uuid.uuid4()
+    logger.info("agent_run_started", session_id=str(session_id), run_id=str(run_id))
     runner = AgentRunner(
         session_id=session_id,
         owner_user_id=requester.user_id,
         owner_is_anonymous=requester.is_anonymous,
-        run_id=run["id"],
+        run_id=run_id,
     )
     generator = runner.stream(
         user_message=payload.message.content,
         is_disconnected=request.is_disconnected,
+        create_run=True,
     )
     # 클라이언트가 resumable 종료(interrupted/awaiting_input) 후 /resume 를 호출할 수
     # 있도록 run_id 를 헤더로 노출한다(SSE 본문 파싱 전에 읽힘). CORS expose 필요.
     return StreamingResponse(
         generator,
         media_type="text/event-stream",
-        headers={**_SSE_HEADERS, "X-Agent-Run-Id": str(run["id"])},
+        headers={**_SSE_HEADERS, "X-Agent-Run-Id": str(run_id)},
     )
 
 

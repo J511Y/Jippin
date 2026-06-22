@@ -110,3 +110,17 @@ def test_evaluate_rules_invalid_input_is_structured_error() -> None:
     res = domain.evaluate_rules_impl(judgment_values={"unknown_key": 1})
     assert res["ok"] is False
     assert res["error_code"] == "RULE_INPUT_INVALID"
+
+
+def test_emit_ui_component_accumulates_across_calls() -> None:
+    # #multi-emit: 한 턴에 여러 번 호출하면 누적(덮어쓰지 않음).
+    ctx = domain.RunContext()
+    domain.emit_ui_component_impl(run_context=ctx, components=[{"kind": "result"}])
+    domain.emit_ui_component_impl(
+        run_context=ctx, components=[{"kind": "cta"}], judgment_snapshot={"v": 1}
+    )
+    ui, snapshot = ctx.drain_ui()
+    assert [c["kind"] for c in ui] == ["result", "cta"]
+    assert snapshot == {"v": 1}
+    # drain 후 비워진다.
+    assert ctx.drain_ui() == ([], None)

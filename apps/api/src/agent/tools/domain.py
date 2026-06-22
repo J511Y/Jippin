@@ -212,12 +212,15 @@ def emit_ui_component_impl(
 
     실제 첨부는 런너가 최종 assistant 메시지를 투영할 때 drain 한다(자유 텍스트
     파싱 대신 명시적 도구 채널을 쓴다 — 코드베이스 규칙).
+
+    한 턴에 여러 번 호출되면(결과 카드 + 별도 CTA 등) **누적**한다 — 직전 payload 를
+    덮어쓰지 않는다(#multi-emit). drain 시 전부 첨부된다.
     """
 
-    run_context.pending_ui_components = list(components or [])
+    run_context.pending_ui_components.extend(components or [])
     if judgment_snapshot is not None:
         run_context.pending_judgment_snapshot = dict(judgment_snapshot)
-    return _ok(buffered=len(components or []))
+    return _ok(buffered=len(run_context.pending_ui_components))
 
 
 class RunContext:

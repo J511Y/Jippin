@@ -94,6 +94,10 @@ paths = [
   '''\.gitleaks\.toml''',
   '''\.env\.example''',
   '''infra/compose/\.env\.example''',
+  # agent fail-safe config 테스트의 더미 DB URL/키(placeholder) — 과거 커밋(1a0a0949)
+  # 에 잠시 있었다가 제거됨. 히스토리 스캔 거짓양성을 path 기준으로 무시(fingerprint
+  # 보다 commit-rewrite 에 견고). 실제 시크릿은 두지 않는 테스트 fixture 다.
+  '''apps/api/tests/test_config\.py''',
 ]
 
 # 가짜/예시 토큰 (런북·문서 안의 placeholder)

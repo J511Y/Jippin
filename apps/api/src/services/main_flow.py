@@ -455,6 +455,56 @@ async def _db_update_agent_run(
     return dict(row._mapping) if row is not None else None
 
 
+_ACTIVE_RUN_STATUSES: tuple[str, ...] = (
+    "pending",
+    "running",
+    "awaiting_input",
+    "interrupted",
+)
+
+
+async def _db_select_active_agent_run(
+    session_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(_AGENT_RUNS)
+                .where(
+                    _AGENT_RUNS.c.session_id == session_id,
+                    _AGENT_RUNS.c.status.in_(_ACTIVE_RUN_STATUSES),
+                )
+                .order_by(_AGENT_RUNS.c.created_at.desc())
+                .limit(1)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def _db_mark_agent_run_running(
+    run_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """pending → running 조건부 전이(+started_at). 아니면 None."""
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_AGENT_RUNS)
+                .where(
+                    _AGENT_RUNS.c.id == run_id,
+                    _AGENT_RUNS.c.status == "pending",
+                )
+                .values(
+                    status="running",
+                    started_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                )
+                .returning(*_AGENT_RUNS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
 async def _db_cancel_agent_run(run_id: uuid.UUID) -> dict[str, Any] | None:
     """비-terminal 런만 원자적으로 cancelled 로 전이.
 
@@ -1062,10 +1112,13 @@ async def create_agent_run(
     model: str,
     input_summary: dict[str, Any] | None = None,
     owner_is_anonymous: bool = False,
+    run_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """`agent_runs` row 생성 — runtime-only. thread_id 는 session_id 와 동일.
 
     세션당 활성 런 1개(부분 유니크)라 동시 시작은 409 AGENT_RUN_ALREADY_ACTIVE.
+    ``run_id`` 를 주면 그 id 로 insert 한다 — 라우터가 스트림 시작 전에 헤더로 노출한
+    id 와 generator 안에서 만드는 row 를 일치시키기 위함이다(#pre-stream-orphan).
     """
 
     await _resolve_owner_session(
@@ -1073,22 +1126,53 @@ async def create_agent_run(
         owner_user_id=owner_user_id,
         owner_is_anonymous=owner_is_anonymous,
     )
+    values: dict[str, Any] = {
+        "session_id": session_id,
+        "user_id": owner_user_id,
+        "thread_id": session_id,
+        "status": "pending",
+        "model": model,
+        "input_summary": dict(input_summary or {}),
+    }
+    if run_id is not None:
+        values["id"] = run_id
     try:
-        return await _db_insert_agent_run(
-            {
-                "session_id": session_id,
-                "user_id": owner_user_id,
-                "thread_id": session_id,
-                "status": "pending",
-                "model": model,
-                "input_summary": dict(input_summary or {}),
-            }
-        )
+        return await _db_insert_agent_run(values)
     except IntegrityError as exc:
         raise _conflict(
             "An agent run is already active for this session.",
             code="AGENT_RUN_ALREADY_ACTIVE",
         ) from exc
+
+
+async def get_active_agent_run(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any] | None:
+    """세션의 활성(pending/running/awaiting_input/interrupted) 런을 반환(없으면 None).
+
+    라우터가 새 런 시작 전에 빠른 409 판정을 하기 위한 owner-gated 읽기. 최종
+    경합은 generator 의 insert 가 부분 유니크로 막는다.
+    """
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    return await _db_select_active_agent_run(session_id)
+
+
+async def mark_agent_run_running(*, run_id: uuid.UUID) -> dict[str, Any] | None:
+    """pending 런만 running 으로 표시(+started_at). 이미 cancelled/terminal 이면 None.
+
+    스트림 시작 전에 /interrupt 가 cancelled 로 바꾼 경우, 무조건 UPDATE 가 다시
+    running 으로 되살리지 못하게 한다(#startup-overwrite). None 이면 런너가 중단한다.
+    """
+
+    return await _db_mark_agent_run_running(run_id)
 
 
 async def get_agent_run(

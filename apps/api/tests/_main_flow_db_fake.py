@@ -44,6 +44,8 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_update_session_fields",
     "_db_insert_agent_run",
     "_db_select_agent_run",
+    "_db_select_active_agent_run",
+    "_db_mark_agent_run_running",
     "_db_update_agent_run",
     "_db_cancel_agent_run",
     "_db_claim_resumable_agent_run",
@@ -371,6 +373,31 @@ class FakeMainFlowDb:
         if row is None:
             return None
         row.update(values)
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_select_active_agent_run(
+        self, session_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        rows = [
+            row
+            for row in self.agent_runs.values()
+            if row["session_id"] == session_id and row["status"] in _ACTIVE_RUN_STATUSES
+        ]
+        if not rows:
+            return None
+        rows.sort(key=lambda r: r["created_at"], reverse=True)
+        return dict(rows[0])
+
+    async def _db_mark_agent_run_running(
+        self, run_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        # 조건부: status == 'pending' → running.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] != "pending":
+            return None
+        row["status"] = "running"
+        row["started_at"] = _now()
         row["updated_at"] = _now()
         return dict(row)
 

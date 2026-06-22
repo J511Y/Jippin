@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..config import get_settings
+from ..errors import ZippinException
 from ..logging import get_logger
 from ..services import main_flow
 from .events import SseEventStream
@@ -31,6 +32,9 @@ from .projection import AssistantMessage, ProjectionWriter, ToolEnd, ToolStart
 from .tools import TOOL_KINDS, RunContext, build_tools
 
 log = get_logger("zippin.agent.runner")
+
+# 스트리밍 중 다른 클라이언트의 /interrupt 를 감지하기 위한 DB status 폴링 주기(초).
+_CANCEL_POLL_SECONDS = 15.0
 
 
 @dataclass
@@ -218,30 +222,76 @@ class AgentRunner:
         checkpointer = await get_checkpointer()
         return build_agent(tools=tools, checkpointer=checkpointer)
 
+    async def _is_cancelled(self) -> bool:
+        try:
+            row = await main_flow.get_agent_run(
+                session_id=self.session_id,
+                run_id=self.run_id,
+                owner_user_id=self.owner_user_id,
+                owner_is_anonymous=self.owner_is_anonymous,
+            )
+        except Exception:  # noqa: BLE001 - 폴링 실패는 스트림을 끊지 않는다
+            return False
+        return row.get("status") == "cancelled"
+
     async def stream(
         self,
         *,
         user_message: str,
         agent: Any | None = None,
         is_disconnected: Callable[[], Awaitable[bool]] | None = None,
+        create_run: bool = False,
     ) -> AsyncIterator[str]:
-        """SSE 프레임 async generator. agent 를 주입하면 LLM 없이 테스트 가능."""
+        """SSE 프레임 async generator. agent 를 주입하면 LLM 없이 테스트 가능.
+
+        ``create_run=True`` 면 row 를 **generator 안에서** 만든다 — try/finally 가
+        늘 감싸므로, 스트림이 시작되기 전 disconnect 로 row 가 pending 으로 고아가
+        되는 일을 막는다(#pre-stream-orphan). resume/테스트(create_run=False)는 row 가
+        이미 존재한다고 본다.
+        """
 
         settings = get_settings()
         sse = SseEventStream()
         deadline = time.monotonic() + settings.agent_run_wallclock_timeout_seconds
         run_status = "succeeded"
         finalized = False
+        owns_run = True  # self.run_id 가 우리가 마감해도 되는 row 인지
 
         try:
             try:
-                # running 표시 + 사용자 메시지 투영을 inner try 안에 둔다 — 여기서
-                # 실패(삭제/만료 세션, 일시 DB 오류)해도 except 가 failed 로 마감하고
-                # finally 가 런을 풀어 준다(#startup-finalize).
-                await main_flow.update_agent_run(
-                    run_id=self.run_id, status="running", started_at=main_flow._now()
-                )
+                if create_run:
+                    try:
+                        await main_flow.create_agent_run(
+                            run_id=self.run_id,
+                            session_id=self.session_id,
+                            owner_user_id=self.owner_user_id,
+                            model=settings.agent_model,
+                            input_summary={"content_chars": len(user_message)},
+                            owner_is_anonymous=self.owner_is_anonymous,
+                        )
+                    except ZippinException as exc:
+                        if exc.code == "AGENT_RUN_ALREADY_ACTIVE":
+                            owns_run = False
+                            yield sse.error(
+                                error_code="AGENT_RUN_ALREADY_ACTIVE",
+                                message="이미 진행 중인 런이 있습니다.",
+                                recoverable=False,
+                            )
+                            yield sse.done(run_status="failed")
+                            return
+                        raise
+                    # pending→running 조건부. 시작 전 /interrupt 가 cancelled 로
+                    # 바꿨으면 None — 되살리지 않고 중단한다(#startup-overwrite).
+                    if (
+                        await main_flow.mark_agent_run_running(run_id=self.run_id)
+                        is None
+                    ):
+                        finalized = True
+                        yield sse.done(run_status="cancelled")
+                        return
                 # 사용자 메시지 투영(공개 경로와 동일하게 owner-gated user 메시지).
+                # 여기서 실패(삭제/만료 세션, 일시 DB 오류)해도 except 가 failed 로
+                # 마감하고 finally 가 런을 풀어 준다(#startup-finalize).
                 await main_flow.append_chat_message(
                     session_id=self.session_id,
                     owner_user_id=self.owner_user_id,
@@ -256,11 +306,20 @@ class AgentRunner:
                     stream_mode=["updates", "messages", "custom"],
                 )
                 try:
+                    last_poll = time.monotonic()
                     async for frame in self._consume(raw, sse, deadline):
                         yield frame
                         if is_disconnected is not None and await is_disconnected():
                             run_status = "interrupted"
                             break
+                        now = time.monotonic()
+                        if now - last_poll >= _CANCEL_POLL_SECONDS:
+                            last_poll = now
+                            # 다른 탭/클라이언트의 /interrupt 를 감지하면 스트림을
+                            # 멈춘다 — LLM/툴이 계속 돌며 부수효과를 내지 않게(#interrupt-stop).
+                            if await self._is_cancelled():
+                                run_status = "cancelled"
+                                break
                 except TimeoutError:
                     # 다음 청크를 기다리다 wall-clock 초과 — stall 도 잡힌다(#7).
                     run_status = "interrupted"
@@ -303,8 +362,8 @@ class AgentRunner:
             # CancelledError) 위 정상 경로가 실행되지 않아 런이 running 으로 남고,
             # 활성-런 유니크 때문에 다음 send 가 AGENT_RUN_ALREADY_ACTIVE 가 된다.
             # 버려진 스트림을 interrupted 로 풀어 준다(#cancel). shield 로 취소 중에도
-            # DB write 가 완료되게 한다.
-            if not finalized:
+            # DB write 가 완료되게 한다. owns_run=False(이미 활성 런 존재)면 건드리지 않음.
+            if not finalized and owns_run:
                 try:
                     await asyncio.shield(self._finalize("interrupted"))
                 except Exception:  # noqa: BLE001

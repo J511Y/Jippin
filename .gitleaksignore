@@ -1,9 +1,8 @@
 # gitleaks 거짓양성 무시 목록 (fingerprint = commit:file:rule:line).
 #
-# 아래는 agent fail-safe config 테스트의 더미 DB URL(postgresql://u:p@host:...)이
-# 커밋 1a0a0949 에 들어갔다가 0ad7e469 에서 자격증명 없는 형태로 교체된 건이다.
-# 실제 시크릿이 아니라 테스트용 placeholder 이며, 현재 트리(working/HEAD)는 깨끗하다
-# (tools/secret-scan/scan.py 통과). gitleaks 는 PR 히스토리를 스캔하므로 과거 커밋의
-# 해당 라인을 fingerprint 로 무시한다.
+# agent fail-safe config 테스트의 더미 자격증명(placeholder)이 과거 커밋 1a0a0949 에
+# 잠시 들어갔다가 0ad7e469 에서 제거된 건이다. 실제 시크릿이 아니며 현재 트리는 깨끗하다
+# (tools/secret-scan/scan.py 통과). 실효 억제는 .gitleaks.toml 의 path allowlist 가
+# 담당하고(commit-rewrite 에 견고), 본 fingerprint 목록은 보조 기록이다.
 1a0a0949f96e6ad14fc6362311319a884b59cf64:apps/api/tests/test_config.py:db-url-inline-password:186
 1a0a0949f96e6ad14fc6362311319a884b59cf64:apps/api/tests/test_config.py:db-url-inline-password:196

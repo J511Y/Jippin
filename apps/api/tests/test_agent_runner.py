@@ -417,3 +417,90 @@ async def test_cancel_agent_run_cancels_active(fake: FakeMainFlowDb) -> None:
     )
     assert row["status"] == "cancelled"
     assert fake.agent_runs[run["id"]]["finished_at"] is not None
+
+
+async def test_runner_create_run_marks_and_finalizes(fake: FakeMainFlowDb) -> None:
+    # #pre-stream-orphan: create_run=True 면 row 를 generator 안에서 만들고 running
+    # 으로 표시한 뒤 정상 마감한다.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run_id = uuid.uuid4()
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run_id,
+    )
+    frames = [
+        f
+        async for f in runner.stream(
+            user_message="x", agent=_FakeAgent(_chunks()), create_run=True
+        )
+    ]
+    assert run_id in fake.agent_runs
+    assert fake.agent_runs[run_id]["status"] == "succeeded"
+    assert fake.agent_runs[run_id]["started_at"] is not None
+    events = _parse(frames)
+    assert events[-1][0] == "done" and events[-1][1]["run_status"] == "succeeded"
+
+
+async def test_runner_create_run_conflict_emits_error(fake: FakeMainFlowDb) -> None:
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    # 이미 활성 런이 있는 세션.
+    await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    run_id = uuid.uuid4()
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run_id,
+    )
+    frames = [
+        f
+        async for f in runner.stream(
+            user_message="x", agent=_FakeAgent(_chunks()), create_run=True
+        )
+    ]
+    events = _parse(frames)
+    assert any(
+        ev == "error" and d["error_code"] == "AGENT_RUN_ALREADY_ACTIVE"
+        for ev, d in events
+    )
+    assert events[-1][0] == "done" and events[-1][1]["run_status"] == "failed"
+    assert run_id not in fake.agent_runs  # 우리 row 는 만들어지지 않음
+
+
+async def test_get_active_and_mark_running(fake: FakeMainFlowDb) -> None:
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    assert (
+        await main_flow.get_active_agent_run(
+            session_id=session["id"], owner_user_id=owner
+        )
+        is None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    active = await main_flow.get_active_agent_run(
+        session_id=session["id"], owner_user_id=owner
+    )
+    assert active is not None and active["id"] == run["id"]
+
+    # pending → running.
+    assert (await main_flow.mark_agent_run_running(run_id=run["id"]))["status"] == (
+        "running"
+    )
+    # cancelled 면 mark 가 None(되살리지 않음, #startup-overwrite).
+    await main_flow.update_agent_run(run_id=run["id"], status="cancelled")
+    assert await main_flow.mark_agent_run_running(run_id=run["id"]) is None
+    assert fake.agent_runs[run["id"]]["status"] == "cancelled"
