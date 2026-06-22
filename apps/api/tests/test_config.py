@@ -53,6 +53,31 @@ def test_anonymous_session_ttl_defaults_to_env_example_value() -> None:
     assert settings.anon_session_ttl_days == 30
 
 
+def test_empty_hosts_env_does_not_break_boot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #empty-list-env: 콤마 리스트 필드는 NoDecode 로 JSON 디코딩을 건너뛰므로
+    # `HOSTS=` 빈 문자열에서도 settings 생성이 깨지지 않고 [] 가 된다.
+    monkeypatch.setenv("HF_SEGMENTATION_ALLOWED_IMAGE_HOSTS", "")
+    settings = Settings()
+    assert settings.hf_segmentation_allowed_image_hosts == []
+
+
+def test_comma_hosts_env_parses_to_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HF_SEGMENTATION_ALLOWED_IMAGE_HOSTS", "a.example, b.example")
+    settings = Settings()
+    assert settings.hf_segmentation_allowed_image_hosts == ["a.example", "b.example"]
+
+
+def test_comma_term_tags_env_parses_to_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 같은 NoDecode 경로 — 콤마 문자열이 JSON 으로 파싱되지 않는다.
+    monkeypatch.setenv("KAKAO_SYNC_REQUIRED_TERM_TAGS", "service_terms,marketing")
+    settings = Settings()
+    assert settings.kakao_sync_required_term_tags == ["service_terms", "marketing"]
+
+
 # --- Derivation from primitives (CMP-DIRECT) ---------------------------------
 # {supabase_ref, public_web_origin} expand into the per-environment URLs so the
 # operator only sets the two primitives. Explicit env values still win.

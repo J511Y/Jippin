@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -10,7 +11,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Sealed APP_ENV enum; DB branch selection comes from environment URLs.
 # Any other value is treated as a human error signal and blocks boot.
@@ -129,7 +130,12 @@ class Settings(BaseSettings):
     # 세그멘테이션에 넘길 이미지 URL 의 허용 호스트(스토리지 서명 URL 호스트). 비우면
     # SSRF 가드(https + 사설/로컬/메타데이터 차단)만 적용하고 공개 https 는 허용한다.
     # 운영에서는 스토리지 호스트로 채워 세션 경계를 강제하길 권장한다. (콤마 구분)
-    hf_segmentation_allowed_image_hosts: list[str] = Field(default_factory=list)
+    # NoDecode: 콤마 문자열(또는 빈 문자열)을 pydantic-settings 의 JSON 디코딩 전에
+    # _parse_comma_list 가 받도록 한다 — list[str] 기본 동작은 env 값을 JSON 으로 파싱해
+    # `HOSTS=` 빈 문자열에서 settings 생성이 실패한다(#empty-list-env).
+    hf_segmentation_allowed_image_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )
 
     oauth_state_redis_url: str | None = Field(default=None)
     auth_oauth_state_ttl_seconds: int = Field(
@@ -253,7 +259,8 @@ class Settings(BaseSettings):
     # IP 한도의 신뢰 가능한 출처 헤더. 프록시(Fly)가 설정하는 헤더만 신뢰한다 — 클라이언트가
     # 위조 가능한 X-Forwarded-For 는 쓰지 않는다. 빈 값이면 소켓 peer(request.client.host)만 사용.
     phone_otp_trusted_ip_header: str = Field(default="fly-client-ip")
-    kakao_sync_required_term_tags: list[str] = Field(
+    # NoDecode: 콤마 문자열을 JSON 디코딩 전에 _parse_comma_list 가 받도록 한다.
+    kakao_sync_required_term_tags: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["service_terms", "privacy_policy"]
     )
 

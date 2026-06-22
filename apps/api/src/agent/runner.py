@@ -36,6 +36,12 @@ log = get_logger("zippin.agent.runner")
 # 스트리밍 중 다른 클라이언트의 /interrupt 를 감지하기 위한 DB status 폴링 주기(초).
 _CANCEL_POLL_SECONDS = 15.0
 
+# agent_runs.current_step 마커 — 재개 의미 판정용.
+#  _STEP_SUBMITTING: 새 턴을 그래프에 넘기기 직전(아직 체크포인트 안 됨).
+#  _STEP_STREAMING : 그래프가 첫 출력을 냄 = 입력이 체크포인트됨(재개 시 reconnect 가능).
+_STEP_SUBMITTING = "submitting"
+_STEP_STREAMING = "streaming"
+
 
 @dataclass
 class TokenSignal:
@@ -293,7 +299,19 @@ class AgentRunner:
                             )
                             yield sse.done(run_status="failed")
                             return
-                        raise
+                        # 그 외(세션/유저가 precheck 이후 삭제 → SESSION_NOT_FOUND 등):
+                        # row 가 아직 없으므로 generic except(update_agent_run →
+                        # AGENT_RUN_NOT_FOUND)나 finally finalize 로 보내지 않고 여기서
+                        # 깔끔히 error+done 으로 종료한다. owns_run=False 라 finally 도
+                        # 건드리지 않는다(#pre-insert-failure).
+                        owns_run = False
+                        yield sse.error(
+                            error_code=exc.code,
+                            message="런을 시작할 수 없습니다.",
+                            recoverable=False,
+                        )
+                        yield sse.done(run_status="failed")
+                        return
                     # pending→running 조건부. 시작 전 /interrupt 가 cancelled 로
                     # 바꿨으면 None — 되살리지 않고 중단한다(#startup-overwrite).
                     if (
@@ -316,7 +334,14 @@ class AgentRunner:
                             owner_user_id=self.owner_user_id,
                             owner_is_anonymous=self.owner_is_anonymous,
                         )
-                        reconnect = prior.get("status") == "interrupted"
+                        # 재연결(=새 턴 재전송 안 함)은 직전 턴이 실제로 그래프에
+                        # 체크포인트된 경우만. row/헤더만 만들어지고 astream 진입 전
+                        # disconnect → interrupted 면 current_step 이 _STEP_STREAMING 이
+                        # 아니므로 재전송한다(프롬프트 유실 방지, #replay-after-accept).
+                        reconnect = (
+                            prior.get("status") == "interrupted"
+                            and prior.get("current_step") == _STEP_STREAMING
+                        )
                     except ZippinException:
                         reconnect = False
                     # resumable 런을 generator 안에서 원자적으로 점유한다 — 스트림이
@@ -349,6 +374,12 @@ class AgentRunner:
                         payload={"content": user_message},
                         owner_is_anonymous=self.owner_is_anonymous,
                     )
+                    # 새 턴 제출 직전 마커. 여기서부터 astream 첫 출력 전까지 disconnect
+                    # 되면 _STEP_STREAMING 이 아니라 _STEP_SUBMITTING 으로 남아, 재개가
+                    # reconnect 가 아니라 재전송으로 처리된다(프롬프트 유실 방지).
+                    await main_flow.update_agent_run(
+                        run_id=self.run_id, current_step=_STEP_SUBMITTING
+                    )
                 if agent is None:
                     agent = await self._build_agent()
                 astream_input = (
@@ -363,8 +394,16 @@ class AgentRunner:
                 )
                 try:
                     last_poll = time.monotonic()
+                    turn_checkpointed = reconnect  # 재연결은 이미 수락된 턴
                     async for frame in self._consume(raw, sse, deadline):
                         yield frame
+                        if not turn_checkpointed and not frame.startswith(":"):
+                            # 그래프가 실제 출력을 냄 = 입력이 체크포인트됨. 이제부터
+                            # 끊겨 interrupted 되면 재개를 reconnect 로 이어 돌린다.
+                            turn_checkpointed = True
+                            await main_flow.update_agent_run(
+                                run_id=self.run_id, current_step=_STEP_STREAMING
+                            )
                         if is_disconnected is not None and await is_disconnected():
                             run_status = "interrupted"
                             break

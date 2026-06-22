@@ -224,6 +224,41 @@ async def test_create_run_fk_violation_maps_to_not_found(
     assert excinfo.value.code == "SESSION_NOT_FOUND"
 
 
+async def test_runner_create_run_pre_insert_failure_emits_clean_error(
+    fake: FakeMainFlowDb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #pre-insert-failure: precheck 이후 세션 삭제로 create_agent_run 이 row 생성 전에
+    # 실패하면, generic except(update_agent_run→NOT_FOUND)로 가지 않고 깔끔히 error+done.
+    from src.errors import ZippinException
+
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+
+    async def _boom(**kwargs: Any) -> dict[str, Any]:
+        raise ZippinException("gone", code="SESSION_NOT_FOUND", http_status=404)
+
+    monkeypatch.setattr(main_flow, "create_agent_run", _boom)
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=uuid.uuid4(),
+    )
+    frames = [
+        f
+        async for f in runner.stream(
+            user_message="안녕", agent=_FakeAgent(_chunks()), create_run=True
+        )
+    ]
+    events = _parse(frames)
+    assert any(
+        ev == "error" and d["error_code"] == "SESSION_NOT_FOUND" for ev, d in events
+    )
+    assert events[-1][0] == "done" and events[-1][1]["run_status"] == "failed"
+
+
 def _tool_message_degraded() -> SimpleNamespace:
     # plain @tool 은 dict 반환을 content(JSON 문자열)로 싣고 status=success, artifact=None.
     return SimpleNamespace(
@@ -617,7 +652,8 @@ class _CapturingAgent:
 
 
 async def test_runner_reconnect_does_not_duplicate_turn(fake: FakeMainFlowDb) -> None:
-    # #reconnect-idempotent: interrupted 런 재개는 새 user 턴을 append/전송하지 않는다.
+    # #reconnect-idempotent: 체크포인트된(_STEP_STREAMING) interrupted 런 재개는 새
+    # user 턴을 append/전송하지 않고 None 으로 이어 돌린다.
     owner = uuid.uuid4()
     session = await main_flow.create_session(
         user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
@@ -625,7 +661,9 @@ async def test_runner_reconnect_does_not_duplicate_turn(fake: FakeMainFlowDb) ->
     run = await main_flow.create_agent_run(
         session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
     )
-    await main_flow.update_agent_run(run_id=run["id"], status="interrupted")
+    await main_flow.update_agent_run(
+        run_id=run["id"], status="interrupted", current_step="streaming"
+    )
     before = sum(
         1
         for m in fake.chat_messages.values()
@@ -679,6 +717,46 @@ async def test_runner_resume_awaiting_input_appends_turn(
     agent = _CapturingAgent(_chunks())
     _ = [f async for f in runner.stream(user_message="네", agent=agent, resume=True)]
     assert agent.payloads[0] == {"messages": [{"role": "user", "content": "네"}]}
+    after = sum(
+        1
+        for m in fake.chat_messages.values()
+        if m["session_id"] == session["id"] and m["role"] == "user"
+    )
+    assert after == before + 1
+
+
+async def test_runner_interrupted_before_checkpoint_resends(
+    fake: FakeMainFlowDb,
+) -> None:
+    # #replay-after-accept: 턴이 그래프에 닿기 전(astream 진입 전) interrupted 된 런은
+    # current_step 이 _STEP_STREAMING 이 아니므로 reconnect 가 아니라 재전송한다 —
+    # 프롬프트 유실 방지.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    # interrupted 지만 체크포인트 마커는 submitting(첫 출력 전에 끊김).
+    await main_flow.update_agent_run(
+        run_id=run["id"], status="interrupted", current_step="submitting"
+    )
+    before = sum(
+        1
+        for m in fake.chat_messages.values()
+        if m["session_id"] == session["id"] and m["role"] == "user"
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    agent = _CapturingAgent(_chunks())
+    _ = [f async for f in runner.stream(user_message="계속", agent=agent, resume=True)]
+    # 재전송이므로 None 이 아니라 메시지를 그래프에 넘기고 user 턴을 append 한다.
+    assert agent.payloads[0] == {"messages": [{"role": "user", "content": "계속"}]}
     after = sum(
         1
         for m in fake.chat_messages.values()

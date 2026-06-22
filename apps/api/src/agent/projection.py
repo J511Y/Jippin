@@ -96,17 +96,20 @@ def _validate_judgment_snapshot(
     return snapshot
 
 
-def _redact_tool_input(data: dict[str, Any] | None) -> dict[str, Any]:
-    """tool input 의 값을 마스킹한다(키만 보존).
+def _redact_tool_payload(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    """tool input/output 의 값을 마스킹한다(키만 보존, None 은 그대로).
 
-    ``chat_tool_calls.input`` 은 세션 소유자에게 select 가 부여되고 스키마 비고가
-    "redacted tool input only" 를 요구한다. 그런데 도구 인자는 사용자 유래 PII(전체
-    주소·동/호) 와 서명 자산 URL 을 담는다(confirm_address / check_building_register /
-    segment_floorplan). 요청 본문 로깅은 이미 제외했지만 이 원장은 영속·쿼리 가능하므로,
-    어떤 인자가 전달됐는지(키) 만 감사용으로 남기고 값은 저장하지 않는다.
+    ``chat_tool_calls.input`` / ``output`` 은 세션 소유자에게 select 가 부여되고 스키마
+    비고가 "redacted only" 를 요구한다. 그런데 도구 인자/결과는 사용자 유래 PII(전체
+    주소·동/호, 주소 후보 목록) 와 서명 자산 URL 을 담는다(confirm_address /
+    search_address / check_building_register / segment_floorplan). 요청 본문 로깅은 이미
+    제외했지만 이 원장은 영속·쿼리 가능하므로, 어떤 키가 오갔는지만 감사용으로 남기고
+    값은 저장하지 않는다. 사람이 읽는 안전 요약은 ``output_summary`` 로 따로 보존한다.
     """
 
-    return {key: "[redacted]" for key in (data or {})}
+    if data is None:
+        return None
+    return {key: "[redacted]" for key in data}
 
 
 class ProjectionWriter:
@@ -129,7 +132,7 @@ class ProjectionWriter:
                 payload={
                     "tool_name": ev.tool_name,
                     "tool_kind": ev.tool_kind,
-                    "input": _redact_tool_input(ev.input),
+                    "input": _redact_tool_payload(ev.input) or {},
                     "metadata": {"lc_tool_call_id": ev.lc_tool_call_id},
                 },
             )
@@ -156,7 +159,9 @@ class ProjectionWriter:
                 owner_user_id=self.owner_user_id,
                 payload={
                     "status": ev.status,
-                    "output": ev.output,
+                    # output 도 PII(주소 후보·확정 주소·서명 URL)를 담을 수 있어 값을
+                    # 마스킹한다 — 사람이 읽는 요약은 output_summary 로만 보존(#redact-output).
+                    "output": _redact_tool_payload(ev.output),
                     "output_summary": ev.output_summary,
                     "error_code": ev.error_code,
                     "error_message": ev.error_message,
