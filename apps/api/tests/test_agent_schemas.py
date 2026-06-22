@@ -48,3 +48,29 @@ def test_message_role_rejects_non_user() -> None:
             schema_version="1.0.0",
             message={"role": "assistant", "content": "hi"},
         )
+
+
+def test_start_request_forbids_extra_fields() -> None:
+    with pytest.raises(ValidationError):
+        AgentRunStartRequest(
+            schema_version="1.0.0",
+            message={"role": "user", "content": "hi"},
+            unsupported="x",
+        )
+
+
+def test_message_forbids_extra_fields() -> None:
+    with pytest.raises(ValidationError):
+        AgentRunStartRequest(
+            schema_version="1.0.0",
+            message={"role": "user", "content": "hi", "sneaky": 1},
+        )
+
+
+def test_start_request_accepts_metadata() -> None:
+    req = AgentRunStartRequest(
+        schema_version="1.0.0",
+        message={"role": "user", "content": "hi"},
+        metadata={"source": "web"},
+    )
+    assert req.metadata == {"source": "web"}

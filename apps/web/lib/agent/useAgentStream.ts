@@ -194,6 +194,9 @@ export function useAgentStream(sessionId: string): UseAgentStream {
       abortRef.current = controller;
       let assembled = '';
       let runStatus: string | null = null;
+      // SSE conflict 에서 활성 런 id 를 복구했으면, done(failed) 로 끝나도 그 id 를
+      // 비우지 않는다 — 다음 send 가 그 런으로 resume 하도록(#preserve-recovered-id).
+      let recoveredActiveRunId: string | null = null;
 
       try {
         let token = await resolveToken();
@@ -311,6 +314,7 @@ export function useAgentStream(sessionId: string): UseAgentStream {
               // generator insert race(AGENT_RUN_ALREADY_ACTIVE)면 활성 런 id 로 복구 —
               // 다음 send 가 그 런을 resume 한다(#active-run-on-race).
               if (ev.error_code === 'AGENT_RUN_ALREADY_ACTIVE' && ev.active_run_id) {
+                recoveredActiveRunId = ev.active_run_id;
                 setResumeId(ev.active_run_id);
               }
             } else if (ev.type === 'done') {
@@ -328,7 +332,8 @@ export function useAgentStream(sessionId: string): UseAgentStream {
           setResumeId(null);
           setStatus('done');
         } else if (runStatus === 'failed') {
-          setResumeId(null);
+          // conflict 로 활성 런 id 를 복구한 경우엔 비우지 않는다(다음 send 가 resume).
+          if (!recoveredActiveRunId) setResumeId(null);
           setStatus('error');
         } else {
           // runStatus === null: done 프레임 없이 스트림이 끊김(네트워크/프록시). run id 를

@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import uuid
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -68,6 +70,42 @@ def _result(
         "instances": instances or [],
         "summary": summary,
     }
+
+
+def _image_url_rejected(url: str, settings: "Settings") -> bool:
+    """이미지 URL 을 거절해야 하면 True.
+
+    image_url 은 LLM/도구 인자(대화에서 유도)라 임의 URL 이 우리 bearer 와 함께 HF 로
+    전달될 수 있다. SSRF 가드(https 강제 + 사설/로컬/링크로컬/메타데이터 차단)를 항상
+    적용하고, 허용 호스트가 설정돼 있으면 그 목록만 통과시킨다(세션 경계).
+    """
+
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return True
+    if parsed.scheme != "https" or not parsed.hostname:
+        return True
+    host = parsed.hostname.lower()
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return True
+    except ValueError:
+        pass  # 호스트명(IP 아님) — DNS 단계 차단은 어려우므로 allowlist 로 보강
+    allowed = settings.hf_segmentation_allowed_image_hosts
+    if allowed and host not in {h.lower() for h in allowed}:
+        return True
+    return False
 
 
 def _valid_uuid(value: Any) -> str | None:
@@ -155,6 +193,14 @@ async def segment_floorplan_impl(
             False,
             error_code="SEGMENTATION_ENDPOINT_UNAVAILABLE",
             summary="세그멘테이션 엔드포인트가 설정되지 않았습니다(미배포).",
+        )
+
+    # SSRF/세션 경계 가드 — 임의 URL 을 우리 bearer 와 함께 HF 로 보내지 않는다.
+    if _image_url_rejected(image_url, settings):
+        return _result(
+            False,
+            error_code="SEGMENTATION_BAD_REQUEST",
+            summary="허용되지 않은 이미지 URL 입니다(허용 호스트의 https 자산만 가능).",
         )
 
     headers: dict[str, str] = {}

@@ -364,10 +364,13 @@ class AgentRunner:
                     "agent_run_failed", run_id=str(self.run_id), error=str(exc)
                 )
                 run_status = "failed"
+                # raw 예외 문자열(SQL 파라미터·업스트림 텍스트·사용자 프롬프트/주소 등
+                # PII 가능)을 status 메타에 저장하지 않는다 — 안정적 메시지만 영속하고
+                # 원본은 위 log.exception 에만 남긴다(계약: error_message 에 raw 금지).
                 await main_flow.update_agent_run(
                     run_id=self.run_id,
                     error_code="AGENT_RUNTIME_ERROR",
-                    error_message=str(exc)[:500],
+                    error_message="에이전트 실행 중 오류가 발생했습니다.",
                 )
                 yield sse.error(
                     error_code="AGENT_RUNTIME_ERROR",

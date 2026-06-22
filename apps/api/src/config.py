@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     hf_segmentation_token: str | None = Field(default=None)
     hf_segmentation_timeout_seconds: int = Field(default=60)
     hf_segmentation_cold_start_max_retries: int = Field(default=2)
+    # 세그멘테이션에 넘길 이미지 URL 의 허용 호스트(스토리지 서명 URL 호스트). 비우면
+    # SSRF 가드(https + 사설/로컬/메타데이터 차단)만 적용하고 공개 https 는 허용한다.
+    # 운영에서는 스토리지 호스트로 채워 세션 경계를 강제하길 권장한다. (콤마 구분)
+    hf_segmentation_allowed_image_hosts: list[str] = Field(default_factory=list)
 
     oauth_state_redis_url: str | None = Field(default=None)
     auth_oauth_state_ttl_seconds: int = Field(
@@ -318,9 +322,13 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("kakao_sync_required_term_tags", mode="before")
+    @field_validator(
+        "kakao_sync_required_term_tags",
+        "hf_segmentation_allowed_image_hosts",
+        mode="before",
+    )
     @classmethod
-    def _parse_kakao_sync_required_term_tags(cls, v: object) -> object:
+    def _parse_comma_list(cls, v: object) -> object:
         if isinstance(v, str):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
