@@ -25,8 +25,25 @@ def build_agent(*, tools: list[Any], checkpointer: Any) -> Any:
 
     settings = get_settings()
     return create_deep_agent(
-        model=settings.agent_model,
+        model=_build_model(settings),
         tools=tools,
         instructions=SYSTEM_PROMPT,
         checkpointer=checkpointer,
     )
+
+
+def _build_model(settings: Any) -> Any:
+    """모델 인스턴스/문자열을 만든다.
+
+    pydantic ``env_file`` 로 읽은 OPENAI_API_KEY 는 os.environ 에 export 되지 않으므로,
+    deepagents 에 모델 문자열만 넘기면 LangChain/OpenAI 가 키를 못 본다(.env 로컬/dev
+    부팅 실패). openai 모델이면 키를 명시적으로 주입한 ChatOpenAI 인스턴스를 만든다.
+    """
+
+    model_str = settings.agent_model
+    api_key = settings.openai_api_key
+    if model_str.startswith("openai:") and api_key:
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(model=model_str.split(":", 1)[1], api_key=api_key)
+    return model_str

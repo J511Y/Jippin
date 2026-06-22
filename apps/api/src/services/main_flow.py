@@ -531,6 +531,35 @@ async def _db_cancel_agent_run(run_id: uuid.UUID) -> dict[str, Any] | None:
     return dict(row._mapping) if row is not None else None
 
 
+async def _db_finalize_agent_run(
+    run_id: uuid.UUID, status: str
+) -> dict[str, Any] | None:
+    """비-terminal 런만 주어진 terminal status 로 마감(+finished_at). 조건부.
+
+    finalize read 이후 마감 write 직전에 /interrupt 가 cancelled 로 바꾼 race 에서,
+    무조건 write 가 그 cancelled 를 succeeded/failed 로 덮어쓰는 것을 막는다 —
+    no-op 이면 None(호출자가 실제 terminal 을 다시 읽는다).
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_AGENT_RUNS)
+                .where(
+                    _AGENT_RUNS.c.id == run_id,
+                    _AGENT_RUNS.c.status.not_in(["succeeded", "failed", "cancelled"]),
+                )
+                .values(
+                    status=status,
+                    finished_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                )
+                .returning(*_AGENT_RUNS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
 async def _db_claim_resumable_agent_run(
     run_id: uuid.UUID,
 ) -> dict[str, Any] | None:
@@ -1163,6 +1192,14 @@ async def get_active_agent_run(
         owner_is_anonymous=owner_is_anonymous,
     )
     return await _db_select_active_agent_run(session_id)
+
+
+async def finalize_agent_run(
+    *, run_id: uuid.UUID, status: str
+) -> dict[str, Any] | None:
+    """비-terminal 런만 terminal status 로 마감. 이미 terminal(동시 cancel 등)이면 None."""
+
+    return await _db_finalize_agent_run(run_id, status)
 
 
 async def mark_agent_run_running(*, run_id: uuid.UUID) -> dict[str, Any] | None:

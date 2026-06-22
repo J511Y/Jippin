@@ -48,6 +48,7 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_mark_agent_run_running",
     "_db_update_agent_run",
     "_db_cancel_agent_run",
+    "_db_finalize_agent_run",
     "_db_claim_resumable_agent_run",
 )
 
@@ -407,6 +408,18 @@ class FakeMainFlowDb:
         if row is None or row["status"] in {"succeeded", "failed", "cancelled"}:
             return None
         row["status"] = "cancelled"
+        row["finished_at"] = _now()
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_finalize_agent_run(
+        self, run_id: uuid.UUID, status: str
+    ) -> dict[str, Any] | None:
+        # 조건부: status NOT IN terminal → 주어진 terminal status.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] in {"succeeded", "failed", "cancelled"}:
+            return None
+        row["status"] = status
         row["finished_at"] = _now()
         row["updated_at"] = _now()
         return dict(row)

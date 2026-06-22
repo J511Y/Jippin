@@ -492,7 +492,16 @@ class AgentRunner:
             "cancelled": "cancelled",
         }
         final = status_map.get(run_status, "succeeded")
-        await main_flow.update_agent_run(
-            run_id=self.run_id, status=final, finished_at=main_flow._now()
-        )
+        # 조건부 마감(비-terminal 일 때만). read 이후 write 직전에 /interrupt 가
+        # cancelled 로 바꾼 race 에서, 무조건 write 가 그 cancelled 를 덮어쓰지 않게
+        # 한다 — no-op 이면 실제(=cancelled) 상태를 다시 읽어 돌려준다(#preserve-cancel).
+        row = await main_flow.finalize_agent_run(run_id=self.run_id, status=final)
+        if row is None:
+            refreshed = await main_flow.get_agent_run(
+                session_id=self.session_id,
+                run_id=self.run_id,
+                owner_user_id=self.owner_user_id,
+                owner_is_anonymous=self.owner_is_anonymous,
+            )
+            return refreshed.get("status") or final
         return final

@@ -108,14 +108,15 @@ async function isRunTerminalOrMissing(
   }
 }
 
-// 409 AGENT_RUN_ALREADY_ACTIVE 응답의 detail.active_run_id 를 읽는다(복구용).
-async function readActiveRunId(res: Response): Promise<string | null> {
+// 409 AGENT_RUN_ALREADY_ACTIVE 응답의 detail(active_run_id/status)을 읽는다(복구용).
+async function readActiveRun(res: Response): Promise<{ id: string; status: string } | null> {
   try {
     const data = (await res.clone().json()) as {
-      detail?: { active_run_id?: string };
+      detail?: { active_run_id?: string; status?: string };
     };
     const id = data?.detail?.active_run_id;
-    return typeof id === 'string' && id ? id : null;
+    if (typeof id !== 'string' || !id) return null;
+    return { id, status: typeof data?.detail?.status === 'string' ? data.detail.status : '' };
   } catch {
     return null;
   }
@@ -243,11 +244,19 @@ export function useAgentStream(sessionId: string): UseAgentStream {
           res = await fetchAuthed(startUrl);
         }
 
-        // 새 런 시작이 409(이미 활성 런)면, 서버가 준 active_run_id 를 저장해 다음
-        // send 가 그 런을 resume/이어가게 한다 — 헤더를 못 받은 새 탭/유실 복구.
+        // 새 런 시작이 409(이미 활성 런)면, 서버가 준 active_run_id 로 복구한다.
+        // resumable(interrupted/awaiting_input)이면 같은 메시지로 즉시 /resume 재시도
+        // (방금 추가한 사용자 메시지 유실 방지). running 이면 id 만 저장한다.
         if (res.status === 409) {
-          const activeId = await readActiveRunId(res);
-          if (activeId) setResumeId(activeId);
+          const active = await readActiveRun(res);
+          if (active) {
+            setResumeId(active.id);
+            if (active.status === 'interrupted' || active.status === 'awaiting_input') {
+              res = await fetchAuthed(
+                `${base}/sessions/${sessionId}/agent/runs/${active.id}/resume`,
+              );
+            }
+          }
         }
 
         if (!res.ok || !res.body) {

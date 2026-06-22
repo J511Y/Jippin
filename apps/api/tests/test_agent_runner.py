@@ -583,3 +583,22 @@ async def test_finalize_preserves_succeeded_terminal(fake: FakeMainFlowDb) -> No
     final = await runner._finalize("interrupted")
     assert final == "succeeded"
     assert fake.agent_runs[run["id"]]["status"] == "succeeded"
+
+
+async def test_finalize_agent_run_is_conditional(fake: FakeMainFlowDb) -> None:
+    # #preserve-cancel: 마감은 비-terminal 일 때만. 이미 terminal 이면 None(덮어쓰지 않음).
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    first = await main_flow.finalize_agent_run(run_id=run["id"], status="succeeded")
+    assert first is not None and first["status"] == "succeeded"
+    # 동시 cancel 후 마감 시도가 와도 succeeded 를 덮어쓰지 않는다.
+    assert (
+        await main_flow.finalize_agent_run(run_id=run["id"], status="interrupted")
+        is None
+    )
+    assert fake.agent_runs[run["id"]]["status"] == "succeeded"
