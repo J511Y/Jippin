@@ -7,13 +7,16 @@ deepagents/LLM 을 mock 한 fake agent 의 astream 청크를 주입해, 번역�
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 import uuid
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from src.agent.events import SseEventStream
 from src.agent.projection import AssistantMessage, ToolEnd, ToolStart
 from src.agent.runner import AgentRunner, TokenSignal, translate_stream
 from src.services import main_flow
@@ -264,3 +267,57 @@ async def test_finalize_preserves_cancelled_run(fake: FakeMainFlowDb) -> None:
     final = await runner._finalize("succeeded")
     assert final == "cancelled"
     assert fake.agent_runs[run["id"]]["status"] == "cancelled"
+
+
+async def test_runner_releases_run_on_abandon(fake: FakeMainFlowDb) -> None:
+    # #cancel: 클라이언트 abort 로 제너레이터가 aclose 되면 런이 running 으로 남지
+    # 않고 interrupted 로 풀린다(다음 send 의 AGENT_RUN_ALREADY_ACTIVE 방지).
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    gen = runner.stream(user_message="x", agent=_FakeAgent(_chunks()))
+    await gen.__anext__()  # 첫 프레임만 받고
+    await gen.aclose()  # 연결 끊김 시뮬레이션
+    assert fake.agent_runs[run["id"]]["status"] == "interrupted"
+    assert fake.agent_runs[run["id"]]["finished_at"] is not None
+
+
+async def test_consume_emits_heartbeat_while_waiting(fake: FakeMainFlowDb) -> None:
+    # #heartbeat: 다음 청크가 늦으면 ': heartbeat' 프레임을 흘려 idle 연결을 유지한다.
+    async def slow_stream():
+        await asyncio.sleep(0.05)
+        yield ("updates", {"agent": {"messages": [_final_ai()]}})
+
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+    sse = SseEventStream()
+    deadline = time.monotonic() + 5.0
+    frames = [
+        f
+        async for f in runner._consume(
+            slow_stream(), sse, deadline, heartbeat_interval=0.01
+        )
+    ]
+    assert any(f.startswith(": heartbeat") for f in frames)
+    assert any("event: message" in f for f in frames)

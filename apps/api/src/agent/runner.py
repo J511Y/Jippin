@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import json
 import time
 import uuid
@@ -230,6 +231,7 @@ class AgentRunner:
         sse = SseEventStream()
         deadline = time.monotonic() + settings.agent_run_wallclock_timeout_seconds
         run_status = "succeeded"
+        finalized = False
 
         await main_flow.update_agent_run(
             run_id=self.run_id, status="running", started_at=main_flow._now()
@@ -243,99 +245,144 @@ class AgentRunner:
         )
 
         try:
-            if agent is None:
-                agent = await self._build_agent()
-            raw = agent.astream(
-                {"messages": [{"role": "user", "content": user_message}]},
-                config={"configurable": {"thread_id": str(self.session_id)}},
-                stream_mode=["updates", "messages", "custom"],
-            )
             try:
-                async for frame in self._consume(raw, sse, deadline):
-                    yield frame
-                    if is_disconnected is not None and await is_disconnected():
-                        run_status = "interrupted"
-                        break
-            except TimeoutError:
-                # 다음 청크를 기다리다 wall-clock 초과 — stall 도 잡힌다(#7).
-                run_status = "interrupted"
-                yield sse.error(
-                    error_code="AGENT_RUN_TIMEOUT",
-                    message="런 제한 시간을 초과했습니다.",
-                    recoverable=True,
+                if agent is None:
+                    agent = await self._build_agent()
+                raw = agent.astream(
+                    {"messages": [{"role": "user", "content": user_message}]},
+                    config={"configurable": {"thread_id": str(self.session_id)}},
+                    stream_mode=["updates", "messages", "custom"],
                 )
-        except Exception as exc:  # noqa: BLE001 - 어떤 실패든 런을 마감하고 통지
-            log.exception("agent_run_failed", run_id=str(self.run_id), error=str(exc))
-            run_status = "failed"
-            await main_flow.update_agent_run(
-                run_id=self.run_id,
-                error_code="AGENT_RUNTIME_ERROR",
-                error_message=str(exc)[:500],
-            )
-            yield sse.error(
-                error_code="AGENT_RUNTIME_ERROR",
-                message="에이전트 실행 중 오류가 발생했습니다.",
-                recoverable=False,
-            )
+                try:
+                    async for frame in self._consume(raw, sse, deadline):
+                        yield frame
+                        if is_disconnected is not None and await is_disconnected():
+                            run_status = "interrupted"
+                            break
+                except TimeoutError:
+                    # 다음 청크를 기다리다 wall-clock 초과 — stall 도 잡힌다(#7).
+                    run_status = "interrupted"
+                    yield sse.error(
+                        error_code="AGENT_RUN_TIMEOUT",
+                        message="런 제한 시간을 초과했습니다.",
+                        recoverable=True,
+                    )
+            except Exception as exc:  # noqa: BLE001 - 어떤 실패든 런을 마감하고 통지
+                log.exception(
+                    "agent_run_failed", run_id=str(self.run_id), error=str(exc)
+                )
+                run_status = "failed"
+                await main_flow.update_agent_run(
+                    run_id=self.run_id,
+                    error_code="AGENT_RUNTIME_ERROR",
+                    error_message=str(exc)[:500],
+                )
+                yield sse.error(
+                    error_code="AGENT_RUNTIME_ERROR",
+                    message="에이전트 실행 중 오류가 발생했습니다.",
+                    recoverable=False,
+                )
 
-        final_status = await self._finalize(run_status)
-        # 최종 세션 상태 통지.
-        session = await main_flow.get_owned_session(
-            self.session_id,
-            owner_user_id=self.owner_user_id,
-            owner_is_anonymous=self.owner_is_anonymous,
-        )
-        yield sse.state_change(
-            session_status=session["status"],
-            completion_decision=session.get("completion_decision"),
-        )
-        yield sse.done(run_status=final_status)
+            final_status = await self._finalize(run_status)
+            finalized = True
+            # 최종 세션 상태 통지.
+            session = await main_flow.get_owned_session(
+                self.session_id,
+                owner_user_id=self.owner_user_id,
+                owner_is_anonymous=self.owner_is_anonymous,
+            )
+            yield sse.state_change(
+                session_status=session["status"],
+                completion_decision=session.get("completion_decision"),
+            )
+            yield sse.done(run_status=final_status)
+        finally:
+            # 클라이언트 abort/disconnect 로 제너레이터가 닫히면(GeneratorExit/
+            # CancelledError) 위 정상 경로가 실행되지 않아 런이 running 으로 남고,
+            # 활성-런 유니크 때문에 다음 send 가 AGENT_RUN_ALREADY_ACTIVE 가 된다.
+            # 버려진 스트림을 interrupted 로 풀어 준다(#cancel). shield 로 취소 중에도
+            # DB write 가 완료되게 한다.
+            if not finalized:
+                try:
+                    await asyncio.shield(self._finalize("interrupted"))
+                except Exception:  # noqa: BLE001
+                    log.warning("agent_run_release_failed", run_id=str(self.run_id))
 
     async def _consume(
-        self, raw: AsyncIterator[Any], sse: SseEventStream, deadline: float
+        self,
+        raw: AsyncIterator[Any],
+        sse: SseEventStream,
+        deadline: float,
+        heartbeat_interval: float = 15.0,
     ) -> AsyncIterator[str]:
-        # translate_stream 을 수동 구동해, 다음 청크 await 를 남은 wall-clock 으로
-        # 제한한다 — LLM/툴이 청크 사이에서 멈춰도 deadline 이 발동한다(#7).
+        # translate_stream 을 수동 구동한다. 다음 청크를 heartbeat 간격으로만 기다리고
+        # (그 사이 ': heartbeat' 프레임을 흘려 프록시 idle-timeout 을 막는다 #heartbeat),
+        # 전체 wall-clock 을 넘기면 TimeoutError(#7). pending 태스크는 heartbeat 시
+        # 취소하지 않아 같은 제너레이터를 안전하게 이어서 기다린다.
+        heartbeat = heartbeat_interval
         signals = translate_stream(raw, tool_kinds=TOOL_KINDS)
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError
-            try:
-                sig = await asyncio.wait_for(signals.__anext__(), timeout=remaining)
-            except StopAsyncIteration:
-                break
-            if isinstance(sig, TokenSignal):
-                yield sse.token(sig.delta)
-            elif isinstance(sig, ToolStart):
-                await self._writer.project_tool_start(sig)
-                yield sse.tool_step(
-                    tool_name=sig.tool_name,
-                    tool_kind=sig.tool_kind,
-                    status="started",
+        pending: asyncio.Task[Any] | None = None
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                if pending is None:
+                    pending = asyncio.ensure_future(signals.__anext__())
+                done, _ = await asyncio.wait(
+                    {pending}, timeout=min(heartbeat, remaining)
                 )
-            elif isinstance(sig, ToolEnd):
-                await self._writer.project_tool_end(sig)
-                yield sse.tool_step(
-                    tool_name="tool",
-                    tool_kind="other",
-                    status="succeeded" if sig.status == "succeeded" else "failed",
-                    error_code=sig.error_code,
-                )
-            elif isinstance(sig, AssistantMessage):
-                ui, snapshot = self._run_context.drain_ui()
-                sig.ui_components = ui
-                sig.judgment_snapshot = snapshot
-                row, created = await self._writer.project_message(sig)
-                # resume replay 로 이미 투영된 메시지는 SSE 를 다시 보내지 않는다 —
-                # 클라이언트 중복 버블 방지(#5).
-                if created:
-                    yield sse.message(
-                        role=sig.role,
-                        content=sig.content,
-                        message_id=str(row["id"]) if row else None,
-                        ui_components=ui,
+                if not done:
+                    yield sse.heartbeat()
+                    continue
+                task, pending = pending, None
+                try:
+                    sig = task.result()
+                except StopAsyncIteration:
+                    break
+                if isinstance(sig, TokenSignal):
+                    yield sse.token(sig.delta)
+                elif isinstance(sig, ToolStart):
+                    await self._writer.project_tool_start(sig)
+                    yield sse.tool_step(
+                        tool_name=sig.tool_name,
+                        tool_kind=sig.tool_kind,
+                        status="started",
                     )
+                elif isinstance(sig, ToolEnd):
+                    await self._writer.project_tool_end(sig)
+                    yield sse.tool_step(
+                        tool_name="tool",
+                        tool_kind="other",
+                        status="succeeded" if sig.status == "succeeded" else "failed",
+                        error_code=sig.error_code,
+                    )
+                elif isinstance(sig, AssistantMessage):
+                    ui, snapshot = self._run_context.drain_ui()
+                    sig.ui_components = ui
+                    sig.judgment_snapshot = snapshot
+                    row, created = await self._writer.project_message(sig)
+                    # resume replay 로 이미 투영된 메시지는 SSE 를 다시 보내지 않는다 —
+                    # 클라이언트 중복 버블 방지(#5).
+                    if created:
+                        yield sse.message(
+                            role=sig.role,
+                            content=sig.content,
+                            message_id=str(row["id"]) if row else None,
+                            ui_components=ui,
+                        )
+        finally:
+            if pending is not None:
+                pending.cancel()
+                with contextlib.suppress(BaseException):
+                    await pending
+            with contextlib.suppress(Exception):
+                await signals.aclose()
+            # 래핑한 raw astream 도 닫아 리소스를 정리한다(LangGraph/테스트 공통).
+            raw_aclose = getattr(raw, "aclose", None)
+            if raw_aclose is not None:
+                with contextlib.suppress(Exception):
+                    await raw_aclose()
 
     async def _finalize(self, run_status: str) -> str:
         """런을 terminal 상태로 마감하고 실제 최종 상태를 돌려준다.

@@ -12,8 +12,10 @@ export type ChatMessage = {
   role: Role;
   content: string;
   createdAt: string;
-  /** AI가 결정한 동적 컴포넌트 슬롯 (있으면 DynamicComponent로 렌더). */
+  /** AI가 결정한 동적 컴포넌트 슬롯 (단일, 하위호환). 가능하면 dynamics 사용. */
   dynamic?: DynamicComponentSpec;
+  /** AI가 응답에 첨부한 동적 컴포넌트 목록(복수 가능). 모두 렌더된다. */
+  dynamics?: DynamicComponentSpec[];
 };
 
 /**

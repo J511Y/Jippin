@@ -80,7 +80,6 @@ export function useAgentStream(sessionId: string): UseAgentStream {
       const controller = new AbortController();
       abortRef.current = controller;
       let assembled = '';
-      let finalStatus: AgentStreamStatus = 'done';
       let runStatus: string | null = null;
 
       try {
@@ -129,8 +128,10 @@ export function useAgentStream(sessionId: string): UseAgentStream {
             } else if (ev.type === 'tool_step') {
               setToolActivity(`${ev.tool_name} · ${ev.status}`);
             } else if (ev.type === 'message') {
-              const firstComponent = ev.ui_components?.[0];
-              const dynamic = firstComponent ? toDynamic(firstComponent) : undefined;
+              // emit_ui_component 가 복수 컴포넌트를 보내면 전부 보존해 렌더한다.
+              const dynamics = (ev.ui_components ?? [])
+                .map(toDynamic)
+                .filter((d): d is DynamicComponentSpec => d !== undefined);
               setMessages((prev) => [
                 ...prev,
                 {
@@ -138,7 +139,7 @@ export function useAgentStream(sessionId: string): UseAgentStream {
                   role: 'assistant',
                   content: ev.content,
                   createdAt: new Date().toISOString(),
-                  dynamic,
+                  dynamics,
                 },
               ]);
               assembled = '';
@@ -147,20 +148,27 @@ export function useAgentStream(sessionId: string): UseAgentStream {
               setError(ev.message);
             } else if (ev.type === 'done') {
               runStatus = ev.run_status;
-              finalStatus = ev.run_status === 'failed' ? 'error' : 'done';
             }
           }
         }
-        // resumable(interrupted/awaiting_input)로 끝났으면 run_id 를 유지해 다음
-        // send 가 /resume 하도록 한다. 종료 상태면 비워 새 런을 시작한다.
-        if (runStatus === 'interrupted' || runStatus === 'awaiting_input') {
-          // resumableRunIdRef 는 이미 X-Agent-Run-Id 로 채워져 있다.
-        } else {
-          resumableRunIdRef.current = null;
-        }
         setToolActivity(null);
         setStreamingText('');
-        setStatus(finalStatus);
+        if (runStatus === 'interrupted' || runStatus === 'awaiting_input') {
+          // resumable — run id 를 유지(이미 X-Agent-Run-Id 로 채워짐)해 다음 send 가
+          // /resume 한다. 입력 가능 상태로 둔다.
+          setStatus('done');
+        } else if (runStatus === 'succeeded' || runStatus === 'cancelled') {
+          resumableRunIdRef.current = null;
+          setStatus('done');
+        } else if (runStatus === 'failed') {
+          resumableRunIdRef.current = null;
+          setStatus('error');
+        } else {
+          // runStatus === null: done 프레임 없이 스트림이 끊김(네트워크/프록시). run id 를
+          // 유지해 다음 send 가 /resume 하도록 하고 오류를 노출한다(#done-required).
+          setError((prev) => prev ?? '연결이 끊겼습니다. 다시 보내면 이어서 진행합니다.');
+          setStatus('error');
+        }
       } catch (err) {
         if ((err as Error)?.name === 'AbortError') {
           setStatus('idle');
