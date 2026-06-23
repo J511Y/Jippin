@@ -1,6 +1,8 @@
 import { Badge, Button, Card, Group, Stack, Text, Title } from '@mantine/core';
 import type { Metadata } from 'next';
 
+import { AgentChat } from '@/components/agent/AgentChat';
+
 type SessionPageProps = {
   params: Promise<{ sessionId: string }>;
 };
@@ -56,10 +58,17 @@ export default async function SessionDetailPage({ params }: SessionPageProps) {
       </Card>
 
       <Card withBorder radius="md" padding="md">
-        <Text size="sm" c="dimmed">
-          placeholder 화면입니다. 실제 분석 상태/WebSocket 갱신은 후속 이슈에서
-          연결됩니다.
-        </Text>
+        {process.env.NEXT_PUBLIC_AGENT_ENABLED === 'true' ? (
+          <Stack gap="sm">
+            <Text fw={600}>AI 도우미와 대화</Text>
+            {/* key=sessionId: 세션 변경 시 remount 해 채팅 상태를 깨끗이 리셋한다. */}
+            <AgentChat key={sessionId} sessionId={sessionId} />
+          </Stack>
+        ) : (
+          <Text size="sm" c="dimmed">
+            AI 도우미 채팅은 곧 제공됩니다. (현재 비활성화)
+          </Text>
+        )}
       </Card>
 
       <Button

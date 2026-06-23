@@ -120,6 +120,40 @@ async def create_home_check(
     return dict(row._mapping)
 
 
+async def find_reusable_home_check(
+    *,
+    user_id: uuid.UUID,
+    road_addr: str,
+    dong: str,
+    ho: str,
+) -> dict[str, Any] | None:
+    """같은 입력(소유자+도로명+동+호)으로 아직 진행 중(querying/needs_input)인 잡을
+    돌려준다(없으면 None).
+
+    에이전트 도구가 잡 생성 후 결과 체크포인트 전에 끊겨 같은 tool call 이 replay 되면
+    create_home_check 가 동일 주소로 또 하나의 querying 잡을 만들고 느린 CODEF 작업을
+    중복 실행한다. 진행 중 잡이 있으면 그것을 재사용해 멱등하게 만든다(#codef-idempotent).
+    completed/failed(terminal)은 매칭하지 않으므로 재조회는 정상적으로 새 잡을 만든다.
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(HomeCheck)
+                .where(
+                    HomeCheck.user_id == user_id,
+                    HomeCheck.road_addr == road_addr,
+                    HomeCheck.addr_dong == (dong or None),
+                    HomeCheck.addr_ho == ho,
+                    HomeCheck.status.in_(("querying", "needs_input")),
+                )
+                .order_by(HomeCheck.created_at.desc())
+                .limit(1)
+            )
+        ).first()
+    return dict(row._mapping) if row else None
+
+
 async def get_home_check_row(
     *, home_check_id: uuid.UUID, user_id: uuid.UUID
 ) -> dict[str, Any] | None:

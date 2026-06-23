@@ -68,4 +68,3 @@ class AuditMixin(TimestampMixin):
 
     created_by: Mapped[str | None] = mapped_column(sa.Text)
     updated_by: Mapped[str | None] = mapped_column(sa.Text)
-

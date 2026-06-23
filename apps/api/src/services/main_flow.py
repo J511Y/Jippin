@@ -45,6 +45,7 @@ from ..config import get_settings
 from ..db import get_engine
 from ..errors import ZippinException
 from ..models import (
+    AgentRun,
     ChatMessage,
     ChatToolCall,
     FloorplanCandidate,
@@ -59,6 +60,11 @@ _FLOORPLAN_UPLOADS = FloorplanUpload.__table__
 _FLOORPLAN_CANDIDATES = FloorplanCandidate.__table__
 _CHAT_MESSAGES = ChatMessage.__table__
 _CHAT_TOOL_CALLS = ChatToolCall.__table__
+_AGENT_RUNS = AgentRun.__table__
+
+# completion_decision 처럼 None 자체가 유효한 값(결정 해제)인 필드의 "미지정"을
+# 구분하기 위한 sentinel — set_session_decision 참조.
+_UNSET: Any = object()
 
 
 def _now() -> datetime:
@@ -339,6 +345,256 @@ async def _db_complete_chat_tool_call(
             return None
         await conn.execute(_touch_session_stmt(session_id))
     return dict(row._mapping)
+
+
+# ---------------------------------------------------------------------------
+# agent projection seams (CMP-DIRECT) — 에이전트 런타임이 astream 이벤트를
+# chat_messages / chat_tool_calls 로 투영할 때의 lc_* idempotency 조회 + 세션
+# 결정 전이 + agent_runs 라이프사이클. 모두 internal/runtime-only.
+# ---------------------------------------------------------------------------
+
+
+async def _db_select_chat_message_by_lc_id(
+    session_id: uuid.UUID, lc_message_id: str
+) -> dict[str, Any] | None:
+    """같은 세션에서 ``metadata->>'lc_message_id'`` 로 기존 투영 메시지 조회."""
+
+    # Table.c 는 컬럼 *이름*("metadata")으로 키된다 — ORM 속성명(metadata_)이 아니다.
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(_CHAT_MESSAGES).where(
+                    _CHAT_MESSAGES.c.session_id == session_id,
+                    _CHAT_MESSAGES.c["metadata"]["lc_message_id"].astext
+                    == lc_message_id,
+                )
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def _db_select_chat_tool_call_by_lc_id(
+    session_id: uuid.UUID, lc_tool_call_id: str
+) -> dict[str, Any] | None:
+    """같은 세션에서 ``metadata->>'lc_tool_call_id'`` 로 기존 투영 툴콜 조회."""
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(_CHAT_TOOL_CALLS).where(
+                    _CHAT_TOOL_CALLS.c.session_id == session_id,
+                    _CHAT_TOOL_CALLS.c["metadata"]["lc_tool_call_id"].astext
+                    == lc_tool_call_id,
+                )
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def _db_update_session_fields(
+    session_id: uuid.UUID, values: dict[str, Any]
+) -> dict[str, Any] | None:
+    """세션 service-controlled 필드(status/completion_decision) UPDATE.
+
+    migration 0008 의 reference-scope trigger 가 항상(role 무관) 적용되므로
+    분석 단계로의 전이는 주소/도면 선택 선행을 요구한다 — 위반 시 DB 가 raise 하고
+    런너가 런을 failed 로 마감한다.
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_SESSIONS)
+                .where(_SESSIONS.c.id == session_id)
+                .values(
+                    last_activity_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                    **values,
+                )
+                .returning(*_SESSIONS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def _db_insert_agent_run(values: dict[str, Any]) -> dict[str, Any] | None:
+    """`agent_runs` INSERT(멱등). 같은 ``id`` 가 이미 있으면 ON CONFLICT DO NOTHING 으로
+    None 을 반환한다 — 라우터가 헤더 노출 전에 만든 placeholder 나 이른 ``/interrupt``
+    가 만든 취소 row 위로 generator 가 다시 create 해도 충돌하지 않게(#early-interrupt-
+    race). 활성 런 1개 부분 유니크 위반(IntegrityError)은 호출자(``create_agent_run``)가
+    409 로 매핑한다 — seam 이 fake 로 교체돼도 매핑이 유지되도록 public 함수에 둔다.
+    """
+
+    stmt = (
+        pg_insert(_AGENT_RUNS)
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=["id"])
+        .returning(*_AGENT_RUNS.c)
+    )
+    async with get_engine().begin() as conn:
+        row = (await conn.execute(stmt)).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def _db_select_agent_run(run_id: uuid.UUID) -> dict[str, Any] | None:
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(sa.select(_AGENT_RUNS).where(_AGENT_RUNS.c.id == run_id))
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def _db_update_agent_run(
+    run_id: uuid.UUID, values: dict[str, Any]
+) -> dict[str, Any] | None:
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_AGENT_RUNS)
+                .where(_AGENT_RUNS.c.id == run_id)
+                .values(updated_at=sa.func.now(), **values)
+                .returning(*_AGENT_RUNS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+_ACTIVE_RUN_STATUSES: tuple[str, ...] = (
+    "pending",
+    "running",
+    "awaiting_input",
+    "interrupted",
+)
+
+
+async def _db_select_active_agent_run(
+    session_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(_AGENT_RUNS)
+                .where(
+                    _AGENT_RUNS.c.session_id == session_id,
+                    _AGENT_RUNS.c.status.in_(_ACTIVE_RUN_STATUSES),
+                )
+                .order_by(_AGENT_RUNS.c.created_at.desc())
+                .limit(1)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def _db_mark_agent_run_running(
+    run_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """pending → running 조건부 전이(+started_at). 아니면 None."""
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_AGENT_RUNS)
+                .where(
+                    _AGENT_RUNS.c.id == run_id,
+                    _AGENT_RUNS.c.status == "pending",
+                )
+                .values(
+                    status="running",
+                    started_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                )
+                .returning(*_AGENT_RUNS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def _db_cancel_agent_run(run_id: uuid.UUID) -> dict[str, Any] | None:
+    """비-terminal 런만 원자적으로 cancelled 로 전이.
+
+    status read 이후 런이 자연 종료되는 race 에서, 무조건 UPDATE 가 terminal
+    succeeded/failed 를 cancelled 로 덮어쓰는 것을 막는다 — 조건부라 no-op 이면 None.
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_AGENT_RUNS)
+                .where(
+                    _AGENT_RUNS.c.id == run_id,
+                    _AGENT_RUNS.c.status.not_in(["succeeded", "failed", "cancelled"]),
+                )
+                .values(
+                    status="cancelled",
+                    finished_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                )
+                .returning(*_AGENT_RUNS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def _db_finalize_agent_run(
+    run_id: uuid.UUID, status: str
+) -> dict[str, Any] | None:
+    """비-terminal 런만 주어진 terminal status 로 마감(+finished_at). 조건부.
+
+    finalize read 이후 마감 write 직전에 /interrupt 가 cancelled 로 바꾼 race 에서,
+    무조건 write 가 그 cancelled 를 succeeded/failed 로 덮어쓰는 것을 막는다 —
+    no-op 이면 None(호출자가 실제 terminal 을 다시 읽는다).
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_AGENT_RUNS)
+                .where(
+                    _AGENT_RUNS.c.id == run_id,
+                    _AGENT_RUNS.c.status.not_in(["succeeded", "failed", "cancelled"]),
+                )
+                .values(
+                    status=status,
+                    finished_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                )
+                .returning(*_AGENT_RUNS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def _db_claim_resumable_agent_run(
+    run_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """resumable(awaiting_input/interrupted) 런을 원자적으로 running 으로 전이.
+
+    조건부 UPDATE 라 동시 resume(두 탭/재시도/더블서브밋) 중 단 하나만 성공한다 —
+    진 쪽은 None 을 받아 409 로 매핑된다. 같은 row 라 활성-런 유니크는 못 막는다.
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_AGENT_RUNS)
+                .where(
+                    _AGENT_RUNS.c.id == run_id,
+                    _AGENT_RUNS.c.status.in_(["awaiting_input", "interrupted"]),
+                )
+                .values(
+                    status="running",
+                    started_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                    # 이전 마감의 stale terminal 메타를 지운다 — running 인데 finished_at
+                    # 이 남아 lifecycle 소비자가 "이미 끝남"으로 오해하지 않게.
+                    finished_at=None,
+                    error_code=None,
+                    error_message=None,
+                )
+                .returning(*_AGENT_RUNS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -836,6 +1092,400 @@ async def complete_chat_tool_call(
             code="CHAT_TOOL_CALL_ALREADY_COMPLETED",
         )
     return updated
+
+
+# ---------------------------------------------------------------------------
+# agent projection / runs (internal/runtime-only) — CMP-DIRECT
+# ---------------------------------------------------------------------------
+
+
+async def find_chat_message_by_lc_id(
+    *, session_id: uuid.UUID, lc_message_id: str
+) -> dict[str, Any] | None:
+    """투영 idempotency — 같은 LC 메시지가 이미 기록됐는지 확인(resume replay)."""
+
+    return await _db_select_chat_message_by_lc_id(session_id, lc_message_id)
+
+
+async def _db_list_chat_messages(
+    session_id: uuid.UUID, limit: int
+) -> list[dict[str, Any]]:
+    async with get_engine().begin() as conn:
+        rows = (
+            await conn.execute(
+                sa.select(_CHAT_MESSAGES)
+                .where(
+                    _CHAT_MESSAGES.c.session_id == session_id,
+                    _CHAT_MESSAGES.c.role.in_(("user", "assistant")),
+                )
+                .order_by(_CHAT_MESSAGES.c.created_at.asc())
+                .limit(limit)
+            )
+        ).all()
+    return [dict(r._mapping) for r in rows]
+
+
+async def list_session_chat_messages(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """소유 세션의 user/assistant 메시지를 시간순으로 반환(채팅 UI 마운트 복원용).
+
+    런이 끝나면 resume 스트림이 없어 영속된 transcript 를 다시 흘릴 수 없으므로,
+    프론트가 마운트 시 이 GET 으로 과거 메시지를 채운다(#load-history-on-mount).
+    """
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    return await _db_list_chat_messages(session_id, limit)
+
+
+async def find_chat_tool_call_by_lc_id(
+    *, session_id: uuid.UUID, lc_tool_call_id: str
+) -> dict[str, Any] | None:
+    """투영 idempotency — 같은 LC 툴콜이 이미 기록됐는지 확인(resume replay)."""
+
+    return await _db_select_chat_tool_call_by_lc_id(session_id, lc_tool_call_id)
+
+
+async def set_session_decision(
+    *,
+    session_id: uuid.UUID,
+    status: str | None = None,
+    completion_decision: Any = _UNSET,
+) -> dict[str, Any]:
+    """세션 상태 머신/FLOW_GUARD 결정 전이 — runtime-only.
+
+    ``completion_decision`` 은 None 자체가 "결정 해제"라서 sentinel 로 미지정과
+    구분한다. status 와 completion_decision 중 최소 하나는 줘야 한다.
+    """
+
+    values: dict[str, Any] = {}
+    if status is not None:
+        values["status"] = status
+    if completion_decision is not _UNSET:
+        values["completion_decision"] = completion_decision
+    if not values:
+        raise ValueError(
+            "set_session_decision 는 status 또는 completion_decision 을 요구한다."
+        )
+
+    row = await _db_update_session_fields(session_id, values)
+    if row is None:
+        raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
+    return row
+
+
+async def create_agent_run(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    model: str,
+    input_summary: dict[str, Any] | None = None,
+    owner_is_anonymous: bool = False,
+    run_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """`agent_runs` row 생성 — runtime-only. thread_id 는 session_id 와 동일.
+
+    세션당 활성 런 1개(부분 유니크)라 동시 시작은 409 AGENT_RUN_ALREADY_ACTIVE.
+    ``run_id`` 를 주면 그 id 로 insert 한다 — 라우터가 스트림 시작 전에 헤더로 노출한
+    id 와 generator 안에서 만드는 row 를 일치시키기 위함이다(#pre-stream-orphan).
+    """
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    values: dict[str, Any] = {
+        "session_id": session_id,
+        "user_id": owner_user_id,
+        "thread_id": session_id,
+        "status": "pending",
+        "model": model,
+        "input_summary": dict(input_summary or {}),
+    }
+    if run_id is not None:
+        values["id"] = run_id
+    try:
+        row = await _db_insert_agent_run(values)
+    except IntegrityError as exc:
+        sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+        if sqlstate == "23503":
+            # _resolve_owner_session 성공 후 insert 커밋 전에 세션/유저가 삭제되면
+            # 활성-런 유니크가 아니라 FK 위반(23503)이 난다 — 활성 런 복구 경로로
+            # 보내지 말고 깔끔히 not-found 로 매핑한다(#unique-only-conflict).
+            raise _not_found("Session not found.", code="SESSION_NOT_FOUND") from exc
+        if sqlstate not in (None, "23505"):
+            # 활성 런 부분 유니크(23505) 외의 무결성 위반은 삼키지 않고 올린다.
+            raise
+        raise _conflict(
+            "An agent run is already active for this session.",
+            code="AGENT_RUN_ALREADY_ACTIVE",
+        ) from exc
+    if row is None:
+        # id 충돌(ON CONFLICT DO NOTHING) — 라우터 placeholder 또는 이른 interrupt 의
+        # 취소 row 가 같은 id 로 먼저 만들어졌다. 그 row 를 그대로 반환해 멱등 보장한다
+        # (취소 row 면 이후 mark_agent_run_running 이 None 을 돌려 런이 멈춘다).
+        if run_id is not None:
+            existing = await _db_select_agent_run(run_id)
+            if existing is not None:
+                return existing
+        raise _conflict(
+            "An agent run is already active for this session.",
+            code="AGENT_RUN_ALREADY_ACTIVE",
+        )
+    return row
+
+
+async def get_active_agent_run(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any] | None:
+    """세션의 활성(pending/running/awaiting_input/interrupted) 런을 반환(없으면 None).
+
+    라우터가 새 런 시작 전에 빠른 409 판정을 하기 위한 owner-gated 읽기. 최종
+    경합은 generator 의 insert 가 부분 유니크로 막는다.
+    """
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    return await _db_select_active_agent_run(session_id)
+
+
+async def finalize_agent_run(
+    *, run_id: uuid.UUID, status: str
+) -> dict[str, Any] | None:
+    """비-terminal 런만 terminal status 로 마감. 이미 terminal(동시 cancel 등)이면 None."""
+
+    return await _db_finalize_agent_run(run_id, status)
+
+
+async def mark_agent_run_running(*, run_id: uuid.UUID) -> dict[str, Any] | None:
+    """pending 런만 running 으로 표시(+started_at). 이미 cancelled/terminal 이면 None.
+
+    스트림 시작 전에 /interrupt 가 cancelled 로 바꾼 경우, 무조건 UPDATE 가 다시
+    running 으로 되살리지 못하게 한다(#startup-overwrite). None 이면 런너가 중단한다.
+    """
+
+    return await _db_mark_agent_run_running(run_id)
+
+
+async def get_agent_run(
+    *,
+    session_id: uuid.UUID,
+    run_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """소유 세션의 런만 반환(아니면 404, 열거 누수 방지)."""
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    row = await _db_select_agent_run(run_id)
+    if row is None or row["session_id"] != session_id:
+        raise _not_found("Agent run not found.", code="AGENT_RUN_NOT_FOUND")
+    return row
+
+
+_AGENT_RUN_UPDATABLE: frozenset[str] = frozenset(
+    {
+        "status",
+        "current_step",
+        "langsmith_run_id",
+        "langsmith_run_url",
+        "error_code",
+        "error_message",
+        "started_at",
+        "finished_at",
+    }
+)
+
+
+async def update_agent_run(*, run_id: uuid.UUID, **fields: Any) -> dict[str, Any]:
+    """런 라이프사이클 필드 UPDATE — runtime-only. 화이트리스트 밖 키는 거부."""
+
+    values = {
+        key: value for key, value in fields.items() if key in _AGENT_RUN_UPDATABLE
+    }
+    unknown = set(fields) - _AGENT_RUN_UPDATABLE
+    if unknown:
+        raise ValueError(f"update_agent_run: 허용되지 않은 필드 {sorted(unknown)}.")
+    if not values:
+        raise ValueError("update_agent_run 는 최소 한 개의 갱신 필드를 요구한다.")
+
+    row = await _db_update_agent_run(run_id, values)
+    if row is None:
+        raise _not_found("Agent run not found.", code="AGENT_RUN_NOT_FOUND")
+    return row
+
+
+async def cancel_agent_run(
+    *,
+    session_id: uuid.UUID,
+    run_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """런을 cancelled 로 전이(소유 세션만). 이미 terminal 이면 그 row 를 그대로 반환.
+
+    조건부 UPDATE 라, interrupt 호출과 자연 종료가 겹쳐도 terminal 상태를 덮어쓰지
+    않는다(idempotent).
+    """
+
+    try:
+        current = await get_agent_run(
+            session_id=session_id,
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
+    except ZippinException as exc:
+        if getattr(exc, "code", None) != "AGENT_RUN_NOT_FOUND":
+            raise
+        # run_id 는 헤더로 노출됐지만 start generator 가 아직 row 를 안 만든 창에서의
+        # /interrupt — 취소 의도를 cancelled 톰스톤으로 남긴다. generator 의 멱등 create
+        # (ON CONFLICT id DO NOTHING)가 이 row 를 받아 mark_running→None→done(cancelled)
+        # 로 멈춘다. 톰스톤은 terminal 이라 active 부분유니크를 차지하지 않아 다음 send 를
+        # 막지 않고, row 를 미리 만들지 않으므로 pre-stream orphan 도 없다(#early-interrupt).
+        tombstone = await _db_insert_agent_run(
+            {
+                "id": run_id,
+                "session_id": session_id,
+                "user_id": owner_user_id,
+                "thread_id": session_id,
+                "status": "cancelled",
+                "model": get_settings().agent_model,
+                "finished_at": _now(),
+            }
+        )
+        if tombstone is not None:
+            return tombstone
+        # 그새 generator 가 같은 id 로 만들었다(ON CONFLICT→None) — 정상 취소 경로로.
+        current = await get_agent_run(
+            session_id=session_id,
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
+    row = await _db_cancel_agent_run(run_id)
+    if row is None:
+        # 이미 terminal(race) — 최신 row 를 다시 읽어 반환.
+        refreshed = await _db_select_agent_run(run_id)
+        return refreshed or current
+    return row
+
+
+async def claim_resumable_agent_run(
+    *,
+    session_id: uuid.UUID,
+    run_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """resume 시작 전 resumable 런을 원자적으로 점유한다(동시 resume race 방지).
+
+    소유 세션의 런만(아니면 404). resumable 상태가 아니거나 이미 running 이면 409.
+    """
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    existing = await _db_select_agent_run(run_id)
+    if existing is None or existing["session_id"] != session_id:
+        raise _not_found("Agent run not found.", code="AGENT_RUN_NOT_FOUND")
+    row = await _db_claim_resumable_agent_run(run_id)
+    if row is None:
+        raise _conflict(
+            "Run is not resumable or already running.",
+            code="AGENT_RUN_NOT_RESUMABLE",
+        )
+    return row
+
+
+async def _db_append_pending_ui(
+    run_id: uuid.UUID,
+    components: list[dict[str, Any]],
+    snapshot: dict[str, Any] | None,
+) -> None:
+    # read-modify-write(한 트랜잭션) — 한 런의 emit 은 그래프 실행상 순차라 안전.
+    async with get_engine().begin() as conn:
+        sel = (
+            await conn.execute(
+                sa.select(_AGENT_RUNS.c.pending_ui).where(_AGENT_RUNS.c.id == run_id)
+            )
+        ).one_or_none()
+        if sel is None:
+            return
+        merged = list(sel.pending_ui or []) + list(components or [])
+        values: dict[str, Any] = {"pending_ui": merged, "updated_at": sa.func.now()}
+        if snapshot is not None:
+            values["pending_judgment_snapshot"] = snapshot
+        await conn.execute(
+            sa.update(_AGENT_RUNS).where(_AGENT_RUNS.c.id == run_id).values(**values)
+        )
+
+
+async def _db_take_pending_ui(
+    run_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    # read + clear(한 트랜잭션) — drain 후 비워 stale carry-over 를 막는다.
+    async with get_engine().begin() as conn:
+        sel = (
+            await conn.execute(
+                sa.select(
+                    _AGENT_RUNS.c.pending_ui,
+                    _AGENT_RUNS.c.pending_judgment_snapshot,
+                ).where(_AGENT_RUNS.c.id == run_id)
+            )
+        ).one_or_none()
+        if sel is None:
+            return [], None
+        await conn.execute(
+            sa.update(_AGENT_RUNS)
+            .where(_AGENT_RUNS.c.id == run_id)
+            .values(
+                pending_ui=[],
+                pending_judgment_snapshot=None,
+                updated_at=sa.func.now(),
+            )
+        )
+    return list(sel.pending_ui or []), sel.pending_judgment_snapshot
+
+
+async def append_pending_ui(
+    *,
+    run_id: uuid.UUID,
+    components: list[dict[str, Any]],
+    snapshot: dict[str, Any] | None = None,
+) -> None:
+    """A2UI 버퍼를 런에 내구적으로 누적한다(resume 생존용). runtime-only."""
+
+    await _db_append_pending_ui(run_id, components, snapshot)
+
+
+async def take_pending_ui(
+    *, run_id: uuid.UUID
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """런의 내구 A2UI 버퍼를 읽고 비운다(메시지 투영 시 drain). runtime-only."""
+
+    return await _db_take_pending_ui(run_id)
 
 
 # ---------------------------------------------------------------------------

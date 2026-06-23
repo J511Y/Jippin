@@ -2,15 +2,23 @@
 # Source: packages/contracts/schemas/*.schema.json
 # Regenerate: pnpm -C packages/contracts run generate
 
+from .agent_run_request import AgentRunRequest, UserMessage
+from .agent_run_status import AgentRunStatus, AgentRunStatusValue
+from .agent_sse_event import AgentSseEvent, DoneEvent, ErrorEvent, MessageEvent, Role, RunStatus, SessionStatus, StateChangeDecision, StateChangeEvent, TokenEvent, ToolKind, ToolStepEvent, ToolStepStatus
 from .common_judgment_schema import BuildingInfo, BuildingType, CommonJudgmentSchema, JudgmentValues, MaskCoord, Provider, Reclassification, SelectedWall, SourceEngine, SourceEngine1, SpaceObject, Type, VlmSupplement, WallObject, WallType, WindowForm
 from .completion_decision import Channel, CompletionDecision, ConfidenceSummary, ConflictFlag, Decision, Kind, MissingField, NextAction
 from .error_response import ErrorBody, ErrorResponse
 from .estimate_result import Assumption, Currency, EstimateResult, MoneyRange
 from .home_check import AddressInfo, BuildingHeading, ChangeEntry, DocumentRef, ErrorInfo, ExclusivePart, FieldModel, HomeCheckJob, HomeCheckReport, Kind, Kind1, NeedsInput, NeedsInputOption, PriceEntry, ReportMeta, Signal, Signal1, Source, Status, Violation
 from .rule_eval_result import Code, LegalBasis, RequiredFacility, RuleEvalResult, Verdict
+from .segmentation_result import ErrorCode, Instance, Label, SegmentationResult
 
 __all__ = [
     "AddressInfo",
+    "AgentRunRequest",
+    "AgentRunStatus",
+    "AgentRunStatusValue",
+    "AgentSseEvent",
     "Assumption",
     "BuildingHeading",
     "BuildingInfo",
@@ -25,7 +33,10 @@ __all__ = [
     "Currency",
     "Decision",
     "DocumentRef",
+    "DoneEvent",
     "ErrorBody",
+    "ErrorCode",
+    "ErrorEvent",
     "ErrorInfo",
     "ErrorResponse",
     "EstimateResult",
@@ -33,11 +44,14 @@ __all__ = [
     "FieldModel",
     "HomeCheckJob",
     "HomeCheckReport",
+    "Instance",
     "JudgmentValues",
     "Kind",
     "Kind1",
+    "Label",
     "LegalBasis",
     "MaskCoord",
+    "MessageEvent",
     "MissingField",
     "MoneyRange",
     "NeedsInput",
@@ -48,16 +62,27 @@ __all__ = [
     "Reclassification",
     "ReportMeta",
     "RequiredFacility",
+    "Role",
     "RuleEvalResult",
+    "RunStatus",
+    "SegmentationResult",
     "SelectedWall",
+    "SessionStatus",
     "Signal",
     "Signal1",
     "Source",
     "SourceEngine",
     "SourceEngine1",
     "SpaceObject",
+    "StateChangeDecision",
+    "StateChangeEvent",
     "Status",
+    "TokenEvent",
+    "ToolKind",
+    "ToolStepEvent",
+    "ToolStepStatus",
     "Type",
+    "UserMessage",
     "Verdict",
     "Violation",
     "VlmSupplement",

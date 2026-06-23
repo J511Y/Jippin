@@ -18,6 +18,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from src.services import main_flow
 
 # main_flow 의 seam 이 이름 변경/추가되면 monkeypatch 가 즉시 실패하도록
@@ -36,7 +38,40 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_select_chat_tool_call",
     "_db_insert_chat_tool_call",
     "_db_complete_chat_tool_call",
+    # agent projection / runs (CMP-DIRECT)
+    "_db_select_chat_message_by_lc_id",
+    "_db_select_chat_tool_call_by_lc_id",
+    "_db_list_chat_messages",
+    "_db_update_session_fields",
+    "_db_insert_agent_run",
+    "_db_select_agent_run",
+    "_db_select_active_agent_run",
+    "_db_mark_agent_run_running",
+    "_db_update_agent_run",
+    "_db_cancel_agent_run",
+    "_db_finalize_agent_run",
+    "_db_claim_resumable_agent_run",
+    "_db_append_pending_ui",
+    "_db_take_pending_ui",
 )
+
+# agent_runs 의 활성(=세션당 1개 부분 유니크) 상태 집합.
+_ACTIVE_RUN_STATUSES: frozenset[str] = frozenset(
+    {"pending", "running", "awaiting_input", "interrupted"}
+)
+
+
+class _FakeDbError(Exception):
+    """psycopg 의 .sqlstate 를 흉내내는 orig — 호출자가 유니크/FK 위반을 구분."""
+
+    def __init__(self, message: str, sqlstate: str) -> None:
+        super().__init__(message)
+        self.sqlstate = sqlstate
+
+
+def _fake_integrity_error(message: str, sqlstate: str = "23505") -> IntegrityError:
+    # 기본 23505(unique_violation) — 활성 런/lc-id 부분 유니크 위반 재현용.
+    return IntegrityError(message, None, _FakeDbError(message, sqlstate))
 
 
 def _now() -> datetime:
@@ -56,6 +91,7 @@ class FakeMainFlowDb:
         ] = {}
         self.chat_messages: dict[uuid.UUID, dict[str, Any]] = {}
         self.chat_tool_calls: dict[uuid.UUID, dict[str, Any]] = {}
+        self.agent_runs: dict[uuid.UUID, dict[str, Any]] = {}
 
     # -- helpers ---------------------------------------------------------
 
@@ -202,6 +238,14 @@ class FakeMainFlowDb:
     async def _db_insert_chat_message(
         self, values: dict[str, Any], *, session_id: uuid.UUID
     ) -> dict[str, Any]:
+        # 부분 유니크(session_id, metadata->>'lc_message_id') 백스톱 — resume race.
+        lc_id = (values.get("metadata") or {}).get("lc_message_id")
+        if lc_id is not None and any(
+            r["session_id"] == values["session_id"]
+            and (r.get("metadata") or {}).get("lc_message_id") == lc_id
+            for r in self.chat_messages.values()
+        ):
+            raise _fake_integrity_error("duplicate lc_message_id")
         row: dict[str, Any] = {
             "id": uuid.uuid4(),
             "created_at": _now(),
@@ -217,6 +261,28 @@ class FakeMainFlowDb:
         row = self.chat_messages.get(message_id)
         return dict(row) if row is not None else None
 
+    async def _db_select_chat_message_by_lc_id(
+        self, session_id: uuid.UUID, lc_message_id: str
+    ) -> dict[str, Any] | None:
+        for row in self.chat_messages.values():
+            if (
+                row["session_id"] == session_id
+                and (row.get("metadata") or {}).get("lc_message_id") == lc_message_id
+            ):
+                return dict(row)
+        return None
+
+    async def _db_list_chat_messages(
+        self, session_id: uuid.UUID, limit: int
+    ) -> list[dict[str, Any]]:
+        rows = [
+            r
+            for r in self.chat_messages.values()
+            if r["session_id"] == session_id and r.get("role") in ("user", "assistant")
+        ]
+        rows.sort(key=lambda r: r.get("created_at"))
+        return [dict(r) for r in rows[:limit]]
+
     # -- chat_tool_calls -----------------------------------------------------
 
     async def _db_select_chat_tool_call(
@@ -225,9 +291,29 @@ class FakeMainFlowDb:
         row = self.chat_tool_calls.get(tool_call_id)
         return dict(row) if row is not None else None
 
+    async def _db_select_chat_tool_call_by_lc_id(
+        self, session_id: uuid.UUID, lc_tool_call_id: str
+    ) -> dict[str, Any] | None:
+        for row in self.chat_tool_calls.values():
+            if (
+                row["session_id"] == session_id
+                and (row.get("metadata") or {}).get("lc_tool_call_id")
+                == lc_tool_call_id
+            ):
+                return dict(row)
+        return None
+
     async def _db_insert_chat_tool_call(
         self, values: dict[str, Any], *, session_id: uuid.UUID
     ) -> dict[str, Any]:
+        # 부분 유니크(session_id, metadata->>'lc_tool_call_id') 백스톱 — resume race.
+        lc_id = (values.get("metadata") or {}).get("lc_tool_call_id")
+        if lc_id is not None and any(
+            r["session_id"] == values["session_id"]
+            and (r.get("metadata") or {}).get("lc_tool_call_id") == lc_id
+            for r in self.chat_tool_calls.values()
+        ):
+            raise _fake_integrity_error("duplicate lc_tool_call_id")
         row: dict[str, Any] = {
             "id": uuid.uuid4(),
             "output": None,
@@ -258,6 +344,158 @@ class FakeMainFlowDb:
         row["completed_at"] = _now()
         self._touch_session(session_id)
         return dict(row)
+
+    # -- sessions (service-field update) ------------------------------------
+
+    async def _db_update_session_fields(
+        self, session_id: uuid.UUID, values: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        row = self.sessions.get(session_id)
+        if row is None:
+            return None
+        row.update(values)
+        self._touch_session(session_id)
+        return dict(row)
+
+    # -- agent_runs ----------------------------------------------------------
+
+    async def _db_insert_agent_run(
+        self, values: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        # ON CONFLICT (id) DO NOTHING — 같은 id 가 이미 있으면 None(멱등 재생성).
+        run_id = values.get("id")
+        if run_id is not None and run_id in self.agent_runs:
+            return None
+        # 세션당 활성 런 1개 부분 유니크 백스톱.
+        if any(
+            r["session_id"] == values["session_id"]
+            and r["status"] in _ACTIVE_RUN_STATUSES
+            for r in self.agent_runs.values()
+        ):
+            raise _fake_integrity_error("agent run already active for session")
+        now = _now()
+        row: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "status": "pending",
+            "current_step": None,
+            "langsmith_run_id": None,
+            "langsmith_run_url": None,
+            "error_code": None,
+            "error_message": None,
+            "input_summary": {},
+            "pending_ui": [],
+            "pending_judgment_snapshot": None,
+            "started_at": None,
+            "finished_at": None,
+            "created_at": now,
+            "updated_at": now,
+            **values,
+        }
+        self.agent_runs[row["id"]] = row
+        return dict(row)
+
+    async def _db_select_agent_run(self, run_id: uuid.UUID) -> dict[str, Any] | None:
+        row = self.agent_runs.get(run_id)
+        return dict(row) if row is not None else None
+
+    async def _db_update_agent_run(
+        self, run_id: uuid.UUID, values: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return None
+        row.update(values)
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_select_active_agent_run(
+        self, session_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        rows = [
+            row
+            for row in self.agent_runs.values()
+            if row["session_id"] == session_id and row["status"] in _ACTIVE_RUN_STATUSES
+        ]
+        if not rows:
+            return None
+        rows.sort(key=lambda r: r["created_at"], reverse=True)
+        return dict(rows[0])
+
+    async def _db_mark_agent_run_running(
+        self, run_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        # 조건부: status == 'pending' → running.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] != "pending":
+            return None
+        row["status"] = "running"
+        row["started_at"] = _now()
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_cancel_agent_run(self, run_id: uuid.UUID) -> dict[str, Any] | None:
+        # 조건부: status NOT IN terminal → cancelled.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] in {"succeeded", "failed", "cancelled"}:
+            return None
+        row["status"] = "cancelled"
+        row["finished_at"] = _now()
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_finalize_agent_run(
+        self, run_id: uuid.UUID, status: str
+    ) -> dict[str, Any] | None:
+        # 조건부: status NOT IN terminal → 주어진 terminal status.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] in {"succeeded", "failed", "cancelled"}:
+            return None
+        row["status"] = status
+        row["finished_at"] = _now()
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_claim_resumable_agent_run(
+        self, run_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        # 조건부 UPDATE: status IN (awaiting_input, interrupted) → running.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] not in {"awaiting_input", "interrupted"}:
+            return None
+        row["status"] = "running"
+        row["started_at"] = _now()
+        row["updated_at"] = _now()
+        row["finished_at"] = None
+        row["error_code"] = None
+        row["error_message"] = None
+        return dict(row)
+
+    async def _db_append_pending_ui(
+        self,
+        run_id: uuid.UUID,
+        components: list[dict[str, Any]],
+        snapshot: dict[str, Any] | None,
+    ) -> None:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return
+        row["pending_ui"] = list(row.get("pending_ui") or []) + list(components or [])
+        if snapshot is not None:
+            row["pending_judgment_snapshot"] = snapshot
+        row["updated_at"] = _now()
+
+    async def _db_take_pending_ui(
+        self, run_id: uuid.UUID
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return [], None
+        ui = list(row.get("pending_ui") or [])
+        snap = row.get("pending_judgment_snapshot")
+        row["pending_ui"] = []
+        row["pending_judgment_snapshot"] = None
+        row["updated_at"] = _now()
+        return ui, snap
 
 
 def install_main_flow_fake(monkeypatch) -> FakeMainFlowDb:

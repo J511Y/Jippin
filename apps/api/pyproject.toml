@@ -20,6 +20,16 @@ dependencies = [
     "redis>=5.0,<6.0",
     "solapi>=5.0,<6.0",
     "cryptography>=43,<46",
+    # 에이전트 세션 (우리집 체크 대화형 에이전트) — CMP-DIRECT.
+    # deepagents 는 신생 패키지라 breaking change 가 잦다 — uv.lock 으로 정확히
+    # 고정하고, 라이브러리 업그레이드 시 langgraph 체크포인터 스키마 마이그레이션
+    # (supabase/migrations) 동반 여부를 반드시 확인한다.
+    "langchain>=0.3,<0.4",
+    "langchain-openai>=0.2,<0.4",
+    "langgraph>=0.2,<0.6",
+    "langgraph-checkpoint-postgres>=2.0,<3.0",
+    "langsmith>=0.1,<0.5",
+    "deepagents>=0.0.5",
 ]
 
 [dependency-groups]

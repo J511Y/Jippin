@@ -34,6 +34,7 @@ from .consultation_lead import (  # noqa: E402
 from .faq import FAQ_CATEGORIES, Faq  # noqa: E402
 from .home_check import HomeCheck, HomeCheckDocument  # noqa: E402
 from .main_feature import (  # noqa: E402
+    AgentRun,
     ChatMessage,
     ChatToolCall,
     Floorplan,
@@ -47,6 +48,7 @@ from .main_feature import (  # noqa: E402
 from .request_log import RequestLog  # noqa: E402
 
 __all__ = [
+    "AgentRun",
     "AuditMixin",
     "Base",
     "ChatMessage",

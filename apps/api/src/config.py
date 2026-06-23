@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -10,7 +11,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Sealed APP_ENV enum; DB branch selection comes from environment URLs.
 # Any other value is treated as a human error signal and blocks boot.
@@ -92,6 +93,49 @@ class Settings(BaseSettings):
     # 계속 False 다. 테스트/로컬 dev 만 명시적으로 활성화하고, 출시 시점에
     # 별도 이슈로 켠다.
     phase_a_skeleton_enabled: bool = Field(default=False)
+
+    # ── 에이전트 세션 (우리집 체크 대화형 에이전트) — CMP-DIRECT ────────────────
+    # deepagents(LangGraph) 런타임. 운영 default 는 False — main.py 에서
+    # phase_a_skeleton_enabled 와 함께 켜져야 agent 라우터가 등록된다. LLM/추적/HF
+    # 시크릿은 Fly secrets 로 주입한다(.env.example 의 agent 섹션 참조).
+    agent_enabled: bool = Field(default=False)
+    agent_model: str = Field(default="openai:gpt-5.4-mini")
+    # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
+    agent_run_wallclock_timeout_seconds: int = Field(default=600)
+
+    openai_api_key: str | None = Field(default=None)
+
+    # LangSmith 트레이싱 — env-var 자동 계측. langchain_tracing_v2=true 일 때만 동작.
+    langchain_tracing_v2: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING"),
+    )
+    langsmith_api_key: str | None = Field(default=None)
+    langsmith_project: str = Field(default="jippin-agent")
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com")
+
+    # LangGraph 체크포인터 — 전용 langgraph 스키마(migration 0015). 체크포인터는
+    # psycopg prepared statement 때문에 트랜잭션 풀러(6543)에서 깨지므로 direct
+    # (5432) database_url 을 쓴다(아래 _validate_agent_checkpointer_url).
+    langgraph_db_schema: str = Field(default="langgraph")
+    checkpointer_pool_min_size: int = Field(default=1)
+    checkpointer_pool_max_size: int = Field(default=5)
+
+    # HuggingFace 평면도 세그멘테이션 엣지 엔드포인트. 미설정/미배포 시 도구가
+    # SEGMENTATION_ENDPOINT_UNAVAILABLE 로 degrade 한다(에이전트 흐름은 유지).
+    hf_segmentation_endpoint_url: str | None = Field(default=None)
+    hf_segmentation_token: str | None = Field(default=None)
+    hf_segmentation_timeout_seconds: int = Field(default=60)
+    hf_segmentation_cold_start_max_retries: int = Field(default=2)
+    # 세그멘테이션에 넘길 이미지 URL 의 허용 호스트(스토리지 서명 URL 호스트). 비우면
+    # SSRF 가드(https + 사설/로컬/메타데이터 차단)만 적용하고 공개 https 는 허용한다.
+    # 운영에서는 스토리지 호스트로 채워 세션 경계를 강제하길 권장한다. (콤마 구분)
+    # NoDecode: 콤마 문자열(또는 빈 문자열)을 pydantic-settings 의 JSON 디코딩 전에
+    # _parse_comma_list 가 받도록 한다 — list[str] 기본 동작은 env 값을 JSON 으로 파싱해
+    # `HOSTS=` 빈 문자열에서 settings 생성이 실패한다(#empty-list-env).
+    hf_segmentation_allowed_image_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )
 
     oauth_state_redis_url: str | None = Field(default=None)
     auth_oauth_state_ttl_seconds: int = Field(
@@ -215,7 +259,8 @@ class Settings(BaseSettings):
     # IP 한도의 신뢰 가능한 출처 헤더. 프록시(Fly)가 설정하는 헤더만 신뢰한다 — 클라이언트가
     # 위조 가능한 X-Forwarded-For 는 쓰지 않는다. 빈 값이면 소켓 peer(request.client.host)만 사용.
     phone_otp_trusted_ip_header: str = Field(default="fly-client-ip")
-    kakao_sync_required_term_tags: list[str] = Field(
+    # NoDecode: 콤마 문자열을 JSON 디코딩 전에 _parse_comma_list 가 받도록 한다.
+    kakao_sync_required_term_tags: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["service_terms", "privacy_policy"]
     )
 
@@ -284,9 +329,13 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("kakao_sync_required_term_tags", mode="before")
+    @field_validator(
+        "kakao_sync_required_term_tags",
+        "hf_segmentation_allowed_image_hosts",
+        mode="before",
+    )
     @classmethod
-    def _parse_kakao_sync_required_term_tags(cls, v: object) -> object:
+    def _parse_comma_list(cls, v: object) -> object:
         if isinstance(v, str):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
@@ -361,6 +410,43 @@ class Settings(BaseSettings):
                 self.frontend_auth_terms_url = f"{origin}/auth/terms"
             if "cors_allow_origins" not in provided:
                 self.cors_allow_origins = [origin]
+        return self
+
+    @model_validator(mode="after")
+    def _validate_agent_checkpointer_url(self) -> "Settings":
+        """fail-safe: agent 활성화 시 체크포인터는 direct(:5432) DATABASE_URL 만 허용.
+
+        LangGraph Postgres 체크포인터(psycopg)는 prepared statement 를 쓰므로
+        Supabase 트랜잭션 풀러(:6543)에서 ``prepared statement already exists`` 로
+        깨진다. 운영 사고를 부팅 시점에 차단한다 — pooler URL 로 agent 를 켜면 boot
+        실패가 정상 동작이다.
+        """
+
+        # agent 라우터는 phase_a_skeleton_enabled 블록 안에서만 등록된다(main.py).
+        # phase_a 없이 agent 만 켜면 채팅 UI 는 보이는데 /agent/runs 가 404 난다 —
+        # 부팅 시점에 차단한다.
+        if self.agent_enabled and not self.phase_a_skeleton_enabled:
+            raise ValueError(
+                "AGENT_ENABLED=true 는 PHASE_A_SKELETON_ENABLED=true 를 요구한다 "
+                "(agent 라우터가 phase A 게이트 안에서 등록되기 때문)."
+            )
+        if self.agent_enabled and self.database_url and ":6543" in self.database_url:
+            raise ValueError(
+                "AGENT_ENABLED=true 는 LangGraph 체크포인터용 direct(:5432) "
+                "DATABASE_URL 을 요구한다. 트랜잭션 풀러(:6543)는 psycopg prepared "
+                "statement 를 깨뜨린다. DATABASE_URL 을 direct 연결로 설정하라."
+            )
+        # OpenAI 모델인데 키가 없으면 모든 런이 _build_agent 에서 깨진다 — 사용자가
+        # 깨진 채팅을 보는 대신 부팅 시점에 차단한다(서비스는 unavailable 로 유지).
+        if (
+            self.agent_enabled
+            and self.agent_model.startswith("openai")
+            and not self.openai_api_key
+        ):
+            raise ValueError(
+                "AGENT_ENABLED=true + OpenAI 모델은 OPENAI_API_KEY 를 요구한다. "
+                "키를 설정하거나 AGENT_ENABLED 를 끈다."
+            )
         return self
 
 

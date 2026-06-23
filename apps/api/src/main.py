@@ -5,7 +5,6 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 
 from .auth.state_store import close_oauth_state_store
 from .config import get_settings
@@ -13,7 +12,9 @@ from .db import dispose_engines
 from .errors import register_exception_handlers
 from .logging import RequestIDMiddleware, configure_logging, get_logger
 from .middleware.request_log import RequestLogMiddleware
+from .middleware.selective_gzip import SelectiveGZipMiddleware
 from .routers.account import router as account_router
+from .routers.agent import router as agent_router
 from .routers.auth import router as auth_router
 from .routers.chat import router as chat_router
 from .routers.faq import router as faq_router
@@ -31,6 +32,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     log = get_logger("zippin.main")
     settings = get_settings()
     log.info("api_start", env=settings.app_env, version=settings.api_version)
+    # 에이전트 체크포인터 스키마 검증(DDL 실행하지 않음). 누락 시 agent 를 런타임
+    # fail-safe 로 비활성화한다(라우터 start/resume 가 503). test_mode 에서는 DB 에
+    # 접속하지 않으므로 검증을 건너뛴다.
+    app.state.agent_ready = True
+    if settings.agent_enabled and not settings.test_mode:
+        from .agent.checkpointer import verify_schema
+
+        app.state.agent_ready = await verify_schema()
+        if not app.state.agent_ready:
+            log.error("agent_disabled_checkpointer_schema_missing")
     try:
         yield
     finally:
@@ -48,16 +59,24 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
 
+    app.state.agent_ready = True
+
     # Middleware add-order is reverse of execution order:
     # last added wraps first → RequestIDMiddleware sees every request first.
-    app.add_middleware(GZipMiddleware, minimum_size=1024)
+    # SSE(/agent/runs) 는 gzip 청크 압축이 즉시 flush 를 방해하므로 제외한다.
+    app.add_middleware(
+        SelectiveGZipMiddleware,
+        minimum_size=1024,
+        exclude_substrings=("/agent/runs",),
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=[settings.request_id_header],
+        # 에이전트 SSE 시작 응답의 X-Agent-Run-Id 를 브라우저가 읽어 resume 에 쓴다.
+        expose_headers=[settings.request_id_header, "X-Agent-Run-Id"],
     )
     app.add_middleware(RequestIDMiddleware)
     # Last added wraps first: request logging sees the final response while
@@ -89,6 +108,10 @@ def create_app() -> FastAPI:
         app.include_router(sessions_router)
         app.include_router(floorplans_router)
         app.include_router(chat_router)
+        # 에이전트 세션 (우리집 체크 대화형 에이전트) — phase_a 게이트 안에서
+        # agent_enabled 가 켜진 환경에만 등록한다(CMP-DIRECT).
+        if settings.agent_enabled:
+            app.include_router(agent_router)
 
     return app
 

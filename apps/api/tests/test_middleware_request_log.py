@@ -381,6 +381,48 @@ def test_request_log_helper_orders_last_ip_as_client():
     assert addrs[-1] == "203.0.113.1"
 
 
+def _post_request(path: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "scheme": "https",
+            "client": ("testclient", 50000),
+        }
+    )
+
+
+def test_agent_run_body_is_not_logged():
+    # 에이전트 채팅 본문(자유 입력 PII)은 request_logs.body 에 저장하지 않는다.
+    request = _post_request("/sessions/abc/agent/runs")
+    request.state.request_id = "00000000-0000-0000-0000-000000000001"
+    record = build_request_log_record(
+        request=request,
+        request_body=b'{"message":{"content":"\xea\xb0\x95\xeb\x82\xa8 ..."}}',
+        response_body=b"",
+        response_status=200,
+        duration_ms=1,
+    )
+    assert record["body"] is None
+
+
+def test_non_agent_body_is_logged():
+    request = _post_request("/leads")
+    request.state.request_id = "00000000-0000-0000-0000-000000000002"
+    record = build_request_log_record(
+        request=request,
+        request_body=b'{"hello":"world"}',
+        response_body=b"",
+        response_status=200,
+        duration_ms=1,
+    )
+    assert record["body"] is not None
+
+
 def test_request_id_string_is_deterministically_mapped_to_uuid():
     request = Request(
         {
