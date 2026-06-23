@@ -186,12 +186,17 @@ async def segment_session_floorplan(
     owner_is_anonymous: bool,
     settings: "Settings",
     client: httpx.AsyncClient | None = None,
+    run_context: Any | None = None,
 ) -> dict[str, Any]:
     """세션에 선택된 도면 asset 을 서명해 세그멘테이션한다.
 
     LLM 이 임의 ``image_url`` 을 넘기지 않게 한다(SSRF/세션 경계) — 도면 출처는 항상
     세션의 ``selected_floorplan_asset_id`` 다. 도면 미업로드면 ``SEGMENTATION_NO_IMAGE``,
     서명 실패(스토리지/설정 문제)는 ``ENDPOINT_UNAVAILABLE`` 로 degrade 한다.
+
+    ``run_context`` 가 주어지면 분석 시작 시점의 입력 지문(asset_id/address_id)을 기록해
+    evaluate_rules 가 verdict 영속을 그 지문 기준 조건부로 만들 수 있게 한다 — 분석
+    도중 도면/주소가 바뀌면 옛 판정이 새 입력에 붙는 race 차단(#analysis-input-fingerprint).
     """
 
     from ...services import main_flow, storage
@@ -207,6 +212,14 @@ async def segment_session_floorplan(
             error_code="SEGMENTATION_NO_IMAGE",
             summary="분석할 도면이 아직 업로드되지 않았습니다. 도면을 먼저 올려 주세요.",
         )
+    # 분석 입력 지문을 한 번만 기록(첫 분석 도구). 도면을 분석하는 시점의 (asset, address).
+    if (
+        run_context is not None
+        and getattr(run_context, "analysis_inputs", None) is None
+    ):
+        inputs = await main_flow.get_session_inputs(session_id)
+        if inputs is not None:
+            run_context.analysis_inputs = inputs
     # 보안 스캔 가드: 사용자 업로드 원본은 clean(또는 not_required)일 때만 분석한다.
     # pending 은 설정(agent_allow_unscanned_floorplans)이 허용할 때만. infected 등은 항상
     # 차단 — 미검사 콘텐츠를 HF 로 전달하지 않는다(#scan-gate).

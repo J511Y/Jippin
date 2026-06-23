@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from src.config import get_settings
 from src.errors import ZippinException
 from src.main import create_app
-from src.services import main_flow
+from src.services import main_flow, storage
 
 from . import _main_flow_db_fake as db_fake
 from . import _supabase_helpers as helpers
@@ -95,10 +95,18 @@ def test_create_floorplan_upload_metadata_row(monkeypatch, fake_db):
     assert stored[0]["file_name"] == "84a-floorplan.pdf"
 
 
+def _patch_head_ok(monkeypatch, *, content_type="image/png", size=12345):
+    async def fake_head(settings, *, bucket, object_path, **_: object):
+        return content_type, size
+
+    monkeypatch.setattr(storage, "head_object", fake_head)
+
+
 def test_create_floorplan_asset_links_session(monkeypatch, fake_db):
     """업로드된 도면 메타가 asset 으로 기록되고 세션에 연결된다(#a2ui/segmentation source)."""
 
     client, token, session_id, subject = _bootstrap_session(monkeypatch)
+    _patch_head_ok(monkeypatch)
     object_key = f"{subject}/{session_id}/abc-floorplan.png"
     with client:
         response = client.post(
@@ -179,6 +187,65 @@ def test_create_floorplan_asset_rejects_non_image(monkeypatch, fake_db):
         )
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "FLOORPLAN_ASSET_UNSUPPORTED_TYPE"
+    assert fake_db.floorplan_assets == {}
+
+
+def test_create_floorplan_asset_rejects_foreign_bucket(monkeypatch, fake_db):
+    """#bucket-boundary: 세션 도면 버킷이 아니면 422(다른 비공개 버킷 객체 등록 차단)."""
+
+    client, token, session_id, subject = _bootstrap_session(monkeypatch)
+    with client:
+        response = client.post(
+            f"/sessions/{session_id}/floorplan-assets",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "bucket": "lead-floorplans",
+                "object_key": f"{subject}/{session_id}/x.png",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "FLOORPLAN_ASSET_UNSUPPORTED_BUCKET"
+    assert fake_db.floorplan_assets == {}
+
+
+def test_create_floorplan_asset_rejects_unverified_or_oversize(monkeypatch, fake_db):
+    """#verify-object: 저장된 객체 HEAD 가 비이미지/초과면 거절(클라 JSON 불신)."""
+
+    client, token, session_id, subject = _bootstrap_session(monkeypatch)
+    base = {
+        "bucket": "session-floorplans",
+        "object_key": f"{subject}/{session_id}/x.png",
+        "content_type": "image/png",
+        "byte_size": 10,
+    }
+    # 검증 불가(객체 없음/HEAD 실패) → 422.
+    _patch_head_ok(monkeypatch, content_type=None, size=None)
+
+    async def head_none(settings, **_: object):
+        return None
+
+    monkeypatch.setattr(storage, "head_object", head_none)
+    with client:
+        unverified = client.post(
+            f"/sessions/{session_id}/floorplan-assets",
+            headers={"Authorization": f"Bearer {token}"},
+            json=base,
+        )
+    assert unverified.status_code == 422
+    assert unverified.json()["error"]["code"] == "FLOORPLAN_ASSET_UNVERIFIED"
+
+    # 실제 객체가 초과 크기 → 422(클라 JSON 의 작은 byte_size 무시).
+    _patch_head_ok(monkeypatch, content_type="image/png", size=60 * 1024 * 1024)
+    with client:
+        oversize = client.post(
+            f"/sessions/{session_id}/floorplan-assets",
+            headers={"Authorization": f"Bearer {token}"},
+            json=base,
+        )
+    assert oversize.status_code == 422
+    assert oversize.json()["error"]["code"] == "FLOORPLAN_ASSET_TOO_LARGE"
     assert fake_db.floorplan_assets == {}
 
 

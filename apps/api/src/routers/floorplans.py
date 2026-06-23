@@ -19,6 +19,7 @@ import uuid
 from fastapi import APIRouter, Depends, Path
 
 from ..auth.request_token import RequestUser, require_supabase_request_user
+from ..config import get_settings
 from ..errors import ZippinException
 from ..logging import get_logger
 from ..schemas.floorplans import (
@@ -27,7 +28,10 @@ from ..schemas.floorplans import (
     FloorplanUploadCreateRequest,
     FloorplanUploadResponse,
 )
-from ..services import main_flow
+from ..services import main_flow, storage
+
+# 도면 업로드 상한(엣지 presign 정책과 일치). HEAD 로 검증한 실제 크기에 적용.
+_MAX_FLOORPLAN_BYTES = 50 * 1024 * 1024
 
 logger = get_logger("zippin.floorplans")
 router = APIRouter(prefix="/sessions", tags=["floorplans"])
@@ -83,18 +87,56 @@ async def create_floorplan_asset(
             code="FLOORPLAN_ASSET_OWNER_MISMATCH",
             http_status=403,
         )
-    # 엣지 검증: 세그멘테이션은 래스터 이미지를 분석하므로 image/* 만 받는다(AV 스캔
-    # 전 최소 검증). PDF 등은 현재 미지원(#unblock-analysis 보강).
+    settings = get_settings()
+    # 버킷 경계: 세션 도면 버킷만 허용한다. 안 그러면 lead-floorplans 등 다른 비공개
+    # 버킷의 객체를 자기 세션에 등록해 세그멘테이션이 서명·전달할 수 있다(#bucket-boundary).
+    if payload.bucket != settings.session_floorplan_bucket:
+        raise ZippinException(
+            "Floorplan must be in the configured session bucket.",
+            code="FLOORPLAN_ASSET_UNSUPPORTED_BUCKET",
+            http_status=422,
+        )
+    # 빠른 거절: JSON content_type 이 image/* 가 아니면 즉시 막는다(아래 HEAD 검증 전).
     if not payload.content_type.lower().startswith("image/"):
         raise ZippinException(
             "Only image/* floorplans are supported.",
             code="FLOORPLAN_ASSET_UNSUPPORTED_TYPE",
             http_status=422,
         )
+    # 저장된 객체 메타 검증: 클라이언트 JSON 은 신뢰 못 한다(presign 우회 가능). 실제
+    # Storage 객체를 HEAD 해 content-type=image/* + 크기 상한을 확인하고, 검증값으로
+    # 영속한다 — 비이미지/초과 페이로드가 pending 으로 분석에 들어가는 것 방지(#verify-object).
+    meta = await storage.head_object(
+        settings, bucket=payload.bucket, object_path=payload.object_key
+    )
+    if meta is None:
+        raise ZippinException(
+            "Could not verify the uploaded object.",
+            code="FLOORPLAN_ASSET_UNVERIFIED",
+            http_status=422,
+        )
+    verified_type, verified_size = meta
+    if verified_type is None or not verified_type.lower().startswith("image/"):
+        raise ZippinException(
+            "Only image/* floorplans are supported.",
+            code="FLOORPLAN_ASSET_UNSUPPORTED_TYPE",
+            http_status=422,
+        )
+    if verified_size is not None and verified_size > _MAX_FLOORPLAN_BYTES:
+        raise ZippinException(
+            "Floorplan exceeds the maximum allowed size.",
+            code="FLOORPLAN_ASSET_TOO_LARGE",
+            http_status=422,
+        )
+    asset_payload = payload.model_dump()
+    # 신뢰 가능한 검증값으로 덮어쓴다(클라이언트 주장 대신 실제 객체 메타).
+    asset_payload["content_type"] = verified_type
+    if verified_size is not None:
+        asset_payload["byte_size"] = verified_size
     row = await main_flow.create_floorplan_asset(
         session_id=session_id,
         owner_user_id=requester.user_id,
-        payload=payload.model_dump(),
+        payload=asset_payload,
         owner_is_anonymous=requester.is_anonymous,
     )
     logger.info(

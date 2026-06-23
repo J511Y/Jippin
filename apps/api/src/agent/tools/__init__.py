@@ -94,6 +94,7 @@ def build_tools(
             owner_user_id=owner_user_id,
             owner_is_anonymous=owner_is_anonymous,
             settings=settings,
+            run_context=run_context,
         )
 
     @tool
@@ -118,7 +119,9 @@ def build_tools(
         """수집된 판단값(wall_type/floor_count/has_sprinkler 등)으로 리모델링 룰을 평가한다.
         결과는 세션 리포트에 자동 저장된다."""
         return await evaluate_rules_impl(
-            session_id=session_id, judgment_values=judgment_values
+            session_id=session_id,
+            judgment_values=judgment_values,
+            run_context=run_context,
         )
 
     @tool

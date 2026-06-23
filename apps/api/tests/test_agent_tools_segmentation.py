@@ -314,6 +314,31 @@ async def test_session_floorplan_signs_and_segments(monkeypatch) -> None:
     assert {i["label"]: i["count"] for i in res["instances"]} == {"wall_other": 2}
 
 
+async def test_session_floorplan_records_input_fingerprint(monkeypatch) -> None:
+    # #analysis-input-fingerprint: 분석 시작 시점의 입력(asset_id/address_id)을 run_context
+    # 에 기록해 evaluate_rules 가 그 지문 기준으로 verdict 영속을 조건부화하게 한다.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    asset_id, address_id = await main_flow.get_session_inputs(session_id)
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+    ctx = RunContext()
+    async with _client(lambda req: httpx.Response(200, json={"instances": []})) as c:
+        await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=c,
+            run_context=ctx,
+        )
+    assert ctx.analysis_inputs == (asset_id, address_id)
+
+
 async def test_session_floorplan_sign_failure_degrades(monkeypatch) -> None:
     session_id, owner = await _session_with_asset(monkeypatch)
 

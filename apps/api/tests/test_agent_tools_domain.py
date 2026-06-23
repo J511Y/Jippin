@@ -199,6 +199,50 @@ async def test_evaluate_rules_invalid_input_is_structured_error(monkeypatch) -> 
     assert fake.sessions[session_id]["rule_eval_result"] is None
 
 
+async def test_evaluate_rules_uses_analysis_fingerprint(monkeypatch) -> None:
+    # #analysis-input-fingerprint: 분석 시작 지문(run_context)이 현재 세션 입력과 다르면
+    # (분석 도중 도면 교체) verdict 를 영속하지 않는다.
+    from tests._main_flow_db_fake import install_main_flow_fake
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    session_id = session["id"]
+    a1 = await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/a1.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    ctx = domain.RunContext()
+    ctx.analysis_inputs = (a1["id"], None)  # 분석은 a1 기준으로 시작됨
+    # 분석 도중 a2 로 교체.
+    await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/a2.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={"wall_type": "NON_LOAD_BEARING"},
+        run_context=ctx,
+    )
+    assert res["ok"] is True  # 판정은 사용자에게 반환
+    # 그러나 입력이 분석 시작 지문과 달라져 stale 판정은 영속되지 않는다.
+    assert fake.sessions[session_id]["rule_eval_result"] is None
+
+
 async def test_emit_ui_component_accumulates_across_calls(monkeypatch) -> None:
     # #multi-emit: 한 턴에 여러 번 호출하면 메모리·내구 버퍼 모두에 누적.
     from tests._main_flow_db_fake import install_main_flow_fake

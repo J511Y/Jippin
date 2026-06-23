@@ -224,7 +224,10 @@ async def check_building_register_impl(
 
 
 async def evaluate_rules_impl(
-    *, session_id: uuid.UUID, judgment_values: dict[str, Any]
+    *,
+    session_id: uuid.UUID,
+    judgment_values: dict[str, Any],
+    run_context: "RunContext | None" = None,
 ) -> dict[str, Any]:
     """리모델링 룰 엔진 평가(rule-eval-result 계약) + 세션에 판정 영속.
 
@@ -233,9 +236,15 @@ async def evaluate_rules_impl(
     영속 실패는 판정 자체를 막지 않고(best-effort) 로그만 남긴다.
     """
 
-    # 분석 입력(도면 asset/주소) 스냅샷 — verdict 영속을 조건부로 만들어, 평가 도중
-    # 도면/주소가 바뀌면 stale 판정을 새 입력에 붙이지 않는다(#stale-verdict-write).
-    inputs = await main_flow.get_session_inputs(session_id)
+    # 판정이 의존하는 입력 지문. judgment_values 를 만든 분석(segment 등) 시점의 입력을
+    # run_context 가 들고 있으면 그것을 쓰고(분석 도중 입력 교체를 정확히 포착), 없으면
+    # 현재 스냅샷으로 폴백한다(#analysis-input-fingerprint). 이 지문이 현재 세션 입력과
+    # 다르면 set_session_verdict 가 stale 판정을 영속하지 않는다.
+    inputs = None
+    if run_context is not None:
+        inputs = getattr(run_context, "analysis_inputs", None)
+    if inputs is None:
+        inputs = await main_flow.get_session_inputs(session_id)
     try:
         verdict = rule_engine.evaluate_judgment_values(judgment_values)
     except rule_engine.RuleInputError as exc:
@@ -290,11 +299,16 @@ async def emit_ui_component_impl(
 
 
 class RunContext:
-    """런 1회 동안 도구↔런너가 공유하는 가변 상태(UI 버퍼)."""
+    """런 1회 동안 도구↔런너가 공유하는 가변 상태(UI 버퍼 + 분석 입력 지문)."""
 
     def __init__(self) -> None:
         self.pending_ui_components: list[dict[str, Any]] = []
         self.pending_judgment_snapshot: dict[str, Any] | None = None
+        # 분석을 시작한 시점의 세션 입력 지문 (selected_floorplan_asset_id, address_id).
+        # 첫 분석 도구(segment_floorplan)가 기록하고, evaluate_rules 가 verdict 영속을
+        # 이 지문 기준 조건부로 만들어, 분석 도중 입력이 바뀌면 stale 판정을 막는다
+        # (#analysis-input-fingerprint). 미설정이면 evaluate 시점 스냅샷으로 폴백.
+        self.analysis_inputs: tuple[Any, Any] | None = None
 
     def drain_ui(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
         ui = self.pending_ui_components

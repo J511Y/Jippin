@@ -64,3 +64,46 @@ async def sign_object_url(
     if not signed:
         return None
     return settings.supabase_url.rstrip("/") + "/storage/v1" + signed
+
+
+async def head_object(
+    settings: Settings,
+    *,
+    bucket: str,
+    object_path: str,
+    operation: str = "head_object",
+) -> tuple[str | None, int | None] | None:
+    """저장된 객체의 (content_type, content_length) 를 조회한다 — 검증 못 하면 None.
+
+    클라이언트가 백엔드 라우트에 보낸 JSON content_type/byte_size 는 신뢰할 수 없으므로
+    (presign 우회 가능), 실제 Storage 객체 헤더로 검증한다. service-role 로 authenticated
+    object 엔드포인트에 HEAD 한다.
+    """
+
+    base = storage_base(settings)
+    if base is None:
+        return None
+    safe_path = quote(object_path, safe="/")
+    url = f"{base}/object/authenticated/{bucket}/{safe_path}"
+    headers = {
+        "Authorization": f"Bearer {settings.supabase_service_role_key}",
+        "apikey": settings.supabase_service_role_key or "",
+    }
+
+    async def _do() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            return await client.head(url, headers=headers)
+
+    try:
+        response = await log_http_call("supabase_storage", operation, _do)
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200:
+        return None
+    content_type = response.headers.get("content-type")
+    raw_len = response.headers.get("content-length")
+    try:
+        content_length = int(raw_len) if raw_len is not None else None
+    except ValueError:
+        content_length = None
+    return content_type, content_length
