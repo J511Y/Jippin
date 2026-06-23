@@ -93,6 +93,9 @@ begin
   then
     new.rule_eval_result := null;
     new.rule_evaluated_at := null;
+    -- 흐름 결정(PROCEED_RULE/HOLD_OR_HANDOFF 등)도 옛 입력 기준이므로 함께 비운다.
+    -- 상세 UI 가 completion_decision 비-null 을 report-ready 로 보기 때문(#stale-decision).
+    new.completion_decision := null;
   end if;
   return new;
 end;
@@ -107,6 +110,37 @@ create trigger trg_sessions_invalidate_verdict
   on public.sessions
   for each row
   execute function public.invalidate_session_verdict_on_input_change();
+
+-- 주소 행 in-place 수정(PUT /sessions/{id}/address 는 같은 session_addresses 행을
+-- upsert 하므로 sessions.address_id 포인터는 그대로다)도 입력 변경이다. 부모 세션의
+-- verdict/decision 을 무효화한다(#address-row-edit). SECURITY DEFINER 로 실행해 cascade
+-- UPDATE 가 authenticated client 가드(prevent_session_client_service_field_mutation)에
+-- 막히지 않게 한다(definer 컨텍스트에선 current_role 이 authenticated 가 아님).
+create or replace function public.invalidate_session_verdict_on_address_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  update public.sessions
+    set rule_eval_result = null,
+        rule_evaluated_at = null,
+        completion_decision = null
+    where id = new.session_id
+      and (
+        rule_eval_result is not null
+        or rule_evaluated_at is not null
+        or completion_decision is not null
+      );
+  return new;
+end;
+$$;
+
+create trigger trg_session_addresses_invalidate_verdict
+  after insert or update on public.session_addresses
+  for each row
+  execute function public.invalidate_session_verdict_on_address_change();
 
 -- ---------------------------------------------------------------------------
 -- Supabase Storage — session-floorplans 비공개 버킷 + owner-folder 정책.

@@ -202,8 +202,12 @@ async def test_new_floorplan_invalidates_persisted_verdict(fake_db):
     await main_flow.set_session_verdict(
         session_id=session_id, rule_eval_result={"verdict": "ALLOW"}
     )
+    # 옛 입력 기준 흐름 결정도 함께 무효화 대상.
+    await main_flow.set_session_decision(
+        session_id=session_id, completion_decision="PROCEED_RULE"
+    )
     assert fake_db.sessions[session_id]["rule_eval_result"] is not None
-    # 새 도면 asset 첨부 → 입력 변경 → verdict 무효화.
+    # 새 도면 asset 첨부 → 입력 변경 → verdict + decision 무효화.
     await main_flow.create_floorplan_asset(
         session_id=session_id,
         owner_user_id=subject,
@@ -213,6 +217,30 @@ async def test_new_floorplan_invalidates_persisted_verdict(fake_db):
             "content_type": "image/png",
             "byte_size": 10,
         },
+    )
+    assert fake_db.sessions[session_id]["rule_eval_result"] is None
+    assert fake_db.sessions[session_id]["rule_evaluated_at"] is None
+    assert fake_db.sessions[session_id]["completion_decision"] is None
+
+
+async def test_address_edit_invalidates_verdict(fake_db):
+    """#address-row-edit: 주소를 고치면(같은 행 in-place upsert) 옛 판정이 무효화된다."""
+
+    session_id, subject = await _create_session_direct()
+    await main_flow.upsert_session_address(
+        session_id=session_id,
+        owner_user_id=subject,
+        payload={"road_address": "서울 강남구 테헤란로 1"},
+    )
+    await main_flow.set_session_verdict(
+        session_id=session_id, rule_eval_result={"verdict": "ALLOW"}
+    )
+    assert fake_db.sessions[session_id]["rule_eval_result"] is not None
+    # 같은 세션 주소 행을 부분 수정(포인터 동일) → verdict 무효화.
+    await main_flow.upsert_session_address(
+        session_id=session_id,
+        owner_user_id=subject,
+        payload={"unit_ho": "1502"},
     )
     assert fake_db.sessions[session_id]["rule_eval_result"] is None
     assert fake_db.sessions[session_id]["rule_evaluated_at"] is None

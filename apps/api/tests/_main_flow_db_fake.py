@@ -203,6 +203,11 @@ class FakeMainFlowDb:
         session["address_id"] = row["id"]
         if session["status"] == "draft":
             session["status"] = "address_ready"
+        # migration 0016 trg_session_addresses_invalidate_verdict 미러: 주소 행이
+        # 바뀌면(in-place 포함) 부모 세션의 verdict/decision 을 무효화한다.
+        session["rule_eval_result"] = None
+        session["rule_evaluated_at"] = None
+        session["completion_decision"] = None
         self._touch_session(session_id)
         return dict(row)
 
@@ -428,6 +433,7 @@ class FakeMainFlowDb:
         if pointer_changed:
             row["rule_eval_result"] = None
             row["rule_evaluated_at"] = None
+            row["completion_decision"] = None
         self._touch_session(session_id)
         return dict(row)
 
