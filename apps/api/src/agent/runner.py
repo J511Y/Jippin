@@ -155,6 +155,17 @@ async def translate_stream(
 
         if mode == "messages":
             chunk = data[0] if isinstance(data, tuple) and data else data
+            # ToolMessage(도구 *결과*)는 tool_call_id 를 가진다 — content 에 JSON 결과나
+            # write_todos 의 "Updated todo list ..." 같은 내부 텍스트가 실려 있어, 토큰으로
+            # 흘리면 프론트 채팅 버블에 raw 가 노출된다. 도구 활동은 tool_step 이벤트로
+            # 별도 노출되므로 여기선 **AI 토큰만** 흘린다(#tool-message-token-leak).
+            if getattr(chunk, "tool_call_id", None) is not None:
+                continue
+            # _translate_message 의 AIMessage 판별과 정합하게 — 비-AI(human/system/tool)
+            # 메시지 청크는 토큰으로 흘리지 않는다.
+            chunk_type = getattr(chunk, "type", None)
+            if chunk_type not in (None, "ai", "AIMessageChunk", "assistant"):
+                continue
             text = _message_text(getattr(chunk, "content", ""))
             if text and not getattr(chunk, "tool_calls", None):
                 yield TokenSignal(text)

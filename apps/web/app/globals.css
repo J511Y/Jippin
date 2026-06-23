@@ -102,3 +102,262 @@ a[data-faq-row]:focus-visible {
   color: var(--jippin-form-disabled-text);
   -webkit-text-fill-color: var(--jippin-form-disabled-text);
 }
+
+/* ===========================================================================
+   채팅 UX (CMP-DIRECT 대화형 재설계) — 레이아웃/전환/마크다운/타이핑.
+   색은 전부 브랜드 토큰. 모션은 prefers-reduced-motion 을 존중한다.
+   =========================================================================== */
+
+/* 채팅 컨테이너는 헤더(60px) 아래 남는 viewport 를 풀높이로 채운다(SiteShell 이 /sessions
+   경로에서 세로 패딩을 줄이고 풀높이를 허용한다). */
+.chat-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.chat-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 대화 본문은 가독성을 위해 중앙 정렬 max-width 컬럼(약 720px). */
+.chat-column {
+  width: 100%;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* compose(인사말) 단계 — 수직 중앙 정렬. */
+.chat-compose {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 0;
+}
+
+/* 대화 스크롤 영역 — 메시지 본문. */
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 0 8px;
+}
+
+/* 하단 도크 — sticky 입력창. */
+.chat-dock {
+  position: sticky;
+  bottom: 0;
+  padding: 10px 0 14px;
+  background: linear-gradient(
+    to top,
+    var(--mantine-color-body) 70%,
+    transparent
+  );
+}
+
+.chat-report-link {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 0 4px;
+}
+
+.chat-report-link a {
+  text-decoration: none;
+}
+
+.chat-report-link a:hover {
+  text-decoration: underline;
+}
+
+/* 대화 레이아웃 진입 시 부드러운 페이드+슬라이드인(컴포저가 중앙→하단으로 자리잡는
+   느낌). compose→conversation 은 별개 컴포넌트 트리라 conversation 마운트 시
+   한 번 재생한다. */
+@media (prefers-reduced-motion: no-preference) {
+  .chat-root[data-mode='conversation'] .chat-shell {
+    animation: chat-fade-in 360ms ease both;
+  }
+  .chat-root[data-mode='conversation'] .chat-dock {
+    animation: chat-dock-in 380ms ease both;
+  }
+}
+
+@keyframes chat-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-dock-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 어시스턴트 메시지 마크다운 — 채팅 버블에 어울리게 촘촘한 수직 리듬. faq-answer 를
+   참고하되 마진을 줄였다. 색은 브랜드 토큰. */
+.chat-markdown {
+  font-size: var(--mantine-font-size-sm);
+  line-height: 1.6;
+  color: var(--jippin-brand-ink);
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown p {
+  margin: 0.4em 0;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 0.4em 0;
+  padding-left: 1.25em;
+}
+
+/* Tailwind preflight 가 ul/ol 의 list-style 을 none 으로 리셋하므로 명시적으로 복원한다
+   (불릿/번호 없이 들여쓰기만 되던 문제 해소). */
+.chat-markdown ul {
+  list-style: disc;
+}
+
+.chat-markdown ol {
+  list-style: decimal;
+}
+
+.chat-markdown li {
+  margin: 0.15em 0;
+}
+
+.chat-markdown li > p {
+  margin: 0.15em 0;
+}
+
+.chat-markdown strong {
+  font-weight: 700;
+  color: var(--jippin-brand-ink);
+}
+
+.chat-markdown a {
+  color: var(--jippin-brand-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4 {
+  margin: 0.8em 0 0.35em;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--jippin-brand-ink);
+}
+
+.chat-markdown h1 {
+  font-size: 1.15em;
+}
+.chat-markdown h2 {
+  font-size: 1.1em;
+}
+.chat-markdown h3,
+.chat-markdown h4 {
+  font-size: 1.02em;
+}
+
+.chat-markdown code {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 0.88em;
+  padding: 0.1em 0.34em;
+  border-radius: 4px;
+  background: var(--jippin-brand-surface);
+  border: 1px solid var(--jippin-brand-border);
+}
+
+.chat-markdown pre {
+  margin: 0.5em 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--jippin-brand-surface);
+  border: 1px solid var(--jippin-brand-border);
+  overflow-x: auto;
+}
+
+.chat-markdown pre code {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.chat-markdown blockquote {
+  margin: 0.5em 0;
+  padding-left: 0.8em;
+  border-left: 3px solid var(--jippin-brand-border);
+  color: var(--jippin-brand-copy);
+}
+
+/* 타이핑 인디케이터(응답 생성 중) — 세 점 바운스. */
+.chat-typing {
+  padding: 10px 14px;
+  border-radius: 16px;
+  border-top-left-radius: 4px;
+  background: var(--jippin-brand-surface-alt, #ffffff);
+  border: 1px solid var(--jippin-brand-border);
+}
+
+.chat-typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--jippin-brand-copy);
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-typing-dot {
+    animation: chat-typing-bounce 1.2s ease-in-out infinite;
+  }
+  .chat-typing-dot:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .chat-typing-dot:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+}
+
+@keyframes chat-typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 0.9;
+  }
+}

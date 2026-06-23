@@ -17,6 +17,7 @@ import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
 import { createClient } from '@/lib/supabase/client';
 
 import { parseSseFrame, splitSseBuffer, type AgentSseEvent } from './sse';
+import { toolDisplay, toolStepText } from './tool-labels';
 
 export type AgentStreamStatus = 'idle' | 'streaming' | 'done' | 'error';
 
@@ -140,10 +141,25 @@ function toDynamic(component: Record<string, unknown>): DynamicComponentSpec | u
   return { kind, payload };
 }
 
+/** 도구 진행 단계 한 줄 — UI(MessageThread)가 스피너/체크로 렌더한다. */
+export interface ToolActivityStep {
+  /** 안정 키(같은 toolName 의 마지막 started 를 갱신할 때 재사용). */
+  id: string;
+  toolName: string;
+  status: ToolStepStatusValue;
+  /** 화이트라벨 문구(toolStepText 결과). raw 도구명은 절대 담지 않는다. */
+  text: string;
+}
+
+type ToolStepStatusValue = 'started' | 'succeeded' | 'failed';
+
 export interface UseAgentStream {
   messages: ChatMessage[];
   streamingText: string;
+  /** 하위호환 — 마지막 활동 한 줄. 신규 UI 는 activity 배열을 쓴다. */
   toolActivity: string | null;
+  /** 이번 턴의 도구 활동 타임라인(숨김 도구는 제외). */
+  activity: ToolActivityStep[];
   status: AgentStreamStatus;
   error: string | null;
   send: (content: string) => Promise<void>;
@@ -154,6 +170,7 @@ export function useAgentStream(sessionId: string): UseAgentStream {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [toolActivity, setToolActivity] = useState<string | null>(null);
+  const [activity, setActivity] = useState<ToolActivityStep[]>([]);
   const [status, setStatus] = useState<AgentStreamStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -172,6 +189,8 @@ export function useAgentStream(sessionId: string): UseAgentStream {
   // useState 리셋은 부모가 AgentChat 을 sessionId 로 key 해 remount 시키는 것으로
   // 처리한다(effect 안 setState 회피).
   useEffect(() => {
+    // 빈 sessionId(=compose 단계) 가드: 히스토리 로드/resume 복원을 no-op 으로 둔다.
+    if (!sessionId) return;
     resumableRunIdRef.current = loadResumeId(sessionId);
     // 마운트/새로고침 시 영속된 transcript 를 복원한다 — 완료된 런은 resume 스트림이
     // 없어 SSE 로 다시 못 받으므로(#load-history-on-mount). 라이브 메시지가 이미 있으면
@@ -232,12 +251,14 @@ export function useAgentStream(sessionId: string): UseAgentStream {
   const send = useCallback(
     async (content: string) => {
       const text = content.trim();
-      if (!text || streamingRef.current) return;
+      // 빈 sessionId(compose 단계)면 send 를 no-op 으로 둔다(SessionChat 이 세션 생성 후 재마운트).
+      if (!text || !sessionId || streamingRef.current) return;
 
       streamingRef.current = true;
       setError(null);
       setStatus('streaming');
       setToolActivity(null);
+      setActivity([]);
       setStreamingText('');
 
       const controller = new AbortController();
@@ -298,8 +319,53 @@ export function useAgentStream(sessionId: string): UseAgentStream {
               assembled += ev.delta;
               setStreamingText(assembled);
             } else if (ev.type === 'tool_step') {
-              setToolActivity(`${ev.tool_name} · ${ev.status}`);
+              // 숨김 도구(set_completion_decision 등)는 활동 UI 에 노출하지 않는다.
+              if (!toolDisplay(ev.tool_name).hidden) {
+                const text = toolStepText(ev.tool_name, ev.status, ev.summary);
+                setToolActivity(text);
+                setActivity((prev) => {
+                  if (ev.status === 'started') {
+                    // 같은 도구의 진행 중 단계가 이미 있으면 갱신, 없으면 push.
+                    const existing = prev.find(
+                      (s) => s.toolName === ev.tool_name && s.status === 'started',
+                    );
+                    const step: ToolActivityStep = {
+                      id: existing ? existing.id : uid(),
+                      toolName: ev.tool_name,
+                      status: 'started',
+                      text,
+                    };
+                    if (existing) {
+                      return prev.map((s) => (s === existing ? step : s));
+                    }
+                    return [...prev, step];
+                  }
+                  // succeeded/failed: 같은 도구의 마지막 started 를 종료 상태로 갱신.
+                  let target: ToolActivityStep | undefined;
+                  for (let i = prev.length - 1; i >= 0; i -= 1) {
+                    const s = prev[i];
+                    if (s && s.toolName === ev.tool_name && s.status === 'started') {
+                      target = s;
+                      break;
+                    }
+                  }
+                  if (target) {
+                    const updated = target;
+                    return prev.map((s) =>
+                      s === updated ? { ...updated, status: ev.status, text } : s,
+                    );
+                  }
+                  // 대응하는 started 가 없으면 종료 단계를 그대로 추가.
+                  return [
+                    ...prev,
+                    { id: uid(), toolName: ev.tool_name, status: ev.status, text },
+                  ];
+                });
+              }
             } else if (ev.type === 'message') {
+              // 방어적 차단: assistant 메시지만 채팅 버블로 만든다. tool/system role 은
+              // 내부 메시지라 raw 누출을 막기 위해 버블화하지 않는다(#raw-leak-guard).
+              if (ev.role !== 'assistant') continue;
               const dynamics = (ev.ui_components ?? [])
                 .map(toDynamic)
                 .filter((d): d is DynamicComponentSpec => d !== undefined);
@@ -440,6 +506,17 @@ export function useAgentStream(sessionId: string): UseAgentStream {
       } finally {
         streamingRef.current = false;
         abortRef.current = null;
+        // 스트림이 끝나면 남은 'started' 단계의 스피너를 멈춘다 — 종료(succeeded)로
+        // 마무리해 완료 후에도 스피너가 계속 도는 것처럼 보이는 문제를 막는다.
+        setActivity((prev) =>
+          prev.some((s) => s.status === 'started')
+            ? prev.map((s) =>
+                s.status === 'started'
+                  ? { ...s, status: 'succeeded', text: toolStepText(s.toolName, 'succeeded') }
+                  : s,
+              )
+            : prev,
+        );
       }
     },
     [sessionId, setResumeId],
@@ -452,5 +529,5 @@ export function useAgentStream(sessionId: string): UseAgentStream {
     setStatus('idle');
   }, []);
 
-  return { messages, streamingText, toolActivity, status, error, send, stop };
+  return { messages, streamingText, toolActivity, activity, status, error, send, stop };
 }

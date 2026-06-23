@@ -45,13 +45,20 @@ const NAV_ITEMS: NavItem[] = [
 // sm 은 "단일 입력 폼" 한정 — 좁은 폭이 입력 가독성에 유리한 경우에만 명시적으로 좁힌다.
 const WIDE_ROUTE_PREFIXES = ['/sessions', '/faq', '/mypage', '/home-check'];
 
-// sm 으로 좁히는 예외 경로(단일 입력 폼). 여기에 없으면 WIDE 매칭 시 lg, 그 외 sm.
-const NARROW_FORM_PREFIXES = ['/sessions/new'];
+// 대화형 채팅 경로 — 헤더 아래 남는 viewport 를 풀높이로 쓰도록 컨테이너 세로 패딩을
+// 없애고 100dvh 기반 풀높이 레이아웃을 허용한다. /sessions, /sessions/new,
+// /sessions/[id] 가 모두 동일 폭(lg)·풀높이를 갖게 해 compose→대화 전환 시 폭/높이
+// 점프를 막는다. 단 리포트(/sessions/[id]/report)는 일반 문서 레이아웃을 유지한다.
+function isChatRoute(pathname: string): boolean {
+  // 채팅 화면은 /sessions/new 와 /sessions/[id] 뿐이다. 목록(/sessions)·리포트
+  // (/sessions/[id]/report)는 일반 문서 레이아웃(세로 패딩 + 비풀높이)을 유지한다.
+  if (pathname === '/sessions' || pathname === '/sessions/') return false;
+  if (!pathname.startsWith('/sessions/')) return false;
+  if (pathname.endsWith('/report')) return false;
+  return true;
+}
 
 function mainContainerSize(pathname: string): 'sm' | 'lg' {
-  if (NARROW_FORM_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
-    return 'sm';
-  }
   return WIDE_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))
     ? 'lg'
     : 'sm';
@@ -241,6 +248,20 @@ export function SiteShell({ children }: { children: ReactNode }) {
         {pathname === '/' || pathname === '/prices' ? (
           // 랜딩(홈·가격)은 풀블리드 섹션을 직접 제어한다.
           children
+        ) : isChatRoute(pathname) ? (
+          // 대화형 채팅 — 헤더 아래 남는 높이를 풀로 쓴다(세로 패딩 제거, flex 컬럼).
+          // 외부 footer 와 겹치지 않도록 헤더 높이만 제외한 최소 높이를 잡는다.
+          <Container
+            size={mainContainerSize(pathname)}
+            py={0}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: `calc(100dvh - ${HEADER_HEIGHT}px)`
+            }}
+          >
+            {children}
+          </Container>
         ) : (
           <Container size={mainContainerSize(pathname)} py="xl">
             {children}

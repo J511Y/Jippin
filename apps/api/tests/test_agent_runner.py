@@ -117,6 +117,38 @@ async def test_translate_stream_emits_expected_signals() -> None:
     assert messages[0].content == "분석을 마쳤습니다."
 
 
+async def test_translate_stream_messages_skips_tool_message_tokens() -> None:
+    # #tool-message-token-leak: messages 모드에서 ToolMessage(도구 결과 — tool_call_id 보유,
+    # content=JSON/내부 텍스트)는 토큰으로 흘리지 않는다(tool_step 으로만 노출). AI 청크는 흘린다.
+    tool_chunk = SimpleNamespace(
+        tool_call_id="tc1",
+        content='{"ok": true, "summary": "주소 확정"}',
+        type="tool",
+    )
+    ai_chunk = SimpleNamespace(content="안녕하세요", tool_calls=None, type="ai")
+    chunks = [
+        ("messages", (tool_chunk, {})),
+        ("messages", (ai_chunk, {})),
+    ]
+    signals = [s async for s in translate_stream(_aiter(chunks), tool_kinds={})]
+    tokens = [s for s in signals if isinstance(s, TokenSignal)]
+    # ToolMessage 는 누출되지 않고, AI 청크만 토큰으로 방출된다.
+    assert len(tokens) == 1
+    assert tokens[0].delta == "안녕하세요"
+
+
+async def test_translate_stream_messages_skips_non_ai_chunks() -> None:
+    # messages 모드에서 비-AI(human 등) 청크도 토큰으로 흘리지 않는다.
+    human_chunk = SimpleNamespace(content="사용자 입력", tool_calls=None, type="human")
+    signals = [
+        s
+        async for s in translate_stream(
+            _aiter([("messages", (human_chunk, {}))]), tool_kinds={}
+        )
+    ]
+    assert [s for s in signals if isinstance(s, TokenSignal)] == []
+
+
 async def test_translate_stream_uses_stable_id_when_message_id_absent() -> None:
     # #stable-projection-id: id 없는 메시지는 내용 기반 결정적 id → replay 시 동일.
     def chunks() -> list[Any]:

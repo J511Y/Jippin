@@ -1,0 +1,203 @@
+'use client';
+
+/**
+ * A2UI `floorplan-request` 카드 — 도면 업로드 유도 (CMP-DIRECT).
+ *
+ * 항상 떠 있던 업로드 입력을 대체한다. 에이전트가 "도면이 필요하다"고 판단하면
+ * 이 카드를 방출하고, 사용자가 카드 안에서 이미지를 골라 첨부하면 업로드 →
+ * asset 등록 → `sendMessage` 로 분석을 이어 가게 한다.
+ *
+ * payload: { reason?: string }
+ *
+ * 보안/검증: payload 는 LLM/서버 유래라 런타임 형태가 임의일 수 있다. `isPlainObject`
+ * 로 객체임을 좁힌 뒤 `reason` 이 string 일 때만 채택한다(아니면 기본 문구). 모든
+ * 사용자/LLM 문자열은 React 텍스트 노드로만 렌더해 raw HTML 주입을 막는다.
+ */
+
+import {
+  Alert,
+  Badge,
+  Button,
+  FileInput,
+  Group,
+  Stack,
+  Text
+} from '@mantine/core';
+import {
+  IconAlertCircle,
+  IconCheck,
+  IconPhotoUp,
+  IconUpload
+} from '@tabler/icons-react';
+import { useState } from 'react';
+import { useChatActions } from '@/components/agent/chat-actions';
+import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
+import { createFloorplanAsset } from '@/lib/sessions/api';
+import {
+  deleteSessionFloorplan,
+  uploadSessionFloorplan
+} from '@/lib/sessions/upload';
+
+/** 50MB — 백엔드 presign 한도와 정합. */
+const MAX_BYTES = 50 * 1024 * 1024;
+
+export type FloorplanRequestPayload = {
+  reason?: string;
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * floorplan-request 는 모든 필드가 optional 이라 빈 객체(`{}`)도 유효하다.
+ * 객체이기만 하면 채택하고, `reason` 은 문자열일 때만 노출한다.
+ */
+export function isFloorplanRequestPayload(
+  payload: unknown
+): payload is FloorplanRequestPayload {
+  if (!isPlainObject(payload)) {
+    return false;
+  }
+  return payload.reason === undefined || typeof payload.reason === 'string';
+}
+
+const DEFAULT_REASON =
+  '정확한 판단을 위해 평면도(도면) 이미지가 필요해요. 등기상 구조와 실제 구조를 비교해 분석합니다.';
+
+export function FloorplanRequestCard({
+  payload
+}: {
+  payload: FloorplanRequestPayload;
+}) {
+  const actions = useChatActions();
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [attached, setAttached] = useState(false);
+
+  const reason =
+    typeof payload.reason === 'string' && payload.reason.trim().length > 0
+      ? payload.reason
+      : DEFAULT_REASON;
+
+  const interactive = actions !== null;
+  const streaming = actions?.busy ?? false;
+  const disabled = busy || streaming || attached || !interactive;
+
+  function handlePick(picked: File | null) {
+    setError(null);
+    if (picked && picked.size > MAX_BYTES) {
+      setFile(null);
+      setError('이미지 용량은 50MB 이하여야 합니다.');
+      return;
+    }
+    setFile(picked);
+  }
+
+  async function handleSubmit() {
+    if (!actions || !file) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    let uploadedKey: string | null = null;
+    try {
+      await ensureAnonymousSession();
+      const uploaded = await uploadSessionFloorplan(actions.sessionId, file);
+      uploadedKey = uploaded.object_key;
+      await createFloorplanAsset(actions.sessionId, {
+        bucket: uploaded.bucket,
+        object_key: uploaded.object_key,
+        content_type: uploaded.content_type,
+        byte_size: uploaded.byte_size
+      });
+      // 등록까지 성공 — 정리 대상 아님.
+      uploadedKey = null;
+      setAttached(true);
+      await actions.refreshSession?.();
+      await actions.sendMessage('도면을 첨부했어요. 분석해 주세요.');
+    } catch (err) {
+      if (uploadedKey) {
+        // asset 등록 실패 — 방금 올린 object 를 정리(best-effort).
+        await deleteSessionFloorplan(uploadedKey);
+      }
+      setError(
+        err instanceof Error ? err.message : '도면 첨부 중 오류가 발생했습니다.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Stack gap="sm">
+      <Group gap="xs" wrap="nowrap">
+        <IconPhotoUp
+          size={18}
+          aria-hidden
+          style={{ color: 'var(--jippin-brand-professional)', flexShrink: 0 }}
+        />
+        <Text fw={600} size="sm" c="var(--jippin-brand-ink)">
+          평면도 첨부
+        </Text>
+        {attached ? (
+          <Badge
+            color="success"
+            variant="light"
+            leftSection={<IconCheck size={12} />}
+          >
+            첨부됨
+          </Badge>
+        ) : null}
+      </Group>
+
+      <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.55 }}>
+        {reason}
+      </Text>
+
+      {attached ? (
+        <Text size="sm" c="var(--jippin-brand-copy)">
+          도면을 첨부했어요. 분석을 이어 갈게요.
+        </Text>
+      ) : interactive ? (
+        <Stack gap="xs">
+          <FileInput
+            value={file}
+            onChange={handlePick}
+            accept="image/*"
+            placeholder="이미지 파일 선택 (최대 50MB)"
+            clearable
+            disabled={busy || streaming}
+            leftSection={<IconPhotoUp size={16} />}
+            aria-label="평면도 이미지 선택"
+          />
+          {error ? (
+            <Alert
+              color="danger"
+              variant="light"
+              icon={<IconAlertCircle size={16} />}
+              p="xs"
+            >
+              <Text size="xs">{error}</Text>
+            </Alert>
+          ) : null}
+          <Button
+            color="cta"
+            leftSection={<IconUpload size={16} />}
+            loading={busy}
+            disabled={!file || disabled}
+            onClick={handleSubmit}
+            fullWidth
+          >
+            도면 첨부하고 분석
+          </Button>
+        </Stack>
+      ) : (
+        <Text size="xs" c="var(--jippin-brand-copy)">
+          대화 화면에서 도면 이미지를 첨부할 수 있어요.
+        </Text>
+      )}
+    </Stack>
+  );
+}

@@ -1,9 +1,21 @@
 'use client';
 
-import { Badge, Code, Group, Paper, Stack, Text } from '@mantine/core';
+import { Badge, Code, Group, Paper, Progress, Stack, Text } from '@mantine/core';
 import { IconLayoutDashboard } from '@tabler/icons-react';
 import type { ReactNode } from 'react';
 import type { DynamicComponentSpec } from '@/components/a2ui/types';
+import {
+  AddressCandidatesCard,
+  isAddressCandidatesPayload
+} from '@/components/a2ui/cards/AddressCandidatesCard';
+import {
+  FloorplanRequestCard,
+  isFloorplanRequestPayload
+} from '@/components/a2ui/cards/FloorplanRequestCard';
+import {
+  JudgmentSummaryCard,
+  isJudgmentSummaryPayload
+} from '@/components/a2ui/cards/JudgmentSummaryCard';
 
 /**
  * A2UI 동적 컴포넌트 렌더러 (placeholder).
@@ -83,24 +95,58 @@ function isFloorplanConfirmPayload(payload: unknown): payload is FloorplanConfir
   return idOk && confidenceOk;
 }
 
+/** 신뢰도 구간별 상태색 — 높음(success)/중간(warning)/낮음(danger). */
+function confidenceColor(value: number): string {
+  if (value >= 0.75) {
+    return 'success';
+  }
+  if (value >= 0.5) {
+    return 'warning';
+  }
+  return 'danger';
+}
+
 function FloorplanConfirmCard({ payload }: { payload: FloorplanConfirmPayload }) {
   const confidence = coerceConfidence(payload.confidence);
+  const color = confidence !== null ? confidenceColor(confidence) : 'blueprint';
   return (
-    <Stack gap={6}>
-      <Group gap="xs">
-        <IconLayoutDashboard size={16} aria-hidden style={{ color: 'var(--jippin-brand-professional)' }} />
-        <Text fw={600} size="sm">도면 후보 영역 확인</Text>
+    <Stack gap="xs">
+      <Group gap="xs" wrap="nowrap">
+        <IconLayoutDashboard
+          size={18}
+          aria-hidden
+          style={{ color: 'var(--jippin-brand-professional)', flexShrink: 0 }}
+        />
+        <Text fw={600} size="sm" c="var(--jippin-brand-ink)">
+          도면 후보 영역 확인
+        </Text>
       </Group>
       {payload.selectedRegionId ? (
         <Text c="var(--jippin-brand-copy)" size="sm">
-          선택 영역: <Text component="span" fw={600}>{payload.selectedRegionId}</Text>
+          선택 영역:{' '}
+          <Text component="span" fw={600} c="var(--jippin-brand-ink)">
+            {payload.selectedRegionId}
+          </Text>
         </Text>
       ) : null}
       {confidence !== null ? (
-        <Group gap="xs">
-          <Text c="var(--jippin-brand-copy)" size="sm">분석 신뢰도</Text>
-          <Badge color="blueprint" variant="light">{formatConfidence(confidence)}</Badge>
-        </Group>
+        <Stack gap={4}>
+          <Group gap="xs" justify="space-between">
+            <Text c="var(--jippin-brand-copy)" size="sm">
+              분석 신뢰도
+            </Text>
+            <Badge color={color} variant="light">
+              {formatConfidence(confidence)}
+            </Badge>
+          </Group>
+          <Progress
+            value={Math.round(confidence * 100)}
+            color={color}
+            radius="xl"
+            size="sm"
+            aria-label="분석 신뢰도"
+          />
+        </Stack>
       ) : null}
     </Stack>
   );
@@ -118,7 +164,13 @@ function FloorplanConfirmCard({ payload }: { payload: FloorplanConfirmPayload })
 type Renderer = (payload: unknown) => ReactNode | null;
 const registry: Record<string, Renderer> = Object.assign(Object.create(null) as Record<string, Renderer>, {
   'floorplan-confirm': (payload: unknown) =>
-    isFloorplanConfirmPayload(payload) ? <FloorplanConfirmCard payload={payload} /> : null
+    isFloorplanConfirmPayload(payload) ? <FloorplanConfirmCard payload={payload} /> : null,
+  'floorplan-request': (payload: unknown) =>
+    isFloorplanRequestPayload(payload) ? <FloorplanRequestCard payload={payload} /> : null,
+  'address-candidates': (payload: unknown) =>
+    isAddressCandidatesPayload(payload) ? <AddressCandidatesCard payload={payload} /> : null,
+  'judgment-summary': (payload: unknown) =>
+    isJudgmentSummaryPayload(payload) ? <JudgmentSummaryCard payload={payload} /> : null
 });
 
 function FallbackJson({ spec }: { spec: DynamicComponentSpec }) {
