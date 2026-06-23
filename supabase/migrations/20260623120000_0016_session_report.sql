@@ -1,4 +1,4 @@
--- 0016 Session report — 사전검토 세션의 룰 판정 결과 영속화 (CMP-DIRECT).
+-- 0016 Session report — 사전검토 세션의 룰 판정 결과 영속화 + 도면 버킷 (CMP-DIRECT).
 --
 -- 에이전트가 evaluate_rules 로 만든 rule-eval-result(verdict/required_facilities/
 -- legal_basis/user_message 등)는 지금까지 chat_messages.judgment_snapshot 에만
@@ -12,3 +12,91 @@
 alter table public.sessions
   add column if not exists rule_eval_result jsonb,
   add column if not exists rule_evaluated_at timestamp with time zone;
+
+-- ---------------------------------------------------------------------------
+-- 클라이언트 쓰기 가드 — rule_eval_result/rule_evaluated_at 도 service-controlled.
+--
+-- 0008 의 sessions_owner_all + authenticated UPDATE grant 때문에, 가드 트리거가
+-- 막지 않으면 세션 소유자가 PostgREST 로 verdict JSON 을 위조할 수 있다(리포트가
+-- 이 값을 정본으로 신뢰하므로 위험). 기존 트리거 함수를 확장해 두 컬럼을 추가로
+-- 막는다(백엔드 service role 은 current_role<>'authenticated' 라 early-return).
+-- ---------------------------------------------------------------------------
+create or replace function public.prevent_session_client_service_field_mutation()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if current_role <> 'authenticated' then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    new.created_at := now();
+    new.updated_at := new.created_at;
+    new.last_activity_at := new.created_at;
+
+    if new.status <> 'draft'
+      or new.judgment_schema <> '{}'::jsonb
+      or new.judgment_schema_version is not null
+      or new.completion_decision is not null
+      or new.expires_at is not null
+      or new.rule_eval_result is not null
+      or new.rule_evaluated_at is not null
+    then
+      raise exception 'authenticated clients cannot set service-controlled session fields'
+        using errcode = '42501';
+    end if;
+  elsif new.created_at is distinct from old.created_at then
+    raise exception 'authenticated clients cannot change session audit timestamps'
+      using errcode = '42501';
+  elsif new.status is distinct from old.status
+    or new.judgment_schema is distinct from old.judgment_schema
+    or new.judgment_schema_version is distinct from old.judgment_schema_version
+    or new.completion_decision is distinct from old.completion_decision
+    or new.last_activity_at is distinct from old.last_activity_at
+    or new.expires_at is distinct from old.expires_at
+    or new.rule_eval_result is distinct from old.rule_eval_result
+    or new.rule_evaluated_at is distinct from old.rule_evaluated_at
+  then
+    raise exception 'authenticated clients cannot change service-controlled session fields'
+      using errcode = '42501';
+  end if;
+
+  if tg_op = 'UPDATE' then
+    new.updated_at := now();
+  end if;
+
+  return new;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Supabase Storage — session-floorplans 비공개 버킷 + owner-folder 정책.
+--
+-- 사전검토 도면 업로드 전용. 프론트는 presigned PUT(S3 자격증명)로 올리고, 세그멘테이션은
+-- service_role 서명 URL 로만 읽는다. 직접 SDK 접근 대비 owner-folder 정책도 둔다
+-- (leads 의 lead-floorplans 패턴). 각 branch 의 Storage 활성화는 콘솔에서 선행해야
+-- storage.* 스키마가 존재한다(ADR-0007).
+-- ---------------------------------------------------------------------------
+insert into storage.buckets (id, name, public)
+values ('session-floorplans', 'session-floorplans', false)
+on conflict (id) do nothing;
+
+create policy session_floorplans_owner_insert
+  on storage.objects
+  for insert
+  to authenticated
+  with check (
+    bucket_id = 'session-floorplans'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  );
+
+create policy session_floorplans_owner_read
+  on storage.objects
+  for select
+  to authenticated
+  using (
+    bucket_id = 'session-floorplans'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  );

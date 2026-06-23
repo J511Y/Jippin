@@ -244,13 +244,15 @@ async def test_rejects_unsafe_or_disallowed_image_url() -> None:
     assert res["error_code"] == "SEGMENTATION_BAD_REQUEST"
 
 
-async def _session_with_asset(monkeypatch) -> tuple[uuid.UUID, uuid.UUID]:
-    db_fake.install_main_flow_fake(monkeypatch)
+async def _session_with_asset(
+    monkeypatch, *, scan_status: str = "clean"
+) -> tuple[uuid.UUID, uuid.UUID]:
+    fake = db_fake.install_main_flow_fake(monkeypatch)
     owner = uuid.uuid4()
     session = await main_flow.create_session(
         user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
     )
-    await main_flow.create_floorplan_asset(
+    asset = await main_flow.create_floorplan_asset(
         session_id=session["id"],
         owner_user_id=owner,
         payload={
@@ -260,6 +262,8 @@ async def _session_with_asset(monkeypatch) -> tuple[uuid.UUID, uuid.UUID]:
             "byte_size": 10,
         },
     )
+    # 업로드는 pending 으로 생성된다 — 스캔 결과를 테스트 의도대로 세팅한다.
+    fake.floorplan_assets[asset["id"]]["scan_status"] = scan_status
     return session["id"], owner
 
 
@@ -323,3 +327,49 @@ async def test_session_floorplan_sign_failure_degrades(monkeypatch) -> None:
     )
     assert res["ok"] is False
     assert res["error_code"] == "SEGMENTATION_ENDPOINT_UNAVAILABLE"
+
+
+async def test_session_floorplan_pending_scan_blocked(monkeypatch) -> None:
+    # #scan-gate: 미검사(pending) 도면은 기본적으로 분석 금지(NOT_SCANNED). 서명/HF 호출 안 함.
+    session_id, owner = await _session_with_asset(monkeypatch, scan_status="pending")
+
+    def boom(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("스캔 전에는 HF 를 호출하면 안 된다")
+
+    async def fake_sign(settings, **_: object) -> str:
+        raise AssertionError("스캔 전에는 서명도 하지 않는다")
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+    async with _client(boom) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_NOT_SCANNED"
+
+
+async def test_session_floorplan_pending_allowed_by_setting(monkeypatch) -> None:
+    # agent_allow_unscanned_floorplans=True 면 pending 도 분석 허용(통제 환경용).
+    session_id, owner = await _session_with_asset(monkeypatch, scan_status="pending")
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"instances": []})
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(agent_allow_unscanned_floorplans=True),
+            client=client,
+        )
+    assert res["ok"] is True

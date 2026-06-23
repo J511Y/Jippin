@@ -926,7 +926,9 @@ async def create_floorplan_asset(
             "content_type": payload["content_type"],
             "byte_size": payload["byte_size"],
             "sha256_hex": payload.get("sha256_hex"),
-            "scan_status": "not_required",
+            # 사용자 업로드 원본은 검사 전이므로 pending — 세그멘테이션은 clean(또는
+            # 설정상 허용)일 때만 분석한다(#scan-gate, schema plan §1534/§1588).
+            "scan_status": "pending",
         }
     )
     # 세션을 이 asset 으로 연결한다. main_flow 는 비-authenticated 풀러로 쓰므로 0008

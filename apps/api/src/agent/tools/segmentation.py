@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 log = get_logger("zippin.agent.tools.segmentation")
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 # segmentation-result 계약의 라벨 enum(검증·요약용).
 _KNOWN_LABELS: frozenset[str] = frozenset(
@@ -206,6 +206,22 @@ async def segment_session_floorplan(
             False,
             error_code="SEGMENTATION_NO_IMAGE",
             summary="분석할 도면이 아직 업로드되지 않았습니다. 도면을 먼저 올려 주세요.",
+        )
+    # 보안 스캔 가드: 사용자 업로드 원본은 clean(또는 not_required)일 때만 분석한다.
+    # pending 은 설정(agent_allow_unscanned_floorplans)이 허용할 때만. infected 등은 항상
+    # 차단 — 미검사 콘텐츠를 HF 로 전달하지 않는다(#scan-gate).
+    scan_status = asset.get("scan_status")
+    allowed_unscanned = bool(
+        getattr(settings, "agent_allow_unscanned_floorplans", False)
+    )
+    analyzable = scan_status in ("clean", "not_required") or (
+        scan_status == "pending" and allowed_unscanned
+    )
+    if not analyzable:
+        return _result(
+            False,
+            error_code="SEGMENTATION_NOT_SCANNED",
+            summary="도면 보안 검사가 끝난 뒤 분석할 수 있습니다.",
         )
     signed = await storage.sign_object_url(
         settings,

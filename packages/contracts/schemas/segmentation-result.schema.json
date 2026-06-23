@@ -10,8 +10,8 @@
     "schema_version": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "const": "1.0.0",
-      "description": "스키마 버전 (semver)."
+      "const": "1.1.0",
+      "description": "스키마 버전 (semver). 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가(추가형)."
     },
     "ok": {
       "type": "boolean",
@@ -27,6 +27,7 @@
         "SEGMENTATION_BAD_REQUEST",
         "SEGMENTATION_BAD_RESPONSE",
         "SEGMENTATION_NO_IMAGE",
+        "SEGMENTATION_NOT_SCANNED",
         null
       ],
       "description": "ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE 등."

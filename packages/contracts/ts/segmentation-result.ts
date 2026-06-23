@@ -10,9 +10,9 @@
  */
 export interface SegmentationResult {
   /**
-   * 스키마 버전 (semver).
+   * 스키마 버전 (semver). 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가(추가형).
    */
-  schema_version: "1.0.0";
+  schema_version: "1.1.0";
   /**
    * 추론 성공 여부. false 면 error_code 가 채워지고 에이전트는 degrade 한다.
    */
@@ -28,6 +28,7 @@ export interface SegmentationResult {
     | "SEGMENTATION_BAD_REQUEST"
     | "SEGMENTATION_BAD_RESPONSE"
     | "SEGMENTATION_NO_IMAGE"
+    | "SEGMENTATION_NOT_SCANNED"
     | null;
   /**
    * 저장된 segmentation_mask floorplan_assets.id (있으면). 마스크 이미지는 Storage 에만 두고 여기엔 포인터만.

@@ -7,7 +7,7 @@
  * 가 Bearer user_id 로 owner-folder 를 한 번 더 검증한다.
  */
 
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NextResponse, type NextRequest } from 'next/server';
 import { safeFileName, validateUploadRequest } from '@/lib/leads/upload-policy';
@@ -97,4 +97,52 @@ export async function POST(request: NextRequest) {
     json.cookies.set(cookie);
   }
   return json;
+}
+
+/**
+ * 업로드된 도면 정리(best-effort). asset 등록(POST /sessions/{id}/floorplan-assets)이
+ * 실패하면 클라이언트가 방금 올린 object 를 지워 orphan(메타 row 없는 PII 도면 파일)을
+ * 남기지 않는다. 소유 폴더(uid)가 세션 uid 와 일치하는 object 만 삭제한다(leads 패턴).
+ */
+export async function DELETE(request: NextRequest) {
+  const cookieResponse = new NextResponse(null);
+  const supabase = createRouteHandlerClient({ request, response: cookieResponse });
+  const {
+    data: { user },
+    error: authError
+  } = await supabase.auth.getUser();
+  if (authError || !user) {
+    return jsonError('UNAUTHENTICATED', '세션이 필요합니다.', 401);
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    body = null;
+  }
+  const objectPath =
+    body && typeof body === 'object' && typeof (body as { object_path?: unknown }).object_path === 'string'
+      ? (body as { object_path: string }).object_path
+      : '';
+  if (!objectPath) {
+    return jsonError('INVALID_OBJECT_PATH', 'object_path 가 필요합니다.', 422);
+  }
+  if (objectPath.split('/')[0] !== user.id) {
+    return jsonError('OBJECT_OWNER_MISMATCH', '본인 폴더의 object 만 삭제할 수 있습니다.', 403);
+  }
+
+  const bucket = process.env.SESSION_FLOORPLAN_BUCKET ?? DEFAULT_BUCKET;
+  try {
+    await createS3Client().send(new DeleteObjectCommand({ Bucket: bucket, Key: objectPath }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '삭제에 실패했습니다.';
+    return jsonError('DELETE_FAILED', message, 500);
+  }
+
+  const ok = new NextResponse(null, { status: 204 });
+  for (const cookie of cookieResponse.cookies.getAll()) {
+    ok.cookies.set(cookie);
+  }
+  return ok;
 }

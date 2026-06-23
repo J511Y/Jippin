@@ -99,19 +99,17 @@ def create_app() -> FastAPI:
     # DB-backed 실 기능이므로 phase_a 플래그와 무관하게 항상 등록한다. 비회원(익명
     # Supabase 토큰)도 조회 가능하고, /mine 이력은 로그인 회원만 가능하다.
     app.include_router(home_check_router)
-    # Phase A 메인 흐름 (CMP-609 skeleton → CMP-608 상당 DB 영속화 완료).
-    # services.main_flow 는 실 Phase A 테이블 (migration 0008) 에 기록한다.
-    # 기능 자체가 아직 미공개 (주소 정규화/도면 파이프라인 미구현) 이므로
-    # settings 의 phase_a_skeleton_enabled 플래그가 켜진 환경에서만 라우터를
-    # 등록한다 (운영 default 는 False — 출시 결정 시 별도 이슈로 켠다).
-    if settings.phase_a_skeleton_enabled:
-        app.include_router(sessions_router)
-        app.include_router(floorplans_router)
-        app.include_router(chat_router)
-        # 에이전트 세션 (우리집 체크 대화형 에이전트) — phase_a 게이트 안에서
-        # agent_enabled 가 켜진 환경에만 등록한다(CMP-DIRECT).
-        if settings.agent_enabled:
-            app.include_router(agent_router)
+    # 사전검토 세션/도면/채팅 — 프로덕션 실기능(세션 CRUD·도면 업로드·리포트). 웹의
+    # /sessions 노출과 한 몸이므로 phase_a 플래그와 무관하게 **항상** 등록한다. 과거
+    # skeleton 시절엔 phase_a_skeleton_enabled 로 가렸지만, 웹은 빌드타임에 노출되어
+    # 백엔드 플래그와 분리되므로 게이트를 두면 프로덕션에서 /sessions 가 404 가 된다.
+    app.include_router(sessions_router)
+    app.include_router(floorplans_router)
+    app.include_router(chat_router)
+    # 에이전트 세션 (우리집 체크 대화형 에이전트) — agent_enabled 환경에만 등록한다
+    # (config validator 가 agent_enabled 시 phase_a_skeleton_enabled·OPENAI 키를 요구).
+    if settings.agent_enabled:
+        app.include_router(agent_router)
 
     return app
 

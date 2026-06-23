@@ -139,6 +139,10 @@ class Settings(BaseSettings):
     hf_segmentation_allowed_image_hosts: Annotated[list[str], NoDecode] = Field(
         default_factory=list
     )
+    # 보안 스캔 전(scan_status='pending') 도면을 세그멘테이션에 넘길지. 기본 False —
+    # 'clean'(또는 'not_required')만 분석한다. AV 스캔 파이프라인이 붙기 전 통제된
+    # 환경에서만 True 로 열어 업로드 즉시 분석을 허용한다(#scan-gate).
+    agent_allow_unscanned_floorplans: bool = Field(default=False)
 
     oauth_state_redis_url: str | None = Field(default=None)
     auth_oauth_state_ttl_seconds: int = Field(

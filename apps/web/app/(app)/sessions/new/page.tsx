@@ -14,7 +14,7 @@ import {
   createSession,
   upsertSessionAddress
 } from '@/lib/sessions/api';
-import { uploadSessionFloorplan } from '@/lib/sessions/upload';
+import { deleteSessionFloorplan, uploadSessionFloorplan } from '@/lib/sessions/upload';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
@@ -51,7 +51,13 @@ export default function NewSessionPage() {
       });
       if (floorplan) {
         const uploaded = await uploadSessionFloorplan(session.id, floorplan);
-        await createFloorplanAsset(session.id, uploaded);
+        try {
+          await createFloorplanAsset(session.id, uploaded);
+        } catch (assetError) {
+          // 업로드는 됐는데 메타 등록이 실패하면 방금 올린 도면을 정리(orphan PII 방지).
+          await deleteSessionFloorplan(uploaded.object_key);
+          throw assetError;
+        }
       }
       router.push(`/sessions/${session.id}`);
     } catch (error) {
