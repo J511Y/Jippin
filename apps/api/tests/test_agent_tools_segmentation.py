@@ -7,11 +7,18 @@ httpx MockTransport 로 미배포/404/503-콜드스타트/타임아웃/연결오
 
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 
 import httpx
 
-from src.agent.tools.segmentation import segment_floorplan_impl
+from src.agent.tools.segmentation import (
+    segment_floorplan_impl,
+    segment_session_floorplan,
+)
+from src.services import main_flow, storage
+
+from . import _main_flow_db_fake as db_fake
 
 _IMG = "https://storage.example/floorplan.png"
 
@@ -23,6 +30,8 @@ def _settings(**override: object) -> SimpleNamespace:
         "hf_segmentation_timeout_seconds": 5,
         "hf_segmentation_cold_start_max_retries": 0,
         "hf_segmentation_allowed_image_hosts": [],
+        # 실제 기본값과 일치(엣지 검증된 pending 도면 분석 허용).
+        "agent_allow_unscanned_floorplans": True,
     }
     base.update(override)
     return SimpleNamespace(**base)
@@ -235,3 +244,211 @@ async def test_rejects_unsafe_or_disallowed_image_url() -> None:
             client=client,
         )
     assert res["error_code"] == "SEGMENTATION_BAD_REQUEST"
+
+
+async def _session_with_asset(
+    monkeypatch, *, scan_status: str = "clean"
+) -> tuple[uuid.UUID, uuid.UUID]:
+    fake = db_fake.install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    asset = await main_flow.create_floorplan_asset(
+        session_id=session["id"],
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session['id']}/x.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    # 업로드는 pending 으로 생성된다 — 스캔 결과를 테스트 의도대로 세팅한다.
+    fake.floorplan_assets[asset["id"]]["scan_status"] = scan_status
+    return session["id"], owner
+
+
+async def test_session_floorplan_no_image(monkeypatch) -> None:
+    # 도면 미업로드 세션 → 임의 URL 호출 없이 SEGMENTATION_NO_IMAGE 로 degrade.
+    db_fake.install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    res = await segment_session_floorplan(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        settings=_settings(),
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_NO_IMAGE"
+
+
+async def test_session_floorplan_signs_and_segments(monkeypatch) -> None:
+    # 세션 asset 을 서명한 URL 로 세그멘테이션. LLM 은 URL 을 못 고른다(세션 고정).
+    session_id, owner = await _session_with_asset(monkeypatch)
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        assert bucket == "session-floorplans"
+        return f"https://signed.example/{object_path}?token=x"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert str(req.url).startswith("https://hf.example/seg")
+        return httpx.Response(
+            200, json={"instances": [{"label": "wall_other", "count": 2}]}
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is True
+    assert {i["label"]: i["count"] for i in res["instances"]} == {"wall_other": 2}
+
+
+async def test_session_floorplan_records_input_fingerprint(monkeypatch) -> None:
+    # #analysis-input-fingerprint: 분석 시작 시점의 입력(asset_id/address_id)을 run_context
+    # 에 기록해 evaluate_rules 가 그 지문 기준으로 verdict 영속을 조건부화하게 한다.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    asset_id, address_id = await main_flow.get_session_inputs(session_id)
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+    ctx = RunContext()
+    async with _client(lambda req: httpx.Response(200, json={"instances": []})) as c:
+        await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=c,
+            run_context=ctx,
+        )
+    assert ctx.analysis_inputs == (asset_id, address_id)
+
+
+async def test_session_floorplan_persists_durable_fingerprint(monkeypatch) -> None:
+    # #analysis-input-fingerprint: run_id 가 오면 분석 시작 지문을 런에 내구화해
+    # resume(새 RunContext)에서도 복원되게 한다. get_run_analysis_inputs 로 왕복 확인.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    asset_id, address_id = await main_flow.get_session_inputs(session_id)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+    ctx = RunContext()
+    async with _client(lambda req: httpx.Response(200, json={"instances": []})) as c:
+        await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=c,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    # 내구 버퍼에서 복원되면 메모리 지문과 동일해야 한다(resume 복원의 정본).
+    restored = await main_flow.get_run_analysis_inputs(run_id=run["id"])
+    assert restored == (asset_id, address_id)
+
+
+async def test_session_floorplan_sign_failure_degrades(monkeypatch) -> None:
+    session_id, owner = await _session_with_asset(monkeypatch)
+
+    async def fail_sign(settings, **_: object) -> None:
+        return None
+
+    monkeypatch.setattr(storage, "sign_object_url", fail_sign)
+    res = await segment_session_floorplan(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        settings=_settings(),
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_ENDPOINT_UNAVAILABLE"
+
+
+async def test_session_floorplan_pending_blocked_when_scan_required(
+    monkeypatch,
+) -> None:
+    # 운영자가 agent_allow_unscanned_floorplans=False 로 좁히면 pending 은 차단(NOT_SCANNED).
+    # 서명/HF 호출도 하지 않는다.
+    session_id, owner = await _session_with_asset(monkeypatch, scan_status="pending")
+
+    def boom(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("스캔 요구 모드에서는 HF 를 호출하면 안 된다")
+
+    async def fake_sign(settings, **_: object) -> str:
+        raise AssertionError("스캔 요구 모드에서는 서명도 하지 않는다")
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+    async with _client(boom) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(agent_allow_unscanned_floorplans=False),
+            client=client,
+        )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_NOT_SCANNED"
+
+
+async def test_session_floorplan_pending_analyzed_by_default(monkeypatch) -> None:
+    # 기본값(allow_unscanned=True): 엣지 검증된 pending 도면은 분석된다(#unblock-analysis).
+    session_id, owner = await _session_with_asset(monkeypatch, scan_status="pending")
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"instances": []})
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),  # 기본 True
+            client=client,
+        )
+    assert res["ok"] is True
+
+
+async def test_session_floorplan_infected_always_blocked(monkeypatch) -> None:
+    # infected 는 allow_unscanned 여부와 무관하게 항상 차단(clean/not_required/pending 만 통과).
+    session_id, owner = await _session_with_asset(monkeypatch, scan_status="infected")
+
+    async def fake_sign(settings, **_: object) -> str:
+        raise AssertionError("infected 는 서명/HF 호출 금지")
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+    res = await segment_session_floorplan(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        settings=_settings(),
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_NOT_SCANNED"

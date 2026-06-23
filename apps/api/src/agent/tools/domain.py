@@ -223,12 +223,38 @@ async def check_building_register_impl(
     )
 
 
-def evaluate_rules_impl(*, judgment_values: dict[str, Any]) -> dict[str, Any]:
-    """리모델링 룰 엔진 평가(rule-eval-result 계약). 동기 순수 함수.
+async def evaluate_rules_impl(
+    *,
+    session_id: uuid.UUID,
+    judgment_values: dict[str, Any],
+    run_context: "RunContext | None" = None,
+) -> dict[str, Any]:
+    """리모델링 룰 엔진 평가(rule-eval-result 계약) + 세션에 판정 영속.
 
-    evaluated_at 은 직렬화 시점(지금)에 주입한다.
+    evaluated_at 은 직렬화 시점(지금)에 주입한다. 성공한 판정은 ``set_session_verdict``
+    로 세션에 기록해 독립 리포트(GET /sessions/{id}/report)의 정본이 되게 한다 —
+    영속 실패는 판정 자체를 막지 않고(best-effort) 로그만 남긴다.
     """
 
+    # 판정이 의존하는 입력 지문 결정.
+    #  - 에이전트 경로(run_context 있음): judgment_values 를 만든 분석(segment) 시작 시점
+    #    지문이 정본이다. 첫 분석에서 기록되고 resume 시 런너가 내구 버퍼에서 복원한다.
+    #    지문이 없으면(분석을 안 했거나 복원 실패) **현재 세션 입력으로 폴백하지 않고
+    #    fail-closed** — stale 판정이 새 입력에 report-ready 로 붙는 걸 막는다
+    #    (#analysis-input-fingerprint).
+    #  - 비-에이전트 경로(run_context 없음: 직접 호출/테스트): resume 개념이 없으므로
+    #    현재 스냅샷 기준으로 영속한다.
+    fingerprint = (
+        getattr(run_context, "analysis_inputs", None)
+        if run_context is not None
+        else None
+    )
+    if run_context is None:
+        inputs = await main_flow.get_session_inputs(session_id)
+        persist = True
+    else:
+        inputs = fingerprint
+        persist = fingerprint is not None
     try:
         verdict = rule_engine.evaluate_judgment_values(judgment_values)
     except rule_engine.RuleInputError as exc:
@@ -236,6 +262,27 @@ def evaluate_rules_impl(*, judgment_values: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         return _safe_error(exc, "RULE_EVAL_FAILED", tool="evaluate_rules")
     result = verdict.to_contract_dict(evaluated_at=datetime.now(UTC))
+    if not persist:
+        # 분석 지문이 없어 freshness 를 증명할 수 없다 — 판정은 사용자에게 보여 주되
+        # 리포트엔 영속하지 않는다(에이전트가 분석 후 재평가하도록).
+        log.info("session_verdict_skipped_no_fingerprint", session_id=str(session_id))
+        return _ok(result=result, summary=f"룰 평가 결과: {result.get('verdict')}")
+    expected_asset, expected_address = inputs if inputs is not None else (None, None)
+    try:
+        persisted = await main_flow.set_session_verdict(
+            session_id=session_id,
+            rule_eval_result=result,
+            expected_asset_id=expected_asset,
+            expected_address_id=expected_address,
+        )
+        if persisted is None:
+            # 평가 도중 입력이 바뀜 — 판정은 사용자에게 보여 주되 리포트엔 영속하지
+            # 않는다(에이전트가 새 입력으로 재평가하도록).
+            log.info(
+                "session_verdict_skipped_inputs_changed", session_id=str(session_id)
+            )
+    except Exception:  # noqa: BLE001 - 리포트 영속 실패는 판정 응답을 막지 않는다
+        log.error("session_verdict_persist_failed", session_id=str(session_id))
     return _ok(result=result, summary=f"룰 평가 결과: {result.get('verdict')}")
 
 
@@ -267,11 +314,16 @@ async def emit_ui_component_impl(
 
 
 class RunContext:
-    """런 1회 동안 도구↔런너가 공유하는 가변 상태(UI 버퍼)."""
+    """런 1회 동안 도구↔런너가 공유하는 가변 상태(UI 버퍼 + 분석 입력 지문)."""
 
     def __init__(self) -> None:
         self.pending_ui_components: list[dict[str, Any]] = []
         self.pending_judgment_snapshot: dict[str, Any] | None = None
+        # 분석을 시작한 시점의 세션 입력 지문 (selected_floorplan_asset_id, address_id).
+        # 첫 분석 도구(segment_floorplan)가 기록하고, evaluate_rules 가 verdict 영속을
+        # 이 지문 기준 조건부로 만들어, 분석 도중 입력이 바뀌면 stale 판정을 막는다
+        # (#analysis-input-fingerprint). 미설정이면 evaluate 시점 스냅샷으로 폴백.
+        self.analysis_inputs: tuple[Any, Any] | None = None
 
     def drain_ui(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
         ui = self.pending_ui_components

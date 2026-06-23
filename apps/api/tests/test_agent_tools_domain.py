@@ -145,8 +145,21 @@ async def test_confirm_address_sanitizes_non_domain_exception(monkeypatch) -> No
     assert "hunter2" not in res["message"]
 
 
-def test_evaluate_rules_load_bearing_denies() -> None:
-    res = domain.evaluate_rules_impl(
+async def _session_for_rules(monkeypatch) -> tuple[uuid.UUID, object]:
+    from tests._main_flow_db_fake import install_main_flow_fake
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    return session["id"], fake
+
+
+async def test_evaluate_rules_load_bearing_denies(monkeypatch) -> None:
+    session_id, fake = await _session_for_rules(monkeypatch)
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
         judgment_values={
             "wall_type": "LOAD_BEARING",
             "floor_count": 5,
@@ -155,23 +168,106 @@ def test_evaluate_rules_load_bearing_denies() -> None:
             "stairwell_count": 2,
             "window_form": "FIXED",
             "fire_zone": False,
-        }
+        },
     )
     assert res["ok"] is True
     assert res["result"]["verdict"] == "DENY"
     assert res["result"]["schema_version"]
+    # 판정이 세션에 영속돼 리포트 정본이 된다(#session-verdict). status 는 건드리지
+    # 않는다(asset-only 세션의 report_ready 전이를 reference-scope 트리거가 막으므로).
+    assert fake.sessions[session_id]["rule_eval_result"]["verdict"] == "DENY"
+    assert fake.sessions[session_id]["rule_evaluated_at"] is not None
 
 
-def test_evaluate_rules_missing_field_holds() -> None:
-    res = domain.evaluate_rules_impl(judgment_values={"wall_type": "NON_LOAD_BEARING"})
+async def test_evaluate_rules_missing_field_holds(monkeypatch) -> None:
+    session_id, _fake = await _session_for_rules(monkeypatch)
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id, judgment_values={"wall_type": "NON_LOAD_BEARING"}
+    )
     assert res["ok"] is True
     assert res["result"]["verdict"] == "HOLD"
 
 
-def test_evaluate_rules_invalid_input_is_structured_error() -> None:
-    res = domain.evaluate_rules_impl(judgment_values={"unknown_key": 1})
+async def test_evaluate_rules_invalid_input_is_structured_error(monkeypatch) -> None:
+    session_id, fake = await _session_for_rules(monkeypatch)
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id, judgment_values={"unknown_key": 1}
+    )
     assert res["ok"] is False
     assert res["error_code"] == "RULE_INPUT_INVALID"
+    # 잘못된 입력은 판정을 영속하지 않는다.
+    assert fake.sessions[session_id]["rule_eval_result"] is None
+
+
+async def test_evaluate_rules_uses_analysis_fingerprint(monkeypatch) -> None:
+    # #analysis-input-fingerprint: 분석 시작 지문(run_context)이 현재 세션 입력과 다르면
+    # (분석 도중 도면 교체) verdict 를 영속하지 않는다.
+    from tests._main_flow_db_fake import install_main_flow_fake
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    session_id = session["id"]
+    a1 = await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/a1.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    ctx = domain.RunContext()
+    ctx.analysis_inputs = (a1["id"], None)  # 분석은 a1 기준으로 시작됨
+    # 분석 도중 a2 로 교체.
+    await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/a2.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={"wall_type": "NON_LOAD_BEARING"},
+        run_context=ctx,
+    )
+    assert res["ok"] is True  # 판정은 사용자에게 반환
+    # 그러나 입력이 분석 시작 지문과 달라져 stale 판정은 영속되지 않는다.
+    assert fake.sessions[session_id]["rule_eval_result"] is None
+
+
+async def test_evaluate_rules_agent_path_no_fingerprint_fails_closed(
+    monkeypatch,
+) -> None:
+    # #analysis-input-fingerprint: 에이전트 경로(run_context 있음)인데 분석 지문이 없으면
+    # (분석 미수행 또는 resume 복원 실패) 현재 입력으로 폴백하지 않고 fail-closed —
+    # 판정은 반환하되 리포트엔 영속하지 않는다.
+    session_id, fake = await _session_for_rules(monkeypatch)
+    ctx = domain.RunContext()  # analysis_inputs 미설정(None)
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={
+            "wall_type": "LOAD_BEARING",
+            "floor_count": 5,
+            "has_sprinkler": True,
+            "has_evacuation_space": True,
+            "stairwell_count": 2,
+            "window_form": "FIXED",
+            "fire_zone": False,
+        },
+        run_context=ctx,
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] == "DENY"
+    # 지문이 없어 영속하지 않는다(리포트 미준비 유지).
+    assert fake.sessions[session_id]["rule_eval_result"] is None
 
 
 async def test_emit_ui_component_accumulates_across_calls(monkeypatch) -> None:

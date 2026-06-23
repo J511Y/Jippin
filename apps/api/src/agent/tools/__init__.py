@@ -19,7 +19,7 @@ from .domain import (
     search_address_impl,
     set_completion_decision_impl,
 )
-from .segmentation import segment_floorplan_impl
+from .segmentation import segment_session_floorplan
 
 if TYPE_CHECKING:
     from ...config import Settings
@@ -86,9 +86,17 @@ def build_tools(
         )
 
     @tool
-    async def segment_floorplan(image_url: str) -> dict[str, Any]:
-        """평면도 이미지를 세그멘테이션한다(벽/공간 분류). 엔드포인트 실패 시 ok=false 로 degrade."""
-        return await segment_floorplan_impl(image_url=image_url, settings=settings)
+    async def segment_floorplan() -> dict[str, Any]:
+        """세션에 업로드된 평면도를 세그멘테이션한다(벽/공간 분류). 도면 출처는 세션에
+        선택된 asset 으로 고정된다(인자 없음). 도면 미업로드/엔드포인트 실패 시 ok=false."""
+        return await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+            settings=settings,
+            run_context=run_context,
+            run_id=run_id,
+        )
 
     @tool
     async def check_building_register(
@@ -108,9 +116,14 @@ def build_tools(
         )
 
     @tool
-    def evaluate_rules(judgment_values: dict[str, Any]) -> dict[str, Any]:
-        """수집된 판단값(wall_type/floor_count/has_sprinkler 등)으로 리모델링 룰을 평가한다."""
-        return evaluate_rules_impl(judgment_values=judgment_values)
+    async def evaluate_rules(judgment_values: dict[str, Any]) -> dict[str, Any]:
+        """수집된 판단값(wall_type/floor_count/has_sprinkler 등)으로 리모델링 룰을 평가한다.
+        결과는 세션 리포트에 자동 저장된다."""
+        return await evaluate_rules_impl(
+            session_id=session_id,
+            judgment_values=judgment_values,
+            run_context=run_context,
+        )
 
     @tool
     async def emit_ui_component(

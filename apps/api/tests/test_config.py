@@ -186,10 +186,16 @@ def test_public_web_origin_allows_port() -> None:
 # --- 에이전트 활성화 fail-safe (CMP-DIRECT) ---------------------------------
 
 
-def test_agent_enabled_requires_phase_a() -> None:
-    with pytest.raises(ValidationError) as exc:
-        Settings(agent_enabled=True, phase_a_skeleton_enabled=False)
-    assert "PHASE_A_SKELETON_ENABLED" in str(exc.value)
+def test_agent_enabled_does_not_require_phase_a() -> None:
+    # agent 라우터가 phase_a 게이트에서 분리됐으므로 phase_a 없이 agent 만 켜도 settings
+    # 생성이 깨지지 않는다(#stale-phase-prereq). 다른 필수(OPENAI 키 등)는 충족시킨다.
+    settings = Settings(
+        agent_enabled=True,
+        phase_a_skeleton_enabled=False,
+        openai_api_key="sk-test-not-a-real-key",
+    )
+    assert settings.agent_enabled is True
+    assert settings.phase_a_skeleton_enabled is False
 
 
 def test_agent_enabled_requires_openai_key() -> None:

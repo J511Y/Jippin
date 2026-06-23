@@ -75,6 +75,12 @@ class Session(TimestampMixin, Base):
     )
     judgment_schema_version: Mapped[str | None] = mapped_column(sa.Text)
     completion_decision: Mapped[str | None] = mapped_column(sa.Text)
+    # 룰 판정 정본(rule-eval-result 계약) — 리포트(GET /sessions/{id}/report)의 source.
+    # NULL = 리포트 미준비. migration 0016 와 정합.
+    rule_eval_result: Mapped[dict[str, object] | None] = mapped_column(postgresql.JSONB)
+    rule_evaluated_at: Mapped[datetime | None] = mapped_column(
+        postgresql.TIMESTAMP(timezone=True)
+    )
     last_activity_at: Mapped[datetime] = mapped_column(
         postgresql.TIMESTAMP(timezone=True),
         nullable=False,
@@ -547,6 +553,9 @@ class AgentRun(TimestampMixin, Base):
     pending_judgment_snapshot: Mapped[dict[str, object] | None] = mapped_column(
         postgresql.JSONB
     )
+    # 분석 시작 시점의 입력 지문(asset_id/address_id) — resume 시 RunContext 로 복원해
+    # verdict 영속을 분석-입력 기준 조건부로 유지한다(#analysis-input-fingerprint).
+    analysis_inputs: Mapped[dict[str, object] | None] = mapped_column(postgresql.JSONB)
     started_at: Mapped[datetime | None] = mapped_column(
         postgresql.TIMESTAMP(timezone=True)
     )

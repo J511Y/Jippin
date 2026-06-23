@@ -92,31 +92,45 @@ def test_session_create_bearer_required_returns_supabase_error_code(monkeypatch)
     assert response.json()["error"]["code"] == "SUPABASE_SESSION_BEARER_REQUIRED"
 
 
-def test_phase_a_routes_absent_when_skeleton_feature_flag_off(monkeypatch):
-    """운영 default — Phase A in-memory skeleton 라우터는 등록되지 않는다.
+def test_session_routes_mounted_regardless_of_skeleton_flag(monkeypatch):
+    """사전검토 세션/도면/채팅은 프로덕션 실기능이라 phase_a 플래그와 무관하게 항상
+    등록된다(CMP-DIRECT). 웹의 /sessions 노출이 빌드타임에 결정되므로, 백엔드 라우트를
+    플래그로 가리면 프로덕션에서 /sessions 가 404 가 되는 사고를 막는다.
 
-    CMP-608 Phase A migration + DB-backed repository 가 들어오기 전에는 운영
-    API surface 에 in-memory store 가 노출되면 안 된다. 본 회귀는 feature flag
-    가 꺼진 환경에서 ``POST /sessions`` 등 신규 endpoint 가 부재함을 확인한다.
+    에이전트 라우트만 agent_enabled 로 게이트된다(아래 별도 테스트).
     """
 
     helpers.set_supabase_env(monkeypatch)
-    # 운영 default 를 흉내내기 위해 helper 가 켜둔 flag 를 다시 끈다.
     monkeypatch.setenv("PHASE_A_SKELETON_ENABLED", "false")
     get_settings.cache_clear()
 
     app = create_app()
     paths = {route.path for route in app.routes}  # type: ignore[attr-defined]
-    for guarded in (
+    for mounted in (
         "/sessions",
         "/sessions/{session_id}",
         "/sessions/{session_id}/address",
         "/sessions/{session_id}/floorplan-uploads",
+        "/sessions/{session_id}/floorplan-assets",
+        "/sessions/{session_id}/report",
         "/sessions/{session_id}/chat/messages",
     ):
-        assert guarded not in paths, f"{guarded} leaked into prod-default app"
+        assert mounted in paths, f"{mounted} must be mounted in production"
 
+    # 인증 없는 호출은 404 가 아니라 401(라우트는 존재, Bearer 필요).
     client = TestClient(app)
     with client:
         response = client.post("/sessions", json={})
-    assert response.status_code == 404
+    assert response.status_code == 401
+
+
+def test_agent_routes_absent_when_agent_disabled(monkeypatch):
+    """에이전트 라우트는 agent_enabled 가 꺼진 환경에선 등록되지 않는다."""
+
+    helpers.set_supabase_env(monkeypatch)
+    monkeypatch.setenv("AGENT_ENABLED", "false")
+    get_settings.cache_clear()
+
+    app = create_app()
+    paths = {route.path for route in app.routes}  # type: ignore[attr-defined]
+    assert "/sessions/{session_id}/agent/runs" not in paths

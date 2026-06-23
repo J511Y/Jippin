@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     )
     # 평면도 첨부 Supabase Storage 버킷명 (migration 0009 와 정합).
     lead_floorplan_bucket: str = Field(default="lead-floorplans")
+    # 사전검토 세션 도면 업로드 Supabase Storage 버킷명. 운영자가 버킷 생성 + PUT CORS
+    # 설정 필요(인프라 선행). 세그멘테이션은 이 버킷의 서명 URL 만 사용한다.
+    session_floorplan_bucket: str = Field(default="session-floorplans")
 
     # 우리집 체크(home-check) — CODEF 세움터 집합건축물대장 전유부+표제부 조회.
     # 결정 정본: docs/adr/0008-home-check-building-register.md.
@@ -136,6 +139,12 @@ class Settings(BaseSettings):
     hf_segmentation_allowed_image_hosts: Annotated[list[str], NoDecode] = Field(
         default_factory=list
     )
+    # AV 스캔 파이프라인이 아직 없으므로, 엣지 검증(업로드 시 content-type=image/* +
+    # owner-folder + 서명 URL 만 사용)을 거친 pending 도면을 기본 허용한다. 그렇지 않으면
+    # 모든 업로드가 SEGMENTATION_NOT_SCANNED 로 막혀 분석/리포트가 불가능하다(#unblock-
+    # analysis). 단 infected/failed/rejected 는 항상 차단한다. AV 스캔이 붙으면 운영자가
+    # False 로 좁혀 'clean'/'not_required' 만 분석하도록 강제할 수 있다.
+    agent_allow_unscanned_floorplans: bool = Field(default=True)
 
     oauth_state_redis_url: str | None = Field(default=None)
     auth_oauth_state_ttl_seconds: int = Field(
@@ -422,14 +431,9 @@ class Settings(BaseSettings):
         실패가 정상 동작이다.
         """
 
-        # agent 라우터는 phase_a_skeleton_enabled 블록 안에서만 등록된다(main.py).
-        # phase_a 없이 agent 만 켜면 채팅 UI 는 보이는데 /agent/runs 가 404 난다 —
-        # 부팅 시점에 차단한다.
-        if self.agent_enabled and not self.phase_a_skeleton_enabled:
-            raise ValueError(
-                "AGENT_ENABLED=true 는 PHASE_A_SKELETON_ENABLED=true 를 요구한다 "
-                "(agent 라우터가 phase A 게이트 안에서 등록되기 때문)."
-            )
+        # agent 라우터는 이제 phase_a 와 무관하게 agent_enabled 만으로 등록된다(main.py).
+        # 따라서 과거의 phase_a_skeleton_enabled 선행 요구는 제거한다 — AGENT_ENABLED 만
+        # 켠 배포가 settings 생성 단계에서 깨지지 않도록(#stale-phase-prereq).
         if self.agent_enabled and self.database_url and ":6543" in self.database_url:
             raise ValueError(
                 "AGENT_ENABLED=true 는 LangGraph 체크포인터용 direct(:5432) "

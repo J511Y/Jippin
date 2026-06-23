@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class ErrorCode(Enum):
     """
-    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT 등.
+    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE 등.
     """
 
     SEGMENTATION_ENDPOINT_UNAVAILABLE = "SEGMENTATION_ENDPOINT_UNAVAILABLE"
@@ -24,6 +24,8 @@ class ErrorCode(Enum):
     SEGMENTATION_UPSTREAM_ERROR = "SEGMENTATION_UPSTREAM_ERROR"
     SEGMENTATION_BAD_REQUEST = "SEGMENTATION_BAD_REQUEST"
     SEGMENTATION_BAD_RESPONSE = "SEGMENTATION_BAD_RESPONSE"
+    SEGMENTATION_NO_IMAGE = "SEGMENTATION_NO_IMAGE"
+    SEGMENTATION_NOT_SCANNED = "SEGMENTATION_NOT_SCANNED"
     NoneType_None = None
 
 
@@ -78,9 +80,9 @@ class SegmentationResult(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.0.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.1.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver).
+    스키마 버전 (semver). 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가(추가형).
     """
     ok: bool
     """

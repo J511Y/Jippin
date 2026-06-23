@@ -48,6 +48,7 @@ from ..models import (
     AgentRun,
     ChatMessage,
     ChatToolCall,
+    FloorplanAsset,
     FloorplanCandidate,
     FloorplanUpload,
     Session,
@@ -57,6 +58,7 @@ from ..models import (
 _SESSIONS = Session.__table__
 _SESSION_ADDRESSES = SessionAddress.__table__
 _FLOORPLAN_UPLOADS = FloorplanUpload.__table__
+_FLOORPLAN_ASSETS = FloorplanAsset.__table__
 _FLOORPLAN_CANDIDATES = FloorplanCandidate.__table__
 _CHAT_MESSAGES = ChatMessage.__table__
 _CHAT_TOOL_CALLS = ChatToolCall.__table__
@@ -678,6 +680,78 @@ async def get_owned_session(
     )
 
 
+async def _db_clear_owner_sessions_expiry(owner_user_id: uuid.UUID) -> None:
+    async with get_engine().begin() as conn:
+        await conn.execute(
+            sa.update(_SESSIONS)
+            .where(
+                _SESSIONS.c.user_id == owner_user_id,
+                _SESSIONS.c.expires_at.isnot(None),
+            )
+            .values(expires_at=None, updated_at=sa.func.now())
+        )
+
+
+async def _db_list_sessions(
+    owner_user_id: uuid.UUID, limit: int
+) -> list[dict[str, Any]]:
+    async with get_engine().begin() as conn:
+        rows = (
+            await conn.execute(
+                sa.select(_SESSIONS)
+                .where(
+                    _SESSIONS.c.user_id == owner_user_id,
+                    _SESSIONS.c.status != "deleted",
+                )
+                .order_by(_SESSIONS.c.last_activity_at.desc())
+                .limit(limit)
+            )
+        ).all()
+    return [dict(r._mapping) for r in rows]
+
+
+async def list_owned_sessions(
+    *,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """요청자 본인 소유 세션을 최신 활동순으로 반환(목록 화면용). deleted 제외.
+
+    owner_user_id(Supabase sub)로 직접 필터링하므로 익명/permanent 모두 본인 것만
+    본다. 익명→OAuth 전환 사용자가 목록만 보고 개별 세션을 안 열어도 anon TTL 이
+    풀리도록, non-anonymous 접근이면 expires_at 를 먼저 해제한다(#list-clear-expiry,
+    `_resolve_owner_session` 의 전환 side-effect 를 목록 경로에서도 보장).
+    """
+
+    if not owner_is_anonymous:
+        await _db_clear_owner_sessions_expiry(owner_user_id)
+    return await _db_list_sessions(owner_user_id, limit)
+
+
+async def get_session_report(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """리포트용 세션+주소 번들을 반환. 판정이 없으면 404 REPORT_NOT_READY.
+
+    리포트의 정본은 ``sessions.rule_eval_result`` 다(에이전트 evaluate_rules 가 영속).
+    아직 없으면(대화 미완료) 가짜 판정을 내지 않고 미준비로 응답한다.
+    """
+
+    session = await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    if session.get("rule_eval_result") is None:
+        raise _not_found("Report is not ready yet.", code="REPORT_NOT_READY")
+    address = await _db_select_session_address(session_id)
+    return {"session": session, "address": address}
+
+
 # session_addresses 컬럼 — partial upsert 가 기존 값을 덮어쓰지 않도록 본 화이트리스트
 # 안에 있는 key 만 payload 에서 받아 row 에 적용한다.
 _ADDRESS_FIELDS: tuple[str, ...] = (
@@ -802,6 +876,168 @@ async def create_floorplan_upload(
             "upload_metadata": dict(payload.get("upload_metadata") or {}),
         },
         session_id=session_id,
+    )
+
+
+async def _db_insert_floorplan_asset(values: dict[str, Any]) -> dict[str, Any]:
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.insert(_FLOORPLAN_ASSETS)
+                .values(**values)
+                .returning(*_FLOORPLAN_ASSETS.c)
+            )
+        ).one()
+    return dict(row._mapping)
+
+
+async def _db_select_selected_floorplan_asset(
+    session_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(_FLOORPLAN_ASSETS)
+                .select_from(
+                    _SESSIONS.join(
+                        _FLOORPLAN_ASSETS,
+                        _SESSIONS.c.selected_floorplan_asset_id
+                        == _FLOORPLAN_ASSETS.c.id,
+                    )
+                )
+                .where(_SESSIONS.c.id == session_id)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def create_floorplan_asset(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    payload: dict[str, Any],
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """업로드된 도면 파일의 storage 메타데이터를 ``floorplan_assets`` 에 기록하고,
+    세션의 ``selected_floorplan_asset_id`` 로 연결한다.
+
+    실제 바이너리는 클라이언트가 presigned URL 로 Storage 에 직접 PUT 한 뒤이며,
+    본 함수는 ``bucket``/``object_key`` 등 메타만 받는다(파일 자체는 저장하지 않음).
+    세그멘테이션 도구가 이 asset 을 서명해 HF 엔드포인트로 보낸다.
+    """
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    asset = await _db_insert_floorplan_asset(
+        {
+            "session_id": session_id,
+            "owner_user_id": owner_user_id,
+            "kind": "original",
+            "storage_provider": "s3",
+            "bucket": payload["bucket"],
+            "object_key": payload["object_key"],
+            "content_type": payload["content_type"],
+            "byte_size": payload["byte_size"],
+            "sha256_hex": payload.get("sha256_hex"),
+            # 사용자 업로드 원본은 검사 전이므로 pending — 세그멘테이션은 clean(또는
+            # 설정상 허용)일 때만 분석한다(#scan-gate, schema plan §1534/§1588).
+            "scan_status": "pending",
+        }
+    )
+    # 세션을 이 asset 으로 연결한다. main_flow 는 비-authenticated 풀러로 쓰므로 0008
+    # client-guard 트리거는 early-return 하고, 같은 세션 소속 asset 이라 reference-scope
+    # 도 통과한다(상태 전이는 강제하지 않음 — 에이전트 플로우가 status 를 진행).
+    await _db_update_session_fields(
+        session_id, {"selected_floorplan_asset_id": asset["id"]}
+    )
+    return asset
+
+
+async def get_selected_floorplan_asset(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any] | None:
+    """세션에 선택된 도면 asset 을 반환(없으면 None). owner-gated."""
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    return await _db_select_selected_floorplan_asset(session_id)
+
+
+async def get_session_inputs(
+    session_id: uuid.UUID,
+) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
+    """세션의 분석 입력 식별자(selected_floorplan_asset_id, address_id)를 반환 —
+    runtime-only. 분석 시작 시점 스냅샷을 떠 verdict 영속을 조건부로 만들 때 쓴다."""
+
+    row = await _db_select_session(session_id)
+    if row is None:
+        return None
+    return row.get("selected_floorplan_asset_id"), row.get("address_id")
+
+
+async def _db_set_session_verdict_if_inputs(
+    session_id: uuid.UUID,
+    values: dict[str, Any],
+    expected_asset_id: Any,
+    expected_address_id: Any,
+) -> dict[str, Any] | None:
+    # 조건부 UPDATE: 분석 시작 때 본 입력과 현재 입력이 같을 때만 verdict 를 쓴다.
+    # _UNSET 인 입력은 검사를 건너뛴다(None 은 "값이 없음" 으로 검사 대상).
+    conds = [_SESSIONS.c.id == session_id]
+    if expected_asset_id is not _UNSET:
+        conds.append(
+            _SESSIONS.c.selected_floorplan_asset_id.is_not_distinct_from(
+                expected_asset_id
+            )
+        )
+    if expected_address_id is not _UNSET:
+        conds.append(_SESSIONS.c.address_id.is_not_distinct_from(expected_address_id))
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_SESSIONS)
+                .where(*conds)
+                .values(updated_at=sa.func.now(), **values)
+                .returning(*_SESSIONS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def set_session_verdict(
+    *,
+    session_id: uuid.UUID,
+    rule_eval_result: dict[str, Any],
+    expected_asset_id: Any = _UNSET,
+    expected_address_id: Any = _UNSET,
+) -> dict[str, Any] | None:
+    """룰 판정 결과(rule-eval-result)를 세션에 영속한다 — runtime-only.
+
+    에이전트가 evaluate_rules 로 verdict 를 만든 직후 호출한다. 이 값이 채워지면
+    GET /sessions/{id}/report 가 리포트를 제공한다(rule_eval_result IS NOT NULL =
+    리포트 준비됨). owner 검증은 caller(런너)가 세션 컨텍스트로 이미 보장한다.
+
+    분석 시작 때 캡처한 입력(asset_id/address_id)을 넘기면, 그 사이 입력이 바뀌었을
+    경우 stale verdict 를 쓰지 않고 None 을 반환한다 — 분석 중 도면 교체로 옛 판정이
+    새 입력에 report-ready 로 붙는 race 를 막는다(#stale-verdict-write). status 는
+    건드리지 않는다(reference-scope 트리거가 asset-only report_ready 를 거부).
+    """
+
+    values = {
+        "rule_eval_result": dict(rule_eval_result),
+        "rule_evaluated_at": _now(),
+    }
+    return await _db_set_session_verdict_if_inputs(
+        session_id, values, expected_asset_id, expected_address_id
     )
 
 
@@ -1486,6 +1722,74 @@ async def take_pending_ui(
     """런의 내구 A2UI 버퍼를 읽고 비운다(메시지 투영 시 drain). runtime-only."""
 
     return await _db_take_pending_ui(run_id)
+
+
+async def _db_set_run_analysis_inputs(
+    run_id: uuid.UUID, payload: dict[str, Any]
+) -> None:
+    async with get_engine().begin() as conn:
+        await conn.execute(
+            sa.update(_AGENT_RUNS)
+            .where(_AGENT_RUNS.c.id == run_id)
+            .values(analysis_inputs=payload, updated_at=sa.func.now())
+        )
+
+
+async def _db_get_run_analysis_inputs(
+    run_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    async with get_engine().connect() as conn:
+        sel = (
+            await conn.execute(
+                sa.select(_AGENT_RUNS.c.analysis_inputs).where(
+                    _AGENT_RUNS.c.id == run_id
+                )
+            )
+        ).one_or_none()
+    if sel is None:
+        return None
+    return sel.analysis_inputs
+
+
+def _to_uuid(value: Any) -> uuid.UUID | None:
+    if value is None or isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+async def set_run_analysis_inputs(
+    *,
+    run_id: uuid.UUID,
+    asset_id: uuid.UUID | None,
+    address_id: uuid.UUID | None,
+) -> None:
+    """분석 시작 지문을 런에 내구적으로 기록한다(resume 생존용). runtime-only.
+
+    첫 분석 도구(segment_floorplan)가 부른다. resume 로 RunContext 가 새로 생겨도
+    런너가 이 값을 복원해 verdict 영속을 분석-입력 기준으로 유지한다.
+    """
+
+    await _db_set_run_analysis_inputs(
+        run_id,
+        {
+            "asset_id": str(asset_id) if asset_id is not None else None,
+            "address_id": str(address_id) if address_id is not None else None,
+        },
+    )
+
+
+async def get_run_analysis_inputs(
+    *, run_id: uuid.UUID
+) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
+    """런에 내구적으로 기록된 분석 시작 지문을 복원한다(없으면 None). runtime-only."""
+
+    payload = await _db_get_run_analysis_inputs(run_id)
+    if not payload:
+        return None
+    return _to_uuid(payload.get("asset_id")), _to_uuid(payload.get("address_id"))
 
 
 # ---------------------------------------------------------------------------
