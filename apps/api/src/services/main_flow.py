@@ -680,6 +680,18 @@ async def get_owned_session(
     )
 
 
+async def _db_clear_owner_sessions_expiry(owner_user_id: uuid.UUID) -> None:
+    async with get_engine().begin() as conn:
+        await conn.execute(
+            sa.update(_SESSIONS)
+            .where(
+                _SESSIONS.c.user_id == owner_user_id,
+                _SESSIONS.c.expires_at.isnot(None),
+            )
+            .values(expires_at=None, updated_at=sa.func.now())
+        )
+
+
 async def _db_list_sessions(
     owner_user_id: uuid.UUID, limit: int
 ) -> list[dict[str, Any]]:
@@ -707,9 +719,13 @@ async def list_owned_sessions(
     """요청자 본인 소유 세션을 최신 활동순으로 반환(목록 화면용). deleted 제외.
 
     owner_user_id(Supabase sub)로 직접 필터링하므로 익명/permanent 모두 본인 것만
-    본다. owner_is_anonymous 는 호출부 일관성을 위해 받되 필터에는 user_id 만 쓴다.
+    본다. 익명→OAuth 전환 사용자가 목록만 보고 개별 세션을 안 열어도 anon TTL 이
+    풀리도록, non-anonymous 접근이면 expires_at 를 먼저 해제한다(#list-clear-expiry,
+    `_resolve_owner_session` 의 전환 side-effect 를 목록 경로에서도 보장).
     """
 
+    if not owner_is_anonymous:
+        await _db_clear_owner_sessions_expiry(owner_user_id)
     return await _db_list_sessions(owner_user_id, limit)
 
 
@@ -966,9 +982,16 @@ async def set_session_verdict(
     리포트 준비됨). owner 검증은 caller(런너)가 세션 컨텍스트로 이미 보장한다.
     """
 
+    # status='report_ready' 도 같은 UPDATE 로 전이한다 — 0008 의 완료-포인터 가드가
+    # 이 상태부터 owner 의 주소/도면 포인터 변경을 막아, 영속된 리포트 JSON 이 표시
+    # 입력과 분리되는 것을 방지한다(#report-ready-status).
     row = await _db_update_session_fields(
         session_id,
-        {"rule_eval_result": dict(rule_eval_result), "rule_evaluated_at": _now()},
+        {
+            "rule_eval_result": dict(rule_eval_result),
+            "rule_evaluated_at": _now(),
+            "status": "report_ready",
+        },
     )
     if row is None:
         raise _not_found("Session not found.", code="SESSION_NOT_FOUND")

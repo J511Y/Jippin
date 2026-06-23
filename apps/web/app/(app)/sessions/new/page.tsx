@@ -100,7 +100,7 @@ export default function NewSessionPage() {
           />
           <FileInput
             label="도면 파일 (선택)"
-            description="이미지 파일(JPG/PNG 등). 지금 없으면 대화 중에 올려도 됩니다."
+            description="이미지 파일만 지원합니다(JPG/PNG 등, PDF 미지원). 지금 없으면 대화 중에 올려도 됩니다."
             placeholder="도면 이미지를 선택하세요"
             accept="image/*"
             leftSection={<IconUpload size={16} aria-hidden />}

@@ -176,6 +176,8 @@ async def test_evaluate_rules_load_bearing_denies(monkeypatch) -> None:
     # 판정이 세션에 영속돼 리포트 정본이 된다(#session-verdict).
     assert fake.sessions[session_id]["rule_eval_result"]["verdict"] == "DENY"
     assert fake.sessions[session_id]["rule_evaluated_at"] is not None
+    # report_ready 로 전이돼 완료-포인터 가드가 주소/도면 변경을 막는다(#report-ready-status).
+    assert fake.sessions[session_id]["status"] == "report_ready"
 
 
 async def test_evaluate_rules_missing_field_holds(monkeypatch) -> None:

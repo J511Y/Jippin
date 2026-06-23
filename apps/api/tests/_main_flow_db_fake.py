@@ -28,6 +28,7 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_insert_session",
     "_db_select_session",
     "_db_list_sessions",
+    "_db_clear_owner_sessions_expiry",
     "_db_clear_session_expiry",
     "_db_select_session_address",
     "_db_upsert_session_address",
@@ -133,6 +134,12 @@ class FakeMainFlowDb:
     async def _db_select_session(self, session_id: uuid.UUID) -> dict[str, Any] | None:
         row = self.sessions.get(session_id)
         return dict(row) if row is not None else None
+
+    async def _db_clear_owner_sessions_expiry(self, owner_user_id: uuid.UUID) -> None:
+        for row in self.sessions.values():
+            if row["user_id"] == owner_user_id and row.get("expires_at") is not None:
+                row["expires_at"] = None
+                row["updated_at"] = _now()
 
     async def _db_list_sessions(
         self, owner_user_id: uuid.UUID, limit: int

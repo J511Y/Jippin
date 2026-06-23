@@ -76,6 +76,14 @@ async def create_floorplan_asset(
             code="FLOORPLAN_ASSET_OWNER_MISMATCH",
             http_status=403,
         )
+    # 엣지 검증: 세그멘테이션은 래스터 이미지를 분석하므로 image/* 만 받는다(AV 스캔
+    # 전 최소 검증). PDF 등은 현재 미지원(#unblock-analysis 보강).
+    if not payload.content_type.lower().startswith("image/"):
+        raise ZippinException(
+            "Only image/* floorplans are supported.",
+            code="FLOORPLAN_ASSET_UNSUPPORTED_TYPE",
+            http_status=422,
+        )
     row = await main_flow.create_floorplan_asset(
         session_id=session_id,
         owner_user_id=requester.user_id,

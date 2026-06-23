@@ -142,6 +142,38 @@ def test_create_floorplan_asset_rejects_foreign_owner_folder(monkeypatch, fake_d
     assert fake_db.floorplan_assets == {}
 
 
+def test_create_floorplan_asset_rejects_non_image(monkeypatch, fake_db):
+    """엣지 검증: image/* 가 아니면 422(세그멘테이션은 래스터 이미지만, PDF 미지원)."""
+
+    client, token, session_id, subject = _bootstrap_session(monkeypatch)
+    with client:
+        response = client.post(
+            f"/sessions/{session_id}/floorplan-assets",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "bucket": "session-floorplans",
+                "object_key": f"{subject}/{session_id}/doc.pdf",
+                "content_type": "application/pdf",
+                "byte_size": 100,
+            },
+        )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "FLOORPLAN_ASSET_UNSUPPORTED_TYPE"
+    assert fake_db.floorplan_assets == {}
+
+
+async def test_list_sessions_clears_expiry_for_converted_owner(fake_db):
+    """#list-clear-expiry: 익명→전환 사용자가 목록만 봐도 anon TTL 이 해제된다."""
+
+    owner = uuid.uuid4()
+    s = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=True, judgment_schema_version=None
+    )
+    assert fake_db.sessions[s["id"]]["expires_at"] is not None
+    await main_flow.list_owned_sessions(owner_user_id=owner, owner_is_anonymous=False)
+    assert fake_db.sessions[s["id"]]["expires_at"] is None
+
+
 def test_create_floorplan_upload_blocks_non_owner(monkeypatch, fake_db):
     """ownership 회귀: user B 는 user A 세션에 업로드 record 를 못 만든다."""
 

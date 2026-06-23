@@ -30,6 +30,8 @@ def _settings(**override: object) -> SimpleNamespace:
         "hf_segmentation_timeout_seconds": 5,
         "hf_segmentation_cold_start_max_retries": 0,
         "hf_segmentation_allowed_image_hosts": [],
+        # 실제 기본값과 일치(엣지 검증된 pending 도면 분석 허용).
+        "agent_allow_unscanned_floorplans": True,
     }
     base.update(override)
     return SimpleNamespace(**base)
@@ -329,15 +331,18 @@ async def test_session_floorplan_sign_failure_degrades(monkeypatch) -> None:
     assert res["error_code"] == "SEGMENTATION_ENDPOINT_UNAVAILABLE"
 
 
-async def test_session_floorplan_pending_scan_blocked(monkeypatch) -> None:
-    # #scan-gate: 미검사(pending) 도면은 기본적으로 분석 금지(NOT_SCANNED). 서명/HF 호출 안 함.
+async def test_session_floorplan_pending_blocked_when_scan_required(
+    monkeypatch,
+) -> None:
+    # 운영자가 agent_allow_unscanned_floorplans=False 로 좁히면 pending 은 차단(NOT_SCANNED).
+    # 서명/HF 호출도 하지 않는다.
     session_id, owner = await _session_with_asset(monkeypatch, scan_status="pending")
 
     def boom(req: httpx.Request) -> httpx.Response:
-        raise AssertionError("스캔 전에는 HF 를 호출하면 안 된다")
+        raise AssertionError("스캔 요구 모드에서는 HF 를 호출하면 안 된다")
 
     async def fake_sign(settings, **_: object) -> str:
-        raise AssertionError("스캔 전에는 서명도 하지 않는다")
+        raise AssertionError("스캔 요구 모드에서는 서명도 하지 않는다")
 
     monkeypatch.setattr(storage, "sign_object_url", fake_sign)
     async with _client(boom) as client:
@@ -345,15 +350,15 @@ async def test_session_floorplan_pending_scan_blocked(monkeypatch) -> None:
             session_id=session_id,
             owner_user_id=owner,
             owner_is_anonymous=False,
-            settings=_settings(),
+            settings=_settings(agent_allow_unscanned_floorplans=False),
             client=client,
         )
     assert res["ok"] is False
     assert res["error_code"] == "SEGMENTATION_NOT_SCANNED"
 
 
-async def test_session_floorplan_pending_allowed_by_setting(monkeypatch) -> None:
-    # agent_allow_unscanned_floorplans=True 면 pending 도 분석 허용(통제 환경용).
+async def test_session_floorplan_pending_analyzed_by_default(monkeypatch) -> None:
+    # 기본값(allow_unscanned=True): 엣지 검증된 pending 도면은 분석된다(#unblock-analysis).
     session_id, owner = await _session_with_asset(monkeypatch, scan_status="pending")
 
     async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
@@ -369,7 +374,25 @@ async def test_session_floorplan_pending_allowed_by_setting(monkeypatch) -> None
             session_id=session_id,
             owner_user_id=owner,
             owner_is_anonymous=False,
-            settings=_settings(agent_allow_unscanned_floorplans=True),
+            settings=_settings(),  # 기본 True
             client=client,
         )
     assert res["ok"] is True
+
+
+async def test_session_floorplan_infected_always_blocked(monkeypatch) -> None:
+    # infected 는 allow_unscanned 여부와 무관하게 항상 차단(clean/not_required/pending 만 통과).
+    session_id, owner = await _session_with_asset(monkeypatch, scan_status="infected")
+
+    async def fake_sign(settings, **_: object) -> str:
+        raise AssertionError("infected 는 서명/HF 호출 금지")
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+    res = await segment_session_floorplan(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        settings=_settings(),
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_NOT_SCANNED"
