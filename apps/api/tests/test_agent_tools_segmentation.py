@@ -339,6 +339,37 @@ async def test_session_floorplan_records_input_fingerprint(monkeypatch) -> None:
     assert ctx.analysis_inputs == (asset_id, address_id)
 
 
+async def test_session_floorplan_persists_durable_fingerprint(monkeypatch) -> None:
+    # #analysis-input-fingerprint: run_id 가 오면 분석 시작 지문을 런에 내구화해
+    # resume(새 RunContext)에서도 복원되게 한다. get_run_analysis_inputs 로 왕복 확인.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    asset_id, address_id = await main_flow.get_session_inputs(session_id)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+    ctx = RunContext()
+    async with _client(lambda req: httpx.Response(200, json={"instances": []})) as c:
+        await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=c,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    # 내구 버퍼에서 복원되면 메모리 지문과 동일해야 한다(resume 복원의 정본).
+    restored = await main_flow.get_run_analysis_inputs(run_id=run["id"])
+    assert restored == (asset_id, address_id)
+
+
 async def test_session_floorplan_sign_failure_degrades(monkeypatch) -> None:
     session_id, owner = await _session_with_asset(monkeypatch)
 

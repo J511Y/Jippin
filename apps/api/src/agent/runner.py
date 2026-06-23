@@ -243,6 +243,14 @@ class AgentRunner:
         from .checkpointer import get_checkpointer
         from .graph import build_agent
 
+        # resume 로 RunContext 가 새로 생긴 경우, 분석 시작 시점에 segment 가 런에
+        # 내구화한 입력 지문을 복원한다 — evaluate_rules 가 현재 세션 입력으로 폴백해
+        # stale 판정을 새 입력에 영속하는 걸 막는다(#analysis-input-fingerprint).
+        if self._run_context.analysis_inputs is None:
+            restored = await main_flow.get_run_analysis_inputs(run_id=self.run_id)
+            if restored is not None:
+                self._run_context.analysis_inputs = restored
+
         tools = build_tools(
             session_id=self.session_id,
             owner_user_id=self.owner_user_id,

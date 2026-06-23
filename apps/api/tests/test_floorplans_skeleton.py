@@ -365,6 +365,33 @@ async def test_address_edit_invalidates_verdict(fake_db):
     assert fake_db.sessions[session_id]["rule_evaluated_at"] is None
 
 
+async def test_address_reconfirm_same_value_keeps_verdict(fake_db):
+    """#address-noop-update: 같은 주소를 재확인하는 no-op upsert 는 verdict 를 안 지운다.
+
+    PUT /sessions/{id}/address 는 같은 주소 재확인 때도 ON CONFLICT DO UPDATE 로 행을
+    다시 쓴다 — 값이 그대로면 입력이 안 바뀐 것이라 리포트를 떨어뜨리면 안 된다.
+    """
+
+    session_id, subject = await _create_session_direct()
+    await main_flow.upsert_session_address(
+        session_id=session_id,
+        owner_user_id=subject,
+        payload={"road_address": "서울 강남구 테헤란로 1", "unit_ho": "1502"},
+    )
+    await main_flow.set_session_verdict(
+        session_id=session_id, rule_eval_result={"verdict": "ALLOW"}
+    )
+    assert fake_db.sessions[session_id]["rule_eval_result"] is not None
+    # 같은 값으로 다시 확정(no-op) → verdict 보존.
+    await main_flow.upsert_session_address(
+        session_id=session_id,
+        owner_user_id=subject,
+        payload={"road_address": "서울 강남구 테헤란로 1", "unit_ho": "1502"},
+    )
+    assert fake_db.sessions[session_id]["rule_eval_result"] is not None
+    assert fake_db.sessions[session_id]["rule_evaluated_at"] is not None
+
+
 def test_create_floorplan_upload_blocks_non_owner(monkeypatch, fake_db):
     """ownership 회귀: user B 는 user A 세션에 업로드 record 를 못 만든다."""
 

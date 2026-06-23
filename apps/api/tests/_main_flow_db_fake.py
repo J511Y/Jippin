@@ -58,6 +58,8 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_claim_resumable_agent_run",
     "_db_append_pending_ui",
     "_db_take_pending_ui",
+    "_db_set_run_analysis_inputs",
+    "_db_get_run_analysis_inputs",
 )
 
 # agent_runs 의 활성(=세션당 1개 부분 유니크) 상태 집합.
@@ -180,6 +182,21 @@ class FakeMainFlowDb:
             ),
             None,
         )
+        # migration 0016 trg_session_addresses_invalidate_verdict 미러: INSERT(새 주소)는
+        # 항상, UPDATE 는 식별 주소 필드가 실제로 바뀔 때만 verdict 를 무효화한다. 같은
+        # 주소 재확인(no-op upsert)은 리포트를 떨어뜨리지 않는다(#address-noop-update).
+        _ADDRESS_FIELDS = (
+            "road_address",
+            "jibun_address",
+            "apartment_name",
+            "building_dong",
+            "unit_ho",
+            "floor_no",
+            "exclusive_area_m2",
+            "size_type",
+            "building_identity",
+            "address_provider",
+        )
         if existing is None:
             row: dict[str, Any] = {
                 "id": uuid.uuid4(),
@@ -188,27 +205,30 @@ class FakeMainFlowDb:
                 **address_values,
             }
             self.session_addresses[row["id"]] = row
+            address_changed = True
         else:
             # ON CONFLICT (session_id) DO UPDATE — id/created_at/normalized_at
             # 은 보존된다 (set 절 밖).
-            existing.update(
-                {
-                    key: value
-                    for key, value in address_values.items()
-                    if key not in ("session_id", "user_id")
-                }
+            merged = {
+                key: value
+                for key, value in address_values.items()
+                if key not in ("session_id", "user_id")
+            }
+            address_changed = any(
+                existing.get(f) != merged.get(f, existing.get(f))
+                for f in _ADDRESS_FIELDS
             )
+            existing.update(merged)
             row = existing
 
         session = self.sessions[session_id]
         session["address_id"] = row["id"]
         if session["status"] == "draft":
             session["status"] = "address_ready"
-        # migration 0016 trg_session_addresses_invalidate_verdict 미러: 주소 행이
-        # 바뀌면(in-place 포함) 부모 세션의 verdict/decision 을 무효화한다.
-        session["rule_eval_result"] = None
-        session["rule_evaluated_at"] = None
-        session["completion_decision"] = None
+        if address_changed:
+            session["rule_eval_result"] = None
+            session["rule_evaluated_at"] = None
+            session["completion_decision"] = None
         self._touch_session(session_id)
         return dict(row)
 
@@ -491,6 +511,7 @@ class FakeMainFlowDb:
             "input_summary": {},
             "pending_ui": [],
             "pending_judgment_snapshot": None,
+            "analysis_inputs": None,
             "started_at": None,
             "finished_at": None,
             "created_at": now,
@@ -602,6 +623,24 @@ class FakeMainFlowDb:
         row["pending_judgment_snapshot"] = None
         row["updated_at"] = _now()
         return ui, snap
+
+    async def _db_set_run_analysis_inputs(
+        self, run_id: uuid.UUID, payload: dict[str, Any]
+    ) -> None:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return
+        row["analysis_inputs"] = dict(payload)
+        row["updated_at"] = _now()
+
+    async def _db_get_run_analysis_inputs(
+        self, run_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return None
+        payload = row.get("analysis_inputs")
+        return dict(payload) if payload is not None else None
 
 
 def install_main_flow_fake(monkeypatch) -> FakeMainFlowDb:

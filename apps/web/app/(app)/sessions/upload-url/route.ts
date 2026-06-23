@@ -103,6 +103,12 @@ export async function POST(request: NextRequest) {
  * 업로드된 도면 정리(best-effort). asset 등록(POST /sessions/{id}/floorplan-assets)이
  * 실패하면 클라이언트가 방금 올린 object 를 지워 orphan(메타 row 없는 PII 도면 파일)을
  * 남기지 않는다. 소유 폴더(uid)가 세션 uid 와 일치하는 object 만 삭제한다(leads 패턴).
+ *
+ * 단, 이미 floorplan_assets row 가 이 object 를 참조하면 **지우지 않는다**. 등록은
+ * 커밋됐는데 응답이 유실/재시도돼 클라 catch 가 cleanup 을 부른 경우, 선택된 asset 의
+ * 유일한 storage object 를 지워 DB 가 사라진 도면을 가리키게 되는 사고를 막는다
+ * (#do-not-delete-registered). 등록 여부 확인이 불확실하면(쿼리 에러) 보수적으로
+ * 삭제를 건너뛴다 — 잔여 orphan 은 서버측 cleanup 잡이 최종 정리한다.
  */
 export async function DELETE(request: NextRequest) {
   const cookieResponse = new NextResponse(null);
@@ -133,6 +139,27 @@ export async function DELETE(request: NextRequest) {
   }
 
   const bucket = process.env.SESSION_FLOORPLAN_BUCKET ?? DEFAULT_BUCKET;
+
+  const noContent = () => {
+    const ok = new NextResponse(null, { status: 204 });
+    for (const cookie of cookieResponse.cookies.getAll()) {
+      ok.cookies.set(cookie);
+    }
+    return ok;
+  };
+
+  // 등록된 asset 이 이 object 를 참조하면 삭제하지 않는다(owner RLS 로 본인 행만 보임).
+  const { data: registered, error: lookupError } = await supabase
+    .from('floorplan_assets')
+    .select('id')
+    .eq('bucket', bucket)
+    .eq('object_key', objectPath)
+    .limit(1);
+  if (lookupError || (registered && registered.length > 0)) {
+    // 등록됨(또는 확인 불가) — 참조 중인 도면을 지우지 않고 멱등 성공으로 응답한다.
+    return noContent();
+  }
+
   try {
     await createS3Client().send(new DeleteObjectCommand({ Bucket: bucket, Key: objectPath }));
   } catch (error) {
@@ -140,9 +167,5 @@ export async function DELETE(request: NextRequest) {
     return jsonError('DELETE_FAILED', message, 500);
   }
 
-  const ok = new NextResponse(null, { status: 204 });
-  for (const cookie of cookieResponse.cookies.getAll()) {
-    ok.cookies.set(cookie);
-  }
-  return ok;
+  return noContent();
 }

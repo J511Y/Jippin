@@ -95,6 +95,7 @@ def build_tools(
             owner_is_anonymous=owner_is_anonymous,
             settings=settings,
             run_context=run_context,
+            run_id=run_id,
         )
 
     @tool

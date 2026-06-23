@@ -128,8 +128,15 @@ export default function SessionReportPage() {
                   {result.user_message}
                 </Text>
               )}
+              {/* HOLD(데이터 부족)면 엔진이 permit_required 를 보수적으로 true 로 직렬화하지만
+                  실제 행위허가 필요 여부는 미정이다. boolean 만 보고 '필요'로 단정하지 않는다. */}
               <Text size="xs" c="dimmed">
-                행위허가 {result.permit_required ? '필요' : '불요(또는 신고 대상)'}
+                행위허가{' '}
+                {result.verdict === 'HOLD'
+                  ? '미정 (추가 확인 필요)'
+                  : result.permit_required
+                    ? '필요'
+                    : '불요(또는 신고 대상)'}
               </Text>
             </Stack>
           </Card>

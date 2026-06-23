@@ -236,15 +236,25 @@ async def evaluate_rules_impl(
     영속 실패는 판정 자체를 막지 않고(best-effort) 로그만 남긴다.
     """
 
-    # 판정이 의존하는 입력 지문. judgment_values 를 만든 분석(segment 등) 시점의 입력을
-    # run_context 가 들고 있으면 그것을 쓰고(분석 도중 입력 교체를 정확히 포착), 없으면
-    # 현재 스냅샷으로 폴백한다(#analysis-input-fingerprint). 이 지문이 현재 세션 입력과
-    # 다르면 set_session_verdict 가 stale 판정을 영속하지 않는다.
-    inputs = None
-    if run_context is not None:
-        inputs = getattr(run_context, "analysis_inputs", None)
-    if inputs is None:
+    # 판정이 의존하는 입력 지문 결정.
+    #  - 에이전트 경로(run_context 있음): judgment_values 를 만든 분석(segment) 시작 시점
+    #    지문이 정본이다. 첫 분석에서 기록되고 resume 시 런너가 내구 버퍼에서 복원한다.
+    #    지문이 없으면(분석을 안 했거나 복원 실패) **현재 세션 입력으로 폴백하지 않고
+    #    fail-closed** — stale 판정이 새 입력에 report-ready 로 붙는 걸 막는다
+    #    (#analysis-input-fingerprint).
+    #  - 비-에이전트 경로(run_context 없음: 직접 호출/테스트): resume 개념이 없으므로
+    #    현재 스냅샷 기준으로 영속한다.
+    fingerprint = (
+        getattr(run_context, "analysis_inputs", None)
+        if run_context is not None
+        else None
+    )
+    if run_context is None:
         inputs = await main_flow.get_session_inputs(session_id)
+        persist = True
+    else:
+        inputs = fingerprint
+        persist = fingerprint is not None
     try:
         verdict = rule_engine.evaluate_judgment_values(judgment_values)
     except rule_engine.RuleInputError as exc:
@@ -252,6 +262,11 @@ async def evaluate_rules_impl(
     except Exception as exc:  # noqa: BLE001
         return _safe_error(exc, "RULE_EVAL_FAILED", tool="evaluate_rules")
     result = verdict.to_contract_dict(evaluated_at=datetime.now(UTC))
+    if not persist:
+        # 분석 지문이 없어 freshness 를 증명할 수 없다 — 판정은 사용자에게 보여 주되
+        # 리포트엔 영속하지 않는다(에이전트가 분석 후 재평가하도록).
+        log.info("session_verdict_skipped_no_fingerprint", session_id=str(session_id))
+        return _ok(result=result, summary=f"룰 평가 결과: {result.get('verdict')}")
     expected_asset, expected_address = inputs if inputs is not None else (None, None)
     try:
         persisted = await main_flow.set_session_verdict(

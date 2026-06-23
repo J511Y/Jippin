@@ -243,6 +243,33 @@ async def test_evaluate_rules_uses_analysis_fingerprint(monkeypatch) -> None:
     assert fake.sessions[session_id]["rule_eval_result"] is None
 
 
+async def test_evaluate_rules_agent_path_no_fingerprint_fails_closed(
+    monkeypatch,
+) -> None:
+    # #analysis-input-fingerprint: 에이전트 경로(run_context 있음)인데 분석 지문이 없으면
+    # (분석 미수행 또는 resume 복원 실패) 현재 입력으로 폴백하지 않고 fail-closed —
+    # 판정은 반환하되 리포트엔 영속하지 않는다.
+    session_id, fake = await _session_for_rules(monkeypatch)
+    ctx = domain.RunContext()  # analysis_inputs 미설정(None)
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={
+            "wall_type": "LOAD_BEARING",
+            "floor_count": 5,
+            "has_sprinkler": True,
+            "has_evacuation_space": True,
+            "stairwell_count": 2,
+            "window_form": "FIXED",
+            "fire_zone": False,
+        },
+        run_context=ctx,
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] == "DENY"
+    # 지문이 없어 영속하지 않는다(리포트 미준비 유지).
+    assert fake.sessions[session_id]["rule_eval_result"] is None
+
+
 async def test_emit_ui_component_accumulates_across_calls(monkeypatch) -> None:
     # #multi-emit: 한 턴에 여러 번 호출하면 메모리·내구 버퍼 모두에 누적.
     from tests._main_flow_db_fake import install_main_flow_fake

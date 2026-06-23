@@ -1724,6 +1724,74 @@ async def take_pending_ui(
     return await _db_take_pending_ui(run_id)
 
 
+async def _db_set_run_analysis_inputs(
+    run_id: uuid.UUID, payload: dict[str, Any]
+) -> None:
+    async with get_engine().begin() as conn:
+        await conn.execute(
+            sa.update(_AGENT_RUNS)
+            .where(_AGENT_RUNS.c.id == run_id)
+            .values(analysis_inputs=payload, updated_at=sa.func.now())
+        )
+
+
+async def _db_get_run_analysis_inputs(
+    run_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    async with get_engine().connect() as conn:
+        sel = (
+            await conn.execute(
+                sa.select(_AGENT_RUNS.c.analysis_inputs).where(
+                    _AGENT_RUNS.c.id == run_id
+                )
+            )
+        ).one_or_none()
+    if sel is None:
+        return None
+    return sel.analysis_inputs
+
+
+def _to_uuid(value: Any) -> uuid.UUID | None:
+    if value is None or isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+async def set_run_analysis_inputs(
+    *,
+    run_id: uuid.UUID,
+    asset_id: uuid.UUID | None,
+    address_id: uuid.UUID | None,
+) -> None:
+    """분석 시작 지문을 런에 내구적으로 기록한다(resume 생존용). runtime-only.
+
+    첫 분석 도구(segment_floorplan)가 부른다. resume 로 RunContext 가 새로 생겨도
+    런너가 이 값을 복원해 verdict 영속을 분석-입력 기준으로 유지한다.
+    """
+
+    await _db_set_run_analysis_inputs(
+        run_id,
+        {
+            "asset_id": str(asset_id) if asset_id is not None else None,
+            "address_id": str(address_id) if address_id is not None else None,
+        },
+    )
+
+
+async def get_run_analysis_inputs(
+    *, run_id: uuid.UUID
+) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
+    """런에 내구적으로 기록된 분석 시작 지문을 복원한다(없으면 None). runtime-only."""
+
+    payload = await _db_get_run_analysis_inputs(run_id)
+    if not payload:
+        return None
+    return _to_uuid(payload.get("asset_id")), _to_uuid(payload.get("address_id"))
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------

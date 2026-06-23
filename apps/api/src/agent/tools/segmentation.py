@@ -187,6 +187,7 @@ async def segment_session_floorplan(
     settings: "Settings",
     client: httpx.AsyncClient | None = None,
     run_context: Any | None = None,
+    run_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """세션에 선택된 도면 asset 을 서명해 세그멘테이션한다.
 
@@ -197,6 +198,9 @@ async def segment_session_floorplan(
     ``run_context`` 가 주어지면 분석 시작 시점의 입력 지문(asset_id/address_id)을 기록해
     evaluate_rules 가 verdict 영속을 그 지문 기준 조건부로 만들 수 있게 한다 — 분석
     도중 도면/주소가 바뀌면 옛 판정이 새 입력에 붙는 race 차단(#analysis-input-fingerprint).
+    ``run_id`` 가 함께 오면 그 지문을 런에 **내구화**해 SSE 단절→resume 로 RunContext 가
+    새로 생겨도 복원되게 한다(메모리 지문만 두면 resume 가 현재 입력으로 폴백해 stale
+    판정이 새 입력에 붙는다).
     """
 
     from ...services import main_flow, storage
@@ -213,6 +217,8 @@ async def segment_session_floorplan(
             summary="분석할 도면이 아직 업로드되지 않았습니다. 도면을 먼저 올려 주세요.",
         )
     # 분석 입력 지문을 한 번만 기록(첫 분석 도구). 도면을 분석하는 시점의 (asset, address).
+    # resume 로 RunContext 가 비어 새로 생긴 경우 런너가 내구 지문을 복원하므로
+    # analysis_inputs 가 이미 채워져 있어 재기록하지 않는다.
     if (
         run_context is not None
         and getattr(run_context, "analysis_inputs", None) is None
@@ -220,6 +226,12 @@ async def segment_session_floorplan(
         inputs = await main_flow.get_session_inputs(session_id)
         if inputs is not None:
             run_context.analysis_inputs = inputs
+            if run_id is not None:
+                await main_flow.set_run_analysis_inputs(
+                    run_id=run_id,
+                    asset_id=inputs[0],
+                    address_id=inputs[1],
+                )
     # 보안 스캔 가드: 사용자 업로드 원본은 clean(또는 not_required)일 때만 분석한다.
     # pending 은 설정(agent_allow_unscanned_floorplans)이 허용할 때만. infected 등은 항상
     # 차단 — 미검사 콘텐츠를 HF 로 전달하지 않는다(#scan-gate).

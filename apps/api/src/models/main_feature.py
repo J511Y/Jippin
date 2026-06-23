@@ -553,6 +553,9 @@ class AgentRun(TimestampMixin, Base):
     pending_judgment_snapshot: Mapped[dict[str, object] | None] = mapped_column(
         postgresql.JSONB
     )
+    # 분석 시작 시점의 입력 지문(asset_id/address_id) — resume 시 RunContext 로 복원해
+    # verdict 영속을 분석-입력 기준 조건부로 유지한다(#analysis-input-fingerprint).
+    analysis_inputs: Mapped[dict[str, object] | None] = mapped_column(postgresql.JSONB)
     started_at: Mapped[datetime | None] = mapped_column(
         postgresql.TIMESTAMP(timezone=True)
     )

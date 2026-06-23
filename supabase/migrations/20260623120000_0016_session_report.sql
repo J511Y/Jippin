@@ -123,6 +123,26 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
+  -- PUT /sessions/{id}/address 는 같은 주소를 재확인할 때도 ON CONFLICT DO UPDATE 로
+  -- 행 전체를 다시 쓴다. 값이 그대로면(주소 재확인) 입력이 안 바뀐 것이므로 verdict 를
+  -- 무효화하지 않는다 — 안 그러면 같은 주소 재확인이 리포트를 REPORT_NOT_READY 로
+  -- 떨어뜨린다(#address-noop-update). 식별 가능한 주소 필드만 비교하고, audit/파생
+  -- 컬럼(created_at/normalized_at)은 제외한다. INSERT 는 항상 새 입력이라 통과.
+  if tg_op = 'UPDATE'
+    and new.road_address is not distinct from old.road_address
+    and new.jibun_address is not distinct from old.jibun_address
+    and new.apartment_name is not distinct from old.apartment_name
+    and new.building_dong is not distinct from old.building_dong
+    and new.unit_ho is not distinct from old.unit_ho
+    and new.floor_no is not distinct from old.floor_no
+    and new.exclusive_area_m2 is not distinct from old.exclusive_area_m2
+    and new.size_type is not distinct from old.size_type
+    and new.building_identity is not distinct from old.building_identity
+    and new.address_provider is not distinct from old.address_provider
+  then
+    return new;
+  end if;
+
   update public.sessions
     set rule_eval_result = null,
         rule_evaluated_at = null,
@@ -185,3 +205,16 @@ create policy session_floorplans_owner_read
     bucket_id = 'session-floorplans'
     and (storage.foldername(name))[1] = (select auth.uid())::text
   );
+
+-- ---------------------------------------------------------------------------
+-- agent_runs.analysis_inputs — 분석 시작 시점의 입력 지문 내구화(resume 생존).
+--
+-- evaluate_rules 의 verdict 영속은 "judgment_values 를 만든 분석(segment)이 본 입력"
+-- 기준으로 조건부여야 한다. 그 지문이 in-memory RunContext 에만 있으면 SSE 가 끊겨
+-- resume 될 때 새 RunContext 가 비어 현재 세션 입력으로 폴백 → 분석 도중 도면이 교체된
+-- 경우 옛 판정이 새 입력에 report-ready 로 붙는다. pending_ui 와 같은 내구 버퍼 패턴으로
+-- 런에 지문을 보관하고 resume 시 복원한다(#analysis-input-fingerprint).
+-- {"asset_id": <uuid|null>, "address_id": <uuid|null>} 형태.
+-- ---------------------------------------------------------------------------
+alter table public.agent_runs
+  add column if not exists analysis_inputs jsonb;
