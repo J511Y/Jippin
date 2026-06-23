@@ -31,6 +31,8 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_select_session_address",
     "_db_upsert_session_address",
     "_db_insert_floorplan_upload",
+    "_db_insert_floorplan_asset",
+    "_db_select_selected_floorplan_asset",
     "_db_select_candidate_revision_keys",
     "_db_insert_floorplan_candidates",
     "_db_insert_chat_message",
@@ -85,6 +87,7 @@ class FakeMainFlowDb:
         self.sessions: dict[uuid.UUID, dict[str, Any]] = {}
         self.session_addresses: dict[uuid.UUID, dict[str, Any]] = {}
         self.floorplan_uploads: dict[uuid.UUID, dict[str, Any]] = {}
+        self.floorplan_assets: dict[uuid.UUID, dict[str, Any]] = {}
         # (session_id, lookup_revision, floorplan_id) -> row
         self.floorplan_candidates: dict[
             tuple[uuid.UUID, int, uuid.UUID | None], dict[str, Any]
@@ -199,6 +202,42 @@ class FakeMainFlowDb:
         self.floorplan_uploads[row["id"]] = row
         self._touch_session(session_id)
         return dict(row)
+
+    # -- floorplan_assets --------------------------------------------------
+
+    async def _db_insert_floorplan_asset(
+        self, values: dict[str, Any]
+    ) -> dict[str, Any]:
+        now = _now()
+        row: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "floorplan_id": None,
+            "floorplan_upload_id": None,
+            "session_id": None,
+            "owner_user_id": None,
+            "sha256_hex": None,
+            "width_px": None,
+            "height_px": None,
+            "page_count": None,
+            "scan_status": "pending",
+            "created_at": now,
+            "updated_at": now,
+            **values,
+        }
+        self.floorplan_assets[row["id"]] = row
+        return dict(row)
+
+    async def _db_select_selected_floorplan_asset(
+        self, session_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        session = self.sessions.get(session_id)
+        if session is None:
+            return None
+        asset_id = session.get("selected_floorplan_asset_id")
+        if asset_id is None:
+            return None
+        row = self.floorplan_assets.get(asset_id)
+        return dict(row) if row is not None else None
 
     # -- floorplan_candidates ----------------------------------------------
 

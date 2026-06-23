@@ -179,6 +179,51 @@ def _parse_ok(data: Any) -> dict[str, Any]:
     return _result(True, summary=summary, instances=instances, mask_asset_id=mask)
 
 
+async def segment_session_floorplan(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool,
+    settings: "Settings",
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """세션에 선택된 도면 asset 을 서명해 세그멘테이션한다.
+
+    LLM 이 임의 ``image_url`` 을 넘기지 않게 한다(SSRF/세션 경계) — 도면 출처는 항상
+    세션의 ``selected_floorplan_asset_id`` 다. 도면 미업로드면 ``SEGMENTATION_NO_IMAGE``,
+    서명 실패(스토리지/설정 문제)는 ``ENDPOINT_UNAVAILABLE`` 로 degrade 한다.
+    """
+
+    from ...services import main_flow, storage
+
+    asset = await main_flow.get_selected_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    if asset is None:
+        return _result(
+            False,
+            error_code="SEGMENTATION_NO_IMAGE",
+            summary="분석할 도면이 아직 업로드되지 않았습니다. 도면을 먼저 올려 주세요.",
+        )
+    signed = await storage.sign_object_url(
+        settings,
+        bucket=asset["bucket"],
+        object_path=asset["object_key"],
+        operation="sign_floorplan_asset",
+    )
+    if not signed:
+        return _result(
+            False,
+            error_code="SEGMENTATION_ENDPOINT_UNAVAILABLE",
+            summary="도면 접근 URL 발급에 실패했습니다.",
+        )
+    return await segment_floorplan_impl(
+        image_url=signed, settings=settings, client=client
+    )
+
+
 async def segment_floorplan_impl(
     *,
     image_url: str,

@@ -95,6 +95,53 @@ def test_create_floorplan_upload_metadata_row(monkeypatch, fake_db):
     assert stored[0]["file_name"] == "84a-floorplan.pdf"
 
 
+def test_create_floorplan_asset_links_session(monkeypatch, fake_db):
+    """업로드된 도면 메타가 asset 으로 기록되고 세션에 연결된다(#a2ui/segmentation source)."""
+
+    client, token, session_id, subject = _bootstrap_session(monkeypatch)
+    object_key = f"{subject}/{session_id}/abc-floorplan.png"
+    with client:
+        response = client.post(
+            f"/sessions/{session_id}/floorplan-assets",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "bucket": "session-floorplans",
+                "object_key": object_key,
+                "content_type": "image/png",
+                "byte_size": 12345,
+            },
+        )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["session_id"] == session_id
+    assert body["kind"] == "original"
+    assert body["object_key"] == object_key
+    # 세션이 이 asset 으로 연결됐다(세그멘테이션이 여기서 도면을 가져온다).
+    assert fake_db.sessions[uuid.UUID(session_id)]["selected_floorplan_asset_id"] == (
+        uuid.UUID(body["id"])
+    )
+
+
+def test_create_floorplan_asset_rejects_foreign_owner_folder(monkeypatch, fake_db):
+    """owner-folder 가드: 남의 user 폴더 object_key 는 403."""
+
+    client, token, session_id, _subject = _bootstrap_session(monkeypatch)
+    with client:
+        response = client.post(
+            f"/sessions/{session_id}/floorplan-assets",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "bucket": "session-floorplans",
+                "object_key": f"{uuid.uuid4()}/x/evil.png",
+                "content_type": "image/png",
+                "byte_size": 1,
+            },
+        )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FLOORPLAN_ASSET_OWNER_MISMATCH"
+    assert fake_db.floorplan_assets == {}
+
+
 def test_create_floorplan_upload_blocks_non_owner(monkeypatch, fake_db):
     """ownership 회귀: user B 는 user A 세션에 업로드 record 를 못 만든다."""
 

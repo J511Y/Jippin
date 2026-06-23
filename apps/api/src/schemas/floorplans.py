@@ -55,6 +55,33 @@ class FloorplanUploadResponse(BaseModel):
     updated_at: datetime
 
 
+class FloorplanAssetCreateRequest(BaseModel):
+    """`POST /sessions/{id}/floorplan-assets` body — 클라이언트가 presigned URL 로
+    Storage 에 직접 PUT 한 뒤 객체 메타데이터만 등록한다(파일 바이너리 미전송).
+
+    ``object_key`` 의 첫 경로 세그먼트는 owner user_id 여야 한다(라우터가 검증).
+    """
+
+    bucket: str = Field(min_length=1)
+    object_key: str = Field(min_length=1)
+    content_type: str = Field(min_length=1)
+    byte_size: int = Field(ge=0)
+    sha256_hex: str | None = None
+
+
+class FloorplanAssetResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    session_id: uuid.UUID | None
+    kind: str
+    bucket: str
+    object_key: str
+    content_type: str
+    byte_size: int
+    scan_status: str
+
+
 class FloorplanCandidateItemInput(BaseModel):
     """Single candidate inside a snapshot batch — **internal-only** contract.
 

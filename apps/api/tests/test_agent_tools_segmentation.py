@@ -7,11 +7,18 @@ httpx MockTransport 로 미배포/404/503-콜드스타트/타임아웃/연결오
 
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 
 import httpx
 
-from src.agent.tools.segmentation import segment_floorplan_impl
+from src.agent.tools.segmentation import (
+    segment_floorplan_impl,
+    segment_session_floorplan,
+)
+from src.services import main_flow, storage
+
+from . import _main_flow_db_fake as db_fake
 
 _IMG = "https://storage.example/floorplan.png"
 
@@ -235,3 +242,84 @@ async def test_rejects_unsafe_or_disallowed_image_url() -> None:
             client=client,
         )
     assert res["error_code"] == "SEGMENTATION_BAD_REQUEST"
+
+
+async def _session_with_asset(monkeypatch) -> tuple[uuid.UUID, uuid.UUID]:
+    db_fake.install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    await main_flow.create_floorplan_asset(
+        session_id=session["id"],
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session['id']}/x.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    return session["id"], owner
+
+
+async def test_session_floorplan_no_image(monkeypatch) -> None:
+    # 도면 미업로드 세션 → 임의 URL 호출 없이 SEGMENTATION_NO_IMAGE 로 degrade.
+    db_fake.install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    res = await segment_session_floorplan(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        settings=_settings(),
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_NO_IMAGE"
+
+
+async def test_session_floorplan_signs_and_segments(monkeypatch) -> None:
+    # 세션 asset 을 서명한 URL 로 세그멘테이션. LLM 은 URL 을 못 고른다(세션 고정).
+    session_id, owner = await _session_with_asset(monkeypatch)
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        assert bucket == "session-floorplans"
+        return f"https://signed.example/{object_path}?token=x"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert str(req.url).startswith("https://hf.example/seg")
+        return httpx.Response(
+            200, json={"instances": [{"label": "wall_other", "count": 2}]}
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is True
+    assert {i["label"]: i["count"] for i in res["instances"]} == {"wall_other": 2}
+
+
+async def test_session_floorplan_sign_failure_degrades(monkeypatch) -> None:
+    session_id, owner = await _session_with_asset(monkeypatch)
+
+    async def fail_sign(settings, **_: object) -> None:
+        return None
+
+    monkeypatch.setattr(storage, "sign_object_url", fail_sign)
+    res = await segment_session_floorplan(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        settings=_settings(),
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_ENDPOINT_UNAVAILABLE"

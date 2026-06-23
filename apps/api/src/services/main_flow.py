@@ -48,6 +48,7 @@ from ..models import (
     AgentRun,
     ChatMessage,
     ChatToolCall,
+    FloorplanAsset,
     FloorplanCandidate,
     FloorplanUpload,
     Session,
@@ -57,6 +58,7 @@ from ..models import (
 _SESSIONS = Session.__table__
 _SESSION_ADDRESSES = SessionAddress.__table__
 _FLOORPLAN_UPLOADS = FloorplanUpload.__table__
+_FLOORPLAN_ASSETS = FloorplanAsset.__table__
 _FLOORPLAN_CANDIDATES = FloorplanCandidate.__table__
 _CHAT_MESSAGES = ChatMessage.__table__
 _CHAT_TOOL_CALLS = ChatToolCall.__table__
@@ -803,6 +805,97 @@ async def create_floorplan_upload(
         },
         session_id=session_id,
     )
+
+
+async def _db_insert_floorplan_asset(values: dict[str, Any]) -> dict[str, Any]:
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.insert(_FLOORPLAN_ASSETS)
+                .values(**values)
+                .returning(*_FLOORPLAN_ASSETS.c)
+            )
+        ).one()
+    return dict(row._mapping)
+
+
+async def _db_select_selected_floorplan_asset(
+    session_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(_FLOORPLAN_ASSETS)
+                .select_from(
+                    _SESSIONS.join(
+                        _FLOORPLAN_ASSETS,
+                        _SESSIONS.c.selected_floorplan_asset_id
+                        == _FLOORPLAN_ASSETS.c.id,
+                    )
+                )
+                .where(_SESSIONS.c.id == session_id)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
+async def create_floorplan_asset(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    payload: dict[str, Any],
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """업로드된 도면 파일의 storage 메타데이터를 ``floorplan_assets`` 에 기록하고,
+    세션의 ``selected_floorplan_asset_id`` 로 연결한다.
+
+    실제 바이너리는 클라이언트가 presigned URL 로 Storage 에 직접 PUT 한 뒤이며,
+    본 함수는 ``bucket``/``object_key`` 등 메타만 받는다(파일 자체는 저장하지 않음).
+    세그멘테이션 도구가 이 asset 을 서명해 HF 엔드포인트로 보낸다.
+    """
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    asset = await _db_insert_floorplan_asset(
+        {
+            "session_id": session_id,
+            "owner_user_id": owner_user_id,
+            "kind": "original",
+            "storage_provider": "s3",
+            "bucket": payload["bucket"],
+            "object_key": payload["object_key"],
+            "content_type": payload["content_type"],
+            "byte_size": payload["byte_size"],
+            "sha256_hex": payload.get("sha256_hex"),
+            "scan_status": "not_required",
+        }
+    )
+    # 세션을 이 asset 으로 연결한다. main_flow 는 비-authenticated 풀러로 쓰므로 0008
+    # client-guard 트리거는 early-return 하고, 같은 세션 소속 asset 이라 reference-scope
+    # 도 통과한다(상태 전이는 강제하지 않음 — 에이전트 플로우가 status 를 진행).
+    await _db_update_session_fields(
+        session_id, {"selected_floorplan_asset_id": asset["id"]}
+    )
+    return asset
+
+
+async def get_selected_floorplan_asset(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any] | None:
+    """세션에 선택된 도면 asset 을 반환(없으면 None). owner-gated."""
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    return await _db_select_selected_floorplan_asset(session_id)
 
 
 async def save_floorplan_candidate_snapshot(

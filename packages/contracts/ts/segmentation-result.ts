@@ -27,6 +27,7 @@ export interface SegmentationResult {
     | "SEGMENTATION_UPSTREAM_ERROR"
     | "SEGMENTATION_BAD_REQUEST"
     | "SEGMENTATION_BAD_RESPONSE"
+    | "SEGMENTATION_NO_IMAGE"
     | null;
   /**
    * 저장된 segmentation_mask floorplan_assets.id (있으면). 마스크 이미지는 Storage 에만 두고 여기엔 포인터만.

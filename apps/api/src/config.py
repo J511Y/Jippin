@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     )
     # 평면도 첨부 Supabase Storage 버킷명 (migration 0009 와 정합).
     lead_floorplan_bucket: str = Field(default="lead-floorplans")
+    # 사전검토 세션 도면 업로드 Supabase Storage 버킷명. 운영자가 버킷 생성 + PUT CORS
+    # 설정 필요(인프라 선행). 세그멘테이션은 이 버킷의 서명 URL 만 사용한다.
+    session_floorplan_bucket: str = Field(default="session-floorplans")
 
     # 우리집 체크(home-check) — CODEF 세움터 집합건축물대장 전유부+표제부 조회.
     # 결정 정본: docs/adr/0008-home-check-building-register.md.
