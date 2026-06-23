@@ -90,7 +90,6 @@ export interface SessionReportResponse {
   rule_eval_result: Record<string, unknown>;
   evaluated_at: string | null;
   address: Record<string, unknown> | null;
-  disclaimer: string;
 }
 
 export async function createSession(): Promise<SessionResponse> {

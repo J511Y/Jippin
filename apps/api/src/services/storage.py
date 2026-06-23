@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import httpx
 
 from ..config import Settings
@@ -33,7 +35,10 @@ async def sign_object_url(
     base = storage_base(settings)
     if base is None:
         return None
-    url = f"{base}/object/sign/{bucket}/{object_path}"
+    # object_path 를 인코딩(세그먼트 구분 '/' 만 보존)해 HTTP 정규화로 다른 객체를
+    # 가리키지 못하게 한다(방어적 — 호출 전 경로 검증과 이중 안전, #path-traversal).
+    safe_path = quote(object_path, safe="/")
+    url = f"{base}/object/sign/{bucket}/{safe_path}"
     headers = {
         "Authorization": f"Bearer {settings.supabase_service_role_key}",
         "apikey": settings.supabase_service_role_key or "",

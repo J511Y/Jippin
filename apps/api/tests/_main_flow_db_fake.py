@@ -413,7 +413,21 @@ class FakeMainFlowDb:
         row = self.sessions.get(session_id)
         if row is None:
             return None
+        # migration 0016 trg_sessions_invalidate_verdict 미러: 입력 포인터가 바뀌면
+        # 영속된 verdict 를 무효화한다(#verdict-input-consistency).
+        pointer_keys = (
+            "address_id",
+            "selected_floorplan_id",
+            "selected_floorplan_upload_id",
+            "selected_floorplan_asset_id",
+        )
+        pointer_changed = any(
+            k in values and values[k] != row.get(k) for k in pointer_keys
+        )
         row.update(values)
+        if pointer_changed:
+            row["rule_eval_result"] = None
+            row["rule_evaluated_at"] = None
         self._touch_session(session_id)
         return dict(row)
 

@@ -72,6 +72,43 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- 리포트-입력 일관성 — 입력(주소/도면 포인터)이 바뀌면 영속된 verdict 를 무효화.
+--
+-- GET /sessions/{id}/report 는 rule_eval_result 를 정본으로 신뢰한다. 그런데 0008 의
+-- 완료-포인터 가드는 (1) authenticated 역할에만 적용되고 (2) 세션이 report 상태일 때만
+-- 동작한다 — service-role API(create_floorplan_asset)나 report 상태 이전의 포인터 변경은
+-- 막지 못해, 새 도면에 옛 판정이 붙는 사고가 난다. 역할/상태 무관 트리거로 입력 포인터가
+-- 바뀌면 verdict 를 비워 리포트가 항상 현재 입력과 일치하게 한다(#verdict-input-consistency).
+-- ---------------------------------------------------------------------------
+create or replace function public.invalidate_session_verdict_on_input_change()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if new.address_id is distinct from old.address_id
+    or new.selected_floorplan_id is distinct from old.selected_floorplan_id
+    or new.selected_floorplan_upload_id is distinct from old.selected_floorplan_upload_id
+    or new.selected_floorplan_asset_id is distinct from old.selected_floorplan_asset_id
+  then
+    new.rule_eval_result := null;
+    new.rule_evaluated_at := null;
+  end if;
+  return new;
+end;
+$$;
+
+create trigger trg_sessions_invalidate_verdict
+  before update of
+    address_id,
+    selected_floorplan_id,
+    selected_floorplan_upload_id,
+    selected_floorplan_asset_id
+  on public.sessions
+  for each row
+  execute function public.invalidate_session_verdict_on_input_change();
+
+-- ---------------------------------------------------------------------------
 -- Supabase Storage — session-floorplans 비공개 버킷 + owner-folder 정책.
 --
 -- 사전검토 도면 업로드 전용. 프론트는 presigned PUT(S3 자격증명)로 올리고, 세그멘테이션은

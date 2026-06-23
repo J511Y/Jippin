@@ -165,12 +165,6 @@ export default function SessionReportPage() {
               </Stack>
             </Card>
           )}
-
-          {report.disclaimer && (
-            <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-              {report.disclaimer}
-            </Text>
-          )}
         </>
       )}
 

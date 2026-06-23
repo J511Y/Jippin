@@ -982,16 +982,15 @@ async def set_session_verdict(
     리포트 준비됨). owner 검증은 caller(런너)가 세션 컨텍스트로 이미 보장한다.
     """
 
-    # status='report_ready' 도 같은 UPDATE 로 전이한다 — 0008 의 완료-포인터 가드가
-    # 이 상태부터 owner 의 주소/도면 포인터 변경을 막아, 영속된 리포트 JSON 이 표시
-    # 입력과 분리되는 것을 방지한다(#report-ready-status).
+    # status 는 건드리지 않는다 — 0008 reference-scope 트리거가 asset-only 세션의
+    # report_ready 전이를 거부하기 때문(browser 업로드는 selected_floorplan_asset_id
+    # 만 설정). 대신 입력(주소/도면 포인터) 변경 시 verdict 를 무효화하는 트리거
+    # (migration 0016)로 리포트-입력 일관성을 보장한다 — authenticated/service 양쪽
+    # 경로 모두 커버(#verdict-input-consistency). 리포트 준비 여부는 rule_eval_result
+    # IS NOT NULL 로만 판정한다.
     row = await _db_update_session_fields(
         session_id,
-        {
-            "rule_eval_result": dict(rule_eval_result),
-            "rule_evaluated_at": _now(),
-            "status": "report_ready",
-        },
+        {"rule_eval_result": dict(rule_eval_result), "rule_evaluated_at": _now()},
     )
     if row is None:
         raise _not_found("Session not found.", code="SESSION_NOT_FOUND")

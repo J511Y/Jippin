@@ -67,12 +67,19 @@ async def create_floorplan_asset(
     session_id: uuid.UUID = Path(...),
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> FloorplanAssetResponse:
-    # owner-folder 강제: object_key 의 첫 세그먼트(=업로드 시 부여한 user 폴더)가
-    # 요청자 user_id 와 일치해야 한다 — 남의 폴더 객체를 자기 세션에 붙이지 못하게.
-    owner_segment = payload.object_key.split("/", 1)[0]
-    if owner_segment != str(requester.user_id):
+    # owner/session-folder 강제 + traversal 차단: object_key 는 정확히
+    # `<user_id>/<session_id>/...` 로 시작해야 하고, '..'·빈 세그먼트를 포함하면 안 된다.
+    # 첫 세그먼트만 보면 `<uid>/../<other>/f.png` 같은 키가 통과해 서명 단계에서 HTTP
+    # 정규화로 다른 객체를 가리킬 수 있다(#path-traversal).
+    expected_prefix = f"{requester.user_id}/{session_id}/"
+    segments = payload.object_key.split("/")
+    if (
+        not payload.object_key.startswith(expected_prefix)
+        or ".." in segments
+        or "" in segments
+    ):
         raise ZippinException(
-            "object_key must be under your own user folder.",
+            "object_key must be under your own user/session folder.",
             code="FLOORPLAN_ASSET_OWNER_MISMATCH",
             http_status=403,
         )

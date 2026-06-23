@@ -142,6 +142,26 @@ def test_create_floorplan_asset_rejects_foreign_owner_folder(monkeypatch, fake_d
     assert fake_db.floorplan_assets == {}
 
 
+def test_create_floorplan_asset_rejects_path_traversal(monkeypatch, fake_db):
+    """#path-traversal: '..' 세그먼트는 owner 폴더로 시작해도 거절(HTTP 정규화 우회 방지)."""
+
+    client, token, session_id, subject = _bootstrap_session(monkeypatch)
+    with client:
+        response = client.post(
+            f"/sessions/{session_id}/floorplan-assets",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "bucket": "session-floorplans",
+                "object_key": f"{subject}/{session_id}/../{uuid.uuid4()}/evil.png",
+                "content_type": "image/png",
+                "byte_size": 1,
+            },
+        )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FLOORPLAN_ASSET_OWNER_MISMATCH"
+    assert fake_db.floorplan_assets == {}
+
+
 def test_create_floorplan_asset_rejects_non_image(monkeypatch, fake_db):
     """엣지 검증: image/* 가 아니면 422(세그멘테이션은 래스터 이미지만, PDF 미지원)."""
 
@@ -172,6 +192,30 @@ async def test_list_sessions_clears_expiry_for_converted_owner(fake_db):
     assert fake_db.sessions[s["id"]]["expires_at"] is not None
     await main_flow.list_owned_sessions(owner_user_id=owner, owner_is_anonymous=False)
     assert fake_db.sessions[s["id"]]["expires_at"] is None
+
+
+async def test_new_floorplan_invalidates_persisted_verdict(fake_db):
+    """#verdict-input-consistency: 새 도면을 붙이면 영속된 판정이 무효화돼 리포트가
+    옛 결과를 새 도면에 붙이지 않는다(service-role 경로 포함)."""
+
+    session_id, subject = await _create_session_direct()
+    await main_flow.set_session_verdict(
+        session_id=session_id, rule_eval_result={"verdict": "ALLOW"}
+    )
+    assert fake_db.sessions[session_id]["rule_eval_result"] is not None
+    # 새 도면 asset 첨부 → 입력 변경 → verdict 무효화.
+    await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=subject,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{subject}/{session_id}/new.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    assert fake_db.sessions[session_id]["rule_eval_result"] is None
+    assert fake_db.sessions[session_id]["rule_evaluated_at"] is None
 
 
 def test_create_floorplan_upload_blocks_non_owner(monkeypatch, fake_db):

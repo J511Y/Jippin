@@ -193,8 +193,9 @@ def test_get_report_returns_persisted_verdict(monkeypatch, fake_db):
     assert report.status_code == 200
     body = report.json()
     assert body["rule_eval_result"]["verdict"] == "ALLOW"
-    assert body["disclaimer"]  # 면책 고지 포함
     assert body["session_id"] == session_id
+    # 법적 고지는 응답 필드가 아니라 화면의 봉인 LegalNotice 가 담당한다(#legal-notice).
+    assert "disclaimer" not in body
 
 
 def test_get_session_owner_only(monkeypatch):
