@@ -18,6 +18,7 @@ from ..schemas.sessions import (
     SessionAddressInput,
     SessionAddressResponse,
     SessionCreateRequest,
+    SessionReportResponse,
     SessionResponse,
 )
 from ..services import main_flow
@@ -42,6 +43,18 @@ async def create_session(
         is_anonymous_owner=requester.is_anonymous,
     )
     return SessionResponse.model_validate(row)
+
+
+@router.get("", response_model=list[SessionResponse])
+async def list_sessions(
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> list[SessionResponse]:
+    # 본인 소유 세션만 최신 활동순으로(목록 화면 복원용).
+    rows = await main_flow.list_owned_sessions(
+        owner_user_id=requester.user_id,
+        owner_is_anonymous=requester.is_anonymous,
+    )
+    return [SessionResponse.model_validate(row) for row in rows]
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -82,3 +95,30 @@ async def upsert_session_address(
         address_id=str(row["id"]),
     )
     return SessionAddressResponse.model_validate(row)
+
+
+@router.get("/{session_id}/report", response_model=SessionReportResponse)
+async def get_session_report(
+    session_id: uuid.UUID = Path(...),
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> SessionReportResponse:
+    # 리포트 정본은 sessions.rule_eval_result(에이전트 evaluate_rules 영속). 없으면
+    # main_flow 가 404 REPORT_NOT_READY 를 던진다 — 가짜 판정을 만들지 않는다.
+    data = await main_flow.get_session_report(
+        session_id=session_id,
+        owner_user_id=requester.user_id,
+        owner_is_anonymous=requester.is_anonymous,
+    )
+    session = data["session"]
+    address = data["address"]
+    return SessionReportResponse(
+        session_id=session["id"],
+        status=session["status"],
+        rule_eval_result=session["rule_eval_result"],
+        evaluated_at=session.get("rule_evaluated_at"),
+        address=(
+            SessionAddressResponse.model_validate(address)
+            if address is not None
+            else None
+        ),
+    )

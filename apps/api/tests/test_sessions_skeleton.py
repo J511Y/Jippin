@@ -129,6 +129,74 @@ def test_anonymous_session_has_expires_at_from_ttl_setting(monkeypatch):
     assert perm_body["expires_at"] is None
 
 
+def test_list_sessions_returns_only_owned(monkeypatch, fake_db):
+    client, pem, kid, _ = _client(monkeypatch)
+    token, _subject = helpers.mint_token(pem, kid, is_anonymous=False)
+    with client:
+        a = client.post(
+            "/sessions", headers={"Authorization": f"Bearer {token}"}, json={}
+        ).json()["id"]
+        b = client.post(
+            "/sessions", headers={"Authorization": f"Bearer {token}"}, json={}
+        ).json()["id"]
+        listed = client.get("/sessions", headers={"Authorization": f"Bearer {token}"})
+        # 다른 owner 는 본인 세션이 없다.
+        other_token, _ = helpers.mint_token(pem, kid, is_anonymous=False)
+        other = client.get(
+            "/sessions", headers={"Authorization": f"Bearer {other_token}"}
+        )
+    assert listed.status_code == 200
+    ids = {row["id"] for row in listed.json()}
+    assert ids == {a, b}
+    assert other.json() == []
+
+
+def test_get_report_not_ready_is_404(monkeypatch, fake_db):
+    client, pem, kid, _ = _client(monkeypatch)
+    token, _ = helpers.mint_token(pem, kid, is_anonymous=False)
+    with client:
+        session_id = client.post(
+            "/sessions", headers={"Authorization": f"Bearer {token}"}, json={}
+        ).json()["id"]
+        report = client.get(
+            f"/sessions/{session_id}/report",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert report.status_code == 404
+    assert report.json()["error"]["code"] == "REPORT_NOT_READY"
+
+
+def test_get_report_returns_persisted_verdict(monkeypatch, fake_db):
+    import uuid
+
+    client, pem, kid, _ = _client(monkeypatch)
+    token, _ = helpers.mint_token(pem, kid, is_anonymous=False)
+    with client:
+        session_id = client.post(
+            "/sessions", headers={"Authorization": f"Bearer {token}"}, json={}
+        ).json()["id"]
+        # 에이전트가 evaluate_rules 로 영속한 판정을 모사.
+        fake_db.sessions[uuid.UUID(session_id)]["rule_eval_result"] = {
+            "schema_version": "1.0.0",
+            "verdict": "ALLOW",
+            "user_message": "지금 정보 기준으로는 가능성이 있습니다.",
+            "required_facilities": [],
+            "permit_required": False,
+            "legal_basis": [],
+            "ruleset_version": "2026-05-01",
+            "evaluated_at": "2026-06-23T00:00:00Z",
+        }
+        report = client.get(
+            f"/sessions/{session_id}/report",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert report.status_code == 200
+    body = report.json()
+    assert body["rule_eval_result"]["verdict"] == "ALLOW"
+    assert body["disclaimer"]  # 면책 고지 포함
+    assert body["session_id"] == session_id
+
+
 def test_get_session_owner_only(monkeypatch):
     client, pem, kid, _ = _client(monkeypatch)
     owner_token, _ = helpers.mint_token(pem, kid)

@@ -223,10 +223,14 @@ async def check_building_register_impl(
     )
 
 
-def evaluate_rules_impl(*, judgment_values: dict[str, Any]) -> dict[str, Any]:
-    """리모델링 룰 엔진 평가(rule-eval-result 계약). 동기 순수 함수.
+async def evaluate_rules_impl(
+    *, session_id: uuid.UUID, judgment_values: dict[str, Any]
+) -> dict[str, Any]:
+    """리모델링 룰 엔진 평가(rule-eval-result 계약) + 세션에 판정 영속.
 
-    evaluated_at 은 직렬화 시점(지금)에 주입한다.
+    evaluated_at 은 직렬화 시점(지금)에 주입한다. 성공한 판정은 ``set_session_verdict``
+    로 세션에 기록해 독립 리포트(GET /sessions/{id}/report)의 정본이 되게 한다 —
+    영속 실패는 판정 자체를 막지 않고(best-effort) 로그만 남긴다.
     """
 
     try:
@@ -236,6 +240,12 @@ def evaluate_rules_impl(*, judgment_values: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         return _safe_error(exc, "RULE_EVAL_FAILED", tool="evaluate_rules")
     result = verdict.to_contract_dict(evaluated_at=datetime.now(UTC))
+    try:
+        await main_flow.set_session_verdict(
+            session_id=session_id, rule_eval_result=result
+        )
+    except Exception:  # noqa: BLE001 - 리포트 영속 실패는 판정 응답을 막지 않는다
+        log.error("session_verdict_persist_failed", session_id=str(session_id))
     return _ok(result=result, summary=f"룰 평가 결과: {result.get('verdict')}")
 
 

@@ -27,6 +27,7 @@ from src.services import main_flow
 _SEAM_NAMES: tuple[str, ...] = (
     "_db_insert_session",
     "_db_select_session",
+    "_db_list_sessions",
     "_db_clear_session_expiry",
     "_db_select_session_address",
     "_db_upsert_session_address",
@@ -119,6 +120,8 @@ class FakeMainFlowDb:
             "judgment_schema": {},
             "judgment_schema_version": values.get("judgment_schema_version"),
             "completion_decision": None,
+            "rule_eval_result": None,
+            "rule_evaluated_at": None,
             "last_activity_at": now,
             "expires_at": values.get("expires_at"),
             "created_at": now,
@@ -130,6 +133,17 @@ class FakeMainFlowDb:
     async def _db_select_session(self, session_id: uuid.UUID) -> dict[str, Any] | None:
         row = self.sessions.get(session_id)
         return dict(row) if row is not None else None
+
+    async def _db_list_sessions(
+        self, owner_user_id: uuid.UUID, limit: int
+    ) -> list[dict[str, Any]]:
+        rows = [
+            r
+            for r in self.sessions.values()
+            if r["user_id"] == owner_user_id and r.get("status") != "deleted"
+        ]
+        rows.sort(key=lambda r: r["last_activity_at"], reverse=True)
+        return [dict(r) for r in rows[:limit]]
 
     async def _db_clear_session_expiry(self, session_id: uuid.UUID) -> dict[str, Any]:
         row = self.sessions[session_id]

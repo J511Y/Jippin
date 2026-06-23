@@ -145,8 +145,21 @@ async def test_confirm_address_sanitizes_non_domain_exception(monkeypatch) -> No
     assert "hunter2" not in res["message"]
 
 
-def test_evaluate_rules_load_bearing_denies() -> None:
-    res = domain.evaluate_rules_impl(
+async def _session_for_rules(monkeypatch) -> tuple[uuid.UUID, object]:
+    from tests._main_flow_db_fake import install_main_flow_fake
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    return session["id"], fake
+
+
+async def test_evaluate_rules_load_bearing_denies(monkeypatch) -> None:
+    session_id, fake = await _session_for_rules(monkeypatch)
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
         judgment_values={
             "wall_type": "LOAD_BEARING",
             "floor_count": 5,
@@ -155,23 +168,34 @@ def test_evaluate_rules_load_bearing_denies() -> None:
             "stairwell_count": 2,
             "window_form": "FIXED",
             "fire_zone": False,
-        }
+        },
     )
     assert res["ok"] is True
     assert res["result"]["verdict"] == "DENY"
     assert res["result"]["schema_version"]
+    # 판정이 세션에 영속돼 리포트 정본이 된다(#session-verdict).
+    assert fake.sessions[session_id]["rule_eval_result"]["verdict"] == "DENY"
+    assert fake.sessions[session_id]["rule_evaluated_at"] is not None
 
 
-def test_evaluate_rules_missing_field_holds() -> None:
-    res = domain.evaluate_rules_impl(judgment_values={"wall_type": "NON_LOAD_BEARING"})
+async def test_evaluate_rules_missing_field_holds(monkeypatch) -> None:
+    session_id, _fake = await _session_for_rules(monkeypatch)
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id, judgment_values={"wall_type": "NON_LOAD_BEARING"}
+    )
     assert res["ok"] is True
     assert res["result"]["verdict"] == "HOLD"
 
 
-def test_evaluate_rules_invalid_input_is_structured_error() -> None:
-    res = domain.evaluate_rules_impl(judgment_values={"unknown_key": 1})
+async def test_evaluate_rules_invalid_input_is_structured_error(monkeypatch) -> None:
+    session_id, fake = await _session_for_rules(monkeypatch)
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id, judgment_values={"unknown_key": 1}
+    )
     assert res["ok"] is False
     assert res["error_code"] == "RULE_INPUT_INVALID"
+    # 잘못된 입력은 판정을 영속하지 않는다.
+    assert fake.sessions[session_id]["rule_eval_result"] is None
 
 
 async def test_emit_ui_component_accumulates_across_calls(monkeypatch) -> None:

@@ -82,6 +82,30 @@ class SessionAddressResponse(BaseModel):
     created_at: datetime
 
 
+_REPORT_DISCLAIMER = (
+    "본 사전검토 결과는 입력하신 정보와 공개 규정을 바탕으로 한 참고용 의견이며, "
+    "법적 효력이 있는 행위허가·신고 가능 여부를 보증하지 않습니다. 실제 진행 전 "
+    "전문가 상담과 관할 행정기관 확인이 필요합니다."
+)
+
+
+class SessionReportResponse(BaseModel):
+    """`GET /sessions/{id}/report` — 세션에 영속된 룰 판정(rule-eval-result) 기반 리포트.
+
+    ``rule_eval_result`` 는 rule-eval-result 계약 그대로의 객체(verdict/
+    required_facilities/permit_required/legal_basis/user_message/evaluated_at 등)다.
+    판정이 아직 없으면 본 응답 대신 404 REPORT_NOT_READY 가 나간다(라우터).
+    """
+
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    session_id: uuid.UUID
+    status: SessionStatus
+    rule_eval_result: dict[str, Any]
+    evaluated_at: datetime | None
+    address: SessionAddressResponse | None
+    disclaimer: str = _REPORT_DISCLAIMER
+
+
 class SessionResponse(BaseModel):
     """DB-shaped ``sessions`` row.
 

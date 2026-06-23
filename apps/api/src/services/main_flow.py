@@ -680,6 +680,62 @@ async def get_owned_session(
     )
 
 
+async def _db_list_sessions(
+    owner_user_id: uuid.UUID, limit: int
+) -> list[dict[str, Any]]:
+    async with get_engine().begin() as conn:
+        rows = (
+            await conn.execute(
+                sa.select(_SESSIONS)
+                .where(
+                    _SESSIONS.c.user_id == owner_user_id,
+                    _SESSIONS.c.status != "deleted",
+                )
+                .order_by(_SESSIONS.c.last_activity_at.desc())
+                .limit(limit)
+            )
+        ).all()
+    return [dict(r._mapping) for r in rows]
+
+
+async def list_owned_sessions(
+    *,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """요청자 본인 소유 세션을 최신 활동순으로 반환(목록 화면용). deleted 제외.
+
+    owner_user_id(Supabase sub)로 직접 필터링하므로 익명/permanent 모두 본인 것만
+    본다. owner_is_anonymous 는 호출부 일관성을 위해 받되 필터에는 user_id 만 쓴다.
+    """
+
+    return await _db_list_sessions(owner_user_id, limit)
+
+
+async def get_session_report(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """리포트용 세션+주소 번들을 반환. 판정이 없으면 404 REPORT_NOT_READY.
+
+    리포트의 정본은 ``sessions.rule_eval_result`` 다(에이전트 evaluate_rules 가 영속).
+    아직 없으면(대화 미완료) 가짜 판정을 내지 않고 미준비로 응답한다.
+    """
+
+    session = await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    if session.get("rule_eval_result") is None:
+        raise _not_found("Report is not ready yet.", code="REPORT_NOT_READY")
+    address = await _db_select_session_address(session_id)
+    return {"session": session, "address": address}
+
+
 # session_addresses 컬럼 — partial upsert 가 기존 값을 덮어쓰지 않도록 본 화이트리스트
 # 안에 있는 key 만 payload 에서 받아 row 에 적용한다.
 _ADDRESS_FIELDS: tuple[str, ...] = (
@@ -896,6 +952,25 @@ async def get_selected_floorplan_asset(
         owner_is_anonymous=owner_is_anonymous,
     )
     return await _db_select_selected_floorplan_asset(session_id)
+
+
+async def set_session_verdict(
+    *, session_id: uuid.UUID, rule_eval_result: dict[str, Any]
+) -> dict[str, Any]:
+    """룰 판정 결과(rule-eval-result)를 세션에 영속한다 — runtime-only.
+
+    에이전트가 evaluate_rules 로 verdict 를 만든 직후 호출한다. 이 값이 채워지면
+    GET /sessions/{id}/report 가 리포트를 제공한다(rule_eval_result IS NOT NULL =
+    리포트 준비됨). owner 검증은 caller(런너)가 세션 컨텍스트로 이미 보장한다.
+    """
+
+    row = await _db_update_session_fields(
+        session_id,
+        {"rule_eval_result": dict(rule_eval_result), "rule_evaluated_at": _now()},
+    )
+    if row is None:
+        raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
+    return row
 
 
 async def save_floorplan_candidate_snapshot(

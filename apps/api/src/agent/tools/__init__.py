@@ -114,9 +114,12 @@ def build_tools(
         )
 
     @tool
-    def evaluate_rules(judgment_values: dict[str, Any]) -> dict[str, Any]:
-        """수집된 판단값(wall_type/floor_count/has_sprinkler 등)으로 리모델링 룰을 평가한다."""
-        return evaluate_rules_impl(judgment_values=judgment_values)
+    async def evaluate_rules(judgment_values: dict[str, Any]) -> dict[str, Any]:
+        """수집된 판단값(wall_type/floor_count/has_sprinkler 등)으로 리모델링 룰을 평가한다.
+        결과는 세션 리포트에 자동 저장된다."""
+        return await evaluate_rules_impl(
+            session_id=session_id, judgment_values=judgment_values
+        )
 
     @tool
     async def emit_ui_component(
