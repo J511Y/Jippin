@@ -143,6 +143,20 @@ create trigger trg_session_addresses_invalidate_verdict
   execute function public.invalidate_session_verdict_on_address_change();
 
 -- ---------------------------------------------------------------------------
+-- floorplan_assets 클라이언트 쓰기 차단 — asset 메타는 백엔드(service-role)만 작성.
+--
+-- 0008 의 owner/session insert·update RLS 정책은 authenticated 클라이언트가 PostgREST
+-- 로 직접 asset row(bucket/object_key/scan_status)를 만들거나 바꾸게 허용한다. 그러면
+-- /sessions/upload-url(presign)·POST /floorplan-assets(owner-folder+content-type 검증)를
+-- 우회해 임의 pending asset 을 심을 수 있고, 기본 allow_unscanned=true 라 세그멘테이션이
+-- 그 untrusted 객체를 서명·전달한다. 프론트는 백엔드 라우트(service-role, RLS 우회)로만
+-- asset 을 만들므로, 클라이언트 insert/update 정책을 제거해 pending=백엔드검증 으로 신뢰
+-- 가능하게 한다(#trusted-pending). 읽기/삭제 정책은 유지.
+-- ---------------------------------------------------------------------------
+drop policy if exists floorplan_assets_owner_or_session_insert on public.floorplan_assets;
+drop policy if exists floorplan_assets_owner_or_session_update on public.floorplan_assets;
+
+-- ---------------------------------------------------------------------------
 -- Supabase Storage — session-floorplans 비공개 버킷 + owner-folder 정책.
 --
 -- 사전검토 도면 업로드 전용. 프론트는 presigned PUT(S3 자격증명)로 올리고, 세그멘테이션은

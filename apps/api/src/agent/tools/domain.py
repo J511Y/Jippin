@@ -233,6 +233,9 @@ async def evaluate_rules_impl(
     영속 실패는 판정 자체를 막지 않고(best-effort) 로그만 남긴다.
     """
 
+    # 분석 입력(도면 asset/주소) 스냅샷 — verdict 영속을 조건부로 만들어, 평가 도중
+    # 도면/주소가 바뀌면 stale 판정을 새 입력에 붙이지 않는다(#stale-verdict-write).
+    inputs = await main_flow.get_session_inputs(session_id)
     try:
         verdict = rule_engine.evaluate_judgment_values(judgment_values)
     except rule_engine.RuleInputError as exc:
@@ -240,10 +243,20 @@ async def evaluate_rules_impl(
     except Exception as exc:  # noqa: BLE001
         return _safe_error(exc, "RULE_EVAL_FAILED", tool="evaluate_rules")
     result = verdict.to_contract_dict(evaluated_at=datetime.now(UTC))
+    expected_asset, expected_address = inputs if inputs is not None else (None, None)
     try:
-        await main_flow.set_session_verdict(
-            session_id=session_id, rule_eval_result=result
+        persisted = await main_flow.set_session_verdict(
+            session_id=session_id,
+            rule_eval_result=result,
+            expected_asset_id=expected_asset,
+            expected_address_id=expected_address,
         )
+        if persisted is None:
+            # 평가 도중 입력이 바뀜 — 판정은 사용자에게 보여 주되 리포트엔 영속하지
+            # 않는다(에이전트가 새 입력으로 재평가하도록).
+            log.info(
+                "session_verdict_skipped_inputs_changed", session_id=str(session_id)
+            )
     except Exception:  # noqa: BLE001 - 리포트 영속 실패는 판정 응답을 막지 않는다
         log.error("session_verdict_persist_failed", session_id=str(session_id))
     return _ok(result=result, summary=f"룰 평가 결과: {result.get('verdict')}")

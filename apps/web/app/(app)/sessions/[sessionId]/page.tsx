@@ -33,18 +33,17 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const AGENT_ENABLED = process.env.NEXT_PUBLIC_AGENT_ENABLED === 'true';
 
 function steps(session: SessionResponse): { label: string; done: boolean }[] {
-  const reportReady =
-    session.status === 'report_ready' || session.completion_decision != null;
   return [
     { label: '주소 확정', done: session.address_id != null },
     { label: '도면 업로드', done: session.selected_floorplan_asset_id != null },
     {
       label: 'AI 분석',
-      done: ['analyzing', 'collecting_info', 'ready_for_rule', 'report_ready'].includes(
-        session.status
-      )
+      // 분석은 verdict 가 나왔으면(has_report) 완료. completion_decision 은 ASK_MORE
+      // 등 비-리포트 상태에도 채워지므로 단계 표시에 쓰지 않는다.
+      done: session.has_report
     },
-    { label: '리포트', done: reportReady }
+    // 리포트 준비 여부는 verdict 영속 여부로만 판정(#report-readiness).
+    { label: '리포트', done: session.has_report }
   ];
 }
 
@@ -190,19 +189,25 @@ export default function SessionDetailPage() {
         </Card>
       )}
 
-      <Card withBorder radius="md" padding="md">
-        {AGENT_ENABLED ? (
-          <Stack gap="sm">
-            <Text fw={600}>AI 도우미와 대화</Text>
-            {/* key=sessionId: 세션 변경 시 remount 해 채팅 상태를 깨끗이 리셋한다. */}
-            <AgentChat key={sessionId} sessionId={sessionId} />
-          </Stack>
-        ) : (
-          <Text size="sm" c="dimmed">
-            AI 도우미 채팅은 곧 제공됩니다. (현재 비활성화)
-          </Text>
-        )}
-      </Card>
+      {AGENT_ENABLED && (
+        <Card withBorder radius="md" padding="md">
+          {/* 소유권이 확인된 뒤(session 로드 + 에러 없음)에만 AgentChat 을 마운트한다.
+              useAgentStream 이 마운트 시 익명 세션을 발급하고 에이전트 이력을 조회하므로,
+              로딩 중/401·404 상태에서 마운트하면 stale·공유 URL 로 익명 유저를 만들고
+              남의 세션을 탐침할 수 있다(#chat-after-ownership). */}
+          {session !== null && !error ? (
+            <Stack gap="sm">
+              <Text fw={600}>AI 도우미와 대화</Text>
+              {/* key=sessionId: 세션 변경 시 remount 해 채팅 상태를 깨끗이 리셋한다. */}
+              <AgentChat key={sessionId} sessionId={sessionId} />
+            </Stack>
+          ) : (
+            <Group justify="center" py="sm">
+              <Loader size="sm" color="jippin" />
+            </Group>
+          )}
+        </Card>
+      )}
 
       <Button
         component="a"

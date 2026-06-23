@@ -29,6 +29,7 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_select_session",
     "_db_list_sessions",
     "_db_clear_owner_sessions_expiry",
+    "_db_set_session_verdict_if_inputs",
     "_db_clear_session_expiry",
     "_db_select_session_address",
     "_db_upsert_session_address",
@@ -435,6 +436,31 @@ class FakeMainFlowDb:
             row["rule_evaluated_at"] = None
             row["completion_decision"] = None
         self._touch_session(session_id)
+        return dict(row)
+
+    async def _db_set_session_verdict_if_inputs(
+        self,
+        session_id: uuid.UUID,
+        values: dict[str, Any],
+        expected_asset_id: Any,
+        expected_address_id: Any,
+    ) -> dict[str, Any] | None:
+        row = self.sessions.get(session_id)
+        if row is None:
+            return None
+        # _UNSET 인 입력은 검사 생략(main_flow._UNSET 미러).
+        if (
+            expected_asset_id is not main_flow._UNSET
+            and row.get("selected_floorplan_asset_id") != expected_asset_id
+        ):
+            return None
+        if (
+            expected_address_id is not main_flow._UNSET
+            and row.get("address_id") != expected_address_id
+        ):
+            return None
+        row.update(values)
+        row["updated_at"] = _now()
         return dict(row)
 
     # -- agent_runs ----------------------------------------------------------

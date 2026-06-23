@@ -223,6 +223,58 @@ async def test_new_floorplan_invalidates_persisted_verdict(fake_db):
     assert fake_db.sessions[session_id]["completion_decision"] is None
 
 
+async def test_set_session_verdict_skips_on_input_change(fake_db):
+    """#stale-verdict-write: 분석 시작 때 본 입력과 현재 입력이 다르면 verdict 를 쓰지
+    않고 None 반환(분석 도중 도면 교체 race)."""
+
+    session_id, subject = await _create_session_direct()
+    a1 = await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=subject,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{subject}/{session_id}/a1.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    # 분석 시작 스냅샷 = a1. 그 사이 a2 로 교체.
+    await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=subject,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{subject}/{session_id}/a2.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    # a1 기준 verdict 영속 시도 → 입력이 바뀌었으므로 skip(None).
+    res = await main_flow.set_session_verdict(
+        session_id=session_id,
+        rule_eval_result={"verdict": "ALLOW"},
+        expected_asset_id=a1["id"],
+        expected_address_id=None,
+    )
+    assert res is None
+    assert fake_db.sessions[session_id]["rule_eval_result"] is None
+
+
+async def test_session_has_report_flag(fake_db):
+    """#report-readiness: has_report 는 verdict 존재로만 파생된다(completion_decision 무관)."""
+
+    session_id, subject = await _create_session_direct()
+    from src.schemas.sessions import SessionResponse
+
+    row = await main_flow.get_owned_session(session_id, owner_user_id=subject)
+    assert SessionResponse.model_validate(row).has_report is False
+    await main_flow.set_session_verdict(
+        session_id=session_id, rule_eval_result={"verdict": "ALLOW"}
+    )
+    row2 = await main_flow.get_owned_session(session_id, owner_user_id=subject)
+    assert SessionResponse.model_validate(row2).has_report is True
+
+
 async def test_address_edit_invalidates_verdict(fake_db):
     """#address-row-edit: 주소를 고치면(같은 행 in-place upsert) 옛 판정이 무효화된다."""
 

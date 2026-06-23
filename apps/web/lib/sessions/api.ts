@@ -50,6 +50,8 @@ export interface SessionResponse {
   selected_floorplan_asset_id: string | null;
   judgment_schema: Record<string, unknown>;
   completion_decision: string | null;
+  /** 리포트 준비 여부 — 백엔드가 verdict(rule_eval_result) 존재로 판정. */
+  has_report: boolean;
   last_activity_at: string;
   expires_at: string | null;
   created_at: string;

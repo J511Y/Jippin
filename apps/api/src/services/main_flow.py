@@ -972,29 +972,73 @@ async def get_selected_floorplan_asset(
     return await _db_select_selected_floorplan_asset(session_id)
 
 
+async def get_session_inputs(
+    session_id: uuid.UUID,
+) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
+    """세션의 분석 입력 식별자(selected_floorplan_asset_id, address_id)를 반환 —
+    runtime-only. 분석 시작 시점 스냅샷을 떠 verdict 영속을 조건부로 만들 때 쓴다."""
+
+    row = await _db_select_session(session_id)
+    if row is None:
+        return None
+    return row.get("selected_floorplan_asset_id"), row.get("address_id")
+
+
+async def _db_set_session_verdict_if_inputs(
+    session_id: uuid.UUID,
+    values: dict[str, Any],
+    expected_asset_id: Any,
+    expected_address_id: Any,
+) -> dict[str, Any] | None:
+    # 조건부 UPDATE: 분석 시작 때 본 입력과 현재 입력이 같을 때만 verdict 를 쓴다.
+    # _UNSET 인 입력은 검사를 건너뛴다(None 은 "값이 없음" 으로 검사 대상).
+    conds = [_SESSIONS.c.id == session_id]
+    if expected_asset_id is not _UNSET:
+        conds.append(
+            _SESSIONS.c.selected_floorplan_asset_id.is_not_distinct_from(
+                expected_asset_id
+            )
+        )
+    if expected_address_id is not _UNSET:
+        conds.append(_SESSIONS.c.address_id.is_not_distinct_from(expected_address_id))
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.update(_SESSIONS)
+                .where(*conds)
+                .values(updated_at=sa.func.now(), **values)
+                .returning(*_SESSIONS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
 async def set_session_verdict(
-    *, session_id: uuid.UUID, rule_eval_result: dict[str, Any]
-) -> dict[str, Any]:
+    *,
+    session_id: uuid.UUID,
+    rule_eval_result: dict[str, Any],
+    expected_asset_id: Any = _UNSET,
+    expected_address_id: Any = _UNSET,
+) -> dict[str, Any] | None:
     """룰 판정 결과(rule-eval-result)를 세션에 영속한다 — runtime-only.
 
     에이전트가 evaluate_rules 로 verdict 를 만든 직후 호출한다. 이 값이 채워지면
     GET /sessions/{id}/report 가 리포트를 제공한다(rule_eval_result IS NOT NULL =
     리포트 준비됨). owner 검증은 caller(런너)가 세션 컨텍스트로 이미 보장한다.
+
+    분석 시작 때 캡처한 입력(asset_id/address_id)을 넘기면, 그 사이 입력이 바뀌었을
+    경우 stale verdict 를 쓰지 않고 None 을 반환한다 — 분석 중 도면 교체로 옛 판정이
+    새 입력에 report-ready 로 붙는 race 를 막는다(#stale-verdict-write). status 는
+    건드리지 않는다(reference-scope 트리거가 asset-only report_ready 를 거부).
     """
 
-    # status 는 건드리지 않는다 — 0008 reference-scope 트리거가 asset-only 세션의
-    # report_ready 전이를 거부하기 때문(browser 업로드는 selected_floorplan_asset_id
-    # 만 설정). 대신 입력(주소/도면 포인터) 변경 시 verdict 를 무효화하는 트리거
-    # (migration 0016)로 리포트-입력 일관성을 보장한다 — authenticated/service 양쪽
-    # 경로 모두 커버(#verdict-input-consistency). 리포트 준비 여부는 rule_eval_result
-    # IS NOT NULL 로만 판정한다.
-    row = await _db_update_session_fields(
-        session_id,
-        {"rule_eval_result": dict(rule_eval_result), "rule_evaluated_at": _now()},
+    values = {
+        "rule_eval_result": dict(rule_eval_result),
+        "rule_evaluated_at": _now(),
+    }
+    return await _db_set_session_verdict_if_inputs(
+        session_id, values, expected_asset_id, expected_address_id
     )
-    if row is None:
-        raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
-    return row
 
 
 async def save_floorplan_candidate_snapshot(
