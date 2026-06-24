@@ -20,6 +20,7 @@ import {
   Button,
   FileInput,
   Group,
+  Loader,
   Stack,
   Text
 } from '@mantine/core';
@@ -64,6 +65,15 @@ export function isFloorplanRequestPayload(
 
 const DEFAULT_REASON =
   '정확한 판단을 위해 평면도(도면) 이미지가 필요해요. 등기상 구조와 실제 구조를 비교해 분석합니다.';
+
+/** 업로드 실패 시 raw 에러 대신 보여 줄 친화적 문구(원인 추정으로 분기). */
+function friendlyUploadError(err: unknown): string {
+  // fetch 네트워크 실패는 보통 TypeError("Failed to fetch").
+  if (err instanceof TypeError) {
+    return '네트워크 문제로 도면을 올리지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
+  }
+  return '도면을 올리지 못했어요. 잠시 후 다시 시도하거나 다른 이미지로 올려 주세요.';
+}
 
 export function FloorplanRequestCard({
   payload
@@ -122,9 +132,11 @@ export function FloorplanRequestCard({
         // asset 등록 실패 — 방금 올린 object 를 정리(best-effort).
         await deleteSessionFloorplan(uploadedKey);
       }
-      setError(
-        err instanceof Error ? err.message : '도면 첨부 중 오류가 발생했습니다.'
-      );
+      // raw 에러(예: "Request failed with status code 422", 백엔드 내부 메시지)를 그대로
+      // 노출하지 않는다 — 사용자에겐 친화적 안내로 치환하고, 원인은 콘솔에만 남긴다.
+      // eslint-disable-next-line no-console
+      console.error('[floorplan-upload] failed', err);
+      setError(friendlyUploadError(err));
     } finally {
       setBusy(false);
     }
@@ -182,15 +194,24 @@ export function FloorplanRequestCard({
               <Text size="xs">{error}</Text>
             </Alert>
           ) : null}
+          {/* 진행 표시 — 버튼 라벨이 사라지는 대신, 업로드 중임을 한 줄로 명확히 알린다. */}
+          {busy ? (
+            <Group gap={8} align="center" wrap="nowrap">
+              <Loader size={14} color="cta" />
+              <Text size="xs" c="var(--jippin-brand-copy)">
+                도면을 올리고 있어요… 잠시만 기다려 주세요.
+              </Text>
+            </Group>
+          ) : null}
+          {/* 로딩 중에도 라벨이 보이도록 Mantine loading(라벨 가림) 대신 직접 분기한다. */}
           <Button
             color="cta"
-            leftSection={<IconUpload size={16} />}
-            loading={busy}
+            leftSection={busy ? <Loader size={16} color="white" /> : <IconUpload size={16} />}
             disabled={!file || disabled}
             onClick={handleSubmit}
             fullWidth
           >
-            도면 첨부하고 분석
+            {busy ? '업로드 중…' : '도면 첨부하고 분석'}
           </Button>
         </Stack>
       ) : (

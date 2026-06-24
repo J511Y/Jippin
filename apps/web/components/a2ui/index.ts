@@ -7,4 +7,10 @@ export { AddressCandidatesCard } from './cards/AddressCandidatesCard';
 export { FloorplanConfirmCard } from './cards/FloorplanConfirmCard';
 export { FloorplanRequestCard } from './cards/FloorplanRequestCard';
 export { JudgmentSummaryCard } from './cards/JudgmentSummaryCard';
-export type { ChatMessage, A2uiComponent, DynamicComponentSpec, Role } from './types';
+export type {
+  ChatMessage,
+  ChatActivityStep,
+  A2uiComponent,
+  DynamicComponentSpec,
+  Role
+} from './types';

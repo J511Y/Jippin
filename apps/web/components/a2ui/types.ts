@@ -16,6 +16,19 @@ export type ChatMessage = {
   dynamic?: A2uiComponent;
   /** AI가 응답에 첨부한 A2UI 컴포넌트 목록. json-render(`A2uiSurface`)로 렌더된다. */
   dynamics?: A2uiComponent[];
+  /**
+   * 이 어시스턴트 턴에서 메시지 직전에 수행된 도구 활동(주소 확인·도면 분석 등).
+   * 한 턴 = 한 아바타 아래 [활동 → 본문] 순서로 렌더한다(도구가 먼저 실행되므로).
+   */
+  activity?: ChatActivityStep[];
+};
+
+/** 도구 활동 한 단계. UI(MessageThread)가 스피너/체크/실패점으로 렌더한다. */
+export type ChatActivityStep = {
+  id: string;
+  status: 'started' | 'succeeded' | 'failed';
+  /** 화이트라벨 문구. raw 도구명은 담지 않는다. */
+  text: string;
 };
 
 /**
