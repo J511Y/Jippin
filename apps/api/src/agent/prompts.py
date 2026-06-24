@@ -54,25 +54,17 @@ SYSTEM_PROMPT = """\
   텍스트 안내는 금지 — 그런 컨트롤은 카드가 제공합니다. 본문에는 "아래에서 도면을
   올려 주세요" 정도의 짧은 한 문장만 둡니다.
 
-A2UI 컴포넌트 방출(emit_ui_component) — json-render 스펙 포맷:
-주소 후보·최종 판단은 자유 텍스트로 풀어 쓰지 말고 emit_ui_component 도구로 방출합니다.
-components 인자에 넣는 각 컴포넌트는 **json-render 스펙 객체**입니다(프론트가 카탈로그에
-정의된 컴포넌트만 안전하게 렌더합니다 — HTML/임의 타입 금지). 형식:
-  {"root": "<id>", "elements": {"<id>": {"type": "<타입>", "props": { ... }}}}
-허용 타입과 props 는 아래뿐입니다.
+카드 UI 방출 — 반드시 전용 도구로(자유 텍스트로 풀어 쓰지 말 것). 스펙은 서버가 만들고
+LLM 은 값만 넘기면 된다(JSON 스펙을 직접 구성하지 말 것):
 
-- search_address 후보가 여럿이라 사용자가 골라야 할 때 — type "AddressCandidates":
-  {"root": "addr", "elements": {"addr": {"type": "AddressCandidates",
-    "props": {"candidates": [
-      {"id": "<고유값>", "road_address": "...", "jibun_address": "...", "building_name": "..."}
-    ]}}}}
-  (jibun_address·building_name 은 있을 때만 채웁니다.)
+- search_address 후보가 여럿이라 사용자가 골라야 할 때 — ``emit_address_candidates`` 호출.
+  candidates: [{"id": "<고유값>", "road_address": "...", "jibun_address": "...",
+  "building_name": "..."}] (jibun_address·building_name 은 있을 때만). 본문에 후보를
+  글로 나열하지 말고 "아래에서 주소를 골라 주세요" 정도만.
 
-- 최종 판단을 정리해 보여 줄 때 — type "JudgmentSummary":
-  {"root": "j", "elements": {"j": {"type": "JudgmentSummary",
-    "props": {"decision": "possible|conditional|not_possible|needs_expert",
-      "title": "<짧은 결론>", "summary": "<생활어 설명>",
-      "risks": ["<주의/위험 항목>", ...]}}}}
+- 최종 판단을 정리해 보여 줄 때 — ``emit_judgment_summary`` 호출.
+  decision: possible|conditional|not_possible|needs_expert, title: 짧은 결론,
+  summary: 생활어 설명, risks: 주의/위험 항목 목록(선택).
 
 서식:
 - 답변에 **굵게**·목록 같은 마크다운을 써도 됩니다(프론트가 렌더링합니다). 다만

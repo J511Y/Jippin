@@ -14,7 +14,9 @@ from .domain import (
     RunContext,
     check_building_register_impl,
     confirm_address_impl,
+    emit_address_candidates_impl,
     emit_floorplan_request_impl,
+    emit_judgment_summary_impl,
     emit_ui_component_impl,
     evaluate_rules_impl,
     search_address_impl,
@@ -35,6 +37,8 @@ TOOL_KINDS: dict[str, str] = {
     "evaluate_rules": "rule_engine",
     "emit_ui_component": "render",
     "emit_floorplan_request": "render",
+    "emit_address_candidates": "render",
+    "emit_judgment_summary": "render",
     "set_completion_decision": "rule_engine",
 }
 
@@ -152,6 +156,38 @@ def build_tools(
         )
 
     @tool
+    async def emit_address_candidates(
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """search_address 후보가 여럿이라 사용자가 골라야 할 때 **주소 선택 카드**를 띄운다.
+        본문에 후보를 글로 나열하지 말고 이 도구를 호출하라. candidates 각 원소:
+        {id, road_address, jibun_address?, building_name?}."""
+        return await emit_address_candidates_impl(
+            run_context=run_context,
+            run_id=run_id,
+            candidates=candidates,
+        )
+
+    @tool
+    async def emit_judgment_summary(
+        decision: str,
+        title: str,
+        summary: str,
+        risks: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """최종 판단을 정리해 **결과 카드**로 보여 준다. decision 은
+        possible|conditional|not_possible|needs_expert 중 하나. title 짧은 결론,
+        summary 생활어 설명, risks 주의/위험 항목 목록(선택)."""
+        return await emit_judgment_summary_impl(
+            run_context=run_context,
+            run_id=run_id,
+            decision=decision,
+            title=title,
+            summary=summary,
+            risks=risks,
+        )
+
+    @tool
     async def set_completion_decision(
         completion_decision: str, reason: str | None = None
     ) -> dict[str, Any]:
@@ -170,5 +206,7 @@ def build_tools(
         evaluate_rules,
         emit_ui_component,
         emit_floorplan_request,
+        emit_address_candidates,
+        emit_judgment_summary,
         set_completion_decision,
     ]

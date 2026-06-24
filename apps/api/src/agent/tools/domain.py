@@ -338,6 +338,63 @@ async def emit_floorplan_request_impl(
     )
 
 
+async def emit_address_candidates_impl(
+    *,
+    run_context: "RunContext",
+    run_id: uuid.UUID,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """주소 후보 선택 카드(AddressCandidates)를 다음 답변에 첨부한다.
+
+    각 후보: {id, road_address, jibun_address?, building_name?}. LLM 은 후보 목록만
+    넘기면 되고, json-render 스펙은 서버가 만든다(LLM 스펙 구성 오류 차단).
+    """
+
+    spec = {
+        "root": "addr",
+        "elements": {
+            "addr": {
+                "type": "AddressCandidates",
+                "props": {"candidates": candidates or []},
+            }
+        },
+    }
+    return await emit_ui_component_impl(
+        run_context=run_context, run_id=run_id, components=[spec]
+    )
+
+
+async def emit_judgment_summary_impl(
+    *,
+    run_context: "RunContext",
+    run_id: uuid.UUID,
+    decision: str,
+    title: str,
+    summary: str,
+    risks: list[str] | None = None,
+) -> dict[str, Any]:
+    """최종 판단 요약 카드(JudgmentSummary)를 다음 답변에 첨부한다.
+
+    decision: possible|conditional|not_possible|needs_expert. 서버가 json-render
+    스펙을 만든다(LLM 은 값만 넘김). judgment_snapshot 영속은 emit_ui_component 로 별도.
+    """
+
+    props: dict[str, Any] = {
+        "decision": str(decision),
+        "title": str(title),
+        "summary": str(summary),
+    }
+    if risks:
+        props["risks"] = [str(r) for r in risks]
+    spec = {
+        "root": "j",
+        "elements": {"j": {"type": "JudgmentSummary", "props": props}},
+    }
+    return await emit_ui_component_impl(
+        run_context=run_context, run_id=run_id, components=[spec]
+    )
+
+
 class RunContext:
     """런 1회 동안 도구↔런너가 공유하는 가변 상태(UI 버퍼 + 분석 입력 지문)."""
 
