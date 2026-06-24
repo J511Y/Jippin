@@ -28,6 +28,7 @@ function Avatar() {
   return (
     <Box
       aria-hidden
+      visibleFrom="sm"
       style={{
         flex: '0 0 auto',
         width: 30,
@@ -109,23 +110,9 @@ function AssistantTurn({
         {hasActivity ? <ActivitySteps steps={activity!} /> : null}
         {hasContent ? (
           <>
-            <Box
-              style={{
-                display: 'inline-block',
-                maxWidth: '100%',
-                padding: '10px 14px',
-                borderRadius: 16,
-                borderTopLeftRadius: 4,
-                background: 'var(--jippin-brand-surface-alt, #FFFFFF)',
-                border: '1px solid var(--jippin-brand-border)',
-                color: 'var(--jippin-brand-ink)',
-                boxShadow: '0 1px 2px rgba(13, 27, 42, 0.04)',
-                overflowWrap: 'break-word',
-                wordBreak: 'break-word'
-              }}
-            >
-              <ChatMarkdown content={content!} />
-            </Box>
+            {/* 마크다운은 버블 크롬 없이 본문에 직접 렌더한다(영역 확보·카드 UI 축소).
+                흰 배경 위 평문처럼 보이도록 padding/border/shadow 제거. */}
+            <ChatMarkdown content={content!} />
             {dynamics && dynamics.length > 0 ? (
               <Stack gap="xs" mt={2}>
                 {dynamics.map((component, index) => (

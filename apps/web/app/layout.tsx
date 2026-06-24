@@ -1,4 +1,4 @@
-import { ColorSchemeScript, mantineHtmlProps } from '@mantine/core';
+import { Box, ColorSchemeScript, mantineHtmlProps } from '@mantine/core';
 import { GoogleTagManager } from '@next/third-parties/google';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
@@ -89,7 +89,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <Providers>
           <main style={{ flex: '1 0 auto' }}>{children}</main>
-          <LegalNotice />
+          {/* 모바일에서는 메인 화면 푸터를 숨기고 햄버거 메뉴(Drawer) 안에서 노출한다
+              (영역 확보). 데스크톱(sm+)에서는 기존대로 하단 푸터를 보여 준다. */}
+          <Box visibleFrom="sm">
+            <LegalNotice />
+          </Box>
         </Providers>
         <AnonymousLeadClaimer />
         <WebVitals />

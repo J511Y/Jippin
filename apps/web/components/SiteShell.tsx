@@ -21,6 +21,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 
+import { LegalNotice } from '@/components/LegalNotice';
 import { createClient } from '@/lib/supabase/client';
 
 const HEADER_HEIGHT = 60;
@@ -249,15 +250,18 @@ export function SiteShell({ children }: { children: ReactNode }) {
           // 랜딩(홈·가격)은 풀블리드 섹션을 직접 제어한다.
           children
         ) : isChatRoute(pathname) ? (
-          // 대화형 채팅 — 헤더 아래 남는 높이를 풀로 쓴다(세로 패딩 제거, flex 컬럼).
-          // 외부 footer 와 겹치지 않도록 헤더 높이만 제외한 최소 높이를 잡는다.
+          // 대화형 채팅 — 헤더 아래 viewport 를 '정확히' 채우고(고정 높이 + overflow:hidden),
+          // 내부 .chat-scroll 이 스스로 스크롤한다(페이지가 아닌 메시지 영역만 스크롤).
+          // 이래야 모바일 진행계획 sticky·"맨 아래로" 버튼·하단 도크가 ChatGPT 처럼 동작한다.
+          // 데스크톱 외부 footer 는 이 풀스크린 채팅 아래에 위치(페이지 스크롤로 노출).
           <Container
             size={mainContainerSize(pathname)}
             py={0}
             style={{
               display: 'flex',
               flexDirection: 'column',
-              minHeight: `calc(100dvh - ${HEADER_HEIGHT}px)`
+              height: `calc(100dvh - ${HEADER_HEIGHT}px)`,
+              overflow: 'hidden'
             }}
           >
             {children}
@@ -332,6 +336,11 @@ export function SiteShell({ children }: { children: ReactNode }) {
             )}
           </Box>
         </Stack>
+
+        {/* 푸터(법적 고지·사업자 표기)는 메인 화면 대신 이 메뉴 안에서 노출한다(모바일 영역 확보). */}
+        <Box mt="xl" mx="calc(var(--mantine-spacing-md) * -1)">
+          <LegalNotice />
+        </Box>
       </Drawer>
     </AppShell>
   );

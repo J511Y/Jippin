@@ -151,7 +151,8 @@ a[data-faq-row]:focus-visible {
   padding: 16px 0 8px;
 }
 
-/* 하단 도크 — sticky 입력창. */
+/* 하단 도크 — sticky 입력창. position:sticky 는 자식 absolute 의 컨테이닝 블록이 되어
+   "맨 아래로" 플로팅 버튼을 도크 바로 위에 띄울 수 있다. */
 .chat-dock {
   position: sticky;
   bottom: 0;
@@ -161,6 +162,25 @@ a[data-faq-row]:focus-visible {
     var(--mantine-color-body) 70%,
     transparent
   );
+}
+
+/* 스크롤이 바닥이 아닐 때만 노출되는 "맨 아래로" 플로팅 버튼 — 입력창 바로 위 중앙. */
+.chat-scroll-btn {
+  position: absolute;
+  top: -48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  background: var(--jippin-brand-surface-alt, #ffffff);
+  border: 1px solid var(--jippin-brand-border);
+  color: var(--jippin-brand-copy);
+  box-shadow: 0 6px 16px rgba(13, 27, 42, 0.16);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-scroll-btn {
+    animation: chat-fade-in 200ms ease both;
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -187,13 +207,18 @@ a[data-faq-row]:focus-visible {
   display: none;
 }
 
-/* 모바일 thread 상단 접이식 바 — 기본 표시. 데스크톱에서는 숨긴다(사이드바가 대신). */
+/* 모바일 thread 상단 접이식 바 — 기본 표시. 데스크톱에서는 숨긴다(사이드바가 대신).
+   스크롤 영역 최상단에 sticky 로 고정해 메시지를 스크롤해도 현재 단계가 항상 보이게 한다. */
 .plan-mobile-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   margin-bottom: 12px;
   padding: 10px 12px;
   border-radius: 12px;
   background: var(--jippin-brand-surface-alt, #ffffff);
   border: 1px solid var(--jippin-brand-border);
+  box-shadow: 0 4px 10px rgba(13, 27, 42, 0.06);
 }
 
 /* Mantine sm 브레이크포인트(48em)와 정합 — PlanPanel 의 visibleFrom/hiddenFrom="sm"

@@ -9,8 +9,9 @@
  * activeId 가 있으면 곧장 대화 레이아웃(Conversation)을 마운트한다.
  */
 
-import { Box, Loader, Stack, Text } from '@mantine/core';
-import { useCallback, useEffect, useState } from 'react';
+import { ActionIcon, Box, Loader, Stack, Text } from '@mantine/core';
+import { IconArrowDown } from '@tabler/icons-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ChatActionsProvider } from '@/components/agent/chat-actions';
 import { trackPrecheckSessionStart } from '@/lib/analytics/sessions-funnel';
@@ -50,6 +51,25 @@ function Conversation({
 
   const busy = status === 'streaming';
   const hasPlan = plan.length > 0;
+
+  // 스크롤이 최하단이 아닐 때만 "맨 아래로" 플로팅 버튼을 노출한다(모바일/PC 공통).
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const recomputeAtBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // 임계값 80px — 거의 바닥이면 버튼을 숨겨 깜빡임을 막는다.
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+  }, []);
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, []);
+  // 새 메시지/스트리밍으로 높이가 바뀌면 바닥 여부를 재계산한다.
+  useEffect(() => {
+    recomputeAtBottom();
+  }, [messages, streamingText, activity, recomputeAtBottom]);
 
   // 마운트 시 보관된 첫 메시지를 1회 전송한다.
   // StrictMode(개발)의 mount→unmount→remount 동안 첫 send 의 fetch 가 useAgentStream
@@ -122,7 +142,7 @@ function Conversation({
             </Box>
           ) : null}
 
-          <Box className="chat-scroll">
+          <Box className="chat-scroll" ref={scrollRef} onScroll={recomputeAtBottom}>
             <Box className="chat-column">
               {/* 모바일 전용 접이식 진행 계획(thread 최상단). 데스크톱에서는 PlanPanel
                   내부의 plan-mobile 표현이 hiddenFrom="sm" 으로 숨겨진다. */}
@@ -143,6 +163,18 @@ function Conversation({
           </Box>
 
           <Box className="chat-dock">
+            {!atBottom ? (
+              <ActionIcon
+                className="chat-scroll-btn"
+                onClick={scrollToBottom}
+                radius="xl"
+                size={38}
+                variant="default"
+                aria-label="맨 아래로 이동"
+              >
+                <IconArrowDown size={18} />
+              </ActionIcon>
+            ) : null}
             <Box className="chat-column">
               <MessageComposer
                 onSend={send}
