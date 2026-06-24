@@ -422,13 +422,10 @@ a[data-faq-row]:focus-visible {
   color: var(--jippin-brand-copy);
 }
 
-/* 타이핑 인디케이터(응답 생성 중) — 세 점 바운스. */
+/* 타이핑 인디케이터(응답 생성 중) — 세 점 바운스. 메시지 박스(버블) 없이 점만 노출한다
+   (마크다운 본문과 마찬가지로 카드 크롬 제거). */
 .chat-typing {
-  padding: 10px 14px;
-  border-radius: 16px;
-  border-top-left-radius: 4px;
-  background: var(--jippin-brand-surface-alt, #ffffff);
-  border: 1px solid var(--jippin-brand-border);
+  padding: 6px 2px;
 }
 
 .chat-typing-dot {
