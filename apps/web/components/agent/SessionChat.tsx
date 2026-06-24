@@ -13,6 +13,7 @@ import { Box, Loader, Stack, Text } from '@mantine/core';
 import { useCallback, useEffect, useState } from 'react';
 
 import { ChatActionsProvider } from '@/components/agent/chat-actions';
+import { trackPrecheckSessionStart } from '@/lib/analytics/sessions-funnel';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
 import { useAgentStream } from '@/lib/agent/useAgentStream';
 import { createSession, getSession } from '@/lib/sessions/api';
@@ -165,7 +166,7 @@ function Compose({
   onFirstSend,
   starting
 }: {
-  onFirstSend: (text: string) => void | Promise<void>;
+  onFirstSend: (text: string, entry: 'example' | 'typed') => void | Promise<void>;
   starting: boolean;
 }) {
   return (
@@ -200,7 +201,8 @@ function Compose({
 
           <Box style={{ width: '100%' }}>
             <MessageComposer
-              onSend={onFirstSend}
+              onSend={(text) => onFirstSend(text, 'typed')}
+              onExample={(text) => onFirstSend(text, 'example')}
               busy={starting}
               variant="compose"
               placeholder="무엇이든 물어보세요"
@@ -220,10 +222,13 @@ export function SessionChat({ sessionId }: { sessionId?: string }) {
   const [startError, setStartError] = useState<string | null>(null);
 
   // 첫 전송: 익명 세션 보장 → 세션 생성 → URL 교체(리마운트 없음) → 대화 전환.
-  const handleFirstSend = useCallback(async (text: string) => {
+  const handleFirstSend = useCallback(
+    async (text: string, entry: 'example' | 'typed' = 'typed') => {
     setStarting(true);
     setStartError(null);
     try {
+      // 퍼널: 사전검토 세션 시작(예시칩/직접입력). createSession 직전에 발화.
+      trackPrecheckSessionStart(entry);
       await ensureAnonymousSession();
       const session = await createSession();
       // Next 라우터 네비게이션을 트리거하지 않고 URL 만 교체한다(부드러운 전환 유지).

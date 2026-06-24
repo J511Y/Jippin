@@ -16,6 +16,7 @@
 import { Group, Stack, Text, UnstyledButton } from '@mantine/core';
 import { IconBuilding, IconChevronRight, IconMapPin } from '@tabler/icons-react';
 import { useId } from 'react';
+import { trackPrecheckAddressSelect } from '@/lib/analytics/sessions-funnel';
 import { useChatActions } from '@/components/agent/chat-actions';
 import { CardHeader, CardRule, CardShell } from './CardShell';
 
@@ -79,6 +80,7 @@ export function AddressCandidatesCard({
     const detail = candidate.building_name
       ? `${candidate.road_address} (${candidate.building_name})`
       : candidate.road_address;
+    trackPrecheckAddressSelect();
     void actions.sendMessage(`이 주소로 진행할게요: ${detail}`);
   }
 

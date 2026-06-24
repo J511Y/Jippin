@@ -17,6 +17,7 @@ import { useEffect, useState } from 'react';
 
 import { LegalNotice } from '@/components/LegalNotice';
 import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+import { trackPrecheckReportView } from '@/lib/analytics/sessions-funnel';
 import { parseApiError } from '@/lib/api/error';
 import {
   getSessionReport,
@@ -47,12 +48,19 @@ export default function SessionReportPage() {
       try {
         await syncExistingToken();
         const data = await getSessionReport(sessionId);
-        if (!ignore) setReport(data);
+        if (!ignore) {
+          setReport(data);
+          // 퍼널: 리포트 진입(판정 준비됨).
+          trackPrecheckReportView(true);
+        }
       } catch (err) {
         const parsed = parseApiError(err);
         if (ignore) return;
-        if (parsed.code === 'REPORT_NOT_READY') setNotReady(true);
-        else setError(parsed.message);
+        if (parsed.code === 'REPORT_NOT_READY') {
+          setNotReady(true);
+          // 퍼널: 리포트 진입(아직 판정 미준비).
+          trackPrecheckReportView(false);
+        } else setError(parsed.message);
       }
     })();
     return () => {

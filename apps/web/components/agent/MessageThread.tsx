@@ -10,7 +10,8 @@
  */
 
 import { Alert, Box, Group, Loader, Stack, Text } from '@mantine/core';
-import { IconAlertTriangle, IconCheck, IconHome } from '@tabler/icons-react';
+import { IconAlertTriangle, IconCheck } from '@tabler/icons-react';
+import Image from 'next/image';
 import { useEffect, useRef } from 'react';
 
 import {
@@ -34,12 +35,13 @@ function Avatar() {
         borderRadius: 999,
         display: 'grid',
         placeItems: 'center',
-        background: 'var(--jippin-brand-primary)',
-        color: 'var(--jippin-brand-primary-fg)',
-        boxShadow: '0 1px 2px rgba(13, 27, 42, 0.12)'
+        background: 'var(--jippin-brand-surface-alt, #FFFFFF)',
+        border: '1px solid var(--jippin-brand-border)',
+        boxShadow: '0 1px 2px rgba(13, 27, 42, 0.10)',
+        overflow: 'hidden'
       }}
     >
-      <IconHome size={17} />
+      <Image src="/logo.png" alt="" width={18} height={18} style={{ display: 'block' }} />
     </Box>
   );
 }

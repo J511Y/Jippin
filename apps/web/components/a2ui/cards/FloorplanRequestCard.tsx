@@ -21,10 +21,11 @@ import {
   IconPhotoUp,
   IconUpload
 } from '@tabler/icons-react';
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
+import { trackPrecheckFloorplanAttach } from '@/lib/analytics/sessions-funnel';
 import { useChatActions } from '@/components/agent/chat-actions';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
-import { createFloorplanAsset } from '@/lib/sessions/api';
+import { createFloorplanAsset, getSession } from '@/lib/sessions/api';
 import {
   deleteSessionFloorplan,
   uploadSessionFloorplan
@@ -88,6 +89,28 @@ export function FloorplanRequestCard({
   const streaming = actions?.busy ?? false;
   const disabled = busy || streaming || attached || !interactive;
 
+  // 새로고침 시 이 카드(과거 메시지의 동적 컴포넌트)가 로컬 state 만으로는 첨부 여부를
+  // 몰라 업로드 폼을 다시 보여 주던 문제 — 마운트 시 세션의 selected_floorplan_asset_id
+  // 를 조회해 이미 도면이 첨부됐으면 '첨부됨' 상태로 반영한다(영속 상태와 UI 동기화).
+  const sessionId = actions?.sessionId;
+  useEffect(() => {
+    if (!sessionId) return;
+    let ignore = false;
+    void (async () => {
+      try {
+        const row = await getSession(sessionId);
+        if (!ignore && row.selected_floorplan_asset_id != null) {
+          setAttached(true);
+        }
+      } catch {
+        /* 조회 실패 — 폼을 그대로 보여 준다(첨부는 다시 시도 가능) */
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [sessionId]);
+
   function handlePick(picked: File | null) {
     setError(null);
     if (picked && picked.size > MAX_BYTES) {
@@ -118,6 +141,7 @@ export function FloorplanRequestCard({
       // 등록까지 성공 — 정리 대상 아님.
       uploadedKey = null;
       setAttached(true);
+      trackPrecheckFloorplanAttach();
       await actions.refreshSession?.();
       await actions.sendMessage('도면을 첨부했어요. 분석해 주세요.');
     } catch (err) {
