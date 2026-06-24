@@ -128,8 +128,22 @@ class Settings(BaseSettings):
     # SEGMENTATION_ENDPOINT_UNAVAILABLE 로 degrade 한다(에이전트 흐름은 유지).
     hf_segmentation_endpoint_url: str | None = Field(default=None)
     hf_segmentation_token: str | None = Field(default=None)
-    hf_segmentation_timeout_seconds: int = Field(default=60)
-    hf_segmentation_cold_start_max_retries: int = Field(default=2)
+    # 배포가 CPU(intel-spr) + scale-to-zero(15분) 라, 유휴 후 첫 요청은 콜드스타트로
+    # TTFB 가 수십 초~수 분이다(모델 카드: "long request timeout"). 전용 엔드포인트는
+    # 보통 503 재시도가 아니라 연결을 잡고 늘어지므로 per-request timeout 을 넉넉히 잡는다
+    # (run wall-clock 600s 이내). 503 재시도는 폴백으로 둔다.
+    hf_segmentation_timeout_seconds: int = Field(default=300)
+    # 이 전용 엔드포인트는 scale-to-zero 에서 깨어나는 동안 **503** 을 즉시 돌려준다
+    # (Retry-After/estimated_time 힌트 없음). CPU 스케일업이 수 분 걸릴 수 있어, 고정
+    # 폴링 간격으로 준비될 때까지 재시도한다 — max_retries × poll 이 run wall-clock(600s)
+    # 안에 들도록 잡는다(30 × 10s = 300s).
+    hf_segmentation_cold_start_max_retries: int = Field(default=30)
+    hf_segmentation_cold_start_poll_seconds: int = Field(default=10)
+    # 추론 파라미터(모델 카드 cmp180_full). 학습은 1536 square resize. CPU 지연이 크면
+    # max_inference_side 를 1280/1024 로 낮춰 절충할 수 있다(디테일 ↔ 지연).
+    hf_segmentation_threshold: float = Field(default=0.5)
+    hf_segmentation_mask_threshold: float = Field(default=0.5)
+    hf_segmentation_max_inference_side: int = Field(default=1536)
     # 세그멘테이션에 넘길 이미지 URL 의 허용 호스트(스토리지 서명 URL 호스트). 비우면
     # SSRF 가드(https + 사설/로컬/메타데이터 차단)만 적용하고 공개 https 는 허용한다.
     # 운영에서는 스토리지 호스트로 채워 세션 경계를 강제하길 권장한다. (콤마 구분)

@@ -7,6 +7,7 @@ httpx MockTransport 로 미배포/404/503-콜드스타트/타임아웃/연결오
 
 from __future__ import annotations
 
+import json
 import uuid
 from types import SimpleNamespace
 
@@ -29,6 +30,10 @@ def _settings(**override: object) -> SimpleNamespace:
         "hf_segmentation_token": "tok",
         "hf_segmentation_timeout_seconds": 5,
         "hf_segmentation_cold_start_max_retries": 0,
+        "hf_segmentation_cold_start_poll_seconds": 10,
+        "hf_segmentation_threshold": 0.5,
+        "hf_segmentation_mask_threshold": 0.5,
+        "hf_segmentation_max_inference_side": 1536,
         "hf_segmentation_allowed_image_hosts": [],
         # 실제 기본값과 일치(엣지 검증된 pending 도면 분석 허용).
         "agent_allow_unscanned_floorplans": True,
@@ -103,15 +108,22 @@ async def test_422_is_bad_request() -> None:
     assert res["error_code"] == "SEGMENTATION_BAD_REQUEST"
 
 
-async def test_200_parses_instances() -> None:
+async def test_200_aggregates_predictions() -> None:
+    # 모델 카드 응답: per-region predictions[]. 라벨별 count(=region 수) + score 평균으로 집계.
     def handler(req: httpx.Request) -> httpx.Response:
+        # 요청 본문이 모델 계약(inputs + parameters)인지 함께 확인한다.
+        body = json.loads(req.content)
+        assert body["inputs"] == _IMG
+        assert body["parameters"]["max_inference_side"] == 1536
         return httpx.Response(
             200,
             json={
-                "instances": [
-                    {"label": "wall_other", "count": 3, "mean_confidence": 0.8},
-                    {"label": "wall_reinforced_concrete", "count": 1},
-                    {"label": "bogus", "count": 9},
+                "predictions": [
+                    {"class_name": "wall_other", "score": 0.9},
+                    {"class_name": "wall_other", "score": 0.7},
+                    {"class_name": "wall_other", "score": 0.8},
+                    {"class_name": "wall_reinforced_concrete", "score": 0.6},
+                    {"class_name": "bogus", "score": 0.99},
                 ]
             },
         )
@@ -121,9 +133,21 @@ async def test_200_parses_instances() -> None:
             image_url=_IMG, settings=_settings(), client=client
         )
     assert res["ok"] is True
-    labels = {i["label"]: i["count"] for i in res["instances"]}
-    assert labels == {"wall_other": 3, "wall_reinforced_concrete": 1}
+    by_label = {i["label"]: i for i in res["instances"]}
+    assert by_label["wall_other"]["count"] == 3
+    assert by_label["wall_other"]["mean_confidence"] == 0.8  # (0.9+0.7+0.8)/3
+    assert by_label["wall_reinforced_concrete"]["count"] == 1
+    assert "bogus" not in by_label  # 18 클래스 밖은 드롭
     assert "비내력벽 후보 3" in res["summary"]
+
+
+async def test_200_missing_predictions_is_bad_response() -> None:
+    # predictions 키가 없으면(포맷 불일치) ok=false 로 degrade.
+    async with _client(lambda req: httpx.Response(200, json={"foo": 1})) as client:
+        res = await segment_floorplan_impl(
+            image_url=_IMG, settings=_settings(), client=client
+        )
+    assert res["error_code"] == "SEGMENTATION_BAD_RESPONSE"
 
 
 async def test_200_non_json_is_bad_response() -> None:
@@ -147,13 +171,15 @@ async def test_request_error_is_upstream() -> None:
 
 
 async def test_200_drops_out_of_range_confidence() -> None:
+    # score 가 [0,1] 밖인 region 은 평균에서 제외(count 엔 포함). door 는 유일 region 의
+    # score 가 범위 밖 → mean_confidence 없음. window 는 0.5 반영.
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
-                "instances": [
-                    {"label": "door", "count": 1, "mean_confidence": 1.4},
-                    {"label": "window", "count": 1, "mean_confidence": 0.5},
+                "predictions": [
+                    {"class_name": "door", "score": 1.4},
+                    {"class_name": "window", "score": 0.5},
                 ]
             },
         )
@@ -163,15 +189,17 @@ async def test_200_drops_out_of_range_confidence() -> None:
             image_url=_IMG, settings=_settings(), client=client
         )
     by_label = {i["label"]: i for i in res["instances"]}
-    assert "mean_confidence" not in by_label["door"]  # 1.4 는 드롭
+    assert by_label["door"]["count"] == 1
+    assert "mean_confidence" not in by_label["door"]  # 1.4 는 평균서 드롭
     assert by_label["window"]["mean_confidence"] == 0.5
 
 
 async def test_200_preserves_mask_asset_id() -> None:
+    # 모델은 보통 mask_asset_id 를 안 주지만, 핸들러가 향후 UUID 를 주면 방어적으로 보존.
     mask_id = "11111111-1111-1111-1111-111111111111"
 
     def handler(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"instances": [], "mask_asset_id": mask_id})
+        return httpx.Response(200, json={"predictions": [], "mask_asset_id": mask_id})
 
     async with _client(handler) as client:
         res = await segment_floorplan_impl(
@@ -184,7 +212,7 @@ async def test_200_preserves_mask_asset_id() -> None:
 async def test_200_drops_non_uuid_mask_asset_id() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            200, json={"instances": [], "mask_asset_id": "storage/key/not-a-uuid"}
+            200, json={"predictions": [], "mask_asset_id": "storage/key/not-a-uuid"}
         )
 
     async with _client(handler) as client:
@@ -195,16 +223,17 @@ async def test_200_drops_non_uuid_mask_asset_id() -> None:
     assert res["mask_asset_id"] is None
 
 
-async def test_200_drops_invalid_counts() -> None:
-    # 음수·bool count 는 계약(count>=0) 위반이라 드롭한다.
+async def test_200_skips_malformed_regions() -> None:
+    # dict 아닌 항목·class_name 누락 region 은 건너뛰고 정상 region 만 집계한다.
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
-                "instances": [
-                    {"label": "door", "count": -1},
-                    {"label": "window", "count": True},
-                    {"label": "wall_other", "count": 2},
+                "predictions": [
+                    "not-a-dict",
+                    {"score": 0.9},  # class_name 없음
+                    {"class_name": "wall_other", "score": 0.5},
+                    {"class_name": "wall_other"},  # score 없음 → count 만
                 ]
             },
         )
@@ -213,8 +242,9 @@ async def test_200_drops_invalid_counts() -> None:
         res = await segment_floorplan_impl(
             image_url=_IMG, settings=_settings(), client=client
         )
-    labels = {i["label"]: i["count"] for i in res["instances"]}
-    assert labels == {"wall_other": 2}
+    by_label = {i["label"]: i for i in res["instances"]}
+    assert by_label["wall_other"]["count"] == 2
+    assert by_label["wall_other"]["mean_confidence"] == 0.5  # score 있는 1건 평균
 
 
 async def test_rejects_unsafe_or_disallowed_image_url() -> None:
@@ -299,7 +329,13 @@ async def test_session_floorplan_signs_and_segments(monkeypatch) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         assert str(req.url).startswith("https://hf.example/seg")
         return httpx.Response(
-            200, json={"instances": [{"label": "wall_other", "count": 2}]}
+            200,
+            json={
+                "predictions": [
+                    {"class_name": "wall_other", "score": 0.8},
+                    {"class_name": "wall_other", "score": 0.6},
+                ]
+            },
         )
 
     async with _client(handler) as client:
@@ -327,7 +363,7 @@ async def test_session_floorplan_records_input_fingerprint(monkeypatch) -> None:
 
     monkeypatch.setattr(storage, "sign_object_url", fake_sign)
     ctx = RunContext()
-    async with _client(lambda req: httpx.Response(200, json={"instances": []})) as c:
+    async with _client(lambda req: httpx.Response(200, json={"predictions": []})) as c:
         await segment_session_floorplan(
             session_id=session_id,
             owner_user_id=owner,
@@ -355,7 +391,7 @@ async def test_session_floorplan_persists_durable_fingerprint(monkeypatch) -> No
 
     monkeypatch.setattr(storage, "sign_object_url", fake_sign)
     ctx = RunContext()
-    async with _client(lambda req: httpx.Response(200, json={"instances": []})) as c:
+    async with _client(lambda req: httpx.Response(200, json={"predictions": []})) as c:
         await segment_session_floorplan(
             session_id=session_id,
             owner_user_id=owner,
@@ -423,7 +459,7 @@ async def test_session_floorplan_pending_analyzed_by_default(monkeypatch) -> Non
     monkeypatch.setattr(storage, "sign_object_url", fake_sign)
 
     def handler(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"instances": []})
+        return httpx.Response(200, json={"predictions": []})
 
     async with _client(handler) as client:
         res = await segment_session_floorplan(

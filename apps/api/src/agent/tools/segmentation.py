@@ -1,10 +1,16 @@
-"""평면도 세그멘테이션 도구(HuggingFace 엣지 엔드포인트) — 실패 처리 핵심.
+"""평면도 세그멘테이션 도구(HuggingFace Inference Endpoint) — 실패 처리 핵심.
 
-모델은 STR 5클래스(door/window/wall_reinforced_concrete/wall_other/wall_unknown)
-+ SPA 13 공간클래스를 낸다(floor-plan-model-train 정합). 엔드포인트는 아직 배포
-전일 수 있으므로 **절대 uncaught raise 하지 않고** segmentation-result 계약 형태의
-구조화 dict 를 반환한다 — 미배포/콜드스타트/타임아웃도 ok=false 로 표현된다.
-에이전트는 ok=false 면 ASK_MORE 로 degrade, 반복 실패 시 HOLD_OR_HANDOFF 한다.
+모델: ``youjunhyeok/floorplan-mask2former-cmp180-full`` (Mask2Former, 18클래스 =
+STR 5 door/window/wall_reinforced_concrete/wall_other/wall_unknown + SPA 13 공간).
+요청 계약: ``{"inputs": <data URL|base64|HTTP(S) URL>, "parameters": {threshold,
+mask_threshold, max_inference_side}}``. 응답: per-region ``predictions[]``(class_name/
+score/polygon/bbox…) — 여기서 라벨별 count + score 평균으로 집계해 segmentation-result
+계약(instances)으로 환원한다(좌표는 계약상 미포함).
+
+엔드포인트는 CPU + scale-to-zero(15분)라 유휴 후 첫 요청은 **503 으로 스케일업**되며
+수 분 걸릴 수 있다 — 폴링 재시도로 흡수한다. 어떤 실패도 **절대 uncaught raise 하지
+않고** 구조화 dict 를 반환한다(미배포/콜드스타트/타임아웃 모두 ok=false). 에이전트는
+ok=false 면 ASK_MORE 로 degrade, 반복 실패 시 HOLD_OR_HANDOFF 한다.
 """
 
 from __future__ import annotations
@@ -119,7 +125,7 @@ def _valid_uuid(value: Any) -> str | None:
     return value
 
 
-def _retry_delay(resp: httpx.Response) -> float:
+def _retry_delay(resp: httpx.Response, fallback: float) -> float:
     raw = resp.headers.get("Retry-After")
     if raw is not None:
         try:
@@ -134,47 +140,70 @@ def _retry_delay(resp: httpx.Response) -> float:
             return min(float(est), _MAX_RETRY_DELAY_SECONDS)
     except Exception:  # noqa: BLE001 - body 파싱 실패는 무시
         pass
-    return 2.0
+    # 전용 엔드포인트는 503 에 힌트를 안 주기도 한다 — 설정된 폴링 간격으로 폴백.
+    return min(fallback, _MAX_RETRY_DELAY_SECONDS)
 
 
 def _parse_ok(data: Any) -> dict[str, Any]:
-    """200 응답 파싱 — 모델 출력 포맷이 확정 전이라 방어적으로 요약만 만든다."""
+    """200 응답 파싱 — 모델 카드(cmp180_full)의 per-region ``predictions[]`` 를 라벨별로
+    집계해 계약의 ``instances[{label, count, mean_confidence}]`` 로 환원한다.
+
+    모델은 인스턴스마다 한 region(class_name/score/polygon/bbox…)을 낸다. 계약(다운스트림
+    에이전트 추론·evaluate_rules)은 라벨별 집계만 쓰므로 여기서 count(=region 수)와
+    mean_confidence(=score 평균)로 줄인다. 폴리곤/bbox 등 좌표는 계약상 싣지 않는다
+    (오버레이 UI 는 계약 확장이 필요한 별도 작업).
+    """
 
     if not isinstance(data, dict):
         return _result(
             False, error_code="SEGMENTATION_BAD_RESPONSE", summary="응답 형식 오류."
         )
 
-    raw_instances = data.get("instances")
-    instances: list[dict[str, Any]] = []
-    if isinstance(raw_instances, list):
-        for item in raw_instances:
-            if not isinstance(item, dict):
-                continue
-            label = item.get("label")
-            count = item.get("count")
-            # 계약은 count>=0. bool(True/False)은 int subclass 라 type() 로 배제하고
-            # 음수도 드롭한다(모델/버전 불일치 시 잘못된 음수 카운트 방지).
-            if label not in _KNOWN_LABELS or type(count) is not int or count < 0:
-                continue
-            entry: dict[str, Any] = {"label": label, "count": count}
-            conf = item.get("mean_confidence")
-            # 계약은 mean_confidence 를 [0,1] 로 제한한다 — 범위 밖(모델/버전 불일치)
-            # 값은 fabricate 하지 않고 드롭한다.
-            if isinstance(conf, (int, float)) and 0 <= conf <= 1:
-                entry["mean_confidence"] = float(conf)
-            instances.append(entry)
+    raw_predictions = data.get("predictions")
+    if not isinstance(raw_predictions, list):
+        return _result(
+            False,
+            error_code="SEGMENTATION_BAD_RESPONSE",
+            summary="응답에 predictions 가 없습니다.",
+        )
 
-    wall_other = sum(i["count"] for i in instances if i["label"] == "wall_other")
-    rc = sum(i["count"] for i in instances if i["label"] == "wall_reinforced_concrete")
+    counts: dict[str, int] = {}
+    score_sum: dict[str, float] = {}
+    score_n: dict[str, int] = {}
+    for item in raw_predictions:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("class_name")
+        # 18 클래스(모델 id2label) 밖이면 드롭 — 모델/버전 불일치 방어.
+        if label not in _KNOWN_LABELS:
+            continue
+        counts[label] = counts.get(label, 0) + 1
+        score = item.get("score")
+        # score 는 [0,1] 만 평균에 반영(bool 은 int subclass 라 배제). 범위 밖은 무시.
+        if (
+            isinstance(score, (int, float))
+            and not isinstance(score, bool)
+            and 0 <= score <= 1
+        ):
+            score_sum[label] = score_sum.get(label, 0.0) + float(score)
+            score_n[label] = score_n.get(label, 0) + 1
+
+    instances: list[dict[str, Any]] = []
+    for label in sorted(counts):  # 결정적 순서.
+        entry: dict[str, Any] = {"label": label, "count": counts[label]}
+        if score_n.get(label):
+            entry["mean_confidence"] = round(score_sum[label] / score_n[label], 4)
+        instances.append(entry)
+
+    wall_other = counts.get("wall_other", 0)
+    rc = counts.get("wall_reinforced_concrete", 0)
     summary = (
         f"세그멘테이션 완료 — 비내력벽 후보 {wall_other}, 내력(RC)벽 후보 {rc}."
         if instances
-        else "세그멘테이션 완료(인스턴스 요약 없음)."
+        else "세그멘테이션 완료(검출된 영역 없음)."
     )
-    # 성공 응답이 마스크 자산 id 를 주면 보존한다(downstream 오버레이/리포트용).
-    # 계약은 UUID 형식이므로 UUID 로 파싱되는 값만 통과시키고, 잘못된 값(스토리지 키·
-    # placeholder 등)은 드롭한다.
+    # 현재 모델 응답엔 저장된 마스크 자산이 없다(폴리곤만). 다만 핸들러가 향후
+    # mask_asset_id(UUID)를 줄 수 있으니 방어적으로 보존한다.
     mask = _valid_uuid(data.get("mask_asset_id"))
     return _result(True, summary=summary, instances=instances, mask_asset_id=mask)
 
@@ -301,8 +330,22 @@ async def segment_floorplan_impl(
         attempt = 0
         while True:
             try:
+                # 모델 카드(cmp180_full) 계약: inputs 는 data URL/base64/HTTP(S) URL 중
+                # 하나. 우리는 스토리지 서명 URL(1h TTL)을 그대로 inputs 로 넘긴다 — 핸들러가
+                # HTTP(S) URL 을 디코드한다(백엔드에서 별도 다운로드/base64 불필요).
                 resp = await client.post(
-                    endpoint, json={"image_url": image_url}, headers=headers
+                    endpoint,
+                    json={
+                        "inputs": image_url,
+                        "parameters": {
+                            "threshold": settings.hf_segmentation_threshold,
+                            "mask_threshold": settings.hf_segmentation_mask_threshold,
+                            "max_inference_side": (
+                                settings.hf_segmentation_max_inference_side
+                            ),
+                        },
+                    },
+                    headers=headers,
                 )
             except (httpx.ConnectError, httpx.ConnectTimeout):
                 return _result(
@@ -340,7 +383,9 @@ async def segment_floorplan_impl(
                         summary="콜드스타트 대기 한도를 초과했습니다.",
                     )
                 attempt += 1
-                await asyncio.sleep(_retry_delay(resp))
+                await asyncio.sleep(
+                    _retry_delay(resp, settings.hf_segmentation_cold_start_poll_seconds)
+                )
                 continue
             if status in (400, 422):
                 return _result(
