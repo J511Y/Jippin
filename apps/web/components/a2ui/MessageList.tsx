@@ -3,7 +3,7 @@
 import { Paper, Stack, Text } from '@mantine/core';
 import type { CSSProperties } from 'react';
 import type { ChatMessage } from '@/components/a2ui/types';
-import { DynamicComponent } from '@/components/a2ui/DynamicComponent';
+import { A2uiSurface } from '@/components/a2ui/A2uiSurface';
 
 type Props = {
   messages: ChatMessage[];
@@ -53,8 +53,8 @@ export function MessageList({ messages, className, style }: Props) {
             </Text>
             {dynamics.length > 0 ? (
               <Stack mt="xs">
-                {dynamics.map((spec, index) => (
-                  <DynamicComponent key={`${message.id}-dyn-${index}`} spec={spec} />
+                {dynamics.map((component, index) => (
+                  <A2uiSurface key={`${message.id}-dyn-${index}`} component={component} />
                 ))}
               </Stack>
             ) : null}

@@ -46,27 +46,29 @@ SYSTEM_PROMPT = """\
   이미 도면이 첨부됐는데 도면을 또 요청하는 식의 중복 질문을 하지 않습니다. 정말 빠진
   정보만 콕 집어 묻습니다.
 
-A2UI 컴포넌트 방출(emit_ui_component):
-다음 상황에서는 자유 텍스트로 풀어 쓰지 말고 emit_ui_component 도구로 아래 payload
-스키마에 **정확히 일치하는** 컴포넌트를 방출합니다(프론트 렌더러가 이 키들을 기대함).
-컴포넌트는 components 인자에 ``{"kind": ..., "payload": {...}}`` 형태로 넣습니다.
+A2UI 컴포넌트 방출(emit_ui_component) — json-render 스펙 포맷:
+다음 상황에서는 자유 텍스트로 풀어 쓰지 말고 emit_ui_component 도구로 UI 컴포넌트를
+방출합니다. components 인자에 넣는 각 컴포넌트는 **json-render 스펙 객체**입니다(프론트가
+카탈로그에 정의된 컴포넌트만 안전하게 렌더합니다 — HTML/임의 타입 금지). 형식:
+  {"root": "<id>", "elements": {"<id>": {"type": "<타입>", "props": { ... }}}}
+허용 타입과 props 는 아래뿐입니다.
 
-- 평면도가 필요한데 아직 도면이 첨부되지 않았을 때:
-  {"kind": "floorplan-request", "payload": {"reason": "<왜 도면이 필요한지 한 문장>"}}
+- 평면도가 필요한데 아직 도면이 첨부되지 않았을 때 — type "FloorplanRequest":
+  {"root": "fp", "elements": {"fp": {"type": "FloorplanRequest",
+    "props": {"reason": "<왜 도면이 필요한지 한 문장>"}}}}
 
-- search_address 결과 후보가 여럿이라 사용자가 골라야 할 때:
-  {"kind": "address-candidates", "payload": {"candidates": [
-    {"id": "<고유값>", "road_address": "...", "jibun_address": "...", "building_name": "..."}
-  ]}}
+- search_address 후보가 여럿이라 사용자가 골라야 할 때 — type "AddressCandidates":
+  {"root": "addr", "elements": {"addr": {"type": "AddressCandidates",
+    "props": {"candidates": [
+      {"id": "<고유값>", "road_address": "...", "jibun_address": "...", "building_name": "..."}
+    ]}}}}
   (jibun_address·building_name 은 있을 때만 채웁니다.)
 
-- 최종 판단을 정리해 보여 줄 때:
-  {"kind": "judgment-summary", "payload": {
-    "decision": "possible|conditional|not_possible|needs_expert",
-    "title": "<짧은 결론>",
-    "summary": "<생활어 설명>",
-    "risks": ["<주의/위험 항목>", ...]
-  }}
+- 최종 판단을 정리해 보여 줄 때 — type "JudgmentSummary":
+  {"root": "j", "elements": {"j": {"type": "JudgmentSummary",
+    "props": {"decision": "possible|conditional|not_possible|needs_expert",
+      "title": "<짧은 결론>", "summary": "<생활어 설명>",
+      "risks": ["<주의/위험 항목>", ...]}}}}
 
 서식:
 - 답변에 **굵게**·목록 같은 마크다운을 써도 됩니다(프론트가 렌더링합니다). 다만

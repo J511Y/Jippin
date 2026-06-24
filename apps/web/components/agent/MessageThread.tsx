@@ -12,7 +12,7 @@ import { Alert, Box, Group, Loader, Stack, Text } from '@mantine/core';
 import { IconCheck, IconHome } from '@tabler/icons-react';
 import { useEffect, useRef } from 'react';
 
-import { DynamicComponent, type ChatMessage } from '@/components/a2ui';
+import { A2uiSurface, type ChatMessage } from '@/components/a2ui';
 import type { ToolActivityStep } from '@/lib/agent/useAgentStream';
 
 import { ChatMarkdown } from './ChatMarkdown';
@@ -69,8 +69,8 @@ function AssistantBubble({ message }: { message: ChatMessage }) {
         </Box>
         {dynamics.length > 0 ? (
           <Stack gap="xs" mt="xs">
-            {dynamics.map((spec, index) => (
-              <DynamicComponent key={`${message.id}-dyn-${index}`} spec={spec} />
+            {dynamics.map((component, index) => (
+              <A2uiSurface key={`${message.id}-dyn-${index}`} component={component} />
             ))}
           </Stack>
         ) : null}

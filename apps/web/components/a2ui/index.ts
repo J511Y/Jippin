@@ -1,7 +1,10 @@
 export { MessageList } from './MessageList';
 export { MessageInput } from './MessageInput';
-export { DynamicComponent } from './DynamicComponent';
+export { A2uiSurface } from './A2uiSurface';
+export { a2uiCatalog, a2uiRegistry } from './jsonrender';
+export { toSpec } from './adapt';
 export { AddressCandidatesCard } from './cards/AddressCandidatesCard';
+export { FloorplanConfirmCard } from './cards/FloorplanConfirmCard';
 export { FloorplanRequestCard } from './cards/FloorplanRequestCard';
 export { JudgmentSummaryCard } from './cards/JudgmentSummaryCard';
-export type { ChatMessage, DynamicComponentSpec, Role } from './types';
+export type { ChatMessage, A2uiComponent, DynamicComponentSpec, Role } from './types';

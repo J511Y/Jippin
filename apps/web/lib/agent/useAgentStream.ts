@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { ChatMessage, DynamicComponentSpec } from '@/components/a2ui';
+import type { A2uiComponent, ChatMessage } from '@/components/a2ui';
 import { apiBaseUrl } from '@/lib/api-base-url';
 import { getAccessToken, setAccessToken } from '@/lib/auth-token';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
@@ -131,16 +131,6 @@ function modeForStatus(status: string): 'reply' | 'reconnect' | null {
   return null;
 }
 
-function toDynamic(component: Record<string, unknown>): DynamicComponentSpec | undefined {
-  const kind = typeof component.kind === 'string' ? component.kind : undefined;
-  if (!kind) return undefined;
-  const payload =
-    component.payload && typeof component.payload === 'object'
-      ? (component.payload as Record<string, unknown>)
-      : {};
-  return { kind, payload };
-}
-
 /** 도구 진행 단계 한 줄 — UI(MessageThread)가 스피너/체크로 렌더한다. */
 export interface ToolActivityStep {
   /** 안정 키(같은 toolName 의 마지막 started 를 갱신할 때 재사용). */
@@ -220,12 +210,10 @@ export function useAgentStream(sessionId: string): UseAgentStream {
           role: m.role === 'assistant' ? 'assistant' : 'user',
           content: typeof m.content === 'string' ? m.content : '',
           createdAt: m.created_at ?? new Date().toISOString(),
+          // A2UI 컴포넌트는 raw 그대로 보존한다 — A2uiSurface 가 json-render spec /
+          // 레거시 {kind,payload} 양쪽을 해석한다.
           dynamics:
-            m.role === 'assistant'
-              ? (m.ui_components ?? [])
-                  .map(toDynamic)
-                  .filter((d): d is DynamicComponentSpec => d !== undefined)
-              : undefined,
+            m.role === 'assistant' ? ((m.ui_components ?? []) as A2uiComponent[]) : undefined,
         }));
         setMessages((prev) => (prev.length > 0 ? prev : history));
       } catch {
@@ -366,9 +354,7 @@ export function useAgentStream(sessionId: string): UseAgentStream {
               // 방어적 차단: assistant 메시지만 채팅 버블로 만든다. tool/system role 은
               // 내부 메시지라 raw 누출을 막기 위해 버블화하지 않는다(#raw-leak-guard).
               if (ev.role !== 'assistant') continue;
-              const dynamics = (ev.ui_components ?? [])
-                .map(toDynamic)
-                .filter((d): d is DynamicComponentSpec => d !== undefined);
+              const dynamics = (ev.ui_components ?? []) as A2uiComponent[];
               const msgId = ev.message_id ?? uid();
               // resume 재연결 시 서버가 이미 영속된 메시지를 다시 보낼 수 있다 —
               // message_id 로 dedupe 한다(#replay-on-resume).

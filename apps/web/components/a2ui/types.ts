@@ -13,15 +13,19 @@ export type ChatMessage = {
   content: string;
   createdAt: string;
   /** AI가 결정한 동적 컴포넌트 슬롯 (단일, 하위호환). 가능하면 dynamics 사용. */
-  dynamic?: DynamicComponentSpec;
-  /** AI가 응답에 첨부한 동적 컴포넌트 목록(복수 가능). 모두 렌더된다. */
-  dynamics?: DynamicComponentSpec[];
+  dynamic?: A2uiComponent;
+  /** AI가 응답에 첨부한 A2UI 컴포넌트 목록. json-render(`A2uiSurface`)로 렌더된다. */
+  dynamics?: A2uiComponent[];
 };
 
 /**
- * AI가 응답에 첨부하는 동적 컴포넌트의 식별자·페이로드.
- * `kind`는 클라이언트 컴포넌트 레지스트리의 키. 미등록 키는 fallback으로 렌더.
+ * 에이전트가 보내는 A2UI 컴포넌트의 raw 객체. 두 포맷 모두 허용한다:
+ *  - json-render spec: `{ root, elements }`
+ *  - 레거시: `{ kind, payload }` (`adapt.toSpec` 가 spec 으로 변환)
  */
+export type A2uiComponent = Record<string, unknown>;
+
+/** @deprecated 레거시 자체 포맷. 신규 코드는 A2uiComponent + A2uiSurface 사용. */
 export type DynamicComponentSpec = {
   kind: string;
   payload: Record<string, unknown>;
