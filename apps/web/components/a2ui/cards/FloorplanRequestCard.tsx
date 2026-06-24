@@ -197,7 +197,7 @@ export function FloorplanRequestCard({
           {/* 진행 표시 — 버튼 라벨이 사라지는 대신, 업로드 중임을 한 줄로 명확히 알린다. */}
           {busy ? (
             <Group gap={8} align="center" wrap="nowrap">
-              <Loader size={14} color="cta" />
+              <Loader size={14} color="coral" />
               <Text size="xs" c="var(--jippin-brand-copy)">
                 도면을 올리고 있어요… 잠시만 기다려 주세요.
               </Text>
@@ -205,7 +205,7 @@ export function FloorplanRequestCard({
           ) : null}
           {/* 로딩 중에도 라벨이 보이도록 Mantine loading(라벨 가림) 대신 직접 분기한다. */}
           <Button
-            color="cta"
+            color="coral"
             leftSection={busy ? <Loader size={16} color="white" /> : <IconUpload size={16} />}
             disabled={!file || disabled}
             onClick={handleSubmit}
