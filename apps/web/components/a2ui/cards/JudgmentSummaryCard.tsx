@@ -16,15 +16,17 @@
  * risks 는 string 배열일 때만 채택. 형태가 어긋나면 null 반환 → JSON fallback.
  */
 
-import { Alert, Badge, Group, List, Stack, Text } from '@mantine/core';
+import { Stack, Text } from '@mantine/core';
 import {
-  IconAlertTriangle,
   IconCircleCheck,
   IconCircleX,
   IconInfoCircle,
+  IconScale,
   IconUserSearch
 } from '@tabler/icons-react';
-import type { ReactNode } from 'react';
+import { useId, type CSSProperties, type ReactNode } from 'react';
+
+import { type CardAccent, CardHeader, CardRule, CardShell } from './CardShell';
 
 export type JudgmentDecision =
   | 'possible'
@@ -47,32 +49,54 @@ const KNOWN_DECISIONS: readonly JudgmentDecision[] = [
 ];
 
 type DecisionStyle = {
-  /** Mantine color name (브랜드 토큰 기반 팔레트). */
-  color: string;
+  /** 카드 강조색 축(CardShell accent) — 좌측 레일·헤더 아이콘 칩 색. */
+  accent: CardAccent;
+  /** 결론 라벨(생활어·보조적 안내 톤). */
   label: string;
   icon: ReactNode;
+  /** verdict 배너 색 — globals.css `.a2ui-verdict` 가 읽는 CSS 변수. 전부 토큰. */
+  verdictVars: VerdictVars;
 };
+
+type VerdictVars = CSSProperties & {
+  '--a2ui-verdict-surface': string;
+  '--a2ui-verdict-border': string;
+  '--a2ui-verdict-fg': string;
+};
+
+/** 상태별 verdict 배너 색 묶음 — surface(옅은 면)/border/foreground(라벨·아이콘). */
+function verdictVars(tone: 'success' | 'warning' | 'danger' | 'blueprint'): VerdictVars {
+  return {
+    '--a2ui-verdict-surface': `var(--mantine-color-${tone}-0)`,
+    '--a2ui-verdict-border': `var(--mantine-color-${tone}-2)`,
+    '--a2ui-verdict-fg': `var(--mantine-color-${tone}-${tone === 'blueprint' ? 6 : 7})`
+  };
+}
 
 const DECISION_STYLES: Record<JudgmentDecision, DecisionStyle> = {
   possible: {
-    color: 'success',
-    label: '가능',
-    icon: <IconCircleCheck size={16} />
+    accent: 'success',
+    label: '가능성 있음',
+    icon: <IconCircleCheck size={18} aria-hidden />,
+    verdictVars: verdictVars('success')
   },
   conditional: {
-    color: 'warning',
+    accent: 'warning',
     label: '조건부 가능',
-    icon: <IconInfoCircle size={16} />
+    icon: <IconInfoCircle size={18} aria-hidden />,
+    verdictVars: verdictVars('warning')
   },
   not_possible: {
-    color: 'danger',
+    accent: 'danger',
     label: '어려움',
-    icon: <IconCircleX size={16} />
+    icon: <IconCircleX size={18} aria-hidden />,
+    verdictVars: verdictVars('danger')
   },
   needs_expert: {
-    color: 'blueprint',
+    accent: 'blueprint',
     label: '전문가 확인 권장',
-    icon: <IconUserSearch size={16} />
+    icon: <IconUserSearch size={18} aria-hidden />,
+    verdictVars: verdictVars('blueprint')
   }
 };
 
@@ -122,48 +146,62 @@ export function JudgmentSummaryCard({
   const decision = normalizeDecision(payload.decision);
   const style = DECISION_STYLES[decision];
   const risks = (payload.risks ?? []).filter((r) => r.trim().length > 0);
+  const titleId = useId();
 
   return (
-    <Stack gap="sm">
-      <Group gap="xs" wrap="nowrap">
-        <Badge
-          color={style.color}
-          variant="light"
-          size="lg"
-          leftSection={style.icon}
-        >
-          {style.label}
-        </Badge>
-      </Group>
+    <CardShell accent={style.accent} labelledBy={titleId}>
+      <CardHeader
+        icon={<IconScale size={17} aria-hidden />}
+        eyebrow="사전검토 결과"
+        title={payload.title}
+        titleId={titleId}
+      />
 
-      <Text fw={700} size="md" c="var(--jippin-brand-ink)">
-        {payload.title}
-      </Text>
+      {/* 결론 배너 — 1차 정보. 색 + 라벨 + 아이콘 셋으로 동시에 전달(WCAG·DESIGN §2.4). */}
+      <div
+        className="a2ui-verdict"
+        role="status"
+        style={{ ...style.verdictVars, marginTop: '0.75rem' }}
+      >
+        <span className="a2ui-verdict__icon">{style.icon}</span>
+        <span className="a2ui-verdict__label">{style.label}</span>
+      </div>
 
-      <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.6 }}>
+      <Text
+        size="sm"
+        c="var(--jippin-brand-copy)"
+        mt="sm"
+        style={{ lineHeight: 1.6 }}
+      >
         {payload.summary}
       </Text>
 
       {risks.length > 0 ? (
-        <Alert
-          color="warning"
-          variant="light"
-          icon={<IconAlertTriangle size={16} />}
-          title="확인이 필요한 점"
-          p="sm"
-        >
-          <List size="sm" spacing={4} c="var(--jippin-brand-copy)">
+        <Stack gap={6} mt="sm">
+          <Text
+            size="xs"
+            fw={600}
+            c="var(--jippin-brand-ink)"
+            style={{ letterSpacing: '0.01em' }}
+          >
+            확인이 필요한 점
+          </Text>
+          <ul className="a2ui-risks">
             {risks.map((risk, index) => (
-              <List.Item key={index}>{risk}</List.Item>
+              <li key={index} className="a2ui-risks__item">
+                {risk}
+              </li>
             ))}
-          </List>
-        </Alert>
+          </ul>
+        </Stack>
       ) : null}
 
-      <Text size="xs" c="var(--jippin-notice-legal)" style={{ lineHeight: 1.5 }}>
+      <CardRule />
+
+      <Text className="a2ui-legal">
         본 결과는 첨부 자료를 바탕으로 한 참고용 안내이며, 법적 판단을 대체하지
         않습니다. 정확한 확인은 전문가와 상담해 주세요.
       </Text>
-    </Stack>
+    </CardShell>
   );
 }

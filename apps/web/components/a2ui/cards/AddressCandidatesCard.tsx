@@ -13,9 +13,11 @@
  * 떨어진다. 모든 문자열은 React 텍스트 노드로만 렌더한다.
  */
 
-import { Badge, Group, Stack, Text, UnstyledButton } from '@mantine/core';
-import { IconChevronRight, IconMapPin } from '@tabler/icons-react';
+import { Group, Stack, Text, UnstyledButton } from '@mantine/core';
+import { IconBuilding, IconChevronRight, IconMapPin } from '@tabler/icons-react';
+import { useId } from 'react';
 import { useChatActions } from '@/components/agent/chat-actions';
+import { CardHeader, CardRule, CardShell } from './CardShell';
 
 export type AddressCandidate = {
   id: string;
@@ -66,6 +68,7 @@ export function AddressCandidatesCard({
   payload: AddressCandidatesPayload;
 }) {
   const actions = useChatActions();
+  const titleId = useId();
   const interactive = actions !== null;
   const disabled = !interactive || (actions?.busy ?? false);
 
@@ -80,78 +83,97 @@ export function AddressCandidatesCard({
   }
 
   return (
-    <Stack gap="sm">
-      <Group gap="xs" wrap="nowrap">
-        <IconMapPin
-          size={18}
-          aria-hidden
-          style={{ color: 'var(--jippin-brand-professional)', flexShrink: 0 }}
-        />
-        <Text fw={600} size="sm" c="var(--jippin-brand-ink)">
-          주소를 선택해 주세요
-        </Text>
-      </Group>
+    <CardShell accent="blueprint" labelledBy={titleId}>
+      <CardHeader
+        icon={<IconMapPin size={17} aria-hidden />}
+        eyebrow="주소 확인"
+        title="어느 주소인가요?"
+        titleId={titleId}
+      />
+
+      <Text className="a2ui-meta" mt={6} mb="xs">
+        검색된 후보 {payload.candidates.length}곳 중 하나를 선택해 주세요.
+      </Text>
 
       <Stack gap={8} role="list">
-        {payload.candidates.map((candidate) => (
+        {payload.candidates.map((candidate, index) => (
           <UnstyledButton
             key={candidate.id}
             role="listitem"
-            onClick={() => handleSelect(candidate)}
+            className="a2ui-option"
+            data-disabled={disabled ? 'true' : undefined}
             disabled={disabled}
+            onClick={() => handleSelect(candidate)}
             aria-label={`주소 선택: ${candidate.road_address}`}
-            style={{
-              border: '1px solid var(--jippin-brand-border)',
-              borderRadius: 'var(--mantine-radius-md)',
-              padding: '0.625rem 0.75rem',
-              background: 'var(--jippin-brand-surface)',
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              opacity: disabled ? 0.6 : 1,
-              transition: 'border-color 120ms ease, background 120ms ease'
-            }}
           >
-            <Group gap="xs" wrap="nowrap" align="flex-start">
-              <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
-                <Group gap={6} wrap="nowrap">
-                  <Text
-                    size="sm"
-                    fw={600}
-                    c="var(--jippin-brand-ink)"
-                    style={{ wordBreak: 'keep-all', overflowWrap: 'anywhere' }}
-                  >
-                    {candidate.road_address}
-                  </Text>
+            <span className="a2ui-option__index" aria-hidden>
+              {index + 1}
+            </span>
+            <Stack gap={3} style={{ flex: 1, minWidth: 0 }}>
+              <Text
+                size="sm"
+                fw={600}
+                c="var(--jippin-brand-ink)"
+                style={{
+                  lineHeight: 1.35,
+                  wordBreak: 'keep-all',
+                  overflowWrap: 'anywhere'
+                }}
+              >
+                {candidate.road_address}
+              </Text>
+              {candidate.building_name || candidate.jibun_address ? (
+                <Group gap={6} wrap="wrap">
                   {candidate.building_name ? (
-                    <Badge color="blueprint" variant="light" size="sm">
-                      {candidate.building_name}
-                    </Badge>
+                    <Group gap={4} wrap="nowrap" align="center">
+                      <IconBuilding
+                        size={13}
+                        aria-hidden
+                        style={{
+                          color: 'var(--jippin-brand-professional)',
+                          flexShrink: 0
+                        }}
+                      />
+                      <Text
+                        size="xs"
+                        fw={500}
+                        c="var(--jippin-brand-professional)"
+                        style={{ wordBreak: 'keep-all' }}
+                      >
+                        {candidate.building_name}
+                      </Text>
+                    </Group>
+                  ) : null}
+                  {candidate.building_name && candidate.jibun_address ? (
+                    <Text size="xs" c="var(--jippin-brand-border)" aria-hidden>
+                      ·
+                    </Text>
+                  ) : null}
+                  {candidate.jibun_address ? (
+                    <Text size="xs" c="var(--jippin-brand-copy)">
+                      지번 {candidate.jibun_address}
+                    </Text>
                   ) : null}
                 </Group>
-                {candidate.jibun_address ? (
-                  <Text size="xs" c="var(--jippin-brand-copy)">
-                    지번 {candidate.jibun_address}
-                  </Text>
-                ) : null}
-              </Stack>
-              <IconChevronRight
-                size={16}
-                aria-hidden
-                style={{
-                  color: 'var(--jippin-brand-copy)',
-                  flexShrink: 0,
-                  marginTop: 2
-                }}
-              />
-            </Group>
+              ) : null}
+            </Stack>
+            <IconChevronRight
+              size={16}
+              aria-hidden
+              className="a2ui-option__chevron"
+            />
           </UnstyledButton>
         ))}
       </Stack>
 
       {!interactive ? (
-        <Text size="xs" c="var(--jippin-brand-copy)">
-          대화 화면에서 주소를 선택할 수 있어요.
-        </Text>
+        <>
+          <CardRule />
+          <Text className="a2ui-meta">
+            대화 화면에서 주소를 선택할 수 있어요.
+          </Text>
+        </>
       ) : null}
-    </Stack>
+    </CardShell>
   );
 }

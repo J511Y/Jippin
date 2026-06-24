@@ -14,23 +14,14 @@
  * 사용자/LLM 문자열은 React 텍스트 노드로만 렌더해 raw HTML 주입을 막는다.
  */
 
-import {
-  Alert,
-  Badge,
-  Button,
-  FileInput,
-  Group,
-  Loader,
-  Stack,
-  Text
-} from '@mantine/core';
+import { Button, FileInput, Group, Loader, Stack, Text } from '@mantine/core';
 import {
   IconAlertCircle,
-  IconCheck,
+  IconCircleCheck,
   IconPhotoUp,
   IconUpload
 } from '@tabler/icons-react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useChatActions } from '@/components/agent/chat-actions';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
 import { createFloorplanAsset } from '@/lib/sessions/api';
@@ -38,6 +29,7 @@ import {
   deleteSessionFloorplan,
   uploadSessionFloorplan
 } from '@/lib/sessions/upload';
+import { CardHeader, CardRule, CardShell } from './CardShell';
 
 /** 50MB — 백엔드 presign 한도와 정합. */
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -81,6 +73,7 @@ export function FloorplanRequestCard({
   payload: FloorplanRequestPayload;
 }) {
   const actions = useChatActions();
+  const titleId = useId();
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -134,7 +127,6 @@ export function FloorplanRequestCard({
       }
       // raw 에러(예: "Request failed with status code 422", 백엔드 내부 메시지)를 그대로
       // 노출하지 않는다 — 사용자에겐 친화적 안내로 치환하고, 원인은 콘솔에만 남긴다.
-      // eslint-disable-next-line no-console
       console.error('[floorplan-upload] failed', err);
       setError(friendlyUploadError(err));
     } finally {
@@ -143,82 +135,109 @@ export function FloorplanRequestCard({
   }
 
   return (
-    <Stack gap="sm">
-      <Group gap="xs" wrap="nowrap">
-        <IconPhotoUp
-          size={18}
-          aria-hidden
-          style={{ color: 'var(--jippin-brand-professional)', flexShrink: 0 }}
-        />
-        <Text fw={600} size="sm" c="var(--jippin-brand-ink)">
-          평면도 첨부
-        </Text>
-        {attached ? (
-          <Badge
-            color="success"
-            variant="light"
-            leftSection={<IconCheck size={12} />}
-          >
-            첨부됨
-          </Badge>
-        ) : null}
-      </Group>
+    <CardShell accent={attached ? 'success' : 'blueprint'} labelledBy={titleId}>
+      <CardHeader
+        icon={
+          attached ? (
+            <IconCircleCheck size={17} aria-hidden />
+          ) : (
+            <IconPhotoUp size={17} aria-hidden />
+          )
+        }
+        eyebrow={attached ? '첨부 완료' : '도면 검토'}
+        title={attached ? '평면도를 받았어요' : '평면도를 올려 주세요'}
+        titleId={titleId}
+      />
 
-      <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.55 }}>
-        {reason}
-      </Text>
+      <CardRule />
 
       {attached ? (
-        <Text size="sm" c="var(--jippin-brand-copy)">
-          도면을 첨부했어요. 분석을 이어 갈게요.
+        <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.55 }}>
+          도면을 첨부했어요. 이어서 비내력벽 후보를 분석할게요.
         </Text>
-      ) : interactive ? (
-        <Stack gap="xs">
-          <FileInput
-            value={file}
-            onChange={handlePick}
-            accept="image/*"
-            placeholder="이미지 파일 선택 (최대 50MB)"
-            clearable
-            disabled={busy || streaming}
-            leftSection={<IconPhotoUp size={16} />}
-            aria-label="평면도 이미지 선택"
-          />
-          {error ? (
-            <Alert
-              color="danger"
-              variant="light"
-              icon={<IconAlertCircle size={16} />}
-              p="xs"
-            >
-              <Text size="xs">{error}</Text>
-            </Alert>
-          ) : null}
-          {/* 진행 표시 — 버튼 라벨이 사라지는 대신, 업로드 중임을 한 줄로 명확히 알린다. */}
-          {busy ? (
-            <Group gap={8} align="center" wrap="nowrap">
-              <Loader size={14} color="coral" />
-              <Text size="xs" c="var(--jippin-brand-copy)">
-                도면을 올리고 있어요… 잠시만 기다려 주세요.
-              </Text>
-            </Group>
-          ) : null}
-          {/* 로딩 중에도 라벨이 보이도록 Mantine loading(라벨 가림) 대신 직접 분기한다. */}
-          <Button
-            color="coral"
-            leftSection={busy ? <Loader size={16} color="white" /> : <IconUpload size={16} />}
-            disabled={!file || disabled}
-            onClick={handleSubmit}
-            fullWidth
-          >
-            {busy ? '업로드 중…' : '도면 첨부하고 분석'}
-          </Button>
-        </Stack>
       ) : (
-        <Text size="xs" c="var(--jippin-brand-copy)">
-          대화 화면에서 도면 이미지를 첨부할 수 있어요.
-        </Text>
+        <Stack gap="sm">
+          <Text
+            size="sm"
+            c="var(--jippin-brand-copy)"
+            style={{ lineHeight: 1.55 }}
+          >
+            {reason}
+          </Text>
+
+          {interactive ? (
+            <Stack gap="xs">
+              <FileInput
+                value={file}
+                onChange={handlePick}
+                accept="image/*"
+                placeholder="이미지 파일 선택 (최대 50MB)"
+                clearable
+                disabled={busy || streaming}
+                leftSection={<IconPhotoUp size={16} />}
+                aria-label="평면도 이미지 선택"
+              />
+              {error ? (
+                <Group
+                  gap={8}
+                  align="flex-start"
+                  wrap="nowrap"
+                  role="alert"
+                  style={{
+                    padding: '0.5rem 0.625rem',
+                    borderRadius: 10,
+                    background: 'var(--mantine-color-danger-0)'
+                  }}
+                >
+                  <IconAlertCircle
+                    size={15}
+                    aria-hidden
+                    style={{
+                      color: 'var(--mantine-color-danger-6)',
+                      flexShrink: 0,
+                      marginTop: 1
+                    }}
+                  />
+                  <Text size="xs" c="var(--jippin-brand-ink)">
+                    {error}
+                  </Text>
+                </Group>
+              ) : null}
+              {/* 진행 표시 — 버튼 라벨이 사라지는 대신, 업로드 중임을 한 줄로 알린다. */}
+              {busy ? (
+                <Group gap={8} align="center" wrap="nowrap">
+                  <Loader size={14} color="coral" />
+                  <Text size="xs" c="var(--jippin-brand-copy)">
+                    도면을 올리고 있어요… 잠시만 기다려 주세요.
+                  </Text>
+                </Group>
+              ) : null}
+              {/* 로딩 중에도 라벨이 보이도록 Mantine loading(라벨 가림) 대신 직접 분기. */}
+              <Button
+                color="coral"
+                size="sm"
+                radius="md"
+                leftSection={
+                  busy ? (
+                    <Loader size={16} color="white" />
+                  ) : (
+                    <IconUpload size={16} />
+                  )
+                }
+                disabled={!file || disabled}
+                onClick={handleSubmit}
+                fullWidth
+              >
+                {busy ? '업로드 중…' : '도면 첨부하고 분석'}
+              </Button>
+            </Stack>
+          ) : (
+            <Text className="a2ui-meta">
+              대화 화면에서 도면 이미지를 첨부할 수 있어요.
+            </Text>
+          )}
+        </Stack>
       )}
-    </Stack>
+    </CardShell>
   );
 }

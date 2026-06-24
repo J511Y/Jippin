@@ -8,8 +8,11 @@
  * number|string 둘 다 허용하고 0~1 범위만 신뢰도로 인정한다.
  */
 
-import { Badge, Group, Progress, Stack, Text } from '@mantine/core';
+import { Group, Progress, Stack, Text } from '@mantine/core';
 import { IconLayoutDashboard } from '@tabler/icons-react';
+import { useId } from 'react';
+
+import { type CardAccent, CardHeader, CardRule, CardShell } from './CardShell';
 
 export type FloorplanConfirmPayload = {
   selectedRegionId?: string;
@@ -42,10 +45,17 @@ function formatConfidence(value: number): string {
 }
 
 /** 신뢰도 구간별 상태색 — 높음(success)/중간(warning)/낮음(danger). */
-function confidenceColor(value: number): string {
+function confidenceColor(value: number): 'success' | 'warning' | 'danger' {
   if (value >= 0.75) return 'success';
   if (value >= 0.5) return 'warning';
   return 'danger';
+}
+
+/** 신뢰도 구간별 한 줄 해설 — 숫자만 던지지 않고 의미를 생활어로 보탠다. */
+function confidenceLabel(value: number): string {
+  if (value >= 0.75) return '높음 · 후보 영역이 비교적 또렷합니다';
+  if (value >= 0.5) return '보통 · 추가 확인이 도움이 됩니다';
+  return '낮음 · 도면을 한 장 더 올리면 정확해집니다';
 }
 
 export function isFloorplanConfirmPayload(payload: unknown): payload is FloorplanConfirmPayload {
@@ -64,46 +74,59 @@ export function isFloorplanConfirmPayload(payload: unknown): payload is Floorpla
 
 export function FloorplanConfirmCard({ payload }: { payload: FloorplanConfirmPayload }) {
   const confidence = coerceConfidence(payload.confidence);
-  const color = confidence !== null ? confidenceColor(confidence) : 'blueprint';
+  const color: CardAccent =
+    confidence !== null ? confidenceColor(confidence) : 'blueprint';
+  const titleId = useId();
   return (
-    <Stack gap="xs">
-      <Group gap="xs" wrap="nowrap">
-        <IconLayoutDashboard
-          size={18}
-          aria-hidden
-          style={{ color: 'var(--jippin-brand-professional)', flexShrink: 0 }}
-        />
-        <Text fw={600} size="sm" c="var(--jippin-brand-ink)">
-          도면 후보 영역 확인
-        </Text>
-      </Group>
+    <CardShell accent={color} labelledBy={titleId}>
+      <CardHeader
+        icon={<IconLayoutDashboard size={17} aria-hidden />}
+        eyebrow="도면 분석"
+        title="후보 영역을 확인했어요"
+        titleId={titleId}
+      />
+
+      <CardRule />
+
       {payload.selectedRegionId ? (
-        <Text c="var(--jippin-brand-copy)" size="sm">
-          선택 영역:{' '}
-          <Text component="span" fw={600} c="var(--jippin-brand-ink)">
+        <Group gap={8} wrap="nowrap" align="center" mb={confidence !== null ? 'sm' : 0}>
+          <Text className="a2ui-meta">선택 영역</Text>
+          <Text
+            size="sm"
+            fw={600}
+            c="var(--jippin-brand-ink)"
+            style={{ fontVariantNumeric: 'tabular-nums' }}
+          >
             {payload.selectedRegionId}
           </Text>
-        </Text>
+        </Group>
       ) : null}
+
       {confidence !== null ? (
-        <Stack gap={4}>
-          <Group gap="xs" justify="space-between">
-            <Text c="var(--jippin-brand-copy)" size="sm">
+        <Stack gap={6}>
+          <Group gap="xs" justify="space-between" align="baseline" wrap="nowrap">
+            <Text size="sm" c="var(--jippin-brand-copy)">
               분석 신뢰도
             </Text>
-            <Badge color={color} variant="light">
+            <Text
+              size="md"
+              fw={700}
+              c={`var(--mantine-color-${color}-7)`}
+              style={{ fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}
+            >
               {formatConfidence(confidence)}
-            </Badge>
+            </Text>
           </Group>
           <Progress
             value={Math.round(confidence * 100)}
             color={color}
             radius="xl"
-            size="sm"
-            aria-label="분석 신뢰도"
+            size="md"
+            aria-label={`분석 신뢰도 ${formatConfidence(confidence)}`}
           />
+          <Text className="a2ui-meta">{confidenceLabel(confidence)}</Text>
         </Stack>
       ) : null}
-    </Stack>
+    </CardShell>
   );
 }
