@@ -19,6 +19,7 @@ import { createSession, getSession } from '@/lib/sessions/api';
 
 import { MessageComposer } from './MessageComposer';
 import { MessageThread } from './MessageThread';
+import { PlanPanel } from './PlanPanel';
 
 const AGENT_ENABLED = process.env.NEXT_PUBLIC_AGENT_ENABLED === 'true';
 
@@ -42,10 +43,12 @@ function Conversation({
   pendingFirstMessage?: string | null;
   onConsumePending?: () => void;
 }) {
-  const { messages, streamingText, activity, status, error, send } = useAgentStream(sessionId);
+  const { messages, streamingText, activity, plan, status, error, send } =
+    useAgentStream(sessionId);
   const [hasReport, setHasReport] = useState(false);
 
   const busy = status === 'streaming';
+  const hasPlan = plan.length > 0;
 
   // 마운트 시 보관된 첫 메시지를 1회 전송한다.
   // StrictMode(개발)의 mount→unmount→remount 동안 첫 send 의 fetch 가 useAgentStream
@@ -94,44 +97,62 @@ function Conversation({
 
   return (
     <ChatActionsProvider value={{ sessionId, sendMessage: send, busy, refreshSession }}>
-      <Box className="chat-shell">
-        {hasReport ? (
-          <Box className="chat-report-link">
-            <Text
-              component="a"
-              href={`/sessions/${sessionId}/report`}
-              size="sm"
-              c="jippin.7"
-              fw={600}
-            >
-              리포트 보기 →
-            </Text>
+      <Box className={`chat-shell${hasPlan ? ' chat-with-plan' : ''}`}>
+        {/* 데스크톱: 좌측 진행 계획 사이드바(plan 이 있을 때만). 모바일에서는 숨기고
+            대신 thread 상단의 접이식 표현을 쓴다(아래 plan-mobile). */}
+        {hasPlan ? (
+          <Box className="plan-sidebar" component="aside" aria-label="진행 계획">
+            <PlanPanel plan={plan} busy={busy} />
           </Box>
         ) : null}
 
-        <Box className="chat-scroll">
-          <Box className="chat-column">
-            <MessageThread
-              messages={messages}
-              streamingText={streamingText}
-              activity={activity}
-              streaming={busy}
-              error={error}
-            />
-          </Box>
-        </Box>
+        <Box className="chat-main">
+          {hasReport ? (
+            <Box className="chat-report-link">
+              <Text
+                component="a"
+                href={`/sessions/${sessionId}/report`}
+                size="sm"
+                c="jippin.7"
+                fw={600}
+              >
+                리포트 보기 →
+              </Text>
+            </Box>
+          ) : null}
 
-        <Box className="chat-dock">
-          <Box className="chat-column">
-            <MessageComposer
-              onSend={send}
-              busy={busy}
-              variant="dock"
-              placeholder="메시지를 입력하세요 (예: 우리집 내력벽 확인해줘)"
-            />
-            <Text size="xs" c="dimmed" ta="center" mt={6}>
-              집핀은 참고용 정보를 제공해요. 실제 시공 전 전문가 확인이 필요합니다.
-            </Text>
+          <Box className="chat-scroll">
+            <Box className="chat-column">
+              {/* 모바일 전용 접이식 진행 계획(thread 최상단). 데스크톱에서는 PlanPanel
+                  내부의 plan-mobile 표현이 hiddenFrom="sm" 으로 숨겨진다. */}
+              {hasPlan ? (
+                <Box className="plan-mobile-bar">
+                  <PlanPanel plan={plan} busy={busy} />
+                </Box>
+              ) : null}
+
+              <MessageThread
+                messages={messages}
+                streamingText={streamingText}
+                activity={activity}
+                streaming={busy}
+                error={error}
+              />
+            </Box>
+          </Box>
+
+          <Box className="chat-dock">
+            <Box className="chat-column">
+              <MessageComposer
+                onSend={send}
+                busy={busy}
+                variant="dock"
+                placeholder="메시지를 입력하세요 (예: 우리집 내력벽 확인해줘)"
+              />
+              <Text size="xs" c="dimmed" ta="center" mt={6}>
+                집핀은 참고용 정보를 제공해요. 실제 시공 전 전문가 확인이 필요합니다.
+              </Text>
+            </Box>
           </Box>
         </Box>
       </Box>

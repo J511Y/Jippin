@@ -21,6 +21,15 @@ import { toolDisplay, toolStepText } from './tool-labels';
 
 export type AgentStreamStatus = 'idle' | 'streaming' | 'done' | 'error';
 
+// 에이전트 SSE 전용 base URL. `/api` 프록시(Next dev / Vercel rewrite)를 거치면 응답이
+// 버퍼링되어 토큰 스트리밍이 한꺼번에 도착할 수 있다 — `NEXT_PUBLIC_AGENT_BASE_URL` 이
+// 설정되면 백엔드로 **직접** 연결해 프록시 버퍼링을 우회한다(직접 연결은 백엔드 CORS 가
+// 해당 웹 오리진을 허용해야 함). 미설정 시 apiBaseUrl(`/api`)로 폴백(현행 동작 유지).
+function agentBaseUrl(): string {
+  const direct = process.env.NEXT_PUBLIC_AGENT_BASE_URL;
+  return direct && direct.length > 0 ? direct : apiBaseUrl();
+}
+
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -143,6 +152,15 @@ export interface ToolActivityStep {
 
 type ToolStepStatusValue = 'started' | 'succeeded' | 'failed';
 
+/**
+ * deepagents 의 write_todos 계획 한 단계. status 는 들어오는 문자열을 그대로 둔다 —
+ * 알 수 없는 값은 UI(PlanPanel)에서 'pending' 으로 취급한다.
+ */
+export interface PlanTodo {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
 export interface UseAgentStream {
   messages: ChatMessage[];
   streamingText: string;
@@ -150,6 +168,8 @@ export interface UseAgentStream {
   toolActivity: string | null;
   /** 이번 턴의 도구 활동 타임라인(숨김 도구는 제외). */
   activity: ToolActivityStep[];
+  /** write_todos 가 세운 최신 전체 계획(턴을 넘어 유지·갱신). 비면 빈 배열. */
+  plan: PlanTodo[];
   status: AgentStreamStatus;
   error: string | null;
   send: (content: string) => Promise<void>;
@@ -161,6 +181,9 @@ export function useAgentStream(sessionId: string): UseAgentStream {
   const [streamingText, setStreamingText] = useState('');
   const [toolActivity, setToolActivity] = useState<string | null>(null);
   const [activity, setActivity] = useState<ToolActivityStep[]>([]);
+  // 계획은 턴을 넘어 유지·갱신한다(send 시작 시 초기화하지 않음). sessionId 가 바뀌면
+  // 부모가 Conversation 을 key 로 remount 시키므로 자연히 초기화된다.
+  const [plan, setPlan] = useState<PlanTodo[]>([]);
   const [status, setStatus] = useState<AgentStreamStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -190,7 +213,7 @@ export function useAgentStream(sessionId: string): UseAgentStream {
       try {
         const token = await resolveToken();
         const res = await fetch(
-          `${apiBaseUrl()}/sessions/${sessionId}/agent/messages`,
+          `${agentBaseUrl()}/sessions/${sessionId}/agent/messages`,
           { headers: { Authorization: `Bearer ${token}` } },
         );
         if (ignore || !res.ok) return;
@@ -251,7 +274,7 @@ export function useAgentStream(sessionId: string): UseAgentStream {
 
       const controller = new AbortController();
       abortRef.current = controller;
-      const base = apiBaseUrl();
+      const base = agentBaseUrl();
       const startUrl = `${base}/sessions/${sessionId}/agent/runs`;
       const resumeUrl = (id: string) =>
         `${base}/sessions/${sessionId}/agent/runs/${id}/resume`;
@@ -307,7 +330,13 @@ export function useAgentStream(sessionId: string): UseAgentStream {
               assembled += ev.delta;
               setStreamingText(assembled);
             } else if (ev.type === 'tool_step') {
-              // 숨김 도구(set_completion_decision 등)는 활동 UI 에 노출하지 않는다.
+              // write_todos 가 보낸 최신 전체 계획이면 plan 을 그대로 교체한다(누적 아님).
+              // write_todos 는 tool-labels 에서 hidden 이라 활동 타임라인엔 안 뜨고,
+              // 대신 PlanPanel 로 보여 준다. 빈 배열은 의미 없는 갱신이라 무시한다.
+              if (Array.isArray(ev.todos) && ev.todos.length > 0) {
+                setPlan(ev.todos as PlanTodo[]);
+              }
+              // 숨김 도구(set_completion_decision, write_todos 등)는 활동 UI 에 노출하지 않는다.
               if (!toolDisplay(ev.tool_name).hidden) {
                 const text = toolStepText(ev.tool_name, ev.status, ev.summary);
                 setToolActivity(text);
@@ -515,5 +544,5 @@ export function useAgentStream(sessionId: string): UseAgentStream {
     setStatus('idle');
   }, []);
 
-  return { messages, streamingText, toolActivity, activity, status, error, send, stop };
+  return { messages, streamingText, toolActivity, activity, plan, status, error, send, stop };
 }

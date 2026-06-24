@@ -14,6 +14,7 @@ from .domain import (
     RunContext,
     check_building_register_impl,
     confirm_address_impl,
+    emit_floorplan_request_impl,
     emit_ui_component_impl,
     evaluate_rules_impl,
     search_address_impl,
@@ -33,6 +34,7 @@ TOOL_KINDS: dict[str, str] = {
     "check_building_register": "external_api",
     "evaluate_rules": "rule_engine",
     "emit_ui_component": "render",
+    "emit_floorplan_request": "render",
     "set_completion_decision": "rule_engine",
 }
 
@@ -139,6 +141,17 @@ def build_tools(
         )
 
     @tool
+    async def emit_floorplan_request(reason: str | None = None) -> dict[str, Any]:
+        """평면도가 필요한데 아직 첨부되지 않았을 때, 사용자에게 **도면 업로드 카드**를 띄운다.
+        본문에 업로드 방법을 텍스트로 설명하지 말고 이 도구를 호출하라. reason 에 왜 도면이
+        필요한지 한 문장."""
+        return await emit_floorplan_request_impl(
+            run_context=run_context,
+            run_id=run_id,
+            reason=reason,
+        )
+
+    @tool
     async def set_completion_decision(
         completion_decision: str, reason: str | None = None
     ) -> dict[str, Any]:
@@ -156,5 +169,6 @@ def build_tools(
         check_building_register,
         evaluate_rules,
         emit_ui_component,
+        emit_floorplan_request,
         set_completion_decision,
     ]

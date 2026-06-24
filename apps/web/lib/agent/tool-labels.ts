@@ -48,13 +48,17 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
     active: '결과를 정리하고 있어요',
     done: '결과를 정리했어요'
   },
+  // 도면 업로드 카드 방출 — 카드 자체가 보이는 결과라 활동 타임라인엔 숨긴다.
+  emit_floorplan_request: { label: '', active: '', done: '', hidden: true },
   // 순수 내부 결정 단계 — 사용자에게 노출할 의미가 없어 숨긴다.
   set_completion_decision: { label: '', active: '', done: '', hidden: true },
-  // deepagents 내장 계획 도구 — 식별자(write_todos)를 그대로 노출하지 않는다.
+  // deepagents 내장 계획 도구 — 이제 PlanPanel 로 계획을 보여 주므로 활동 타임라인엔
+  // 중복 노출하지 않는다(hidden). label/문구는 폴백/접근성용으로 남겨 둔다.
   write_todos: {
     label: '작업 계획',
     active: '필요한 작업을 정리하고 있어요',
-    done: '작업 계획을 정리했어요'
+    done: '작업 계획을 정리했어요',
+    hidden: true
   }
 };
 

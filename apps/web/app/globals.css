@@ -163,6 +163,83 @@ a[data-faq-row]:focus-visible {
   );
 }
 
+/* ---------------------------------------------------------------------------
+   진행 계획(PlanPanel) 레이아웃 — 데스크톱은 좌측 사이드바 2열, 모바일은 thread
+   상단 접이식 바. plan 이 있을 때만 .chat-with-plan 이 붙는다(없으면 기존 단일 컬럼).
+   --------------------------------------------------------------------------- */
+
+/* .chat-main 은 기존 단일 컬럼 채팅 구조(scroll + dock)를 감싼다 — plan 유무와
+   무관하게 풀높이 플렉스를 유지해 dock sticky/스크롤 동작을 깨지 않는다. */
+.chat-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 모바일 기본: 단일 컬럼. 데스크톱(sm+)에서만 가로 2열(사이드바 | 채팅)로 바꾼다. */
+.chat-with-plan {
+  flex-direction: column;
+}
+
+/* 데스크톱 좌측 사이드바 — 기본(모바일)은 숨김. plan-mobile-bar 가 대신 보인다. */
+.plan-sidebar {
+  display: none;
+}
+
+/* 모바일 thread 상단 접이식 바 — 기본 표시. 데스크톱에서는 숨긴다(사이드바가 대신). */
+.plan-mobile-bar {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--jippin-brand-surface-alt, #ffffff);
+  border: 1px solid var(--jippin-brand-border);
+}
+
+/* Mantine sm 브레이크포인트(48em)와 정합 — PlanPanel 의 visibleFrom/hiddenFrom="sm"
+   과 같은 경계에서 데스크톱 사이드바 레이아웃으로 전환한다. */
+@media (min-width: 48em) {
+  .chat-with-plan {
+    flex-direction: row;
+    align-items: stretch;
+    gap: 20px;
+  }
+
+  /* 좌측 사이드바: 고정폭, 상단 sticky, 자체 스크롤 가능. */
+  .chat-with-plan .plan-sidebar {
+    display: block;
+    flex: 0 0 260px;
+    width: 260px;
+    align-self: flex-start;
+    position: sticky;
+    top: 8px;
+    max-height: calc(100dvh - 88px);
+    overflow-y: auto;
+    padding: 16px;
+    border-radius: 14px;
+    background: var(--jippin-brand-surface-alt, #ffffff);
+    border: 1px solid var(--jippin-brand-border);
+  }
+
+  /* 채팅 본문: 남는 가로 공간을 채운다. */
+  .chat-with-plan .chat-main {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* 데스크톱에서는 thread 상단 모바일 바를 숨긴다(사이드바가 계획을 보여 주므로). */
+  .plan-mobile-bar {
+    display: none;
+  }
+}
+
+/* 모션 비선호 사용자: chevron 회전 트랜지션 제거(인라인 transition 무력화). */
+@media (prefers-reduced-motion: reduce) {
+  .plan-chevron {
+    transition: none !important;
+  }
+}
+
 .chat-report-link {
   display: flex;
   justify-content: flex-end;

@@ -313,6 +313,31 @@ async def emit_ui_component_impl(
     return _ok(buffered=len(run_context.pending_ui_components))
 
 
+async def emit_floorplan_request_impl(
+    *,
+    run_context: "RunContext",
+    run_id: uuid.UUID,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """다음 답변에 **도면 업로드 카드(FloorplanRequest)** 를 첨부한다.
+
+    평면도가 필요한데 아직 첨부되지 않았을 때 호출한다. 본문에 업로드 방법을 텍스트로
+    설명하는 대신 이 도구를 호출하면 프론트가 실제 업로드 컨트롤을 보여 준다. 미리 만든
+    json-render 스펙을 emit_ui_component 버퍼에 넣을 뿐이라 LLM 이 스펙을 구성할 필요가 없다.
+    """
+
+    props: dict[str, Any] = {}
+    if isinstance(reason, str) and reason.strip():
+        props["reason"] = reason.strip()
+    spec = {
+        "root": "fp",
+        "elements": {"fp": {"type": "FloorplanRequest", "props": props}},
+    }
+    return await emit_ui_component_impl(
+        run_context=run_context, run_id=run_id, components=[spec]
+    )
+
+
 class RunContext:
     """런 1회 동안 도구↔런너가 공유하는 가변 상태(UI 버퍼 + 분석 입력 지문)."""
 

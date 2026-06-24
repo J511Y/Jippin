@@ -21,7 +21,8 @@ SYSTEM_PROMPT = """\
    조회를 '시작'합니다(백그라운드로 처리되어 다소 시간이 걸립니다). 도구는 즉시
    status=querying 과 home_check_id 를 돌려주니, 사용자에게 조회를 시작했고 잠시 후
    결과/추가 인증 안내가 표시될 수 있다고 알립니다(이 단계 결과를 기다리지 않습니다).
-3) 평면도 — 사용자가 올린 평면도를 segment_floorplan 으로 분석합니다.
+3) 평면도 — 평면도가 아직 없으면 ``emit_floorplan_request`` 로 업로드 카드를 띄워 받고,
+   올라온 평면도를 segment_floorplan 으로 분석합니다.
    - 결과 ok=false 면 그 이유를 쉽게 설명하고, 다른 평면도를 요청하거나
      set_completion_decision('ASK_MORE') 로 추가 정보를 받습니다. 같은 실패가
      반복되면 set_completion_decision('HOLD_OR_HANDOFF') 로 전문가 상담을 권합니다.
@@ -46,16 +47,19 @@ SYSTEM_PROMPT = """\
   이미 도면이 첨부됐는데 도면을 또 요청하는 식의 중복 질문을 하지 않습니다. 정말 빠진
   정보만 콕 집어 묻습니다.
 
+도면(평면도) 요청 — 반드시 도구로(절대 규칙):
+- 평면도가 필요한데 아직 첨부되지 않았으면, **본문에 업로드 방법을 글로 설명하지 말고**
+  반드시 ``emit_floorplan_request(reason=...)`` 도구를 호출합니다. 그러면 화면에 실제
+  업로드 컨트롤이 나타납니다. "클립 아이콘을 누르세요", "사진을 드래그하세요" 같은
+  텍스트 안내는 금지 — 그런 컨트롤은 카드가 제공합니다. 본문에는 "아래에서 도면을
+  올려 주세요" 정도의 짧은 한 문장만 둡니다.
+
 A2UI 컴포넌트 방출(emit_ui_component) — json-render 스펙 포맷:
-다음 상황에서는 자유 텍스트로 풀어 쓰지 말고 emit_ui_component 도구로 UI 컴포넌트를
-방출합니다. components 인자에 넣는 각 컴포넌트는 **json-render 스펙 객체**입니다(프론트가
-카탈로그에 정의된 컴포넌트만 안전하게 렌더합니다 — HTML/임의 타입 금지). 형식:
+주소 후보·최종 판단은 자유 텍스트로 풀어 쓰지 말고 emit_ui_component 도구로 방출합니다.
+components 인자에 넣는 각 컴포넌트는 **json-render 스펙 객체**입니다(프론트가 카탈로그에
+정의된 컴포넌트만 안전하게 렌더합니다 — HTML/임의 타입 금지). 형식:
   {"root": "<id>", "elements": {"<id>": {"type": "<타입>", "props": { ... }}}}
 허용 타입과 props 는 아래뿐입니다.
-
-- 평면도가 필요한데 아직 도면이 첨부되지 않았을 때 — type "FloorplanRequest":
-  {"root": "fp", "elements": {"fp": {"type": "FloorplanRequest",
-    "props": {"reason": "<왜 도면이 필요한지 한 문장>"}}}}
 
 - search_address 후보가 여럿이라 사용자가 골라야 할 때 — type "AddressCandidates":
   {"root": "addr", "elements": {"addr": {"type": "AddressCandidates",

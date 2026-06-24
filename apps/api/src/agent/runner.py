@@ -128,6 +128,28 @@ def _tool_end_payload(msg: Any, result: dict[str, Any] | None) -> dict[str, Any]
     return {"output": output, "output_summary": summary, "error_code": error_code}
 
 
+def _plan_todos(sig: ToolStart) -> list[dict[str, str]] | None:
+    """write_todos 호출 인자에서 계획 단계 목록을 정규화한다(프론트 PlanPanel 용).
+
+    deepagents write_todos 는 ``{"todos": [{"content": ..., "status": ...}]}`` 로
+    호출된다. content/status 만 문자열로 추려 SSE 로 노출한다(그 외 키는 버림). 비거나
+    형태가 어긋나면 None 을 돌려 tool_step 에 todos 키를 싣지 않는다.
+    """
+
+    raw = sig.input.get("todos") if isinstance(sig.input, dict) else None
+    if not isinstance(raw, list):
+        return None
+    todos: list[dict[str, str]] = [
+        {
+            "content": str(item.get("content", "")),
+            "status": str(item.get("status", "pending")),
+        }
+        for item in raw
+        if isinstance(item, dict)
+    ]
+    return todos or None
+
+
 async def translate_stream(
     raw_stream: AsyncIterator[Any], *, tool_kinds: dict[str, str]
 ) -> AsyncIterator[Signal]:
@@ -603,6 +625,10 @@ class AgentRunner:
         heartbeat = heartbeat_interval
         signals = translate_stream(raw, tool_kinds=TOOL_KINDS)
         pending: asyncio.Task[Any] | None = None
+        # lc_tool_call_id → (tool_name, tool_kind). ToolEnd 신호엔 도구명이 없어
+        # ToolStart 에서 기억해 둔다 — 그래야 완료 tool_step 도 실제 도구명을 실어
+        # 프론트가 화이트라벨/숨김(write_todos·emit_* 등)을 적용할 수 있다.
+        tool_meta: dict[str, tuple[str, str]] = {}
         try:
             while True:
                 remaining = deadline - time.monotonic()
@@ -625,16 +651,22 @@ class AgentRunner:
                     yield sse.token(sig.delta)
                 elif isinstance(sig, ToolStart):
                     await self._writer.project_tool_start(sig)
+                    tool_meta[sig.lc_tool_call_id] = (sig.tool_name, sig.tool_kind)
+                    # deepagents write_todos 의 계획 단계를 SSE 로 노출한다(프론트 PlanPanel).
+                    # todos 는 도구 호출 인자(sig.input["todos"]) 에 담긴 최신 전체 계획이다.
+                    todos = _plan_todos(sig) if sig.tool_name == "write_todos" else None
                     yield sse.tool_step(
                         tool_name=sig.tool_name,
                         tool_kind=sig.tool_kind,
                         status="started",
+                        todos=todos,
                     )
                 elif isinstance(sig, ToolEnd):
                     await self._writer.project_tool_end(sig)
+                    name, kind = tool_meta.get(sig.lc_tool_call_id, ("tool", "other"))
                     yield sse.tool_step(
-                        tool_name="tool",
-                        tool_kind="other",
+                        tool_name=name,
+                        tool_kind=kind,
                         status="succeeded" if sig.status == "succeeded" else "failed",
                         error_code=sig.error_code,
                     )
