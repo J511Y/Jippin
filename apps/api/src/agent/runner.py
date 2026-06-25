@@ -292,8 +292,26 @@ class AgentRunner:
             run_id=self.run_id,
             settings=settings,
         )
+        # 현재 세션 상태 스냅샷을 system prompt 에 주입 — 에이전트가 OVERLAY 선택·확정
+        # 주소·도면 분석 상태(REST/타경로로 갱신되어 체크포인터엔 없는 사실)를 알게 한다.
+        # 조회 실패는 무시하고 컨텍스트 없이 진행한다(런을 막지 않음).
+        session_context: str | None = None
+        try:
+            from .session_context import build_session_state_context
+
+            session_row = await main_flow.get_owned_session(
+                self.session_id,
+                owner_user_id=self.owner_user_id,
+                owner_is_anonymous=self.owner_is_anonymous,
+            )
+            address_row = await main_flow.get_session_address(self.session_id)
+            session_context = build_session_state_context(session_row, address_row)
+        except Exception:  # noqa: BLE001 - 스냅샷 실패는 런을 막지 않는다
+            log.warning("session_context_build_failed", run_id=str(self.run_id))
         checkpointer = await get_checkpointer()
-        return build_agent(tools=tools, checkpointer=checkpointer)
+        return build_agent(
+            tools=tools, checkpointer=checkpointer, session_context=session_context
+        )
 
     async def _is_cancelled(self) -> bool:
         try:

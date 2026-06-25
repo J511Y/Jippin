@@ -680,6 +680,13 @@ async def get_owned_session(
     )
 
 
+async def get_session_address(session_id: uuid.UUID) -> dict[str, Any] | None:
+    """세션 주소 row 를 반환(없으면 None). 에이전트 세션 컨텍스트 스냅샷용 — 호출자가
+    이미 owner-gated 세션을 들고 있으므로 추가 소유권 검사는 하지 않는다."""
+
+    return await _db_select_session_address(session_id)
+
+
 async def merge_judgment_schema(
     *,
     session_id: uuid.UUID,
