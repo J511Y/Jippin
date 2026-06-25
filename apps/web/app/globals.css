@@ -33,6 +33,14 @@
    선택 가능 벽: 점선(형태 신호) + hover/포커스 피드백 + 선택 시 흰 실선. stroke 는
    non-scaling 이라 줌 무관 일정 두께(149개 영역 줌아웃에서도 안 뭉갬).
    =========================================================================== */
+/* touch-action 은 상속되지 않으므로 SVG 의 모든 자식(폴리곤 포함)에 명시한다 — 벽
+   폴리곤을 터치해 끌어도 부모(채팅)가 스크롤되지 않게(#scroll-chain). */
+.fp-overlay,
+.fp-overlay svg,
+.fp-overlay svg * {
+  touch-action: none;
+}
+
 .fp-poly {
   transition: fill-opacity 120ms ease;
 }

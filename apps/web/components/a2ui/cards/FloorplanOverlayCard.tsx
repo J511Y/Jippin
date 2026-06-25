@@ -456,13 +456,18 @@ function OverlayCanvas({
     [zoomAt]
   );
 
-  const onWheel = useCallback(
-    (e: React.WheelEvent<SVGSVGElement>) => {
+  // 휠 줌은 네이티브 non-passive 리스너로 단다 — React 의 onWheel 은 passive 라
+  // preventDefault 가 무시돼 부모(채팅 스크롤)가 함께 스크롤된다(#scroll-chain).
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
       e.preventDefault();
       zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
-    },
-    [zoomAt]
-  );
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, [zoomAt]);
 
   const onPointerDown = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -520,7 +525,10 @@ function OverlayCanvas({
         borderRadius: 12,
         overflow: 'hidden',
         border: '1px solid var(--jippin-brand-border)',
-        background: '#fff'
+        background: '#fff',
+        // 줌/팬 제스처가 부모(채팅) 스크롤로 새지 않게 체이닝 차단.
+        overscrollBehavior: 'contain',
+        touchAction: 'none'
       }}
     >
       <svg
@@ -528,7 +536,6 @@ function OverlayCanvas({
         viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
         role="img"
         aria-label="도면 분석 오버레이"
-        onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
