@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
     agent_run_wallclock_timeout_seconds: int = Field(default=600)
 
+    # AI-002 VLM 도면 문맥 해석(SDD §4.4). Mask2Former 레이블을 OpenAI Vision 으로 보완·
+    # 정합성 검증한다. 모델/키는 agent 와 공유(gpt-5.4-mini). 비활성/실패 시 세그멘테이션
+    # 단독으로 degrade(VLM_TIMEOUT). 0.6 미만 신뢰도는 ANALYSIS_LOW_CONFIDENCE 로 재업로드 권장.
+    vlm_floorplan_enabled: bool = Field(default=True)
+    vlm_floorplan_timeout_seconds: int = Field(default=60)
+
     openai_api_key: str | None = Field(default=None)
 
     # LangSmith 트레이싱 — env-var 자동 계측. langchain_tracing_v2=true 일 때만 동작.

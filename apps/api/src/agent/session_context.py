@@ -101,6 +101,24 @@ def build_session_state_context(
             f"고른/선택한 벽'을 물으면 이 선택을 근거로 답할 것(선택을 모른다고 하지 말 것)."
         )
 
+    # AI-002 VLM 문맥 검토 결과 — 도면 이미지를 본 관찰/보정을 에이전트가 활용하게 한다.
+    vlm = judgment.get("vlm_supplement")
+    if isinstance(vlm, dict):
+        notes = vlm.get("notes")
+        if isinstance(notes, list) and notes:
+            joined = " / ".join(str(n) for n in notes[:5] if isinstance(n, str))
+            if joined:
+                lines.append(
+                    f"- 도면 VLM 문맥 검토 관찰(이미지 기반): {joined}. 이 관찰을 답변에 "
+                    f"적극 활용할 것(도면을 다시 보여 달라고 하지 말 것)."
+                )
+        recl = vlm.get("reclassifications")
+        if isinstance(recl, list) and recl:
+            lines.append(
+                f"- VLM 이 이미지 기준으로 벽 분류를 보정한 곳: {len(recl)}곳. 이 보정을 반영해 "
+                f"설명할 것."
+            )
+
     # 이미 수집된 판단값(있으면) — 같은 걸 또 묻지 않게.
     jv = judgment.get("judgment_values")
     if isinstance(jv, dict):

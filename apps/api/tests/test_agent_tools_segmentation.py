@@ -35,6 +35,12 @@ def _settings(**override: object) -> SimpleNamespace:
         "hf_segmentation_mask_threshold": 0.5,
         "hf_segmentation_max_inference_side": 1536,
         "hf_segmentation_allowed_image_hosts": [],
+        # VLM(AI-002) — 테스트에선 interpret 를 모킹하므로 기본 비활성으로 둔다.
+        "vlm_floorplan_enabled": False,
+        "vlm_floorplan_timeout_seconds": 60,
+        "agent_model": "openai:gpt-5.4-mini",
+        "openai_api_key": None,
+        "app_env": "test",
         # 실제 기본값과 일치(엣지 검증된 pending 도면 분석 허용).
         "agent_allow_unscanned_floorplans": True,
     }
@@ -435,6 +441,81 @@ async def test_session_floorplan_emits_overlay_and_persists_objects(
         "LOAD_BEARING",
     }
     assert {s["id"] for s in js["space_objects"]} == {"pred:3"}
+
+
+async def test_session_floorplan_merges_vlm_reclassification(monkeypatch) -> None:
+    # AI-002+AI-003: VLM 이 이미지로 wall_other 를 내력벽으로 보정하면 regions/judgment 가
+    # 머지되고 source_engine=VLM, vlm_supplement 가 판단스키마에 저장된다.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    async def fake_vlm(*, image_url, regions, image, settings, user_context=None):
+        return {
+            "provider": "OPENAI",
+            "model": "gpt-5.4-mini",
+            "notes": ["거실 남측 벽은 연속 외벽이라 구조벽 의심"],
+            "reclassifications": [
+                {
+                    "object_id": "pred:1",
+                    "new_label": "wall_reinforced_concrete",
+                    "reason": "연속 외벽",
+                }
+            ],
+            "confidence": 0.7,
+            "is_floorplan": True,
+        }
+
+    monkeypatch.setattr("src.agent.tools.vlm.interpret_floorplan_impl", fake_vlm)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_other",
+                        "score": 0.9,
+                        "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                    }
+                ],
+            },
+        )
+
+    ctx = RunContext()
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    assert res["ok"] is True
+    assert res["vlm_reclassified"] == ["pred:1"]
+    assert "구조벽 의심" in res["vlm_notes"][0]
+
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    js = session["judgment_schema"]
+    wall = next(w for w in js["wall_objects"] if w["id"] == "pred:1")
+    assert wall["wall_type"] == "LOAD_BEARING"  # VLM 보정 반영
+    assert wall["source_engine"] == "VLM"
+    assert js["vlm_supplement"]["confidence"] == 0.7
+    assert js["vlm_supplement"]["provider"] == "OPENAI"
 
 
 async def test_session_floorplan_records_input_fingerprint(monkeypatch) -> None:

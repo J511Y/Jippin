@@ -351,12 +351,15 @@ def build_overlay_spec(
 
 def build_judgment_objects(
     regions: list[dict[str, Any]],
+    vlm_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """regions → (wall_objects, space_objects) 계약 형태. door/window 는 제외(둘 다 아님).
 
     좌표가 부족하면(벽 <2점, 공간 <3점) 그 객체는 드롭한다(계약 minItems 준수).
     region_id 를 객체 id 로 써서 OVERLAY 의 selected_walls(region_id[]) 와 정합시킨다.
+    ``vlm_ids`` 에 든 region 은 VLM(AI-002)이 교정한 것이라 source_engine 을 VLM 으로 둔다.
     """
+    vlm_ids = vlm_ids or set()
     walls: list[dict[str, Any]] = []
     spaces: list[dict[str, Any]] = []
     for r in regions:
@@ -364,6 +367,7 @@ def build_judgment_objects(
         rid = r.get("region_id")
         if not isinstance(cls, str) or not isinstance(rid, str):
             continue
+        engine = "VLM" if rid in vlm_ids else "MASK2FORMER"
         pts = _polygon_to_maskcoords(r.get("polygon") or [])
         conf = float(r["score"]) if isinstance(r.get("score"), (int, float)) else 0.0
         if cls in _WALL_TYPE_BY_CLASS:
@@ -375,7 +379,7 @@ def build_judgment_objects(
                     "wall_type": _WALL_TYPE_BY_CLASS[cls],
                     "confidence": conf,
                     "coords": pts,
-                    "source_engine": "MASK2FORMER",
+                    "source_engine": engine,
                 }
             )
         elif cls in _SPACE_LABEL_BY_CLASS:
@@ -388,7 +392,7 @@ def build_judgment_objects(
                     "type": _SPACE_TYPE_BY_CLASS.get(cls, "ETC"),
                     "mask_coords": pts,
                     "confidence": conf,
-                    "source_engine": "MASK2FORMER",
+                    "source_engine": engine,
                 }
             )
     return walls, spaces
@@ -485,29 +489,74 @@ async def segment_session_floorplan(
     # 무르지 않는다(best-effort) — 좌표 없는 요약만 LLM 에 돌려도 흐름은 유지된다.
     regions = result.get("regions") or []
     image = result.get("image")
+
+    # AI-002 VLM 문맥 해석 — 도면 이미지로 Mask2Former 레이블을 보완(실패 시 None=단독 degrade).
+    supplement: dict[str, Any] | None = None
+    with contextlib.suppress(Exception):
+        from .vlm import interpret_floorplan_impl
+
+        supplement = await interpret_floorplan_impl(
+            image_url=signed, regions=regions, image=image, settings=settings
+        )
+
+    # AI-003 정합성 검증·정규화 — VLM 교정(reclassifications)을 regions 에 머지한다.
+    vlm_ids: set[str] = set()
+    if supplement and supplement.get("reclassifications"):
+        by_id = {r.get("region_id"): r for r in regions if isinstance(r, dict)}
+        for rc in supplement["reclassifications"]:
+            reg = by_id.get(rc.get("object_id"))
+            if reg is not None:
+                reg["class_name"] = rc["new_label"]  # VLM 교정 적용
+                reg["source_engine"] = "VLM"
+                vlm_ids.add(rc["object_id"])
+
     if run_context is not None and run_id is not None:
         from .domain import emit_ui_component_impl
 
+        # 오버레이는 머지된(VLM 교정 반영) regions 로 띄운다.
         spec = build_overlay_spec(asset_id=asset["id"], image=image, regions=regions)
         with contextlib.suppress(Exception):
             await emit_ui_component_impl(
                 run_context=run_context, run_id=run_id, components=[spec]
             )
-    walls, spaces = build_judgment_objects(regions)
+
+    walls, spaces = build_judgment_objects(regions, vlm_ids=vlm_ids)
+    patch: dict[str, Any] = {"wall_objects": walls, "space_objects": spaces}
+    if supplement is not None:
+        patch["vlm_supplement"] = supplement
     with contextlib.suppress(Exception):
         await main_flow.merge_judgment_schema(
             session_id=session_id,
             owner_user_id=owner_user_id,
             owner_is_anonymous=owner_is_anonymous,
-            patch={"wall_objects": walls, "space_objects": spaces},
+            patch=patch,
         )
-    # 좌표는 카드로만 — LLM 반환분에서 떼어 낸다.
+
+    # 요약 — 세그멘테이션 + VLM 보완. ANALYSIS_LOW_CONFIDENCE(0.6 미만)면 재확인 권장.
+    summary = result.get("summary")
+    low_conf = bool(
+        supplement
+        and supplement.get("confidence") is not None
+        and supplement["confidence"] < 0.6
+    )
+    if supplement:
+        summary = (summary or "") + " VLM 문맥 검토도 함께 반영했어요."
+        if vlm_ids:
+            summary += f" (벽 {len(vlm_ids)}곳은 이미지 기준으로 분류를 보정했어요.)"
+        if low_conf:
+            summary += " 다만 분석 신뢰도가 낮아 재확인이 필요할 수 있어요."
+    # 좌표는 카드로만 — LLM 반환분에서 떼어 낸다. VLM 관찰(notes)은 에이전트가 바로 쓰도록 싣는다.
     return {
         **result,
+        "summary": summary,
         "regions": [],
         "image": None,
         "overlay_emitted": True,
         "region_count": len(regions),
+        "vlm_notes": (supplement or {}).get("notes") or [],
+        "vlm_confidence": (supplement or {}).get("confidence"),
+        "vlm_reclassified": sorted(vlm_ids),
+        "analysis_low_confidence": low_conf,
     }
 
 

@@ -313,40 +313,6 @@ class AgentRunner:
             tools=tools, checkpointer=checkpointer, session_context=session_context
         )
 
-    async def _build_user_content(
-        self, user_message: str, settings: Any
-    ) -> str | list[dict[str, Any]]:
-        """도면이 첨부됐으면 [텍스트 + 도면 image_url] 멀티모달 content 를, 아니면 텍스트
-        문자열을 반환한다. LLM 이 도면을 실제로 보고 추론하게 한다(비전). 서명/조회 실패는
-        무시하고 텍스트로 폴백한다(런을 막지 않음)."""
-
-        try:
-            from ..services import storage
-
-            asset = await main_flow.get_selected_floorplan_asset(
-                session_id=self.session_id,
-                owner_user_id=self.owner_user_id,
-                owner_is_anonymous=self.owner_is_anonymous,
-            )
-            if asset:
-                signed = await storage.sign_object_url(
-                    settings,
-                    bucket=asset["bucket"],
-                    object_path=asset["object_key"],
-                    operation="sign_floorplan_vision",
-                )
-                if signed:
-                    return [
-                        {"type": "text", "text": user_message},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": signed, "detail": "high"},
-                        },
-                    ]
-        except Exception:  # noqa: BLE001 - 이미지 첨부 실패는 텍스트로 폴백
-            log.warning("user_content_image_attach_failed", run_id=str(self.run_id))
-        return user_message
-
     async def _is_cancelled(self) -> bool:
         try:
             row = await main_flow.get_agent_run(
@@ -526,14 +492,14 @@ class AgentRunner:
                     )
                 if agent is None:
                     agent = await self._build_agent()
-                # 도면이 첨부돼 있으면 사용자 메시지에 **도면 이미지**를 함께 실어 멀티모달로
-                # 보낸다 — LLM(gpt-5.4-mini, 비전 지원)이 세그멘테이션 텍스트뿐 아니라 도면을
-                # 실제로 '보고' 위치/맥락을 추론하게 한다(SDD §4.4 VLM 문맥 해석 단계).
-                if reconnect:
-                    astream_input = None
-                else:
-                    content = await self._build_user_content(user_message, settings)
-                    astream_input = {"messages": [{"role": "user", "content": content}]}
+                # 도면 비전 해석은 분석 단계의 AI-002 VLM(segment_floorplan)이 담당하고, 그
+                # 결과(vlm_supplement/교정된 wall_objects)는 세션 컨텍스트로 에이전트에 주입된다 —
+                # 채팅 LLM 에 매 턴 이미지를 싣지 않는다(SDD §4.4 분리).
+                astream_input = (
+                    None
+                    if reconnect
+                    else {"messages": [{"role": "user", "content": user_message}]}
+                )
                 raw = agent.astream(
                     astream_input,
                     config={"configurable": {"thread_id": str(self.session_id)}},
