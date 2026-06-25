@@ -670,6 +670,14 @@ class AgentRunner:
                 elif isinstance(sig, ToolStart):
                     await self._writer.project_tool_start(sig)
                     tool_meta[sig.lc_tool_call_id] = (sig.tool_name, sig.tool_kind)
+                    # 도구 흐름을 로그로 남긴다 — 어떤 도구가 어떤 순서로 돌았는지(특히
+                    # evaluate_rules 가 실제로 돌았는지) 추적 가능하게(#tool-trace).
+                    log.info(
+                        "agent_tool_start",
+                        run_id=str(self.run_id),
+                        tool=sig.tool_name,
+                        kind=sig.tool_kind,
+                    )
                     # deepagents write_todos 의 계획 단계를 SSE 로 노출한다(프론트 PlanPanel).
                     # todos 는 도구 호출 인자(sig.input["todos"]) 에 담긴 최신 전체 계획이다.
                     todos = _plan_todos(sig) if sig.tool_name == "write_todos" else None
@@ -682,6 +690,14 @@ class AgentRunner:
                 elif isinstance(sig, ToolEnd):
                     await self._writer.project_tool_end(sig)
                     name, kind = tool_meta.get(sig.lc_tool_call_id, ("tool", "other"))
+                    log.info(
+                        "agent_tool_end",
+                        run_id=str(self.run_id),
+                        tool=name,
+                        kind=kind,
+                        status=sig.status,
+                        error_code=sig.error_code,
+                    )
                     yield sse.tool_step(
                         tool_name=name,
                         tool_kind=kind,

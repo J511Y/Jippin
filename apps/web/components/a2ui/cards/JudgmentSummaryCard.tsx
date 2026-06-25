@@ -39,6 +39,8 @@ export type JudgmentSummaryPayload = {
   title: string;
   summary: string;
   risks?: string[];
+  /** true 면 룰엔진(evaluate_rules) 판정 기반, false/미지정이면 규칙 평가 전 예비 결과. */
+  rule_backed?: boolean;
 };
 
 const KNOWN_DECISIONS: readonly JudgmentDecision[] = [
@@ -166,6 +168,14 @@ export function JudgmentSummaryCard({
         <span className="a2ui-verdict__icon">{style.icon}</span>
         <span className="a2ui-verdict__label">{style.label}</span>
       </div>
+
+      {/* 판정 근거 투명성 — 룰엔진(결정성 규칙)을 거친 결과인지, 규칙 평가 전 예비
+          관찰인지 한 줄로 밝힌다(법적 판단은 룰엔진 소유, SDD §4.8). */}
+      <Text size="11px" c="dimmed" mt={6} style={{ lineHeight: 1.4 }}>
+        {payload.rule_backed
+          ? '※ 법령 규칙 평가(룰엔진)를 거친 결과예요.'
+          : '※ 자동 분석 기반 예비 관찰이에요. 규칙 평가에 필요한 정보가 모이면 더 정확히 검토해 드려요.'}
+      </Text>
 
       <Text
         size="sm"

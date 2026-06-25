@@ -262,6 +262,18 @@ async def evaluate_rules_impl(
     except Exception as exc:  # noqa: BLE001
         return _safe_error(exc, "RULE_EVAL_FAILED", tool="evaluate_rules")
     result = verdict.to_contract_dict(evaluated_at=datetime.now(UTC))
+    # 룰엔진이 실제로 돌았고 어떤 판정을 냈는지 로그로 남긴다 — "LLM 판단인지 룰 판정인지"
+    # 추적 가능하게(#rule-trace). 입력 PII 는 키 이름만 남긴다.
+    log.info(
+        "rule_eval_completed",
+        session_id=str(session_id),
+        verdict=result.get("verdict"),
+        permit_required=result.get("permit_required"),
+        input_keys=sorted(judgment_values.keys())
+        if isinstance(judgment_values, dict)
+        else None,
+        persisted=persist,
+    )
     if not persist:
         # 분석 지문이 없어 freshness 를 증명할 수 없다 — 판정은 사용자에게 보여 주되
         # 리포트엔 영속하지 않는다(에이전트가 분석 후 재평가하도록).
@@ -364,10 +376,21 @@ async def emit_address_candidates_impl(
     )
 
 
+# 룰엔진 verdict(rule-eval-result) → JudgmentSummary 카드 decision 매핑. 룰 판정이 있으면
+# 이게 정본이다(SDD §4.8: 법적 판단은 결정성 RULE 엔진이 소유, LLM 이 발명하지 않음).
+_RULE_VERDICT_TO_DECISION: dict[str, str] = {
+    "ALLOW": "possible",
+    "WARN": "conditional",
+    "DENY": "not_possible",
+    "HOLD": "needs_expert",
+}
+
+
 async def emit_judgment_summary_impl(
     *,
     run_context: "RunContext",
     run_id: uuid.UUID,
+    session_id: uuid.UUID,
     decision: str,
     title: str,
     summary: str,
@@ -375,14 +398,48 @@ async def emit_judgment_summary_impl(
 ) -> dict[str, Any]:
     """최종 판단 요약 카드(JudgmentSummary)를 다음 답변에 첨부한다.
 
-    decision: possible|conditional|not_possible|needs_expert. 서버가 json-render
-    스펙을 만든다(LLM 은 값만 넘김). judgment_snapshot 영속은 emit_ui_component 로 별도.
+    decision: possible|conditional|not_possible|needs_expert. **최종 판정은 룰엔진
+    (evaluate_rules)의 verdict 가 정본**이어야 한다(SDD §4.8). 세션에 영속된 rule_eval_result
+    가 있으면 그 verdict 를 decision 의 정본으로 쓰고(LLM 인자보다 우선), 카드에 rule_backed=
+    true 를 실어 '룰엔진 검증됨'을 표시한다. 없으면(=evaluate_rules 미실행) **LLM 단독 판정**
+    이므로 warning 로그 + rule_backed=false 로 명시해 추적/표시 가능하게 한다.
     """
 
+    rule_verdict: str | None = None
+    try:
+        rev = await main_flow.get_session_verdict(session_id)
+        v = rev.get("verdict") if isinstance(rev, dict) else None
+        rule_verdict = str(v) if isinstance(v, str) else None
+    except Exception:  # noqa: BLE001 - 판정 조회 실패는 카드 방출을 막지 않는다
+        rule_verdict = None
+
+    rule_backed = rule_verdict is not None
+    decision_used = str(decision)
+    if rule_backed:
+        mapped = _RULE_VERDICT_TO_DECISION.get(rule_verdict or "")
+        if mapped:
+            decision_used = mapped
+        log.info(
+            "judgment_summary_emitted",
+            session_id=str(session_id),
+            llm_decision=str(decision),
+            rule_verdict=rule_verdict,
+            decision_used=decision_used,
+            rule_backed=True,
+        )
+    else:
+        log.warning(
+            "judgment_summary_llm_only",
+            session_id=str(session_id),
+            llm_decision=str(decision),
+            note="evaluate_rules 미실행 — 룰엔진 backing 없는 LLM 단독 판정",
+        )
+
     props: dict[str, Any] = {
-        "decision": str(decision),
+        "decision": decision_used,
         "title": str(title),
         "summary": str(summary),
+        "rule_backed": rule_backed,
     }
     if risks:
         props["risks"] = [str(r) for r in risks]

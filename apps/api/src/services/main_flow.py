@@ -687,6 +687,15 @@ async def get_session_address(session_id: uuid.UUID) -> dict[str, Any] | None:
     return await _db_select_session_address(session_id)
 
 
+async def get_session_verdict(session_id: uuid.UUID) -> dict[str, Any] | None:
+    """세션에 영속된 ``rule_eval_result``(룰엔진 판정)를 반환(없으면 None). 내부용 —
+    emit_judgment_summary 가 최종 판정이 룰엔진 backing 인지 확인할 때 쓴다."""
+
+    row = await _db_select_session(session_id)
+    rev = row.get("rule_eval_result") if isinstance(row, dict) else None
+    return rev if isinstance(rev, dict) else None
+
+
 async def merge_judgment_schema(
     *,
     session_id: uuid.UUID,

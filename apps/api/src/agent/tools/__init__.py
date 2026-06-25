@@ -181,6 +181,7 @@ def build_tools(
         return await emit_judgment_summary_impl(
             run_context=run_context,
             run_id=run_id,
+            session_id=session_id,
             decision=decision,
             title=title,
             summary=summary,

@@ -301,3 +301,52 @@ async def test_emit_ui_component_accumulates_across_calls(monkeypatch) -> None:
         "cta",
     ]
     assert fake.agent_runs[run["id"]]["pending_judgment_snapshot"] == {"v": 1}
+
+
+async def _session_run_ctx(monkeypatch):
+    from tests._main_flow_db_fake import install_main_flow_fake
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    return session["id"], run["id"], fake, domain.RunContext()
+
+
+async def test_judgment_summary_uses_rule_verdict_when_present(monkeypatch) -> None:
+    # 룰엔진 판정이 영속돼 있으면 그 verdict 가 카드 decision 의 정본(LLM 인자 무시).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    fake.sessions[session_id]["rule_eval_result"] = {"verdict": "DENY"}
+    await domain.emit_judgment_summary_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        decision="conditional",  # LLM 이 conditional 이라 우겨도
+        title="t",
+        summary="s",
+    )
+    ui, _snap = ctx.drain_ui()
+    props = ui[0]["elements"]["j"]["props"]
+    assert props["decision"] == "not_possible"  # DENY → not_possible 로 교정
+    assert props["rule_backed"] is True
+
+
+async def test_judgment_summary_flags_llm_only_without_rule(monkeypatch) -> None:
+    # 룰엔진 판정이 없으면 LLM 단독 판정 — decision 은 유지하되 rule_backed=false 로 표시.
+    session_id, run_id, _fake, ctx = await _session_run_ctx(monkeypatch)
+    await domain.emit_judgment_summary_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        decision="conditional",
+        title="t",
+        summary="s",
+    )
+    ui, _snap = ctx.drain_ui()
+    props = ui[0]["elements"]["j"]["props"]
+    assert props["rule_backed"] is False
+    assert props["decision"] == "conditional"
