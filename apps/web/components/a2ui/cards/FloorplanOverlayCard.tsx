@@ -19,6 +19,8 @@
 
 import { ActionIcon, Box, Button, Group, Loader, Stack, Text } from '@mantine/core';
 import {
+  IconCircleCheck,
+  IconHammer,
   IconHandFinger,
   IconMinus,
   IconPhotoExclamation,
@@ -55,59 +57,6 @@ export type FloorplanOverlayPayload = {
   image?: { width?: number; height?: number };
   regions?: OverlayRegion[];
 };
-
-type ClassKind = 'wall' | 'opening' | 'space';
-
-type ClassStyle = {
-  /** CSS 변수 색(globals.css `--floorplan-*`). */
-  color: string;
-  label: string;
-  kind: ClassKind;
-};
-
-// 18 클래스 → 토큰 색/라벨/종류. 색은 전부 `--floorplan-*`(brand 톤 정합).
-const CLASS_STYLE: Record<string, ClassStyle> = {
-  wall_reinforced_concrete: { color: 'var(--floorplan-wall-load)', label: '내력벽 후보', kind: 'wall' },
-  wall_other: { color: 'var(--floorplan-wall-nonload)', label: '비내력벽 후보', kind: 'wall' },
-  wall_unknown: { color: 'var(--floorplan-wall-unknown)', label: '미분류 벽', kind: 'wall' },
-  door: { color: 'var(--floorplan-door)', label: '문', kind: 'opening' },
-  window: { color: 'var(--floorplan-window)', label: '창문', kind: 'opening' },
-  space_balcony: { color: 'var(--floorplan-space-balcony)', label: '발코니', kind: 'space' },
-  space_living_room: { color: 'var(--floorplan-space-living)', label: '거실', kind: 'space' },
-  space_kitchen: { color: 'var(--floorplan-space-kitchen)', label: '주방', kind: 'space' },
-  space_bedroom: { color: 'var(--floorplan-space-bedroom)', label: '침실', kind: 'space' },
-  space_bathroom: { color: 'var(--floorplan-space-bathroom)', label: '욕실', kind: 'space' },
-  space_entrance: { color: 'var(--floorplan-space-entrance)', label: '현관', kind: 'space' },
-  space_stairwell: { color: 'var(--floorplan-space-stairwell)', label: '계단실', kind: 'space' },
-  space_elevator_hall: { color: 'var(--floorplan-space-hall)', label: '엘리베이터홀', kind: 'space' },
-  space_elevator: { color: 'var(--floorplan-space-hall)', label: '엘리베이터', kind: 'space' },
-  space_dress_room: { color: 'var(--floorplan-space-dress)', label: '드레스룸', kind: 'space' },
-  space_ac_room: { color: 'var(--floorplan-space-ac)', label: '실외기실', kind: 'space' },
-  space_multipurpose: { color: 'var(--floorplan-space-multi)', label: '다목적실', kind: 'space' },
-  space_other: { color: 'var(--floorplan-space-other)', label: '기타 공간', kind: 'space' }
-};
-
-const FALLBACK_STYLE: ClassStyle = {
-  color: 'var(--floorplan-space-other)',
-  label: '영역',
-  kind: 'space'
-};
-
-function styleFor(cls: string): ClassStyle {
-  return CLASS_STYLE[cls] ?? FALLBACK_STYLE;
-}
-
-/** 비내력벽 후보만 철거 희망 대상으로 선택 가능(OVERLAY-002). */
-function isSelectable(cls: string): boolean {
-  return cls === 'wall_other';
-}
-
-/** 범례 라벨 꼬리표 — 색에만 의존하지 않게 '선택 가능/불가'를 글로 보강. */
-function legendSuffix(cls: string): string {
-  if (cls === 'wall_other') return ' (선택 가능)';
-  if (cls === 'wall_reinforced_concrete') return ' (선택 불가)';
-  return '';
-}
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -182,24 +131,30 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     return { w: Math.ceil(maxX), h: Math.ceil(maxY) };
   }, [payload.image, regions]);
 
+  // 철거 가능한 건 비내력벽뿐 — 오버레이는 wall_other 후보만 그린다(나머지 벽/공간/개구부는
+  // 도면 이미지에 이미 보이므로 굳이 겹치지 않는다 → 선택 대상이 한눈에 또렷해진다).
+  const wallRegions = useMemo(
+    () => regions.filter((r) => r.class_name === 'wall_other'),
+    [regions]
+  );
+
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
   const [loading, setLoading] = useState<boolean>(() => Boolean(sessionId));
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [saving, setSaving] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
-  const wallOtherCount = useMemo(
-    () => regions.filter((r) => r.class_name === 'wall_other').length,
-    [regions]
-  );
+  const interactive = actions !== null;
+  const streaming = actions?.busy ?? false;
 
-  // 노출 분석 이벤트 — 카드가 처음 렌더될 때 1회(선택 가능 벽 수 포함).
+  // 노출 분석 이벤트 — 카드가 처음 렌더될 때 1회.
   const viewedRef = useRef(false);
   useEffect(() => {
     if (viewedRef.current) return;
     viewedRef.current = true;
-    trackPrecheckOverlayView(wallOtherCount);
-  }, [wallOtherCount]);
+    trackPrecheckOverlayView(wallRegions.length);
+  }, [wallRegions.length]);
 
   // 표시용 서명 URL 발급 + 기존 선택 복원(judgment_schema.selected_walls).
   useEffect(() => {
@@ -217,8 +172,9 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
         if (url) setImageUrl(url);
         else setImageFailed(true);
         const prev = session?.judgment_schema?.selected_walls;
-        if (Array.isArray(prev)) {
+        if (Array.isArray(prev) && prev.length > 0) {
           setSelected(new Set(prev.filter((x): x is string => typeof x === 'string')));
+          setSubmitted(true); // 이미 제출된 선택 복원.
         }
       } catch {
         if (!ignore) setImageFailed(true);
@@ -231,72 +187,65 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     };
   }, [sessionId, assetId]);
 
-  // 선택 변경 → 판단스키마 영속(best-effort) + 분석 이벤트.
-  const persist = useCallback(
-    async (next: Set<string>) => {
-      trackPrecheckWallSelect(next.size);
-      if (!sessionId) return;
-      setSaving(true);
-      try {
-        await updateSelectedWalls(sessionId, [...next]);
-      } catch {
-        /* 영속 실패는 조용히 무시 — 다음 토글에서 다시 시도된다 */
-      } finally {
-        setSaving(false);
-      }
-    },
-    [sessionId]
-  );
-
-  const toggle = useCallback(
-    (regionId: string, cls: string) => {
-      if (!isSelectable(cls)) return;
-      setSelected((cur) => {
-        const next = new Set(cur);
-        if (next.has(regionId)) next.delete(regionId);
-        else next.add(regionId);
-        void persist(next);
-        return next;
-      });
-    },
-    [persist]
-  );
-
-  const clearSelection = useCallback(() => {
-    setSelected(() => {
-      const next = new Set<string>();
-      void persist(next);
+  // 토글은 **로컬 상태만** 바꾼다(자동 저장 안 함) — 아래 '제출' 버튼으로 확정한다.
+  const toggle = useCallback((regionId: string) => {
+    setSubmitted(false);
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(regionId)) next.delete(regionId);
+      else next.add(regionId);
       return next;
     });
-  }, [persist]);
+  }, []);
 
-  // 범례: 실제 등장한 클래스만, 종류(벽→공간→개구부) + 라벨 순.
-  const legend = useMemo(() => {
-    const seen = new Map<string, ClassStyle>();
-    for (const r of regions) {
-      if (!seen.has(r.class_name)) seen.set(r.class_name, styleFor(r.class_name));
+  const clearSelection = useCallback(() => {
+    setSubmitted(false);
+    setSelected(new Set());
+  }, []);
+
+  // 제출 — 선택한 비내력벽을 철거 대상으로 확정(영속) + 대화로 이어 검토 요청.
+  const submit = useCallback(async () => {
+    if (!actions || !sessionId || selected.size === 0) return;
+    setSubmitting(true);
+    try {
+      await updateSelectedWalls(sessionId, [...selected]);
+      trackPrecheckWallSelect(selected.size);
+      setSubmitted(true);
+      await actions.sendMessage(
+        `도면에서 비내력벽 후보 ${selected.size}곳을 철거 대상으로 골랐어요. 이걸 기준으로 검토해 주세요.`
+      );
+    } catch {
+      /* 실패 시 submitted 로 두지 않는다 — 사용자가 다시 시도 가능 */
+    } finally {
+      setSubmitting(false);
     }
-    const order: Record<ClassKind, number> = { wall: 0, space: 1, opening: 2 };
-    return [...seen.entries()].sort(
-      (a, b) => order[a[1].kind] - order[b[1].kind] || a[1].label.localeCompare(b[1].label)
-    );
-  }, [regions]);
+  }, [actions, sessionId, selected]);
+
+  const hasWalls = wallRegions.length > 0;
+  const submitDisabled =
+    selected.size === 0 || submitting || submitted || streaming || !interactive;
+  const submitLabel = submitting
+    ? '제출 중…'
+    : submitted
+      ? `철거 검토 요청을 보냈어요 · ${selected.size}곳`
+      : selected.size > 0
+        ? `선택한 비내력벽 ${selected.size}곳 철거 검토하기`
+        : '철거할 벽을 먼저 골라 주세요';
 
   return (
     <CardShell accent="blueprint" labelledBy={titleId}>
       <CardHeader
         icon={<IconVectorTriangle size={17} aria-hidden />}
-        eyebrow="도면 분석"
-        title="분석 영역을 확인하고 철거할 벽을 골라 주세요"
+        eyebrow="비내력벽 선택"
+        title="철거할 벽을 골라 제출해 주세요"
         titleId={titleId}
       />
       <CardRule />
 
       <Stack gap="sm">
         <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.55 }}>
-          도면 위 색상은 AI가 <b>추정</b>한 후보예요. 초록색 <b>비내력벽 후보</b>(점선)를 눌러
-          철거하고 싶은 벽을 고르면 다음 단계에서 함께 검토해 드려요. 모든 표시는 확정이 아니라
-          검토용 후보입니다.
+          철거가 가능한 건 <b>비내력벽</b>이에요. 도면 위 <b>초록색 영역</b>을 눌러 철거할 벽을
+          고른 뒤(여러 곳 가능), 아래 <b>제출</b> 버튼을 눌러 주세요. 표시는 AI 추정 후보예요.
         </Text>
 
         {loading ? (
@@ -308,9 +257,9 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
           />
         ) : (
           <OverlayCanvas
-            key={`${dims.w}x${dims.h}:${regions.length}`}
+            key={`${dims.w}x${dims.h}:${wallRegions.length}`}
             dims={dims}
-            regions={regions}
+            regions={wallRegions}
             imageUrl={imageUrl}
             imageFailed={imageFailed}
             selected={selected}
@@ -319,63 +268,45 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
           />
         )}
 
-        <Text size="11px" c="dimmed" ta="center">
-          휠·두 손가락으로 확대, 드래그로 이동할 수 있어요.
-        </Text>
-
-        {legend.length > 0 ? (
-          <Group gap={10} wrap="wrap" aria-label="범례">
-            {legend.map(([cls, st]) => (
-              <Group key={cls} gap={5} wrap="nowrap">
-                <span
-                  aria-hidden
-                  style={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: 3,
-                    flexShrink: 0,
-                    border: `1.5px ${cls === 'wall_other' ? 'dashed' : 'solid'} ${st.color}`,
-                    background: `color-mix(in srgb, ${st.color} ${
-                      st.kind === 'space' ? 16 : 30
-                    }%, transparent)`
-                  }}
-                />
-                <Text size="11px" c="var(--jippin-brand-copy)">
-                  {st.label}
-                  {legendSuffix(cls)}
-                </Text>
-              </Group>
-            ))}
-          </Group>
-        ) : null}
-
         <Group justify="space-between" wrap="nowrap" gap="xs">
           <Text size="xs" c="var(--jippin-brand-copy)">
-            {wallOtherCount > 0
-              ? `비내력벽 후보 ${wallOtherCount}곳 · 선택 ${selected.size}곳`
+            {hasWalls
+              ? `비내력벽 후보 ${wallRegions.length}곳 · 선택 ${selected.size}곳`
               : '선택 가능한 비내력벽 후보가 없어요. 다른 도면이 필요할 수 있어요.'}
           </Text>
-          <Group gap="xs" wrap="nowrap">
-            {selected.size > 0 ? (
-              <Button
-                variant="subtle"
-                color="gray"
-                size="compact-xs"
-                onClick={clearSelection}
-              >
-                선택 해제
-              </Button>
-            ) : null}
-            {saving ? (
-              <Group gap={5} wrap="nowrap">
-                <Loader size={12} color="coral" />
-                <Text size="11px" c="dimmed">
-                  저장 중…
-                </Text>
-              </Group>
-            ) : null}
-          </Group>
+          {selected.size > 0 ? (
+            <Button
+              variant="subtle"
+              color="gray"
+              size="compact-xs"
+              onClick={clearSelection}
+              disabled={submitting}
+            >
+              선택 해제
+            </Button>
+          ) : null}
         </Group>
+
+        {hasWalls ? (
+          <Button
+            color="coral"
+            radius="md"
+            fullWidth
+            disabled={submitDisabled}
+            onClick={submit}
+            leftSection={
+              submitting ? (
+                <Loader size={16} color="white" />
+              ) : submitted ? (
+                <IconCircleCheck size={18} />
+              ) : (
+                <IconHammer size={18} />
+              )
+            }
+          >
+            {submitLabel}
+          </Button>
+        ) : null}
       </Stack>
     </CardShell>
   );
@@ -396,7 +327,7 @@ function OverlayCanvas({
   imageUrl: string | null;
   imageFailed: boolean;
   selected: Set<string>;
-  onToggle: (regionId: string, cls: string) => void;
+  onToggle: (regionId: string) => void;
   onImageError: () => void;
 }) {
   // 부모가 dims/regions 변화 시 key 로 remount 하므로 view 초기값을 full 로 두면 충분하다.
@@ -562,48 +493,40 @@ function OverlayCanvas({
         ) : null}
 
         {regions.map((r) => {
-          const st = styleFor(r.class_name);
-          const selectable = isSelectable(r.class_name);
+          // 부모가 wall_other(비내력벽 후보)만 넘기므로 모두 선택 대상이다.
           const isSel = selected.has(r.region_id);
-          const baseOpacity = st.kind === 'space' ? 0.16 : st.kind === 'opening' ? 0.32 : 0.28;
-          const dash = selectable && !isSel ? '5 3' : undefined;
           return (
             <polygon
               key={r.region_id}
-              className={`fp-poly${selectable ? ' fp-poly-selectable' : ''}`}
+              className="fp-poly fp-poly-selectable"
               data-selected={isSel ? '1' : '0'}
               points={toPoints(r.polygon)}
               vectorEffect="non-scaling-stroke"
-              fill={st.color}
-              fillOpacity={isSel ? 0.55 : baseOpacity}
-              stroke={isSel ? '#ffffff' : st.color}
-              strokeOpacity={st.kind === 'space' ? 0.55 : 0.95}
-              strokeWidth={isSel ? 3.2 : 1.4}
-              strokeDasharray={dash}
-              tabIndex={selectable ? 0 : undefined}
-              role={selectable ? 'button' : undefined}
-              aria-pressed={selectable ? isSel : undefined}
-              aria-label={
-                selectable
-                  ? `비내력벽 후보, 누르면 철거 대상으로 ${isSel ? '해제' : '선택'}`
-                  : st.label
-              }
+              fill="var(--floorplan-wall-nonload)"
+              fillOpacity={isSel ? 0.7 : 0.22}
+              stroke={isSel ? '#ffffff' : 'var(--floorplan-wall-nonload)'}
+              strokeOpacity={0.95}
+              strokeWidth={isSel ? 4 : 1.6}
+              strokeDasharray={isSel ? undefined : '5 3'}
+              tabIndex={0}
+              role="button"
+              aria-pressed={isSel}
+              aria-label={`비내력벽 후보, 누르면 철거 대상으로 ${isSel ? '해제' : '선택'}`}
               onClick={() => {
                 if (panMoved.current) return; // 팬 끝의 클릭은 무시(드래그/선택 구분).
-                onToggle(r.region_id, r.class_name);
+                onToggle(r.region_id);
               }}
               onKeyDown={(e) => {
-                if (!selectable) return;
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  onToggle(r.region_id, r.class_name);
+                  onToggle(r.region_id);
                 }
               }}
             >
               <title>
-                {selectable
-                  ? '비내력벽 후보 — 누르면 철거 대상으로 선택'
-                  : `${st.label}${st.kind === 'wall' ? ' — 선택 불가' : ''}`}
+                {isSel
+                  ? '철거 대상으로 선택됨 — 누르면 해제'
+                  : '비내력벽 후보 — 누르면 철거 대상으로 선택'}
               </title>
             </polygon>
           );

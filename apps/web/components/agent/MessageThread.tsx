@@ -103,27 +103,24 @@ function AssistantTurn({
 }) {
   const hasActivity = activity != null && activity.length > 0;
   const hasContent = content != null && content.length > 0;
+  const hasDynamics = dynamics != null && dynamics.length > 0;
   return (
     <Group align="flex-start" gap="sm" wrap="nowrap" style={{ alignSelf: 'stretch' }}>
       <Avatar />
       <Stack gap="xs" style={{ minWidth: 0, flex: 1 }}>
         {hasActivity ? <ActivitySteps steps={activity!} /> : null}
-        {hasContent ? (
-          <>
-            {/* 마크다운은 버블 크롬 없이 본문에 직접 렌더한다(영역 확보·카드 UI 축소).
-                흰 배경 위 평문처럼 보이도록 padding/border/shadow 제거. */}
-            <ChatMarkdown content={content!} />
-            {dynamics && dynamics.length > 0 ? (
-              <Stack gap="xs" mt={2}>
-                {dynamics.map((component, index) => (
-                  <A2uiSurface key={`${bubbleKey}-dyn-${index}`} component={component} />
-                ))}
-              </Stack>
-            ) : null}
-          </>
-        ) : typing ? (
-          <TypingDots />
+        {/* 마크다운은 버블 크롬 없이 본문에 직접 렌더한다(영역 확보·카드 UI 축소). */}
+        {hasContent ? <ChatMarkdown content={content!} /> : null}
+        {/* A2UI 카드(오버레이 등)는 본문 유무와 무관하게 렌더한다 — UI-only 메시지(빈 본문 +
+            카드)가 새로고침 시 사라지던 문제 해소(#ui-only-render). */}
+        {hasDynamics ? (
+          <Stack gap="xs" mt={2}>
+            {dynamics!.map((component, index) => (
+              <A2uiSurface key={`${bubbleKey}-dyn-${index}`} component={component} />
+            ))}
+          </Stack>
         ) : null}
+        {!hasContent && !hasDynamics && typing ? <TypingDots /> : null}
       </Stack>
     </Group>
   );
