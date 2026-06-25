@@ -350,6 +350,93 @@ async def test_session_floorplan_signs_and_segments(monkeypatch) -> None:
     assert {i["label"]: i["count"] for i in res["instances"]} == {"wall_other": 2}
 
 
+async def test_session_floorplan_emits_overlay_and_persists_objects(
+    monkeypatch,
+) -> None:
+    # 폴리곤 있는 predictions → 오버레이 카드 방출 + 판단스키마(wall/space objects) 누적 +
+    # LLM 반환분에서 좌표 제거(컨텍스트 leanness).
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_other",
+                        "score": 0.9,
+                        "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                        "requires_hitl": True,
+                    },
+                    {
+                        "region_id": "pred:2",
+                        "class_name": "wall_reinforced_concrete",
+                        "score": 0.8,
+                        "polygon": [20, 20, 30, 20, 30, 30],
+                    },
+                    {
+                        "region_id": "pred:3",
+                        "class_name": "space_living_room",
+                        "score": 0.95,
+                        "polygon": [40, 40, 60, 40, 60, 60, 40, 60],
+                    },
+                    {
+                        "region_id": "pred:4",
+                        "class_name": "door",
+                        "score": 0.7,
+                        "polygon": [1, 1, 2, 1, 2, 2],
+                    },
+                ],
+            },
+        )
+
+    ctx = RunContext()
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    # LLM 반환분: 좌표 제거 + 오버레이 플래그.
+    assert res["ok"] is True
+    assert res["overlay_emitted"] is True
+    assert res["regions"] == []
+    assert res["image"] is None
+    assert res["region_count"] == 4  # 4개 모두 polygon 유효(door 포함)
+
+    # 오버레이 카드(FloorplanOverlay)가 방출됐다.
+    ui, _snapshot = ctx.drain_ui()
+    assert "FloorplanOverlay" in json.dumps(ui)
+
+    # 판단스키마에 wall/space objects 누적(door 는 둘 다 아님 → 제외).
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    js = session["judgment_schema"]
+    assert {w["id"] for w in js["wall_objects"]} == {"pred:1", "pred:2"}
+    assert {w["wall_type"] for w in js["wall_objects"]} == {
+        "NON_LOAD_BEARING",
+        "LOAD_BEARING",
+    }
+    assert {s["id"] for s in js["space_objects"]} == {"pred:3"}
+
+
 async def test_session_floorplan_records_input_fingerprint(monkeypatch) -> None:
     # #analysis-input-fingerprint: 분석 시작 시점의 입력(asset_id/address_id)을 run_context
     # 에 기록해 evaluate_rules 가 그 지문 기준으로 verdict 영속을 조건부화하게 한다.

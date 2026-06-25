@@ -25,6 +25,10 @@ import {
   type FloorplanConfirmPayload
 } from '@/components/a2ui/cards/FloorplanConfirmCard';
 import {
+  FloorplanOverlayCard,
+  type FloorplanOverlayPayload
+} from '@/components/a2ui/cards/FloorplanOverlayCard';
+import {
   FloorplanRequestCard,
   type FloorplanRequestPayload
 } from '@/components/a2ui/cards/FloorplanRequestCard';
@@ -38,6 +42,15 @@ const addressCandidate = z.object({
   road_address: z.string(),
   jibun_address: z.string().optional(),
   building_name: z.string().optional()
+});
+
+const overlayRegion = z.object({
+  region_id: z.string(),
+  class_name: z.string(),
+  polygon: z.array(z.number()),
+  bbox: z.array(z.number()).optional(),
+  score: z.number().optional(),
+  requires_hitl: z.boolean().optional()
 });
 
 export const a2uiCatalog = defineCatalog(schema, {
@@ -66,6 +79,18 @@ export const a2uiCatalog = defineCatalog(schema, {
         confidence: z.union([z.number(), z.string()]).optional()
       }),
       description: '도면 세그멘테이션 후보 영역 + 분석 신뢰도(0~1) 카드.'
+    },
+    FloorplanOverlay: {
+      props: z.object({
+        asset_id: z.string().optional(),
+        image: z
+          .object({ width: z.number(), height: z.number() })
+          .partial()
+          .optional(),
+        regions: z.array(overlayRegion).default([])
+      }),
+      description:
+        '도면 위에 AI 분석 영역(벽/공간)을 폴리곤 오버레이로 표시하고 비내력벽 후보를 선택받는 카드(OVERLAY).'
     }
   },
   // 카드 인터랙션은 useChatActions(상위 컨텍스트)로 처리하므로 json-render 액션은 없음.
@@ -86,6 +111,9 @@ const { registry: a2uiRegistry } = defineRegistry(a2uiCatalog, {
     ),
     FloorplanConfirm: ({ props }) => (
       <FloorplanConfirmCard payload={props as FloorplanConfirmPayload} />
+    ),
+    FloorplanOverlay: ({ props }) => (
+      <FloorplanOverlayCard payload={props as FloorplanOverlayPayload} />
     )
   }
 });
@@ -97,5 +125,6 @@ export const A2UI_TYPE_BY_KIND: Record<string, string> = {
   'floorplan-request': 'FloorplanRequest',
   'address-candidates': 'AddressCandidates',
   'judgment-summary': 'JudgmentSummary',
-  'floorplan-confirm': 'FloorplanConfirm'
+  'floorplan-confirm': 'FloorplanConfirm',
+  'floorplan-overlay': 'FloorplanOverlay'
 };

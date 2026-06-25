@@ -16,6 +16,7 @@ ok=false 면 ASK_MORE 로 degrade, 반복 실패 시 HOLD_OR_HANDOFF 한다.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 log = get_logger("zippin.agent.tools.segmentation")
 
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.2.0"
 
 # segmentation-result 계약의 라벨 enum(검증·요약용).
 _KNOWN_LABELS: frozenset[str] = frozenset(
@@ -67,6 +68,8 @@ def _result(
     summary: str | None = None,
     instances: list[dict[str, Any]] | None = None,
     mask_asset_id: str | None = None,
+    image: dict[str, Any] | None = None,
+    regions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -74,6 +77,10 @@ def _result(
         "error_code": error_code,
         "mask_asset_id": mask_asset_id,
         "instances": instances or [],
+        # 오버레이 렌더용(좌표 포함). LLM 컨텍스트엔 싣지 않고 카드로만 전달한다 —
+        # segment_session_floorplan 이 카드 방출 후 LLM 반환분에서 떼어 낸다.
+        "image": image,
+        "regions": regions or [],
         "summary": summary,
     }
 
@@ -205,7 +212,186 @@ def _parse_ok(data: Any) -> dict[str, Any]:
     # 현재 모델 응답엔 저장된 마스크 자산이 없다(폴리곤만). 다만 핸들러가 향후
     # mask_asset_id(UUID)를 줄 수 있으니 방어적으로 보존한다.
     mask = _valid_uuid(data.get("mask_asset_id"))
-    return _result(True, summary=summary, instances=instances, mask_asset_id=mask)
+    image = _parse_image(data.get("image"))
+    regions = _parse_regions(raw_predictions)
+    return _result(
+        True,
+        summary=summary,
+        instances=instances,
+        mask_asset_id=mask,
+        image=image,
+        regions=regions,
+    )
+
+
+def _parse_image(raw: Any) -> dict[str, Any] | None:
+    """원본 이미지 크기(width/height)만 추려 계약(Image)으로 환원. 좌표 스케일에 쓴다."""
+    if not isinstance(raw, dict):
+        return None
+    w = raw.get("width")
+    h = raw.get("height")
+    if isinstance(w, int) and isinstance(h, int) and w > 0 and h > 0:
+        return {"width": w, "height": h}
+    return None
+
+
+def _parse_regions(raw_predictions: list[Any]) -> list[dict[str, Any]]:
+    """per-region predictions 를 오버레이 계약(Region)으로 환원.
+
+    좌표(polygon/bbox)는 원본 픽셀 그대로 보존한다(오버레이가 표시 크기로 스케일).
+    polygon 이 비었거나(짝수 좌표 < 6=삼각형 미만) 라벨이 18클래스 밖이면 드롭한다.
+    """
+    out: list[dict[str, Any]] = []
+    for idx, item in enumerate(raw_predictions):
+        if not isinstance(item, dict):
+            continue
+        label = item.get("class_name")
+        if label not in _KNOWN_LABELS:
+            continue
+        polygon = item.get("polygon")
+        if not isinstance(polygon, list) or len(polygon) < 6 or len(polygon) % 2 != 0:
+            continue  # 최소 삼각형(3점=6좌표) + 짝수만.
+        if not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in polygon
+        ):
+            continue
+        region: dict[str, Any] = {
+            "region_id": str(item.get("region_id") or f"pred:{idx + 1}"),
+            "class_name": label,
+            "polygon": [float(v) for v in polygon],
+            "requires_hitl": bool(item.get("requires_hitl"))
+            or str(label).startswith("wall_"),
+        }
+        score = item.get("score")
+        if (
+            isinstance(score, (int, float))
+            and not isinstance(score, bool)
+            and 0 <= score <= 1
+        ):
+            region["score"] = float(score)
+        bbox = item.get("bbox")
+        if (
+            isinstance(bbox, list)
+            and len(bbox) == 4
+            and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) for v in bbox
+            )
+        ):
+            region["bbox"] = [float(v) for v in bbox]
+        out.append(region)
+    return out
+
+
+# class_name → 계약 WallObject.wall_type (common-judgment-schema). 모델 출력은 후보일
+# 뿐 확정 아님 — UI 어휘는 '후보/검토 필요'로 표시한다.
+_WALL_TYPE_BY_CLASS: dict[str, str] = {
+    "wall_other": "NON_LOAD_BEARING",
+    "wall_reinforced_concrete": "LOAD_BEARING",
+    "wall_unknown": "UNKNOWN",
+}
+# class_name → 계약 SpaceObject.type. 매핑 없는 공간은 ETC.
+_SPACE_TYPE_BY_CLASS: dict[str, str] = {
+    "space_living_room": "LIVING_ROOM",
+    "space_kitchen": "KITCHEN",
+    "space_bedroom": "BEDROOM",
+    "space_bathroom": "BATHROOM",
+    "space_balcony": "BALCONY",
+    "space_stairwell": "STAIRWELL",
+    "space_elevator_hall": "CORRIDOR",
+    "space_entrance": "CORRIDOR",
+}
+# class_name → 사람이 읽는 라벨(SpaceObject.label).
+_SPACE_LABEL_BY_CLASS: dict[str, str] = {
+    "space_living_room": "거실",
+    "space_kitchen": "주방",
+    "space_bedroom": "침실",
+    "space_bathroom": "욕실",
+    "space_balcony": "발코니",
+    "space_stairwell": "계단실",
+    "space_elevator_hall": "엘리베이터홀",
+    "space_entrance": "현관",
+    "space_multipurpose": "다목적실",
+    "space_ac_room": "실외기실",
+    "space_dress_room": "드레스룸",
+    "space_elevator": "엘리베이터",
+    "space_other": "기타 공간",
+}
+
+
+def _polygon_to_maskcoords(polygon: list[float]) -> list[dict[str, float]]:
+    """평면 [x1,y1,x2,y2,...] → 계약 MaskCoord[{x,y}]."""
+    return [
+        {"x": float(polygon[i]), "y": float(polygon[i + 1])}
+        for i in range(0, len(polygon) - 1, 2)
+    ]
+
+
+def build_overlay_spec(
+    *, asset_id: Any, image: dict[str, Any] | None, regions: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """오버레이 카드(FloorplanOverlay) json-render spec — 서버가 구성한다(LLM 미관여).
+
+    asset_id 로 프론트가 표시용 서명 URL 을 발급받고, image(원본 크기)로 좌표를 스케일해
+    polygon 을 그린다.
+    """
+    return {
+        "root": "ov",
+        "elements": {
+            "ov": {
+                "type": "FloorplanOverlay",
+                "props": {
+                    "asset_id": str(asset_id),
+                    "image": image or {},
+                    "regions": regions,
+                },
+            }
+        },
+    }
+
+
+def build_judgment_objects(
+    regions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """regions → (wall_objects, space_objects) 계약 형태. door/window 는 제외(둘 다 아님).
+
+    좌표가 부족하면(벽 <2점, 공간 <3점) 그 객체는 드롭한다(계약 minItems 준수).
+    region_id 를 객체 id 로 써서 OVERLAY 의 selected_walls(region_id[]) 와 정합시킨다.
+    """
+    walls: list[dict[str, Any]] = []
+    spaces: list[dict[str, Any]] = []
+    for r in regions:
+        cls = r.get("class_name")
+        rid = r.get("region_id")
+        if not isinstance(cls, str) or not isinstance(rid, str):
+            continue
+        pts = _polygon_to_maskcoords(r.get("polygon") or [])
+        conf = float(r["score"]) if isinstance(r.get("score"), (int, float)) else 0.0
+        if cls in _WALL_TYPE_BY_CLASS:
+            if len(pts) < 2:
+                continue
+            walls.append(
+                {
+                    "id": rid,
+                    "wall_type": _WALL_TYPE_BY_CLASS[cls],
+                    "confidence": conf,
+                    "coords": pts,
+                    "source_engine": "MASK2FORMER",
+                }
+            )
+        elif cls in _SPACE_LABEL_BY_CLASS:
+            if len(pts) < 3:
+                continue
+            spaces.append(
+                {
+                    "id": rid,
+                    "label": _SPACE_LABEL_BY_CLASS[cls],
+                    "type": _SPACE_TYPE_BY_CLASS.get(cls, "ETC"),
+                    "mask_coords": pts,
+                    "confidence": conf,
+                    "source_engine": "MASK2FORMER",
+                }
+            )
+    return walls, spaces
 
 
 async def segment_session_floorplan(
@@ -289,9 +475,40 @@ async def segment_session_floorplan(
             error_code="SEGMENTATION_ENDPOINT_UNAVAILABLE",
             summary="도면 접근 URL 발급에 실패했습니다.",
         )
-    return await segment_floorplan_impl(
+    result = await segment_floorplan_impl(
         image_url=signed, settings=settings, client=client
     )
+    if not result.get("ok") or not result.get("regions"):
+        return result
+    # 분석 성공 — 오버레이 카드 방출 + 공통 판단 스키마(wall/space objects) 누적 + LLM
+    # 반환분에서 좌표 제거(컨텍스트 leanness). 카드 방출/판단 누적 실패는 분석 자체를
+    # 무르지 않는다(best-effort) — 좌표 없는 요약만 LLM 에 돌려도 흐름은 유지된다.
+    regions = result.get("regions") or []
+    image = result.get("image")
+    if run_context is not None and run_id is not None:
+        from .domain import emit_ui_component_impl
+
+        spec = build_overlay_spec(asset_id=asset["id"], image=image, regions=regions)
+        with contextlib.suppress(Exception):
+            await emit_ui_component_impl(
+                run_context=run_context, run_id=run_id, components=[spec]
+            )
+    walls, spaces = build_judgment_objects(regions)
+    with contextlib.suppress(Exception):
+        await main_flow.merge_judgment_schema(
+            session_id=session_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+            patch={"wall_objects": walls, "space_objects": spaces},
+        )
+    # 좌표는 카드로만 — LLM 반환분에서 떼어 낸다.
+    return {
+        **result,
+        "regions": [],
+        "image": None,
+        "overlay_emitted": True,
+        "region_count": len(regions),
+    }
 
 
 async def segment_floorplan_impl(

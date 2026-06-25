@@ -680,6 +680,33 @@ async def get_owned_session(
     )
 
 
+async def merge_judgment_schema(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    """공통 판단 스키마(JSONB)에 top-level 키를 병합한다(owner-gated).
+
+    OVERLAY 가 수집한 ``selected_walls``, AI 분석의 ``wall_objects``/``space_objects``
+    등을 ``sessions.judgment_schema`` 에 누적한다. 전체 CommonJudgmentSchema 검증은
+    RULE 진입 시점에 별도로 하고, 여기선 부분 누적만 한다(top-level merge). 타인/부재
+    세션은 404 (``_resolve_owner_session``).
+    """
+
+    session = await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    current = session.get("judgment_schema")
+    merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
+    merged.update(patch)
+    await _db_update_session_fields(session_id, {"judgment_schema": merged})
+    return merged
+
+
 async def _db_clear_owner_sessions_expiry(owner_user_id: uuid.UUID) -> None:
     async with get_engine().begin() as conn:
         await conn.execute(

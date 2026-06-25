@@ -17,6 +17,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, Path
+from pydantic import BaseModel, Field
 
 from ..auth.request_token import RequestUser, require_supabase_request_user
 from ..config import get_settings
@@ -145,3 +146,94 @@ async def create_floorplan_asset(
         asset_id=str(row["id"]),
     )
     return FloorplanAssetResponse.model_validate(row)
+
+
+class SignedUrlResponse(BaseModel):
+    url: str
+
+
+@router.get(
+    "/{session_id}/floorplan-assets/{asset_id}/signed-url",
+    response_model=SignedUrlResponse,
+)
+async def get_floorplan_asset_signed_url(
+    session_id: uuid.UUID = Path(...),
+    asset_id: uuid.UUID = Path(...),
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> SignedUrlResponse:
+    """오버레이가 도면 이미지를 표시할 짧은-수명 서명 URL 을 발급한다(owner-gated).
+
+    카드에 서명 URL 을 영속하면 만료(새로고침 시 깨짐)되므로, 카드는 asset_id 만 들고
+    프론트가 렌더 시점에 본 엔드포인트로 신선한 URL 을 받는다. 세션의 선택된 도면
+    asset 과 일치할 때만 서명한다(stale/타세션 참조 거절).
+    """
+
+    asset = await main_flow.get_selected_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=requester.user_id,
+        owner_is_anonymous=requester.is_anonymous,
+    )
+    if asset is None or str(asset["id"]) != str(asset_id):
+        raise ZippinException(
+            "Floorplan asset not found for this session.",
+            code="FLOORPLAN_ASSET_NOT_FOUND",
+            http_status=404,
+        )
+    settings = get_settings()
+    signed = await storage.sign_object_url(
+        settings,
+        bucket=asset["bucket"],
+        object_path=asset["object_key"],
+        operation="sign_floorplan_display",
+    )
+    if not signed:
+        raise ZippinException(
+            "Could not sign the floorplan URL.",
+            code="FLOORPLAN_SIGN_FAILED",
+            http_status=502,
+        )
+    return SignedUrlResponse(url=signed)
+
+
+class SelectedWallsRequest(BaseModel):
+    # OVERLAY-002: 사용자가 클릭한 철거 희망 비내력벽 후보 region_id 목록. 빈 목록은
+    # 선택 해제(전체)로 허용한다. 폭주 방지를 위해 상한을 둔다.
+    region_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
+class SelectedWallsResponse(BaseModel):
+    selected_walls: list[str]
+
+
+@router.patch(
+    "/{session_id}/selected-walls",
+    response_model=SelectedWallsResponse,
+)
+async def update_selected_walls(
+    payload: SelectedWallsRequest,
+    session_id: uuid.UUID = Path(...),
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> SelectedWallsResponse:
+    """OVERLAY 가 수집한 철거 대상 벽 선택을 공통 판단 스키마에 기록한다(HITL).
+
+    빈 문자열 제거 + 순서 보존 dedupe 후 ``judgment_schema.selected_walls`` 로 병합한다.
+    LLM 을 거치지 않는 직접 UI 액션이라 REST 로 둔다(클릭마다 모델을 깨우지 않음).
+    """
+
+    seen: set[str] = set()
+    clean: list[str] = []
+    for rid in payload.region_ids:
+        rid = rid.strip()
+        if rid and rid not in seen:
+            seen.add(rid)
+            clean.append(rid)
+    merged = await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=requester.user_id,
+        owner_is_anonymous=requester.is_anonymous,
+        patch={"selected_walls": clean},
+    )
+    walls = merged.get("selected_walls")
+    return SelectedWallsResponse(
+        selected_walls=walls if isinstance(walls, list) else clean
+    )

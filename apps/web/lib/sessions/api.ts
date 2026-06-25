@@ -131,3 +131,38 @@ export async function getSessionReport(id: string): Promise<SessionReportRespons
   const response = await apiClient.get<SessionReportResponse>(`/sessions/${id}/report`);
   return response.data;
 }
+
+/** 오버레이가 도면 이미지를 표시할 짧은-수명 서명 URL 을 발급받는다(렌더 시점 호출). */
+export async function getFloorplanAssetSignedUrl(
+  sessionId: string,
+  assetId: string
+): Promise<string> {
+  const res = await apiClient.get<{ url: string }>(
+    `/sessions/${sessionId}/floorplan-assets/${assetId}/signed-url`
+  );
+  return res.data.url;
+}
+
+/** OVERLAY-002: 사용자가 선택한 철거 희망 비내력벽 region_id 목록을 판단스키마에 기록. */
+export async function updateSelectedWalls(
+  sessionId: string,
+  regionIds: string[]
+): Promise<string[]> {
+  const res = await apiClient.patch<{ selected_walls: string[] }>(
+    `/sessions/${sessionId}/selected-walls`,
+    { region_ids: regionIds }
+  );
+  return res.data.selected_walls;
+}
+
+/**
+ * 세션 진입 시 HF 세그멘테이션 엔드포인트를 미리 깨운다(콜드스타트 체감 제거).
+ * best-effort — 실패해도 무시하고, 백엔드가 스로틀하므로 자주 불러도 안전하다.
+ */
+export async function warmupSegmentation(): Promise<void> {
+  try {
+    await apiClient.post('/sessions/agent/warmup', {});
+  } catch {
+    // 워밍업은 부가 기능 — 실패를 사용자에게 전파하지 않는다.
+  }
+}

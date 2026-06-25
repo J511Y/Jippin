@@ -17,7 +17,7 @@ import { ChatActionsProvider } from '@/components/agent/chat-actions';
 import { trackPrecheckSessionStart } from '@/lib/analytics/sessions-funnel';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
 import { useAgentStream } from '@/lib/agent/useAgentStream';
-import { createSession, getSession } from '@/lib/sessions/api';
+import { createSession, getSession, warmupSegmentation } from '@/lib/sessions/api';
 
 import { MessageComposer } from './MessageComposer';
 import { MessageThread } from './MessageThread';
@@ -252,6 +252,12 @@ export function SessionChat({ sessionId }: { sessionId?: string }) {
   const [pendingFirstMessage, setPendingFirstMessage] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+
+  // /sessions/* 진입 시 HF 세그멘테이션 엔드포인트를 미리 깨운다(콜드스타트 체감 제거).
+  // 사용자가 도면을 올리기 전에 replica 가 warm 이도록. best-effort + 백엔드 스로틀.
+  useEffect(() => {
+    void warmupSegmentation();
+  }, []);
 
   // 첫 전송: 익명 세션 보장 → 세션 생성 → URL 교체(리마운트 없음) → 대화 전환.
   const handleFirstSend = useCallback(

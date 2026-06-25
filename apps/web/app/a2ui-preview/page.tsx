@@ -7,8 +7,38 @@ import { Badge, Container, Stack, Text, Title } from '@mantine/core';
 
 import { A2uiSurface } from '@/components/a2ui';
 
+// 오버레이 미리보기용 합성 평면도(1000x800). 미리보기엔 세션이 없어 실제 도면 이미지는
+// 안 뜨고 폴리곤/범례/줌/선택 UI 만 확인된다(실서비스에선 서명 URL 로 도면 위에 겹친다).
+const OVERLAY_REGIONS = [
+  { region_id: 's1', class_name: 'space_living_room', polygon: [60, 60, 500, 60, 500, 400, 60, 400], score: 0.95 },
+  { region_id: 's2', class_name: 'space_kitchen', polygon: [520, 60, 940, 60, 940, 400, 520, 400], score: 0.93 },
+  { region_id: 's3', class_name: 'space_bedroom', polygon: [60, 420, 500, 420, 500, 740, 60, 740], score: 0.94 },
+  { region_id: 's4', class_name: 'space_bathroom', polygon: [520, 420, 740, 420, 740, 740, 520, 740], score: 0.9 },
+  { region_id: 's5', class_name: 'space_balcony', polygon: [740, 420, 940, 420, 940, 740, 740, 740], score: 0.92 },
+  { region_id: 'w1', class_name: 'wall_reinforced_concrete', polygon: [40, 40, 960, 40, 960, 60, 40, 60], score: 0.7, requires_hitl: true },
+  { region_id: 'w2', class_name: 'wall_reinforced_concrete', polygon: [40, 740, 960, 740, 960, 760, 40, 760], score: 0.68, requires_hitl: true },
+  { region_id: 'w3', class_name: 'wall_reinforced_concrete', polygon: [40, 40, 60, 40, 60, 760, 40, 760], score: 0.66, requires_hitl: true },
+  { region_id: 'w4', class_name: 'wall_reinforced_concrete', polygon: [940, 40, 960, 40, 960, 760, 940, 760], score: 0.69, requires_hitl: true },
+  { region_id: 'w5', class_name: 'wall_other', polygon: [500, 60, 520, 60, 520, 400, 500, 400], score: 0.62, requires_hitl: true },
+  { region_id: 'w6', class_name: 'wall_other', polygon: [60, 400, 500, 400, 500, 420, 60, 420], score: 0.6, requires_hitl: true },
+  { region_id: 'd1', class_name: 'door', polygon: [240, 400, 300, 400, 300, 420, 240, 420], score: 0.8 },
+  { region_id: 'g1', class_name: 'window', polygon: [740, 740, 860, 740, 860, 760, 740, 760], score: 0.75 }
+];
+
 // (1) json-render 네이티브 스펙 — 백엔드가 새로 방출할 포맷.
 const NATIVE_SPECS: { label: string; component: Record<string, unknown> }[] = [
+  {
+    label: 'FloorplanOverlay (native spec) — 폴리곤 오버레이 + 비내력벽 선택',
+    component: {
+      root: 'ov',
+      elements: {
+        ov: {
+          type: 'FloorplanOverlay',
+          props: { asset_id: '', image: { width: 1000, height: 800 }, regions: OVERLAY_REGIONS }
+        }
+      }
+    }
+  },
   {
     label: 'FloorplanRequest (native spec)',
     component: {
