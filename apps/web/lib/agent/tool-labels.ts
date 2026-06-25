@@ -28,6 +28,11 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
     active: '주소를 확인하고 있어요',
     done: '주소를 확인했어요'
   },
+  lookup_floorplan_candidates: {
+    label: '보유 도면 확인',
+    active: '내부 보유 도면을 찾고 있어요',
+    done: '보유 도면을 확인했어요'
+  },
   check_building_register: {
     label: '건축물대장 조회',
     active: '건축물대장을 조회하고 있어요',

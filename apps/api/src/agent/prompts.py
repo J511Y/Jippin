@@ -34,8 +34,14 @@ SYSTEM_PROMPT = """\
    조회를 '시작'합니다(백그라운드로 처리되어 다소 시간이 걸립니다). 도구는 즉시
    status=querying 과 home_check_id 를 돌려주니, 사용자에게 조회를 시작했고 잠시 후
    결과/추가 인증 안내가 표시될 수 있다고 알립니다(이 단계 결과를 기다리지 않습니다).
-3) 평면도 — 평면도가 아직 없으면 ``emit_floorplan_request`` 로 업로드 카드를 띄워 받고,
-   올라온 평면도를 segment_floorplan 으로 분석합니다.
+3) 보유 도면 확인 — 주소가 확정되면(아파트명) **먼저 lookup_floorplan_candidates 로 내부
+   보유 도면이 있는지 찾습니다**(곧장 업로드부터 시키지 않습니다).
+   - count>0 이면: 보유 도면이 있다고 알리고, 그 중에서 쓸지 아니면 직접 올릴지 물어
+     사용자가 고르게 합니다.
+   - count==0 이면: "내부에 보유한 도면이 없어서 직접 올려주셔야 해요" 라고 안내하고
+     아래 4)로 넘어가 업로드를 요청합니다.
+4) 평면도 — (보유 도면이 없거나 사용자가 직접 올리길 원할 때) ``emit_floorplan_request`` 로
+   업로드 카드를 띄워 받고, 올라온 평면도를 segment_floorplan 으로 분석합니다.
    - 결과 ok=false 면 그 이유를 쉽게 설명하고, 다른 평면도를 요청하거나
      set_completion_decision('ASK_MORE') 로 추가 정보를 받습니다. 같은 실패가
      반복되면 set_completion_decision('HOLD_OR_HANDOFF') 로 전문가 상담을 권합니다.

@@ -156,6 +156,61 @@ async def search_address_impl(*, keyword: str) -> dict[str, Any]:
     )
 
 
+async def lookup_floorplan_candidates_impl(*, session_id: uuid.UUID) -> dict[str, Any]:
+    """INPUT-lookupFloorplanCandidates — 확정 주소(아파트명)로 내부 보유 도면 카탈로그를
+    검색한다(기능명세서 §2.2, 플로우: 주소→보유 도면 확인→없으면 업로드).
+
+    후보가 있으면(count>0) 사용자가 고르게 하고, 없으면(count==0) 직접 업로드를 요청한다.
+    카탈로그가 미큐레이션이면 보통 0건이라 업로드로 흐른다.
+    """
+
+    try:
+        addr = await main_flow.get_session_address(session_id)
+    except Exception as exc:  # noqa: BLE001 - 구조화 에러로 degrade
+        return _safe_error(
+            exc, "FLOORPLAN_LOOKUP_FAILED", tool="lookup_floorplan_candidates"
+        )
+    apartment = addr.get("apartment_name") if isinstance(addr, dict) else None
+    dong = addr.get("building_dong") if isinstance(addr, dict) else None
+    if not apartment:
+        return _ok(
+            candidates=[],
+            count=0,
+            summary="아직 아파트명이 확정되지 않아 보유 도면을 찾지 못했어요.",
+        )
+    try:
+        rows = await main_flow.search_floorplan_catalog(
+            apartment_name=apartment, building_dong=dong, limit=10
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _safe_error(
+            exc, "FLOORPLAN_LOOKUP_FAILED", tool="lookup_floorplan_candidates"
+        )
+    candidates = [
+        {
+            "floorplan_id": str(r.get("id")),
+            "apartment_name": r.get("apartment_name"),
+            "building_dong": r.get("building_dong"),
+            "size_type": r.get("size_type"),
+            "exclusive_area_m2": (
+                float(r["exclusive_area_m2"])
+                if r.get("exclusive_area_m2") is not None
+                else None
+            ),
+        }
+        for r in rows
+    ]
+    return _ok(
+        candidates=candidates,
+        count=len(candidates),
+        summary=(
+            f"내부 보유 도면 {len(candidates)}건을 찾았어요."
+            if candidates
+            else "내부 보유 도면이 없어 직접 올려주셔야 해요."
+        ),
+    )
+
+
 # run_home_check 백그라운드 태스크 강참조(GC 방지). 라우터의 BackgroundTasks 와 동일한
 # "응답 후 처리" 패턴을 에이전트 런타임에서 재현한다.
 _home_check_tasks: set[Any] = set()

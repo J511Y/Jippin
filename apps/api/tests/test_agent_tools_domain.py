@@ -27,6 +27,55 @@ async def test_search_address_wraps_results(monkeypatch) -> None:
     assert len(res["items"]) == 2
 
 
+async def _session_with_apartment(monkeypatch):
+    from tests._main_flow_db_fake import install_main_flow_fake
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    sid = session["id"]
+    # 주소(아파트명)를 페이크에 직접 세팅(upsert 는 road/jibun 검증이 있어 우회).
+    fake.session_addresses[sid] = {
+        "session_id": sid,
+        "apartment_name": "만촌 메르디앙",
+        "building_dong": None,
+        "road_address": None,
+        "jibun_address": None,
+        "unit_ho": None,
+    }
+    return sid, fake
+
+
+async def test_lookup_floorplan_candidates_empty_catalog(monkeypatch) -> None:
+    # 카탈로그 미큐레이션(빈) → count 0 + 업로드 안내(직접 올려야 함).
+    session_id, _fake = await _session_with_apartment(monkeypatch)
+    res = await domain.lookup_floorplan_candidates_impl(session_id=session_id)
+    assert res["ok"] is True
+    assert res["count"] == 0
+    assert "없어" in res["summary"]
+
+
+async def test_lookup_floorplan_candidates_found(monkeypatch) -> None:
+    # 카탈로그에 검증된 공개 도면이 있으면 후보로 반환.
+    session_id, fake = await _session_with_apartment(monkeypatch)
+    fp_id = uuid.uuid4()
+    fake.floorplans[fp_id] = {
+        "id": fp_id,
+        "apartment_name": "만촌 메르디앙",
+        "building_dong": None,
+        "size_type": "84A",
+        "exclusive_area_m2": None,
+        "visibility": "public_catalog",
+        "quality_status": "verified",
+    }
+    res = await domain.lookup_floorplan_candidates_impl(session_id=session_id)
+    assert res["count"] == 1
+    assert res["candidates"][0]["apartment_name"] == "만촌 메르디앙"
+    assert res["candidates"][0]["size_type"] == "84A"
+
+
 async def test_search_address_degrades_on_service_error(monkeypatch) -> None:
     async def fake_search(*, keyword: str, **_: object) -> dict[str, object]:
         raise ZippinException("키 없음", code="JUSO_CONFM_KEY_MISSING", http_status=503)

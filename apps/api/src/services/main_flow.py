@@ -48,6 +48,7 @@ from ..models import (
     AgentRun,
     ChatMessage,
     ChatToolCall,
+    Floorplan,
     FloorplanAsset,
     FloorplanCandidate,
     FloorplanUpload,
@@ -57,6 +58,7 @@ from ..models import (
 
 _SESSIONS = Session.__table__
 _SESSION_ADDRESSES = SessionAddress.__table__
+_FLOORPLANS = Floorplan.__table__
 _FLOORPLAN_UPLOADS = FloorplanUpload.__table__
 _FLOORPLAN_ASSETS = FloorplanAsset.__table__
 _FLOORPLAN_CANDIDATES = FloorplanCandidate.__table__
@@ -703,6 +705,41 @@ async def get_session_judgment_schema(session_id: uuid.UUID) -> dict[str, Any]:
     row = await _db_select_session(session_id)
     js = row.get("judgment_schema") if isinstance(row, dict) else None
     return js if isinstance(js, dict) else {}
+
+
+async def _db_search_floorplan_catalog(
+    *, apartment_name: str, building_dong: str | None, limit: int
+) -> list[dict[str, Any]]:
+    async with get_engine().begin() as conn:
+        stmt = sa.select(_FLOORPLANS).where(
+            _FLOORPLANS.c.visibility == "public_catalog",
+            _FLOORPLANS.c.quality_status == "verified",
+            _FLOORPLANS.c.apartment_name.ilike(f"%{apartment_name}%"),
+        )
+        if building_dong:
+            stmt = stmt.where(_FLOORPLANS.c.building_dong == building_dong)
+        stmt = stmt.order_by(_FLOORPLANS.c.updated_at.desc()).limit(limit)
+        rows = (await conn.execute(stmt)).all()
+    return [dict(r._mapping) for r in rows]
+
+
+async def search_floorplan_catalog(
+    *,
+    apartment_name: str | None,
+    building_dong: str | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """내부 보유 도면 카탈로그(``floorplans``)에서 아파트명으로 후보를 검색한다(INPUT-
+    lookupFloorplanCandidates). 공개·검증된(catalog/verified) 행만 반환한다. 아파트명이
+    없으면 검색하지 않는다(빈 목록)."""
+
+    if not apartment_name or not apartment_name.strip():
+        return []
+    return await _db_search_floorplan_catalog(
+        apartment_name=apartment_name.strip(),
+        building_dong=building_dong,
+        limit=limit,
+    )
 
 
 async def merge_judgment_schema(

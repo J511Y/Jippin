@@ -19,6 +19,7 @@ from .domain import (
     emit_judgment_summary_impl,
     emit_ui_component_impl,
     evaluate_rules_impl,
+    lookup_floorplan_candidates_impl,
     search_address_impl,
     set_completion_decision_impl,
 )
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 TOOL_KINDS: dict[str, str] = {
     "search_address": "external_api",
     "confirm_address": "external_api",
+    "lookup_floorplan_candidates": "external_api",
     "segment_floorplan": "ai_model",
     "check_building_register": "external_api",
     "evaluate_rules": "rule_engine",
@@ -66,6 +68,13 @@ def build_tools(
     async def search_address(keyword: str) -> dict[str, Any]:
         """도로명주소 API로 주소 후보를 검색한다. 사용자가 정확한 주소를 모를 때 사용."""
         return await search_address_impl(keyword=keyword)
+
+    @tool
+    async def lookup_floorplan_candidates() -> dict[str, Any]:
+        """확정된 주소(아파트명)로 **내부 보유 도면**을 검색한다. 주소 확정 후 도면 단계
+        진입 전에 호출하라. count>0 이면 후보가 있으니 사용자가 고르게 하고, count==0 이면
+        보유 도면이 없으니 emit_floorplan_request 로 업로드를 요청하라."""
+        return await lookup_floorplan_candidates_impl(session_id=session_id)
 
     @tool
     async def confirm_address(
@@ -201,6 +210,7 @@ def build_tools(
 
     return [
         search_address,
+        lookup_floorplan_candidates,
         confirm_address,
         segment_floorplan,
         check_building_register,
