@@ -26,6 +26,8 @@ function pushToDataLayer(event: DataLayerEvent): void {
 export const PRECHECK_SESSION_START_EVENT = 'precheck_session_start';
 export const PRECHECK_ADDRESS_SELECT_EVENT = 'precheck_address_select';
 export const PRECHECK_FLOORPLAN_ATTACH_EVENT = 'precheck_floorplan_attach';
+export const PRECHECK_OVERLAY_VIEW_EVENT = 'precheck_overlay_view';
+export const PRECHECK_WALL_SELECT_EVENT = 'precheck_wall_select';
 export const PRECHECK_REPORT_VIEW_EVENT = 'precheck_report_view';
 
 /** 세션 시작(첫 메시지로 세션 생성). entry: 예시칩 클릭('example') / 직접 입력('typed'). */
@@ -41,6 +43,22 @@ export function trackPrecheckAddressSelect(): void {
 /** 도면 첨부(업로드+asset 등록) 성공. */
 export function trackPrecheckFloorplanAttach(): void {
   pushToDataLayer({ event: PRECHECK_FLOORPLAN_ATTACH_EVENT });
+}
+
+/** 도면 오버레이 카드 노출(분석 결과 렌더). wall_other_count: 선택 가능한 비내력벽 후보 수. */
+export function trackPrecheckOverlayView(wallOtherCount: number): void {
+  pushToDataLayer({
+    event: PRECHECK_OVERLAY_VIEW_EVENT,
+    wall_other_count: wallOtherCount
+  });
+}
+
+/** 오버레이에서 철거 대상 벽 선택 변경. selected_count: 현재 선택 수. */
+export function trackPrecheckWallSelect(selectedCount: number): void {
+  pushToDataLayer({
+    event: PRECHECK_WALL_SELECT_EVENT,
+    selected_count: selectedCount
+  });
 }
 
 /** 사전검토 리포트 진입. has_report: 판정 결과 준비 여부. */

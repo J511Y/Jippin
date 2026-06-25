@@ -4,6 +4,92 @@
 
 :root {
   color-scheme: light;
+
+  /* 도면 오버레이(OVERLAY) 클래스 색. 의미색은 브랜드 상태 토큰을 그대로 쓴다 — 내력벽
+     후보(선택 불가)=danger, 비내력벽 후보(선택 가능)=success. 공간색은 brand 청록 톤에
+     맞춰 채도를 낮춘 별도 팔레트로 토큰화한다(형광 원색 금지, BRAND §3). SVG fill 이
+     var() 를 직접 읽는다 — 하드코딩 hex 제거 + 다크모드/리브랜드 시 한곳에서 관리. */
+  --floorplan-wall-load: var(--mantine-color-danger-6);
+  --floorplan-wall-nonload: var(--mantine-color-success-6);
+  --floorplan-wall-unknown: #8a929b;
+  --floorplan-door: #3f6f9c;
+  --floorplan-window: #3c8896;
+  --floorplan-space-balcony: #c0803c;
+  --floorplan-space-living: #6a5fa0;
+  --floorplan-space-kitchen: #3e8a78;
+  --floorplan-space-bedroom: #4d6aa0;
+  --floorplan-space-bathroom: #3e879a;
+  --floorplan-space-entrance: #8a6098;
+  --floorplan-space-stairwell: #6e8a4e;
+  --floorplan-space-hall: #9aa0a6;
+  --floorplan-space-dress: #9a607e;
+  --floorplan-space-ac: #7e955a;
+  --floorplan-space-multi: #7e6aa8;
+  --floorplan-space-other: #aab0b6;
+}
+
+/* ===========================================================================
+   도면 오버레이 카드(FloorplanOverlay) — SVG 폴리곤 인터랙션.
+   선택 가능 벽: 점선(형태 신호) + hover/포커스 피드백 + 선택 시 흰 실선. stroke 는
+   non-scaling 이라 줌 무관 일정 두께(149개 영역 줌아웃에서도 안 뭉갬).
+   =========================================================================== */
+.fp-poly {
+  transition: fill-opacity 120ms ease;
+}
+.fp-poly-selectable {
+  cursor: pointer;
+}
+/* hover: 미선택 선택가능 벽만 살짝 진하게(어포던스). */
+.fp-poly-selectable:not([data-selected='1']):hover {
+  fill-opacity: 0.46;
+}
+/* 키보드 포커스 링 — 색만이 아니라 굵은 실선으로(WCAG). */
+.fp-poly-selectable:focus-visible {
+  outline: none;
+  stroke: var(--jippin-brand-primary);
+  stroke-width: 3.5;
+  stroke-dasharray: none;
+}
+/* 진입 펄스 — 선택 가능 벽이 "여길 누르세요"를 1회 알린다(모션 비선호 시 생략). */
+@media (prefers-reduced-motion: no-preference) {
+  .fp-overlay[data-hint='1'] .fp-poly-selectable:not([data-selected='1']) {
+    animation: fp-pulse 1.1s ease-in-out 2;
+  }
+}
+@keyframes fp-pulse {
+  0%,
+  100% {
+    fill-opacity: 0.3;
+  }
+  50% {
+    fill-opacity: 0.62;
+  }
+}
+/* 로딩 스켈레톤 — 캔버스와 같은 비율로 자리 예약(CLS 방지). */
+.fp-skeleton {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--jippin-brand-border);
+  background: linear-gradient(
+    90deg,
+    var(--mantine-color-gray-1) 25%,
+    var(--mantine-color-gray-2) 37%,
+    var(--mantine-color-gray-1) 63%
+  );
+  background-size: 400% 100%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .fp-skeleton {
+    animation: fp-shimmer 1.4s ease infinite;
+  }
+}
+@keyframes fp-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
 }
 
 html,

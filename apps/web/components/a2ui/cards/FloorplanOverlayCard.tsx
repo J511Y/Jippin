@@ -5,31 +5,39 @@
  *
  * 기능명세서 §2.5 OVERLAY-001/002, SDD §4.5 OVERLAY 모듈의 프론트 정본.
  * - OVERLAY-001: AI 분석 결과(폴리곤/클래스)를 평면도 위에 반투명 색상 + 레이블 + 범례로
- *   오버레이. SVG 기반(폴리곤=DOM 요소 → 클릭/접근성 용이, 의존성 0). 핀치 줌·드래그 팬 지원.
- * - OVERLAY-002: 비내력벽 후보(wall_other)를 클릭으로 단일/복수 선택 → selected_walls 로
- *   판단스키마에 기록(updateSelectedWalls). 내력벽 후보는 보이되 선택 불가(철거 대상 아님).
+ *   오버레이. SVG 기반(폴리곤=DOM 요소 → 클릭/키보드/접근성 용이, 의존성 0). 핀치/휠 줌·
+ *   드래그/스와이프 팬. stroke 는 non-scaling 이라 줌 무관 일정 두께(149개에서도 안 뭉갬).
+ * - OVERLAY-002: 비내력벽 후보(wall_other)를 클릭/키보드로 단일·복수 선택 → selected_walls
+ *   로 판단스키마에 기록. 내력벽 후보는 보이되 선택 불가(철거 대상 아님).
  *
- * 안전 어휘(모델 카드 + BRAND): '후보/추정/검토 필요'만 쓰고 '철거 가능 확정/내력벽 확정'은
- * 절대 쓰지 않는다. 모델 출력은 사람 검토(HITL)용 입력이지 법적/구조 판정이 아니다.
+ * 색·접근성: 클래스 색은 전부 CSS 토큰(`--floorplan-*`). "선택 가능/불가"를 색만이 아니라
+ * **선 모양**(선택가능=점선 → 선택=흰 실선)과 **범례 라벨**(선택 가능/불가)로도 인코딩해
+ * 적록색맹·오독을 방지한다(WCAG 1.4.1).
  *
- * payload: { asset_id?, image?: {width,height}, regions: Region[] }. payload 는 서버가
- * 구성하지만(LLM 미관여) 런타임 형태 방어를 위해 좁혀서 읽는다.
+ * 안전 어휘(모델 카드 + BRAND): '후보/추정/검토 필요'만, '철거 가능 확정/내력벽 확정' 금지.
  */
 
-import { ActionIcon, Box, Group, Loader, Stack, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Box, Button, Group, Loader, Stack, Text } from '@mantine/core';
 import {
-  IconArrowsMaximize,
   IconHandFinger,
   IconMinus,
   IconPhotoExclamation,
   IconPlus,
-  IconVectorTriangle
+  IconVectorTriangle,
+  IconZoomReset
 } from '@tabler/icons-react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { useChatActions } from '@/components/agent/chat-actions';
-import { getSession, updateSelectedWalls } from '@/lib/sessions/api';
-import { getFloorplanAssetSignedUrl } from '@/lib/sessions/api';
+import {
+  trackPrecheckOverlayView,
+  trackPrecheckWallSelect
+} from '@/lib/analytics/sessions-funnel';
+import {
+  getFloorplanAssetSignedUrl,
+  getSession,
+  updateSelectedWalls
+} from '@/lib/sessions/api';
 
 import { CardHeader, CardRule, CardShell } from './CardShell';
 
@@ -51,34 +59,39 @@ export type FloorplanOverlayPayload = {
 type ClassKind = 'wall' | 'opening' | 'space';
 
 type ClassStyle = {
+  /** CSS 변수 색(globals.css `--floorplan-*`). */
   color: string;
   label: string;
   kind: ClassKind;
 };
 
-// 18 클래스 → 색/라벨/종류. 색은 데이터 시각화용 고대비 팔레트.
+// 18 클래스 → 토큰 색/라벨/종류. 색은 전부 `--floorplan-*`(brand 톤 정합).
 const CLASS_STYLE: Record<string, ClassStyle> = {
-  wall_reinforced_concrete: { color: '#E03131', label: '내력벽 후보', kind: 'wall' },
-  wall_other: { color: '#2F9E44', label: '비내력벽 후보', kind: 'wall' },
-  wall_unknown: { color: '#868E96', label: '미분류 벽', kind: 'wall' },
-  door: { color: '#1971C2', label: '문', kind: 'opening' },
-  window: { color: '#1098AD', label: '창문', kind: 'opening' },
-  space_balcony: { color: '#F08C00', label: '발코니', kind: 'space' },
-  space_living_room: { color: '#7048E8', label: '거실', kind: 'space' },
-  space_kitchen: { color: '#0CA678', label: '주방', kind: 'space' },
-  space_bedroom: { color: '#4263EB', label: '침실', kind: 'space' },
-  space_bathroom: { color: '#15AABF', label: '욕실', kind: 'space' },
-  space_entrance: { color: '#9C36B5', label: '현관', kind: 'space' },
-  space_stairwell: { color: '#5C940D', label: '계단실', kind: 'space' },
-  space_elevator_hall: { color: '#A9A9A9', label: '엘리베이터홀', kind: 'space' },
-  space_elevator: { color: '#A9A9A9', label: '엘리베이터', kind: 'space' },
-  space_dress_room: { color: '#C2255C', label: '드레스룸', kind: 'space' },
-  space_ac_room: { color: '#74B816', label: '실외기실', kind: 'space' },
-  space_multipurpose: { color: '#7950F2', label: '다목적실', kind: 'space' },
-  space_other: { color: '#ADB5BD', label: '기타 공간', kind: 'space' }
+  wall_reinforced_concrete: { color: 'var(--floorplan-wall-load)', label: '내력벽 후보', kind: 'wall' },
+  wall_other: { color: 'var(--floorplan-wall-nonload)', label: '비내력벽 후보', kind: 'wall' },
+  wall_unknown: { color: 'var(--floorplan-wall-unknown)', label: '미분류 벽', kind: 'wall' },
+  door: { color: 'var(--floorplan-door)', label: '문', kind: 'opening' },
+  window: { color: 'var(--floorplan-window)', label: '창문', kind: 'opening' },
+  space_balcony: { color: 'var(--floorplan-space-balcony)', label: '발코니', kind: 'space' },
+  space_living_room: { color: 'var(--floorplan-space-living)', label: '거실', kind: 'space' },
+  space_kitchen: { color: 'var(--floorplan-space-kitchen)', label: '주방', kind: 'space' },
+  space_bedroom: { color: 'var(--floorplan-space-bedroom)', label: '침실', kind: 'space' },
+  space_bathroom: { color: 'var(--floorplan-space-bathroom)', label: '욕실', kind: 'space' },
+  space_entrance: { color: 'var(--floorplan-space-entrance)', label: '현관', kind: 'space' },
+  space_stairwell: { color: 'var(--floorplan-space-stairwell)', label: '계단실', kind: 'space' },
+  space_elevator_hall: { color: 'var(--floorplan-space-hall)', label: '엘리베이터홀', kind: 'space' },
+  space_elevator: { color: 'var(--floorplan-space-hall)', label: '엘리베이터', kind: 'space' },
+  space_dress_room: { color: 'var(--floorplan-space-dress)', label: '드레스룸', kind: 'space' },
+  space_ac_room: { color: 'var(--floorplan-space-ac)', label: '실외기실', kind: 'space' },
+  space_multipurpose: { color: 'var(--floorplan-space-multi)', label: '다목적실', kind: 'space' },
+  space_other: { color: 'var(--floorplan-space-other)', label: '기타 공간', kind: 'space' }
 };
 
-const FALLBACK_STYLE: ClassStyle = { color: '#ADB5BD', label: '영역', kind: 'space' };
+const FALLBACK_STYLE: ClassStyle = {
+  color: 'var(--floorplan-space-other)',
+  label: '영역',
+  kind: 'space'
+};
 
 function styleFor(cls: string): ClassStyle {
   return CLASS_STYLE[cls] ?? FALLBACK_STYLE;
@@ -87,6 +100,13 @@ function styleFor(cls: string): ClassStyle {
 /** 비내력벽 후보만 철거 희망 대상으로 선택 가능(OVERLAY-002). */
 function isSelectable(cls: string): boolean {
   return cls === 'wall_other';
+}
+
+/** 범례 라벨 꼬리표 — 색에만 의존하지 않게 '선택 가능/불가'를 글로 보강. */
+function legendSuffix(cls: string): string {
+  if (cls === 'wall_other') return ' (선택 가능)';
+  if (cls === 'wall_reinforced_concrete') return ' (선택 불가)';
+  return '';
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -164,10 +184,22 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
 
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
-  // 세션이 있으면 로딩으로 시작(서명 URL/선택 복원), 없으면 로딩할 게 없다.
   const [loading, setLoading] = useState<boolean>(() => Boolean(sessionId));
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+
+  const wallOtherCount = useMemo(
+    () => regions.filter((r) => r.class_name === 'wall_other').length,
+    [regions]
+  );
+
+  // 노출 분석 이벤트 — 카드가 처음 렌더될 때 1회(선택 가능 벽 수 포함).
+  const viewedRef = useRef(false);
+  useEffect(() => {
+    if (viewedRef.current) return;
+    viewedRef.current = true;
+    trackPrecheckOverlayView(wallOtherCount);
+  }, [wallOtherCount]);
 
   // 표시용 서명 URL 발급 + 기존 선택 복원(judgment_schema.selected_walls).
   useEffect(() => {
@@ -199,9 +231,10 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     };
   }, [sessionId, assetId]);
 
-  // 선택 토글 → 판단스키마 영속(클릭마다, best-effort).
+  // 선택 변경 → 판단스키마 영속(best-effort) + 분석 이벤트.
   const persist = useCallback(
     async (next: Set<string>) => {
+      trackPrecheckWallSelect(next.size);
       if (!sessionId) return;
       setSaving(true);
       try {
@@ -229,6 +262,14 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     [persist]
   );
 
+  const clearSelection = useCallback(() => {
+    setSelected(() => {
+      const next = new Set<string>();
+      void persist(next);
+      return next;
+    });
+  }, [persist]);
+
   // 범례: 실제 등장한 클래스만, 종류(벽→공간→개구부) + 라벨 순.
   const legend = useMemo(() => {
     const seen = new Map<string, ClassStyle>();
@@ -240,11 +281,6 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
       (a, b) => order[a[1].kind] - order[b[1].kind] || a[1].label.localeCompare(b[1].label)
     );
   }, [regions]);
-
-  const wallOtherCount = useMemo(
-    () => regions.filter((r) => r.class_name === 'wall_other').length,
-    [regions]
-  );
 
   return (
     <CardShell accent="blueprint" labelledBy={titleId}>
@@ -258,18 +294,18 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
 
       <Stack gap="sm">
         <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.55 }}>
-          도면 위 색상은 AI가 <b>추정</b>한 후보예요. 초록색 <b>비내력벽 후보</b>를 눌러 철거하고
-          싶은 벽을 고르면 다음 단계에서 함께 검토해 드려요. 모든 표시는 확정이 아니라 검토용
-          후보입니다.
+          도면 위 색상은 AI가 <b>추정</b>한 후보예요. 초록색 <b>비내력벽 후보</b>(점선)를 눌러
+          철거하고 싶은 벽을 고르면 다음 단계에서 함께 검토해 드려요. 모든 표시는 확정이 아니라
+          검토용 후보입니다.
         </Text>
 
         {loading ? (
-          <Group gap={8} align="center" wrap="nowrap" style={{ minHeight: 120 }}>
-            <Loader size={16} color="coral" />
-            <Text size="xs" c="var(--jippin-brand-copy)">
-              도면을 불러오고 있어요…
-            </Text>
-          </Group>
+          <div
+            className="fp-skeleton"
+            style={{ aspectRatio: `${dims.w} / ${dims.h}` }}
+            role="status"
+            aria-label="도면을 불러오는 중"
+          />
         ) : (
           <OverlayCanvas
             key={`${dims.w}x${dims.h}:${regions.length}`}
@@ -283,6 +319,10 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
           />
         )}
 
+        <Text size="11px" c="dimmed" ta="center">
+          휠·두 손가락으로 확대, 드래그로 이동할 수 있어요.
+        </Text>
+
         {legend.length > 0 ? (
           <Group gap={10} wrap="wrap" aria-label="범례">
             {legend.map(([cls, st]) => (
@@ -290,16 +330,19 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
                 <span
                   aria-hidden
                   style={{
-                    width: 11,
-                    height: 11,
+                    width: 12,
+                    height: 12,
                     borderRadius: 3,
-                    background: st.color,
-                    opacity: st.kind === 'space' ? 0.55 : 0.85,
-                    flexShrink: 0
+                    flexShrink: 0,
+                    border: `1.5px ${cls === 'wall_other' ? 'dashed' : 'solid'} ${st.color}`,
+                    background: `color-mix(in srgb, ${st.color} ${
+                      st.kind === 'space' ? 16 : 30
+                    }%, transparent)`
                   }}
                 />
                 <Text size="11px" c="var(--jippin-brand-copy)">
                   {st.label}
+                  {legendSuffix(cls)}
                 </Text>
               </Group>
             ))}
@@ -312,21 +355,33 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
               ? `비내력벽 후보 ${wallOtherCount}곳 · 선택 ${selected.size}곳`
               : '선택 가능한 비내력벽 후보가 없어요. 다른 도면이 필요할 수 있어요.'}
           </Text>
-          {saving ? (
-            <Group gap={5} wrap="nowrap">
-              <Loader size={12} color="coral" />
-              <Text size="11px" c="dimmed">
-                저장 중…
-              </Text>
-            </Group>
-          ) : null}
+          <Group gap="xs" wrap="nowrap">
+            {selected.size > 0 ? (
+              <Button
+                variant="subtle"
+                color="gray"
+                size="compact-xs"
+                onClick={clearSelection}
+              >
+                선택 해제
+              </Button>
+            ) : null}
+            {saving ? (
+              <Group gap={5} wrap="nowrap">
+                <Loader size={12} color="coral" />
+                <Text size="11px" c="dimmed">
+                  저장 중…
+                </Text>
+              </Group>
+            ) : null}
+          </Group>
         </Group>
       </Stack>
     </CardShell>
   );
 }
 
-/** SVG 오버레이 + 줌/팬. viewBox 를 조작해 핀치/휠 줌, 드래그/스와이프 팬을 지원한다. */
+/** SVG 오버레이 + 줌/팬. viewBox 를 조작해 휠/핀치 줌, 드래그/스와이프 팬을 지원한다. */
 function OverlayCanvas({
   dims,
   regions,
@@ -344,16 +399,21 @@ function OverlayCanvas({
   onToggle: (regionId: string, cls: string) => void;
   onImageError: () => void;
 }) {
-  // 부모가 dims/regions 변화 시 key 로 remount 하므로, view 초기값을 full 로 두면 충분하다
-  // (effect 내 setState 불필요).
+  // 부모가 dims/regions 변화 시 key 로 remount 하므로 view 초기값을 full 로 두면 충분하다.
   const full: ViewBox = useMemo(() => ({ x: 0, y: 0, w: dims.w, h: dims.h }), [dims]);
   const [view, setView] = useState<ViewBox>(full);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
-  // 활성 포인터(핀치 감지). pointerId → 화면 좌표.
   const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinchPrev = useRef<number | null>(null);
   const panMoved = useRef(false);
+
+  // 진입 펄스 힌트(선택 가능 벽 강조) — 1회, 모션 비선호 시 CSS 가 생략.
+  const [hint, setHint] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setHint(false), 2600);
+    return () => clearTimeout(t);
+  }, []);
 
   const zoom = dims.w / view.w;
 
@@ -386,6 +446,16 @@ function OverlayCanvas({
     [clampView, dims.w, full.h, full.w]
   );
 
+  // 버튼 줌은 화면 중앙 기준(좌상단 기준이 부자연스럽다는 리뷰 반영).
+  const zoomCenter = useCallback(
+    (factor: number) => {
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, factor);
+    },
+    [zoomAt]
+  );
+
   const onWheel = useCallback(
     (e: React.WheelEvent<SVGSVGElement>) => {
       e.preventDefault();
@@ -411,7 +481,6 @@ function OverlayCanvas({
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
       if (pts.size >= 2) {
-        // 핀치 줌 — 두 포인터 거리 변화율로.
         const [a, b] = [...pts.values()];
         if (a && b) {
           const dist = Math.hypot(a.x - b.x, a.y - b.y);
@@ -424,7 +493,6 @@ function OverlayCanvas({
         return;
       }
       if (Math.abs(dx) > 2 || Math.abs(dy) > 2) panMoved.current = true;
-      // 단일 포인터 드래그 = 팬.
       setView((v) => {
         const rect = svgRef.current?.getBoundingClientRect();
         if (!rect) return v;
@@ -445,6 +513,8 @@ function OverlayCanvas({
 
   return (
     <Box
+      className="fp-overlay"
+      data-hint={hint ? '1' : '0'}
       style={{
         position: 'relative',
         borderRadius: 12,
@@ -489,64 +559,78 @@ function OverlayCanvas({
           const selectable = isSelectable(r.class_name);
           const isSel = selected.has(r.region_id);
           const baseOpacity = st.kind === 'space' ? 0.16 : st.kind === 'opening' ? 0.32 : 0.28;
+          const dash = selectable && !isSel ? '5 3' : undefined;
           return (
             <polygon
               key={r.region_id}
+              className={`fp-poly${selectable ? ' fp-poly-selectable' : ''}`}
+              data-selected={isSel ? '1' : '0'}
               points={toPoints(r.polygon)}
+              vectorEffect="non-scaling-stroke"
               fill={st.color}
               fillOpacity={isSel ? 0.55 : baseOpacity}
               stroke={isSel ? '#ffffff' : st.color}
-              strokeOpacity={st.kind === 'space' ? 0.5 : 0.9}
-              strokeWidth={(isSel ? 3.5 : 1.5) * (view.w / dims.w)}
-              style={{ cursor: selectable ? 'pointer' : 'default' }}
+              strokeOpacity={st.kind === 'space' ? 0.55 : 0.95}
+              strokeWidth={isSel ? 3.2 : 1.4}
+              strokeDasharray={dash}
+              tabIndex={selectable ? 0 : undefined}
+              role={selectable ? 'button' : undefined}
+              aria-pressed={selectable ? isSel : undefined}
+              aria-label={
+                selectable
+                  ? `비내력벽 후보, 누르면 철거 대상으로 ${isSel ? '해제' : '선택'}`
+                  : st.label
+              }
               onClick={() => {
-                // 팬 제스처 끝의 클릭은 무시(드래그와 선택 구분).
-                if (panMoved.current) return;
+                if (panMoved.current) return; // 팬 끝의 클릭은 무시(드래그/선택 구분).
                 onToggle(r.region_id, r.class_name);
               }}
+              onKeyDown={(e) => {
+                if (!selectable) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onToggle(r.region_id, r.class_name);
+                }
+              }}
             >
-              {selectable ? (
-                <title>비내력벽 후보 — 누르면 철거 대상으로 선택</title>
-              ) : (
-                <title>{st.label}</title>
-              )}
+              <title>
+                {selectable
+                  ? '비내력벽 후보 — 누르면 철거 대상으로 선택'
+                  : `${st.label}${st.kind === 'wall' ? ' — 선택 불가' : ''}`}
+              </title>
             </polygon>
           );
         })}
       </svg>
 
-      {/* 줌 컨트롤 + 도움말. */}
-      <Group
-        gap={4}
-        style={{ position: 'absolute', right: 8, bottom: 8 }}
-        wrap="nowrap"
-      >
+      {/* 줌 컨트롤 — 모바일 터치 타깃 확보(size lg ≈ 44px). */}
+      <Group gap={6} style={{ position: 'absolute', right: 8, bottom: 8 }} wrap="nowrap">
         <ActionIcon
           variant="default"
-          size="md"
+          size="lg"
           radius="md"
           aria-label="축소"
-          onClick={() => zoomAt(0, 0, 1 / 1.4)}
+          onClick={() => zoomCenter(1 / 1.4)}
         >
-          <IconMinus size={15} />
+          <IconMinus size={16} />
         </ActionIcon>
         <ActionIcon
           variant="default"
-          size="md"
+          size="lg"
           radius="md"
           aria-label="확대"
-          onClick={() => zoomAt(0, 0, 1.4)}
+          onClick={() => zoomCenter(1.4)}
         >
-          <IconPlus size={15} />
+          <IconPlus size={16} />
         </ActionIcon>
         <ActionIcon
           variant="default"
-          size="md"
+          size="lg"
           radius="md"
-          aria-label="원래 크기"
+          aria-label="원래 크기로"
           onClick={() => setView(full)}
         >
-          <IconArrowsMaximize size={15} />
+          <IconZoomReset size={16} />
         </ActionIcon>
       </Group>
 
@@ -569,18 +653,24 @@ function OverlayCanvas({
           </Text>
         </Group>
       ) : (
-        <Tooltip label="휠/핀치로 확대, 드래그로 이동" position="left" withArrow>
-          <ActionIcon
-            variant="default"
-            size="md"
-            radius="md"
-            aria-label="조작 안내"
-            style={{ position: 'absolute', left: 8, top: 8 }}
-            tabIndex={-1}
-          >
-            <IconHandFinger size={15} />
-          </ActionIcon>
-        </Tooltip>
+        <Group
+          gap={5}
+          wrap="nowrap"
+          aria-hidden
+          style={{
+            position: 'absolute',
+            left: 8,
+            top: 8,
+            padding: '4px 8px',
+            borderRadius: 8,
+            background: 'rgba(255,255,255,0.85)'
+          }}
+        >
+          <IconHandFinger size={13} color="var(--jippin-brand-professional)" />
+          <Text size="11px" c="var(--jippin-brand-copy)">
+            초록 점선 벽을 눌러 선택
+          </Text>
+        </Group>
       )}
     </Box>
   );
