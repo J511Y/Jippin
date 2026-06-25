@@ -443,6 +443,38 @@ async def test_session_floorplan_emits_overlay_and_persists_objects(
     assert {s["id"] for s in js["space_objects"]} == {"pred:3"}
 
 
+def test_merge_overlapping_regions() -> None:
+    # 겹치는 같은-클래스 벽 둘 → 하나로 병합(merged:N), 떨어진 벽 → 원본 id 유지.
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_other",
+            "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+            "score": 0.9,
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_other",
+            "polygon": [5, 0, 15, 0, 15, 10, 5, 10],
+            "score": 0.7,
+        },
+        {
+            "region_id": "pred:3",
+            "class_name": "wall_other",
+            "polygon": [100, 100, 110, 100, 110, 110, 100, 110],
+            "score": 0.8,
+        },
+    ]
+    merged = _merge_overlapping_regions(regions)
+    walls = [r for r in merged if r["class_name"] == "wall_other"]
+    assert len(walls) == 2  # 겹친 둘→하나 + 떨어진 하나
+    ids = {r["region_id"] for r in walls}
+    assert "pred:3" in ids  # 안 겹친 건 원본 id 보존
+    assert any(i.startswith("merged:") for i in ids)  # 겹친 건 병합 id
+
+
 async def test_session_floorplan_merges_vlm_reclassification(monkeypatch) -> None:
     # AI-002+AI-003: VLM 이 이미지로 wall_other 를 내력벽으로 보정하면 regions/judgment 가
     # 머지되고 source_engine=VLM, vlm_supplement 가 판단스키마에 저장된다.

@@ -398,6 +398,80 @@ def build_judgment_objects(
     return walls, spaces
 
 
+def _merge_overlapping_regions(
+    regions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """겹치는(intersect) 같은-클래스 region 을 하나의 엔티티로 병합(후처리).
+
+    세그멘테이션이 한 벽을 여러 인스턴스로 쪼개 내보내 오버레이가 서로 겹쳐 보이던 문제를
+    정리한다 — shapely unary_union 으로 클래스별 폴리곤을 합쳐 연결된 영역을 단일 region 으로
+    만든다. region_id 는 ``merged:N`` 으로 새로 부여(선택은 이 id 기준). shapely 부재/실패는
+    원본을 그대로 돌려 degrade 한다.
+    """
+
+    if not regions:
+        return regions
+    try:
+        from shapely.geometry import Polygon
+        from shapely.ops import unary_union
+    except Exception:  # noqa: BLE001 - shapely 미존재 시 병합 없이 진행
+        return regions
+
+    by_class: dict[str, list[dict[str, Any]]] = {}
+    for r in regions:
+        cls = r.get("class_name")
+        if isinstance(cls, str):
+            by_class.setdefault(cls, []).append(r)
+
+    out: list[dict[str, Any]] = []
+    counter = 0
+    for cls, group in by_class.items():
+        shaped: list[tuple[Any, dict[str, Any]]] = []
+        for r in group:
+            poly = r.get("polygon") or []
+            pts = [(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)]
+            try:
+                g = Polygon(pts)
+                if not g.is_valid:
+                    g = g.buffer(0)  # self-intersection 보정
+                if g.is_empty or g.area <= 0:
+                    out.append(r)  # 폴리곤화 불가 → 원본 유지
+                    continue
+                shaped.append((g, r))
+            except Exception:  # noqa: BLE001
+                out.append(r)
+        if not shaped:
+            continue
+        merged = unary_union([g for g, _ in shaped])
+        parts = list(merged.geoms) if merged.geom_type == "MultiPolygon" else [merged]
+        for part in parts:
+            if part.is_empty or part.geom_type != "Polygon":
+                continue
+            members = [r for g, r in shaped if part.intersects(g)]
+            if len(members) <= 1:
+                # 겹친 게 없음 → 원본 region 그대로(id·좌표 보존, 불필요한 변형 방지).
+                out.extend(members)
+                continue
+            counter += 1
+            flat: list[float] = []
+            for x, y in part.exterior.coords:
+                flat += [float(x), float(y)]
+            scores = [
+                m["score"] for m in members if isinstance(m.get("score"), (int, float))
+            ]
+            out.append(
+                {
+                    "region_id": f"merged:{counter}",
+                    "class_name": cls,
+                    "polygon": flat,
+                    "score": (sum(scores) / len(scores)) if scores else None,
+                    "requires_hitl": any(bool(m.get("requires_hitl")) for m in members)
+                    or cls.startswith("wall_"),
+                }
+            )
+    return out
+
+
 async def segment_session_floorplan(
     *,
     session_id: uuid.UUID,
@@ -488,6 +562,9 @@ async def segment_session_floorplan(
     # 반환분에서 좌표 제거(컨텍스트 leanness). 카드 방출/판단 누적 실패는 분석 자체를
     # 무르지 않는다(best-effort) — 좌표 없는 요약만 LLM 에 돌려도 흐름은 유지된다.
     regions = result.get("regions") or []
+    # 후처리: 겹치는 같은-클래스 엔티티를 하나로 병합(세그멘테이션이 한 벽을 여러 조각으로
+    # 쪼개 오버레이가 겹치던 문제 정리). 이후 VLM/오버레이/선택이 모두 병합본 기준.
+    regions = _merge_overlapping_regions(regions)
     image = result.get("image")
 
     # AI-002 VLM 문맥 해석 — 도면 이미지로 Mask2Former 레이블을 보완(실패 시 None=단독 degrade).

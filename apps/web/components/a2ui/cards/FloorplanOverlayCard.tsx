@@ -100,6 +100,19 @@ function toPoints(poly: number[]): string {
   return parts.join(' ');
 }
 
+/** 폴리곤 무게중심(좌표 평균) — 선택 핀을 꽂을 위치. */
+function centroidOf(poly: number[]): { x: number; y: number } {
+  let sx = 0;
+  let sy = 0;
+  let n = 0;
+  for (let i = 0; i + 1 < poly.length; i += 2) {
+    sx += poly[i] ?? 0;
+    sy += poly[i + 1] ?? 0;
+    n += 1;
+  }
+  return n > 0 ? { x: sx / n, y: sy / n } : { x: 0, y: 0 };
+}
+
 type ViewBox = { x: number; y: number; w: number; h: number };
 
 const MIN_ZOOM = 1;
@@ -203,23 +216,30 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     setSelected(new Set());
   }, []);
 
-  // 제출 — 선택한 비내력벽을 철거 대상으로 확정(영속) + 대화로 이어 검토 요청.
+  // 제출 — 선택한 비내력벽을 철거 대상으로 확정 + 대화로 이어 검토 요청.
+  // 핵심: 도면 제출과 동일하게 **버튼을 누르면 user 메시지가 항상 발화**되어야 한다.
+  // selected_walls 영속은 best-effort 로(실패해도 메시지 발화는 막지 않는다 — 영속 실패가
+  // sendMessage 를 건너뛰게 하던 버그 수정).
   const submit = useCallback(async () => {
-    if (!actions || !sessionId || selected.size === 0) return;
+    if (!actions || selected.size === 0 || submitting || streaming) return;
     setSubmitting(true);
     try {
-      await updateSelectedWalls(sessionId, [...selected]);
+      if (sessionId) {
+        try {
+          await updateSelectedWalls(sessionId, [...selected]);
+        } catch {
+          /* 영속 실패는 무시 — 메시지 발화로 흐름은 이어간다 */
+        }
+      }
       trackPrecheckWallSelect(selected.size);
       setSubmitted(true);
       await actions.sendMessage(
-        `도면에서 비내력벽 후보 ${selected.size}곳을 철거 대상으로 골랐어요. 이걸 기준으로 검토해 주세요.`
+        `도면에서 비내력벽 ${selected.size}곳을 철거 대상으로 골랐어요. 이걸 기준으로 검토해 주세요.`
       );
-    } catch {
-      /* 실패 시 submitted 로 두지 않는다 — 사용자가 다시 시도 가능 */
     } finally {
       setSubmitting(false);
     }
-  }, [actions, sessionId, selected]);
+  }, [actions, sessionId, selected, submitting, streaming]);
 
   const hasWalls = wallRegions.length > 0;
   const submitDisabled =
@@ -531,6 +551,31 @@ function OverlayCanvas({
             </polygon>
           );
         })}
+
+        {/* 선택된 벽에 핀을 꽂아 직관적으로 표시(색 변화만으로는 구분이 어려움).
+            크기를 view.w 비율로 잡아 줌과 무관하게 화면상 일정 크기로 보이게 한다. */}
+        {regions
+          .filter((r) => selected.has(r.region_id))
+          .map((r) => {
+            const c = centroidOf(r.polygon);
+            const r0 = (view.w * 0.045) / 2; // 핀 반지름(user 단위, 화면상 ~일정).
+            return (
+              <g
+                key={`pin-${r.region_id}`}
+                transform={`translate(${c.x} ${c.y})`}
+                pointerEvents="none"
+                aria-hidden
+              >
+                <path
+                  d={`M 0 0 C ${-r0} ${-r0 * 1.3}, ${-r0} ${-r0 * 2.7}, 0 ${-r0 * 2.7} C ${r0} ${-r0 * 2.7}, ${r0} ${-r0 * 1.3}, 0 0 Z`}
+                  fill="var(--mantine-color-coral-6)"
+                  stroke="#ffffff"
+                  strokeWidth={r0 * 0.2}
+                />
+                <circle cx={0} cy={-r0 * 1.75} r={r0 * 0.5} fill="#ffffff" />
+              </g>
+            );
+          })}
       </svg>
 
       {/* 줌 컨트롤 — 모바일 터치 타깃 확보(size lg ≈ 44px). */}
