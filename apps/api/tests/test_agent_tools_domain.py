@@ -188,15 +188,39 @@ async def test_evaluate_rules_missing_field_holds(monkeypatch) -> None:
     assert res["result"]["verdict"] == "HOLD"
 
 
-async def test_evaluate_rules_invalid_input_is_structured_error(monkeypatch) -> None:
-    session_id, fake = await _session_for_rules(monkeypatch)
+async def test_evaluate_rules_drops_unknown_keys(monkeypatch) -> None:
+    # 계약 밖 key 는 hard-fail(RULE_INPUT_INVALID) 대신 조용히 드롭하고 평가를 진행한다 —
+    # LLM 이 여분 key 를 넘겨 평가가 통째로 '실패'하는 걸 막는다. 남은 필수값이 없으면 HOLD.
+    session_id, _fake = await _session_for_rules(monkeypatch)
     res = await domain.evaluate_rules_impl(
-        session_id=session_id, judgment_values={"unknown_key": 1}
+        session_id=session_id,
+        judgment_values={"unknown_key": 1, "floor_count": 3, "has_sprinkler": True},
     )
-    assert res["ok"] is False
-    assert res["error_code"] == "RULE_INPUT_INVALID"
-    # 잘못된 입력은 판정을 영속하지 않는다.
-    assert fake.sessions[session_id]["rule_eval_result"] is None
+    assert res["ok"] is True  # 실패가 아니라 정상 평가
+    assert res["result"]["verdict"] == "HOLD"  # wall_type 등 미수집 → HOLD
+
+
+async def test_evaluate_rules_derives_wall_type_from_selection(monkeypatch) -> None:
+    # wall_type 을 안 넘겨도 selected_walls(비내력 후보)에서 서버가 자동 유도한다.
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_walls": ["pred:1"],
+        "wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}],
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={
+            "floor_count": 3,
+            "has_sprinkler": True,
+            "has_evacuation_space": True,
+            "stairwell_count": 2,
+            "window_form": "FIXED",
+            "fire_zone": False,
+        },
+    )
+    assert res["ok"] is True
+    # wall_type=NON_LOAD_BEARING 으로 채워져 DENY 가 아니라 가능성 계열.
+    assert res["result"]["verdict"] in ("ALLOW", "WARN")
 
 
 async def test_evaluate_rules_uses_analysis_fingerprint(monkeypatch) -> None:

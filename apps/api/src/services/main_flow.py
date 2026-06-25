@@ -696,6 +696,15 @@ async def get_session_verdict(session_id: uuid.UUID) -> dict[str, Any] | None:
     return rev if isinstance(rev, dict) else None
 
 
+async def get_session_judgment_schema(session_id: uuid.UUID) -> dict[str, Any]:
+    """세션의 공통 판단 스키마(JSONB)를 반환(없으면 빈 dict). 내부용 — evaluate_rules 가
+    selected_walls/wall_objects 에서 wall_type 을 유도할 때 쓴다."""
+
+    row = await _db_select_session(session_id)
+    js = row.get("judgment_schema") if isinstance(row, dict) else None
+    return js if isinstance(js, dict) else {}
+
+
 async def merge_judgment_schema(
     *,
     session_id: uuid.UUID,

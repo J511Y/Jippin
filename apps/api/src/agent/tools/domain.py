@@ -223,6 +223,25 @@ async def check_building_register_impl(
     )
 
 
+def _derive_wall_type(judgment_schema: dict[str, Any]) -> str | None:
+    """selected_walls + wall_objects 에서 철거 대상 벽 종류를 유도한다.
+
+    사용자가 고른 벽 중 하나라도 내력벽 후보면 보수적으로 LOAD_BEARING(→DENY),
+    전부 비내력벽 후보면 NON_LOAD_BEARING. 선택이 없거나 매핑 불가면 None(HOLD 가 묻는다).
+    """
+    selected = judgment_schema.get("selected_walls")
+    walls = judgment_schema.get("wall_objects")
+    if not isinstance(selected, list) or not selected or not isinstance(walls, list):
+        return None
+    by_id = {w.get("id"): w.get("wall_type") for w in walls if isinstance(w, dict)}
+    types = [by_id.get(s) for s in selected if isinstance(s, str)]
+    if any(t == "LOAD_BEARING" for t in types):
+        return "LOAD_BEARING"
+    if types and all(t == "NON_LOAD_BEARING" for t in types):
+        return "NON_LOAD_BEARING"
+    return None
+
+
 async def evaluate_rules_impl(
     *,
     session_id: uuid.UUID,
@@ -255,8 +274,25 @@ async def evaluate_rules_impl(
     else:
         inputs = fingerprint
         persist = fingerprint is not None
+    # 입력 정제 — 계약 밖 key 는 hard-fail(RuleInputError → "평가 실패") 대신 조용히
+    # 드롭한다(LLM 이 여분 key 를 넘겨 평가가 통째로 깨지는 걸 막는다). 드롭은 로그로 남긴다.
+    accepted = set(rule_engine.JUDGMENT_VALUE_FIELDS) | set(rule_engine.CONTEXT_FIELDS)
+    src = judgment_values if isinstance(judgment_values, dict) else {}
+    clean_values = {k: v for k, v in src.items() if k in accepted}
+    dropped = sorted(set(src) - accepted)
+    if dropped:
+        log.info("rule_eval_dropped_keys", session_id=str(session_id), dropped=dropped)
+    # wall_type 자동 보강 — LLM 이 안 넘겨도 selected_walls(사용자 선택)로 유도한다.
+    if not clean_values.get("wall_type"):
+        try:
+            js = await main_flow.get_session_judgment_schema(session_id)
+            derived = _derive_wall_type(js)
+            if derived:
+                clean_values["wall_type"] = derived
+        except Exception:  # noqa: BLE001 - 유도 실패는 무시(HOLD 가 묻는다)
+            pass
     try:
-        verdict = rule_engine.evaluate_judgment_values(judgment_values)
+        verdict = rule_engine.evaluate_judgment_values(clean_values)
     except rule_engine.RuleInputError as exc:
         return _err("RULE_INPUT_INVALID", str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -269,9 +305,8 @@ async def evaluate_rules_impl(
         session_id=str(session_id),
         verdict=result.get("verdict"),
         permit_required=result.get("permit_required"),
-        input_keys=sorted(judgment_values.keys())
-        if isinstance(judgment_values, dict)
-        else None,
+        input_keys=sorted(clean_values.keys()),
+        wall_type=clean_values.get("wall_type"),
         persisted=persist,
     )
     if not persist:
