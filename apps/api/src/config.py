@@ -114,6 +114,11 @@ class Settings(BaseSettings):
 
     openai_api_key: str | None = Field(default=None)
 
+    # OpenAI Platform 저장(store=True) — 완성본/이미지를 프로바이더 Logs 에 보관해 평가·
+    # 디버깅에 쓴다. 프리체크 대화는 전체 주소·도면 파생 정보를 담을 수 있어 **기본 미저장**
+    # (프로덕션 보호). 관측이 필요한 비프로덕션에서만 명시적으로 켠다.
+    openai_store_logs: bool = Field(default=False)
+
     # LangSmith 트레이싱 — env-var 자동 계측. langchain_tracing_v2=true 일 때만 동작.
     langchain_tracing_v2: bool = Field(
         default=False,

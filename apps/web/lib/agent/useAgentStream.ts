@@ -436,6 +436,9 @@ export function useAgentStream(sessionId: string): UseAgentStream {
         return { runStatus, recoveredId };
       };
 
+      // 런이 에러/중단으로 끝났는지 — finally 에서 남은 'started' 단계를 succeeded 로 둘지
+      // failed 로 둘지 가른다. 성공/대기/정상중단은 false 유지(#orphan-tool-step).
+      let errored = false;
       try {
         // --- 0단계: 직전이 drop(reconnect)이면, 새 입력 전에 no-message reconnect 로
         // 끊긴 런을 먼저 drain 한다 — 서버 reconnect 경로가 message 를 무시해 새 입력이
@@ -521,15 +524,18 @@ export function useAgentStream(sessionId: string): UseAgentStream {
             setResumeId(null);
             resumeModeRef.current = null;
           }
+          errored = true;
           setStatus('error');
         } else {
           // done 프레임 없이 스트림이 끊김(네트워크/프록시) — reconnect 로 표시해 다음
           // send 가 no-message drain 후 이어가도록 한다(#done-required).
           resumeModeRef.current = 'reconnect';
           setError((prev) => prev ?? '연결이 끊겼습니다. 다시 보내면 이어서 진행합니다.');
+          errored = true;
           setStatus('error');
         }
       } catch (err) {
+        errored = true;
         if ((err as Error)?.name === 'AbortError') {
           setStatus('idle');
           return;
@@ -539,15 +545,16 @@ export function useAgentStream(sessionId: string): UseAgentStream {
       } finally {
         streamingRef.current = false;
         abortRef.current = null;
-        // 스트림이 끝나면 남은 'started' 단계의 스피너를 멈춘다 — 종료(succeeded)로
-        // 마무리해 완료 후에도 스피너가 계속 도는 것처럼 보이는 문제를 막는다(메시지
-        // 없이 끝난 엣지케이스용; 정상 턴은 message 커밋 시 이미 비워짐).
+        // 스트림이 끝나면 남은 'started' 단계의 스피너를 멈춘다. 단 **성공으로 끝났을 때만
+        // succeeded** 로 마무리하고, 에러/중단(errored)이면 failed 로 둔다 — 실패한 런 옆에
+        // "분석 완료" 체크가 뜨던 문제를 막는다(#orphan-tool-step).
         const remaining = activityRef.current;
         if (remaining.some((s) => s.status === 'started')) {
+          const end: ToolStepStatusValue = errored ? 'failed' : 'succeeded';
           setActivitySynced(
             remaining.map((s) =>
               s.status === 'started'
-                ? { ...s, status: 'succeeded', text: toolStepText(s.toolName, 'succeeded') }
+                ? { ...s, status: end, text: toolStepText(s.toolName, end) }
                 : s,
             ),
           );

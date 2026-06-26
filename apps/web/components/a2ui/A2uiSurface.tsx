@@ -41,9 +41,32 @@ function FallbackJson({ component }: { component: unknown }) {
   );
 }
 
+/** 변환 불가/미등록 컴포넌트의 프로덕션 폴백 — 원시 payload 를 사용자에게 노출하지 않는다. */
+function UnavailableCard() {
+  return (
+    <Paper
+      role="figure"
+      aria-label="표시할 수 없는 항목"
+      bg="var(--jippin-brand-surface-alt, #FFFFFF)"
+      p="sm"
+      radius="md"
+      style={{ border: '1px solid var(--jippin-brand-border)' }}
+    >
+      <Text c="dimmed" size="xs">
+        이 항목은 지금 표시할 수 없어요.
+      </Text>
+    </Paper>
+  );
+}
+
 export function A2uiSurface({ component }: { component: unknown }) {
   const spec = toSpec(component);
   if (!spec) {
+    // 프로덕션에선 원시 payload(주소 후보·판단 내부 등)를 채팅에 덤프하지 않는다 — 중립
+    // 폴백만. 디버깅 가시성은 비프로덕션에서만 raw JSON 으로 유지한다(#no-raw-a2ui-leak).
+    if (process.env.NODE_ENV === 'production') {
+      return <UnavailableCard />;
+    }
     return <FallbackJson component={component} />;
   }
   return (

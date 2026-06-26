@@ -55,13 +55,13 @@ def _build_model(settings: Any) -> Any:
     if model_str.startswith("openai:") and api_key:
         from langchain_openai import ChatOpenAI
 
-        # store=True: 완성본을 OpenAI Platform 에 저장해 Logs 대시보드/평가에서 보이게 한다
-        # (기본값은 미저장이라 usage 집계엔 잡혀도 Logs 엔 안 뜬다). metadata 로 앱/환경을
-        # 태깅해 로컬·dev·prod 를 구분 필터링할 수 있게 한다.
+        # store: 완성본을 OpenAI Platform Logs 에 저장(평가/디버깅). 프리체크 대화는 주소
+        # 등 PII 를 담을 수 있어 **openai_store_logs 가 켜진 경우에만** 저장한다(기본 미저장,
+        # 프로덕션 보호). metadata 로 앱/환경을 태깅해 환경별 필터링이 가능하게 한다.
         return ChatOpenAI(
             model=model_str.split(":", 1)[1],
             api_key=api_key,
-            store=True,
+            store=settings.openai_store_logs,
             model_kwargs={
                 "metadata": {"app": "jippin-agent", "env": str(settings.app_env)}
             },

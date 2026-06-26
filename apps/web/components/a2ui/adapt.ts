@@ -38,8 +38,12 @@ export function toSpec(component: unknown): Spec | null {
   // 2) 레거시 {kind, payload}.
   const kind = typeof component.kind === 'string' ? component.kind : undefined;
   if (kind) {
-    const type = A2UI_TYPE_BY_KIND[kind];
-    if (!type) return null;
+    // own-property 만 인정 — kind 가 'constructor'/'toString' 등이면 프로토타입 체인의
+    // 값(Function 등)이 잡혀 잘못된 spec 으로 렌더가 깨질 수 있다(#proto-lookup).
+    const type = Object.prototype.hasOwnProperty.call(A2UI_TYPE_BY_KIND, kind)
+      ? A2UI_TYPE_BY_KIND[kind]
+      : undefined;
+    if (typeof type !== 'string') return null;
     const props = isPlainObject(component.payload) ? component.payload : {};
     return { root: 'el', elements: { el: { type, props } } };
   }

@@ -231,11 +231,13 @@ async def interpret_floorplan_impl(
     try:
         from langchain_openai import ChatOpenAI
 
+        # store 는 openai_store_logs 가 켜진 경우에만 — 도면 이미지 URL/영역 다이제스트가
+        # 프로바이더 Logs 에 저장되지 않게 기본 미저장(프로덕션 보호).
         model = ChatOpenAI(
             model=model_str.split(":", 1)[1],
             api_key=api_key,
             max_retries=1,
-            store=True,
+            store=getattr(settings, "openai_store_logs", False),
             model_kwargs={
                 "metadata": {"app": "jippin-vlm", "env": str(settings.app_env)}
             },
