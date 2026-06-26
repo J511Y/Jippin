@@ -64,7 +64,9 @@ def build_session_state_context(
                 parts.append(str(address[key]))
         addr_txt = " ".join(p for p in parts if p)
         if addr_txt:
-            lines.append(f"- 확정 주소: {_data(addr_txt)} — 이미 받았으니 다시 묻지 말 것.")
+            lines.append(
+                f"- 확정 주소: {_data(addr_txt)} — 이미 받았으니 다시 묻지 말 것."
+            )
         floor = address.get("floor_no")
         area = address.get("exclusive_area_m2")
         extra = []
