@@ -368,6 +368,23 @@ def _derive_wall_type(judgment_schema: dict[str, Any]) -> str | None:
     return None
 
 
+def _has_analyzed_selection(judgment_schema: dict[str, Any]) -> bool:
+    """분석된 벽 객체(wall_objects)와 사용자 선택(selected_walls)이 **둘 다** 있으면 True.
+
+    cross-turn 영속(리포트 발행)의 전제다 — 이게 있어야 '실제 도면 분석 + 사용자 선택'에
+    근거한 판정이다. 없으면(segment 안 돈 턴에서 모델이 wall_type 만 들고 온 경우 등)
+    분석 없는 판정이 리포트로 발행되지 않게 막는다(#require-analyzed-selection)."""
+
+    walls = judgment_schema.get("wall_objects")
+    selected = judgment_schema.get("selected_walls")
+    return (
+        isinstance(walls, list)
+        and len(walls) > 0
+        and isinstance(selected, list)
+        and len(selected) > 0
+    )
+
+
 def _apply_vlm_hints(
     clean_values: dict[str, Any],
     judgment_schema: dict[str, Any],
@@ -405,32 +422,6 @@ async def evaluate_rules_impl(
     영속 실패는 판정 자체를 막지 않고(best-effort) 로그만 남긴다.
     """
 
-    # 판정 영속의 freshness 기준(입력 지문) 결정.
-    #  - 같은 런에서 분석(segment)이 돌아 지문이 있으면: 그 지문 기준으로 조건부 영속해
-    #    분석 도중 도면/주소가 바뀐 stale 판정을 막는다(#analysis-input-fingerprint).
-    #  - 지문이 없으면(비-에이전트 직접/테스트, 또는 분석이 이전 턴이라 이 런엔 지문 없음):
-    #    세션의 현재 입력으로 폴백해 영속한다 — 멀티턴에서 룰평가가 세그멘테이션과 다른
-    #    턴이면 리포트가 영영 안 나오던 버그 수정(#report-cross-turn).
-    fingerprint = (
-        getattr(run_context, "analysis_inputs", None)
-        if run_context is not None
-        else None
-    )
-    if fingerprint is not None:
-        # 같은 런에서 분석(segment)이 돌아 지문이 있음 — 그 지문 기준으로 조건부 영속한다
-        # (분석 도중 도면/주소가 바뀐 stale 판정을 set_session_verdict 가 거른다).
-        inputs = fingerprint
-        persist = True
-    else:
-        # 지문이 없음 — 비-에이전트 경로(직접/테스트)이거나, 분석이 **이전 턴**에 끝나
-        # 이 런(다른 run_id)엔 지문이 복원되지 않은 경우다. 후자가 멀티턴의 정상 흐름인데,
-        # 과거엔 fail-closed 로 영속을 건너뛰어 **세그멘테이션과 룰평가가 다른 턴이면
-        # 리포트가 영영 안 만들어지던** 버그가 있었다(#report-cross-turn). 분석 결과
-        # (judgment_schema)는 이미 세션에 영속돼 있으므로 세션의 현재 입력을 정본으로 삼아
-        # 영속한다 — set_session_verdict 가 expected==current 일 때만 쓰므로(동시 입력
-        # 변경 레이스 안전) 정상 멀티턴에선 항상 영속되고 리포트가 준비된다.
-        inputs = await main_flow.get_session_inputs(session_id)
-        persist = True
     # 입력 정제 — 계약 밖 key 는 hard-fail(RuleInputError → "평가 실패") 대신 조용히
     # 드롭한다(LLM 이 여분 key 를 넘겨 평가가 통째로 깨지는 걸 막는다). 드롭은 로그로 남긴다.
     accepted = set(rule_engine.JUDGMENT_VALUE_FIELDS) | set(rule_engine.CONTEXT_FIELDS)
@@ -457,6 +448,34 @@ async def evaluate_rules_impl(
         log.info(
             "rule_eval_vlm_hints_applied", session_id=str(session_id), fields=hinted
         )
+
+    # 판정 영속의 freshness 기준(입력 지문) 결정.
+    #  - 비-에이전트 직접 호출(run_context 없음: 테스트/내부 호출)은 호출자가 명시한
+    #    입력 그대로 영속한다.
+    #  - 에이전트 + 같은 런에서 분석(segment)이 돌아 지문이 있으면: 그 지문 기준으로
+    #    조건부 영속해 분석 도중 도면/주소가 바뀐 stale 판정을 막는다(#analysis-input-fingerprint).
+    #  - 에이전트 cross-turn(분석이 이전 턴이라 이 런엔 지문 없음)은 **실제 분석
+    #    (wall_objects)+선택(selected_walls)이 있을 때만** 영속한다 — segment 안 돈 턴에서
+    #    모델이 wall_type 만 들고 와 분석 없는 판정을 리포트로 발행하는 걸 막는다
+    #    (#require-analyzed-selection). 정상 멀티턴(이전 턴 분석+선택)에선 영속돼 리포트가
+    #    준비된다(#report-cross-turn).
+    fingerprint = (
+        getattr(run_context, "analysis_inputs", None)
+        if run_context is not None
+        else None
+    )
+    if run_context is None:
+        inputs = await main_flow.get_session_inputs(session_id)
+        persist = True
+    elif fingerprint is not None:
+        inputs = fingerprint
+        persist = True
+    else:
+        inputs = await main_flow.get_session_inputs(session_id)
+        persist = _has_analyzed_selection(js)
+        if not persist:
+            log.info("session_verdict_skipped_no_analysis", session_id=str(session_id))
+
     try:
         verdict = rule_engine.evaluate_judgment_values(clean_values)
     except rule_engine.RuleInputError as exc:

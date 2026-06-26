@@ -387,33 +387,44 @@ async def test_evaluate_rules_uses_analysis_fingerprint(monkeypatch) -> None:
     assert fake.sessions[session_id]["rule_eval_result"] is None
 
 
-async def test_evaluate_rules_agent_path_no_fingerprint_persists_via_session_inputs(
+async def test_evaluate_rules_agent_cross_turn_persists_with_analysis(
     monkeypatch,
 ) -> None:
-    # #report-cross-turn: 에이전트 경로(run_context 있음)인데 분석 지문이 없으면(분석이
-    # 이전 턴에 끝나 이 런엔 지문 없음 — 멀티턴 정상 흐름) 세션의 현재 입력으로 폴백해
-    # **영속한다**. 과거 fail-closed 라 룰평가가 세그멘테이션과 다른 턴이면 리포트가 영영
-    # 안 만들어지던 버그 수정.
+    # #report-cross-turn + #require-analyzed-selection: 에이전트 cross-turn(지문 없음)에서
+    # 이전 턴 분석(wall_objects)+선택(selected_walls)이 세션에 있으면 현재 입력으로 폴백해
+    # **영속**한다 → 리포트 준비. (멀티턴 정상 흐름.)
     session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_walls": ["pred:1"],
+        "wall_objects": [{"id": "pred:1", "wall_type": "LOAD_BEARING"}],
+    }
     ctx = domain.RunContext()  # analysis_inputs 미설정(None)
     res = await domain.evaluate_rules_impl(
         session_id=session_id,
-        judgment_values={
-            "wall_type": "LOAD_BEARING",
-            "floor_count": 5,
-            "has_sprinkler": True,
-            "has_evacuation_space": True,
-            "stairwell_count": 2,
-            "window_form": "FIXED",
-            "fire_zone": False,
-        },
+        judgment_values={"floor_count": 5},
         run_context=ctx,
     )
     assert res["ok"] is True
-    assert res["result"]["verdict"] == "DENY"
-    # 세션 현재 입력 기준으로 영속됨 → 리포트 준비 완료.
+    assert res["result"]["verdict"] == "DENY"  # 선택이 내력벽 → DENY
     assert fake.sessions[session_id]["rule_eval_result"] is not None
     assert fake.sessions[session_id]["rule_eval_result"]["verdict"] == "DENY"
+
+
+async def test_evaluate_rules_agent_cross_turn_no_analysis_skips_persist(
+    monkeypatch,
+) -> None:
+    # #require-analyzed-selection: 에이전트 cross-turn 인데 분석/선택이 없으면(segment 안
+    # 돈 턴에서 모델이 wall_type 만 들고 온 경우) 판정은 보여 주되 **영속하지 않는다** —
+    # 분석 없는 판정이 리포트로 발행되는 걸 막는다.
+    session_id, fake = await _session_for_rules(monkeypatch)
+    ctx = domain.RunContext()
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={"wall_type": "NON_LOAD_BEARING", "balcony_attached": False},
+        run_context=ctx,
+    )
+    assert res["ok"] is True
+    assert fake.sessions[session_id]["rule_eval_result"] is None  # 영속 안 됨
 
 
 async def test_emit_ui_component_accumulates_across_calls(monkeypatch) -> None:
