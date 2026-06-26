@@ -765,7 +765,15 @@ async def merge_judgment_schema(
     current = session.get("judgment_schema")
     merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
     merged.update(patch)
-    await _db_update_session_fields(session_id, {"judgment_schema": merged})
+    values: dict[str, Any] = {"judgment_schema": merged}
+    # 분석(wall_objects)·선택(selected_walls)이 바뀌면 그 입력으로 계산된 기존 판정은
+    # stale 이다 — rule_eval_result 를 비워, 입력이 바뀐 새 맥락에서 옛 판정이 리포트/
+    # 판정 카드에 rule-backed 로 보이는 걸 막는다. 다음 evaluate_rules 가 새로 채운다
+    # (#stale-verdict-on-input-change). 주소 변경은 DB 트리거가 별도로 무효화한다.
+    if "selected_walls" in patch or "wall_objects" in patch:
+        values["rule_eval_result"] = None
+        values["rule_evaluated_at"] = None
+    await _db_update_session_fields(session_id, values)
     return merged
 
 

@@ -642,6 +642,19 @@ async def segment_session_floorplan(
             image_url=signed, regions=regions, image=image, settings=settings
         )
 
+    # VLM 이 "평면도가 아니다(is_floorplan=false)"라고 판단하면, 사진·스크린샷 등에서 나온
+    # 오탐 영역으로 오버레이/판정까지 흘러가지 않게 여기서 degrade 한다 — 다른(진짜) 도면을
+    # 요청하도록 ok=false 로 돌린다(#not-floorplan).
+    if supplement is not None and supplement.get("is_floorplan") is False:
+        return _result(
+            False,
+            error_code="SEGMENTATION_NOT_FLOORPLAN",
+            summary=(
+                "업로드하신 이미지가 평면도가 아닌 것 같아요. 집 평면도(도면) 이미지를 "
+                "올려 주세요."
+            ),
+        )
+
     # AI-003 정합성 검증·정규화 — VLM 교정(reclassifications)을 regions 에 머지한다.
     vlm_ids: set[str] = set()
     if supplement and supplement.get("reclassifications"):

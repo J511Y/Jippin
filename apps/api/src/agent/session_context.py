@@ -123,9 +123,12 @@ def build_session_state_context(
         if isinstance(notes, list) and notes:
             joined = " / ".join(str(n) for n in notes[:5] if isinstance(n, str))
             if joined:
+                # VLM notes 는 도면 이미지(표제란 등)에서 읽은 텍스트라 사용자 주소와 같은
+                # 신뢰불가 데이터다 — « » 로 격리해 이미지 속 지시문이 시스템 지시로 승격되지
+                # 않게 한다(#prompt-injection-vlm).
                 lines.append(
-                    f"- 도면 VLM 문맥 검토 관찰(이미지 기반): {joined}. 이 관찰을 답변에 "
-                    f"적극 활용할 것(도면을 다시 보여 달라고 하지 말 것)."
+                    f"- 도면 VLM 문맥 검토 관찰(이미지 기반): {_data(joined)}. 이 관찰을 "
+                    f"답변에 적극 활용할 것(도면을 다시 보여 달라고 하지 말 것)."
                 )
         recl = vlm.get("reclassifications")
         if isinstance(recl, list) and recl:

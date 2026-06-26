@@ -427,6 +427,53 @@ async def test_evaluate_rules_agent_cross_turn_no_analysis_skips_persist(
     assert fake.sessions[session_id]["rule_eval_result"] is None  # 영속 안 됨
 
 
+async def test_merge_judgment_schema_clears_stale_verdict(monkeypatch) -> None:
+    # #stale-verdict-on-input-change: selected_walls/wall_objects 가 바뀌면 그 입력으로
+    # 계산된 기존 rule_eval_result 를 비운다(옛 판정이 새 맥락에서 rule-backed 로 보이지 않게).
+    from tests._main_flow_db_fake import install_main_flow_fake
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    sid = session["id"]
+    fake.sessions[sid]["rule_eval_result"] = {"verdict": "ALLOW"}
+    fake.sessions[sid]["rule_evaluated_at"] = "2026-06-26T00:00:00Z"
+
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"selected_walls": ["pred:2"]},
+    )
+    assert fake.sessions[sid]["rule_eval_result"] is None
+    assert fake.sessions[sid]["rule_evaluated_at"] is None
+
+
+async def test_merge_judgment_schema_keeps_verdict_for_non_input_patch(
+    monkeypatch,
+) -> None:
+    # vlm_supplement 등 '입력'이 아닌 키만 바뀌면 verdict 를 유지한다.
+    from tests._main_flow_db_fake import install_main_flow_fake
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    sid = session["id"]
+    fake.sessions[sid]["rule_eval_result"] = {"verdict": "ALLOW"}
+
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"vlm_supplement": {"notes": []}},
+    )
+    assert fake.sessions[sid]["rule_eval_result"] == {"verdict": "ALLOW"}
+
+
 async def test_emit_ui_component_accumulates_across_calls(monkeypatch) -> None:
     # #multi-emit: 한 턴에 여러 번 호출하면 메모리·내구 버퍼 모두에 누적.
     from tests._main_flow_db_fake import install_main_flow_fake

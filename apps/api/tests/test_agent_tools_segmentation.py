@@ -601,6 +601,58 @@ async def test_session_floorplan_merges_vlm_reclassification(monkeypatch) -> Non
     assert js["vlm_supplement"]["provider"] == "OPENAI"
 
 
+async def test_session_floorplan_degrades_when_vlm_says_not_floorplan(
+    monkeypatch,
+) -> None:
+    # VLM is_floorplan=false → 오버레이/판정으로 안 흐르고 ok=false(다른 도면 요청).
+    session_id, owner = await _session_with_asset(monkeypatch)
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    async def fake_vlm(*, image_url, regions, image, settings, user_context=None):
+        return {
+            "provider": "OPENAI",
+            "model": "gpt-5.4-mini",
+            "notes": [],
+            "reclassifications": [],
+            "confidence": 0.3,
+            "is_floorplan": False,  # 평면도가 아님
+        }
+
+    monkeypatch.setattr("src.agent.tools.vlm.interpret_floorplan_impl", fake_vlm)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_other",
+                        "score": 0.9,
+                        "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                    }
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_NOT_FLOORPLAN"
+    assert not res.get("overlay_emitted")
+
+
 async def test_session_floorplan_records_input_fingerprint(monkeypatch) -> None:
     # #analysis-input-fingerprint: 분석 시작 시점의 입력(asset_id/address_id)을 run_context
     # 에 기록해 evaluate_rules 가 그 지문 기준으로 verdict 영속을 조건부화하게 한다.
