@@ -368,6 +368,30 @@ def _derive_wall_type(judgment_schema: dict[str, Any]) -> str | None:
     return None
 
 
+def _apply_vlm_hints(
+    clean_values: dict[str, Any],
+    judgment_schema: dict[str, Any],
+    accepted: set[str],
+) -> list[str]:
+    """LLM 이 안 넘긴 룰 입력을 VLM 이 도면에서 읽은 힌트로 채운다(P1-3 스코핑).
+
+    우선순위: **LLM 제공값 > VLM 힌트 > (룰엔진 보수적 가정)**. VLM 힌트(vlm_supplement.
+    judgment_hints, vlm.py 산출)는 계약 JudgmentValues 어휘라 그대로 병합한다. 힌트가
+    None(도면에서 못 읽음)이면 채우지 않아 룰엔진 v2 의 '미확인 → 보수적 가정 + caveat'
+    경로로 흐른다. 채운 필드 목록을 반환한다(로그/추적용)."""
+
+    supplement = judgment_schema.get("vlm_supplement")
+    hints = supplement.get("judgment_hints") if isinstance(supplement, dict) else None
+    if not isinstance(hints, dict):
+        return []
+    filled: list[str] = []
+    for key, value in hints.items():
+        if key in accepted and value is not None and clean_values.get(key) is None:
+            clean_values[key] = value
+            filled.append(key)
+    return filled
+
+
 async def evaluate_rules_impl(
     *,
     session_id: uuid.UUID,
@@ -381,14 +405,12 @@ async def evaluate_rules_impl(
     영속 실패는 판정 자체를 막지 않고(best-effort) 로그만 남긴다.
     """
 
-    # 판정이 의존하는 입력 지문 결정.
-    #  - 에이전트 경로(run_context 있음): judgment_values 를 만든 분석(segment) 시작 시점
-    #    지문이 정본이다. 첫 분석에서 기록되고 resume 시 런너가 내구 버퍼에서 복원한다.
-    #    지문이 없으면(분석을 안 했거나 복원 실패) **현재 세션 입력으로 폴백하지 않고
-    #    fail-closed** — stale 판정이 새 입력에 report-ready 로 붙는 걸 막는다
-    #    (#analysis-input-fingerprint).
-    #  - 비-에이전트 경로(run_context 없음: 직접 호출/테스트): resume 개념이 없으므로
-    #    현재 스냅샷 기준으로 영속한다.
+    # 판정 영속의 freshness 기준(입력 지문) 결정.
+    #  - 같은 런에서 분석(segment)이 돌아 지문이 있으면: 그 지문 기준으로 조건부 영속해
+    #    분석 도중 도면/주소가 바뀐 stale 판정을 막는다(#analysis-input-fingerprint).
+    #  - 지문이 없으면(비-에이전트 직접/테스트, 또는 분석이 이전 턴이라 이 런엔 지문 없음):
+    #    세션의 현재 입력으로 폴백해 영속한다 — 멀티턴에서 룰평가가 세그멘테이션과 다른
+    #    턴이면 리포트가 영영 안 나오던 버그 수정(#report-cross-turn).
     fingerprint = (
         getattr(run_context, "analysis_inputs", None)
         if run_context is not None
@@ -417,15 +439,21 @@ async def evaluate_rules_impl(
     dropped = sorted(set(src) - accepted)
     if dropped:
         log.info("rule_eval_dropped_keys", session_id=str(session_id), dropped=dropped)
-    # wall_type 자동 보강 — LLM 이 안 넘겨도 selected_walls(사용자 선택)로 유도한다.
+    # 분석 결과(judgment_schema)에서 자동 보강: wall_type(사용자 선택) + 안전 변수(VLM 힌트).
+    # LLM 이 안 넘긴 값을 도면 분석으로 채워, 사용자에게 같은 걸 다시 묻지 않게 한다.
+    try:
+        js = await main_flow.get_session_judgment_schema(session_id)
+    except Exception:  # noqa: BLE001 - 조회 실패는 무시(룰엔진이 미확인으로 처리)
+        js = {}
     if not clean_values.get("wall_type"):
-        try:
-            js = await main_flow.get_session_judgment_schema(session_id)
-            derived = _derive_wall_type(js)
-            if derived:
-                clean_values["wall_type"] = derived
-        except Exception:  # noqa: BLE001 - 유도 실패는 무시(HOLD 가 묻는다)
-            pass
+        derived = _derive_wall_type(js)
+        if derived:
+            clean_values["wall_type"] = derived
+    hinted = _apply_vlm_hints(clean_values, js, accepted)
+    if hinted:
+        log.info(
+            "rule_eval_vlm_hints_applied", session_id=str(session_id), fields=hinted
+        )
     try:
         verdict = rule_engine.evaluate_judgment_values(clean_values)
     except rule_engine.RuleInputError as exc:

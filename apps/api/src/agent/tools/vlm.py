@@ -38,9 +38,26 @@ _SYSTEM_PROMPT = (
     "4) reclassifications: 명백히 잘못 분류된 벽이 있으면 교정 목록. 각 항목은 "
     "{object_id, new_label, reason}. object_id 는 아래 제공된 region_id 만, new_label 은 "
     "제공된 클래스 어휘만 사용. 확신이 없으면 비웁니다(빈 배열).\n"
+    "5) judgment_hints: 도면에서 **직접 읽을 수 있는 것만** 채우고, 안 보이거나 확신이 "
+    "없으면 각 항목을 null 로 두세요(절대 추측 금지). 이 값들은 리모델링 규정 판단의 입력이 "
+    "되므로 정확해야 합니다. 각 항목:\n"
+    "   - has_sprinkler: 천장 스프링클러 헤드 심볼(원/십자 등)이 발코니·거실에 보이면 true, "
+    "명확히 없으면 false, 모르면 null.\n"
+    "   - has_evacuation_space: 대피공간 또는 경량칸막이(파괴 가능 경계벽) 표기가 보이면 "
+    "true, 명확히 없으면 false, 모르면 null.\n"
+    "   - stairwell_count: 도면에 보이는 계단실(직통계단) 개수를 정수로. 모르면 null.\n"
+    "   - window_form: 외부(발코니) 창호가 고정형(입면분할창)이면 FIXED, 여닫이 OPENABLE, "
+    "접이 FOLDING, 미닫이 SLIDING, 그 외 OTHER, 모르면 null.\n"
+    "   - fire_zone: 방화구획선/표기가 철거 대상 부위에 걸치면 true, 명확히 없으면 false, "
+    "모르면 null.\n"
+    "   - balcony_attached: 사용자가 고른(또는 검토 중인) 철거 대상 벽이 발코니와 접하면 "
+    "true(발코니 확장에 해당), 발코니와 무관한 실내 공간 사이 벽이면 false, 모르면 null.\n"
     '출력 예: {"is_floorplan":true,"confidence":0.7,"notes":["..."],'
     '"reclassifications":[{"object_id":"pred:5","new_label":'
-    '"wall_reinforced_concrete","reason":"..."}]}'
+    '"wall_reinforced_concrete","reason":"..."}],'
+    '"judgment_hints":{"has_sprinkler":null,"has_evacuation_space":true,'
+    '"stairwell_count":2,"window_form":"FIXED","fire_zone":false,'
+    '"balcony_attached":false}}'
 )
 
 
@@ -124,6 +141,43 @@ def _normalize_supplement(
         "reclassifications": reclass[:20],
         "confidence": confidence,
         "is_floorplan": bool(data.get("is_floorplan", True)),
+        "judgment_hints": _normalize_hints(data.get("judgment_hints")),
+    }
+
+
+#: VLM 이 도면에서 읽어낸 룰 입력 힌트의 어휘/타입. 값은 계약 JudgmentValues 와 동일.
+_HINT_WINDOW_FORMS: frozenset[str] = frozenset(
+    {"FIXED", "OPENABLE", "FOLDING", "SLIDING", "OTHER"}
+)
+
+
+def _normalize_hints(raw: Any) -> dict[str, Any]:
+    """VLM judgment_hints 를 엄격 정규화 — 어휘/타입 밖은 None(미확인)으로 강등.
+
+    각 값은 evaluate_rules 가 judgment_values 로 그대로 병합할 수 있는 형태다(계약
+    JudgmentValues 어휘). 모르면 null 로 두라고 지시했으므로, 누락/형식오류도 None 으로
+    수렴해 '확인 안 됨 → 보수적 가정 + caveat' 경로(룰엔진 v2)로 흐른다.
+    """
+
+    if not isinstance(raw, dict):
+        return {}
+
+    def _bool(key: str) -> bool | None:
+        v = raw.get(key)
+        return v if isinstance(v, bool) else None
+
+    def _int(key: str) -> int | None:
+        v = raw.get(key)
+        return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+    window = raw.get("window_form")
+    return {
+        "has_sprinkler": _bool("has_sprinkler"),
+        "has_evacuation_space": _bool("has_evacuation_space"),
+        "stairwell_count": _int("stairwell_count"),
+        "window_form": window if window in _HINT_WINDOW_FORMS else None,
+        "fire_zone": _bool("fire_zone"),
+        "balcony_attached": _bool("balcony_attached"),
     }
 
 

@@ -270,6 +270,44 @@ async def test_evaluate_rules_minimal_input_is_conservative_warn(monkeypatch) ->
     assert res["result"]["verdict"] == "WARN"
 
 
+def test_apply_vlm_hints_fills_missing_respects_llm() -> None:
+    from src.services import rule_engine
+
+    clean = {"has_sprinkler": True}  # LLM 이 직접 준 값
+    js = {
+        "vlm_supplement": {
+            "judgment_hints": {
+                "has_sprinkler": False,  # LLM 우선 → 무시
+                "stairwell_count": 2,  # 채움
+                "balcony_attached": False,  # 채움
+                "window_form": None,  # None → 안 채움
+            }
+        }
+    }
+    accepted = set(rule_engine.JUDGMENT_VALUE_FIELDS) | set(rule_engine.CONTEXT_FIELDS)
+    filled = domain._apply_vlm_hints(clean, js, accepted)
+    assert clean["has_sprinkler"] is True  # LLM 값 보존
+    assert clean["stairwell_count"] == 2
+    assert clean["balcony_attached"] is False
+    assert "window_form" not in clean
+    assert set(filled) == {"stairwell_count", "balcony_attached"}
+
+
+async def test_evaluate_rules_uses_vlm_hints_interior(monkeypatch) -> None:
+    # VLM 힌트 balcony_attached=False(실내 가벽) + 선택으로 유도된 NON_LOAD_BEARING →
+    # 발코니 확장 화재안전 룰 미적용 → ALLOW, 시설 0. 사용자에게 안전 변수를 안 물어도 됨.
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_walls": ["pred:1"],
+        "wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}],
+        "vlm_supplement": {"judgment_hints": {"balcony_attached": False}},
+    }
+    res = await domain.evaluate_rules_impl(session_id=session_id, judgment_values={})
+    assert res["ok"] is True
+    assert res["result"]["verdict"] == "ALLOW"
+    assert res["result"]["required_facilities"] == []
+
+
 async def test_evaluate_rules_drops_unknown_keys(monkeypatch) -> None:
     # 계약 밖 key 는 hard-fail(RULE_INPUT_INVALID) 대신 조용히 드롭하고 평가를 진행한다 —
     # LLM 이 여분 key 를 넘겨 평가가 통째로 '실패'하는 걸 막는다. 남은 필수값이 없으면 HOLD.

@@ -18,6 +18,38 @@ def test_parse_json_strips_fences_and_noise() -> None:
     assert vlm._parse_json([{"text": '{"y": 3}'}]) == {"y": 3}
 
 
+def test_normalize_hints_keeps_valid_drops_invalid() -> None:
+    hints = vlm._normalize_hints(
+        {
+            "has_sprinkler": True,
+            "has_evacuation_space": "yes",  # bool 아님 → None
+            "stairwell_count": 2,
+            "window_form": "FIXED",
+            "fire_zone": False,
+            "balcony_attached": False,
+            "extra": 1,  # 어휘 밖 → 무시
+        }
+    )
+    assert hints["has_sprinkler"] is True
+    assert hints["has_evacuation_space"] is None
+    assert hints["stairwell_count"] == 2
+    assert hints["window_form"] == "FIXED"
+    assert hints["fire_zone"] is False
+    assert hints["balcony_attached"] is False
+    assert "extra" not in hints
+
+
+def test_normalize_hints_bad_window_and_count() -> None:
+    hints = vlm._normalize_hints({"window_form": "BANANA", "stairwell_count": -1})
+    assert hints["window_form"] is None
+    assert hints["stairwell_count"] is None
+
+
+def test_normalize_hints_non_dict() -> None:
+    assert vlm._normalize_hints(None) == {}
+    assert vlm._normalize_hints("x") == {}
+
+
 def test_normalize_supplement_filters_invalid() -> None:
     data = {
         "is_floorplan": True,
