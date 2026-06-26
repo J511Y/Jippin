@@ -93,6 +93,22 @@ async def confirm_address_impl(
         }.items()
         if value is not None
     }
+    # 도로명/지번이 없어도 아파트명(+동/호)만으로 주소를 확정할 수 있게 building_identity 를
+    # 구성한다 — 과거엔 "야탑 장미마을 802동 1406호"처럼 도로명 없는 입력이
+    # INSUFFICIENT_ADDRESS_DATA 로 거절돼 **아파트명조차 저장 못 해** 보유 도면 검색·세션
+    # 주소 컨텍스트가 막혔다(#address-apt-identity). road/jibun 이 이미 있으면 손대지 않는다.
+    if not road_address and not jibun_address and apartment_name:
+        identity = {
+            key: value
+            for key, value in {
+                "apartment_name": apartment_name,
+                "building_dong": building_dong,
+                "unit_ho": unit_ho,
+            }.items()
+            if value
+        }
+        if identity:
+            payload["building_identity"] = identity
     try:
         row = await main_flow.upsert_session_address(
             session_id=session_id,
@@ -378,12 +394,21 @@ async def evaluate_rules_impl(
         if run_context is not None
         else None
     )
-    if run_context is None:
-        inputs = await main_flow.get_session_inputs(session_id)
+    if fingerprint is not None:
+        # 같은 런에서 분석(segment)이 돌아 지문이 있음 — 그 지문 기준으로 조건부 영속한다
+        # (분석 도중 도면/주소가 바뀐 stale 판정을 set_session_verdict 가 거른다).
+        inputs = fingerprint
         persist = True
     else:
-        inputs = fingerprint
-        persist = fingerprint is not None
+        # 지문이 없음 — 비-에이전트 경로(직접/테스트)이거나, 분석이 **이전 턴**에 끝나
+        # 이 런(다른 run_id)엔 지문이 복원되지 않은 경우다. 후자가 멀티턴의 정상 흐름인데,
+        # 과거엔 fail-closed 로 영속을 건너뛰어 **세그멘테이션과 룰평가가 다른 턴이면
+        # 리포트가 영영 안 만들어지던** 버그가 있었다(#report-cross-turn). 분석 결과
+        # (judgment_schema)는 이미 세션에 영속돼 있으므로 세션의 현재 입력을 정본으로 삼아
+        # 영속한다 — set_session_verdict 가 expected==current 일 때만 쓰므로(동시 입력
+        # 변경 레이스 안전) 정상 멀티턴에선 항상 영속되고 리포트가 준비된다.
+        inputs = await main_flow.get_session_inputs(session_id)
+        persist = True
     # 입력 정제 — 계약 밖 key 는 hard-fail(RuleInputError → "평가 실패") 대신 조용히
     # 드롭한다(LLM 이 여분 key 를 넘겨 평가가 통째로 깨지는 걸 막는다). 드롭은 로그로 남긴다.
     accepted = set(rule_engine.JUDGMENT_VALUE_FIELDS) | set(rule_engine.CONTEXT_FIELDS)

@@ -194,6 +194,37 @@ async def test_confirm_address_sanitizes_non_domain_exception(monkeypatch) -> No
     assert "hunter2" not in res["message"]
 
 
+async def test_confirm_address_accepts_apartment_only(monkeypatch) -> None:
+    # #address-apt-identity: 도로명/지번 없이 아파트명+동+호 만으로도 주소를 확정·저장한다
+    # (building_identity 로 구성). 과거엔 INSUFFICIENT_ADDRESS_DATA 로 거절돼 아파트명조차
+    # 저장 못 했다 — 보유 도면 검색·세션 주소 컨텍스트가 막히던 문제.
+    from tests._main_flow_db_fake import install_main_flow_fake
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    session_id = session["id"]
+    res = await domain.confirm_address_impl(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        apartment_name="장미마을",
+        building_dong="802동",
+        unit_ho="1406호",
+    )
+    assert res["ok"] is True
+    assert res["address"]["apartment_name"] == "장미마을"
+    # 세션 주소가 실제로 저장됐고, building_identity 로 충분성 통과.
+    saved = next(
+        r for r in fake.session_addresses.values() if r["session_id"] == session_id
+    )
+    assert saved["apartment_name"] == "장미마을"
+    assert saved["building_identity"]["apartment_name"] == "장미마을"
+    assert saved["building_identity"]["unit_ho"] == "1406호"
+
+
 async def _session_for_rules(monkeypatch) -> tuple[uuid.UUID, object]:
     from tests._main_flow_db_fake import install_main_flow_fake
 
@@ -316,12 +347,13 @@ async def test_evaluate_rules_uses_analysis_fingerprint(monkeypatch) -> None:
     assert fake.sessions[session_id]["rule_eval_result"] is None
 
 
-async def test_evaluate_rules_agent_path_no_fingerprint_fails_closed(
+async def test_evaluate_rules_agent_path_no_fingerprint_persists_via_session_inputs(
     monkeypatch,
 ) -> None:
-    # #analysis-input-fingerprint: 에이전트 경로(run_context 있음)인데 분석 지문이 없으면
-    # (분석 미수행 또는 resume 복원 실패) 현재 입력으로 폴백하지 않고 fail-closed —
-    # 판정은 반환하되 리포트엔 영속하지 않는다.
+    # #report-cross-turn: 에이전트 경로(run_context 있음)인데 분석 지문이 없으면(분석이
+    # 이전 턴에 끝나 이 런엔 지문 없음 — 멀티턴 정상 흐름) 세션의 현재 입력으로 폴백해
+    # **영속한다**. 과거 fail-closed 라 룰평가가 세그멘테이션과 다른 턴이면 리포트가 영영
+    # 안 만들어지던 버그 수정.
     session_id, fake = await _session_for_rules(monkeypatch)
     ctx = domain.RunContext()  # analysis_inputs 미설정(None)
     res = await domain.evaluate_rules_impl(
@@ -339,8 +371,9 @@ async def test_evaluate_rules_agent_path_no_fingerprint_fails_closed(
     )
     assert res["ok"] is True
     assert res["result"]["verdict"] == "DENY"
-    # 지문이 없어 영속하지 않는다(리포트 미준비 유지).
-    assert fake.sessions[session_id]["rule_eval_result"] is None
+    # 세션 현재 입력 기준으로 영속됨 → 리포트 준비 완료.
+    assert fake.sessions[session_id]["rule_eval_result"] is not None
+    assert fake.sessions[session_id]["rule_eval_result"]["verdict"] == "DENY"
 
 
 async def test_emit_ui_component_accumulates_across_calls(monkeypatch) -> None:

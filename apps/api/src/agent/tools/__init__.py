@@ -86,7 +86,8 @@ def build_tools(
         floor_no: int | None = None,
         exclusive_area_m2: float | None = None,
     ) -> dict[str, Any]:
-        """사용자의 주소/동·호/전용면적을 세션에 확정한다. 충분하면 분석 단계로 진행 가능."""
+        """사용자의 주소/동·호/전용면적을 세션에 확정한다. 충분하면 분석 단계로 진행 가능.
+        도로명/지번을 몰라도 **아파트명+동+호** 만으로 확정·저장된다(도로명 강요 금지)."""
         return await confirm_address_impl(
             session_id=session_id,
             owner_user_id=owner_user_id,
