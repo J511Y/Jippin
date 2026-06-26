@@ -445,10 +445,13 @@ async def evaluate_rules_impl(
         js = await main_flow.get_session_judgment_schema(session_id)
     except Exception:  # noqa: BLE001 - 조회 실패는 무시(룰엔진이 미확인으로 처리)
         js = {}
-    if not clean_values.get("wall_type"):
-        derived = _derive_wall_type(js)
-        if derived:
-            clean_values["wall_type"] = derived
+    # 철거 대상 벽 종류는 **사용자가 도면에서 고른 벽(selected_walls)이 정본**이다 — 모델이
+    # judgment_values 로 wall_type 을 넘겨도 선택에서 유도한 값으로 덮어쓴다(모델이 선택과
+    # 다른 wall_type 을 우겨 내력벽을 비내력벽으로 잘못 판정/영속하는 걸 막는다,
+    # #wall-type-from-selection). 선택이 없을 때만 모델 제공값을 그대로 둔다.
+    derived = _derive_wall_type(js)
+    if derived:
+        clean_values["wall_type"] = derived
     hinted = _apply_vlm_hints(clean_values, js, accepted)
     if hinted:
         log.info(

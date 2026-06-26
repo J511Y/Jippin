@@ -27,6 +27,7 @@ import {
 } from '@tabler/icons-react';
 import { useId, useState, type CSSProperties, type ReactNode } from 'react';
 
+import { LEGAL_NOTICE_TEXT } from '@/components/LegalNotice';
 import { QuickPrecheckConsultForm } from '@/components/leads/QuickPrecheckConsultForm';
 
 import { type CardAccent, CardHeader, CardRule, CardShell } from './CardShell';
@@ -179,12 +180,12 @@ export function JudgmentSummaryCard({
         <span className="a2ui-verdict__label">{style.label}</span>
       </div>
 
-      {/* 판정 근거 투명성 — 룰엔진(결정성 규칙)을 거친 결과인지, 규칙 평가 전 예비
-          관찰인지 한 줄로 밝힌다(법적 판단은 룰엔진 소유, SDD §4.8). */}
+      {/* 판정 근거 투명성 — 법령 기준 검토를 거친 결과인지, 그 전 예비 관찰인지 한 줄로
+          밝힌다. B2C 카피라 '룰엔진' 등 내부 용어는 노출하지 않는다. */}
       <Text size="11px" c="dimmed" mt={6} style={{ lineHeight: 1.4 }}>
         {payload.rule_backed
-          ? '※ 법령 규칙 평가(룰엔진)를 거친 결과예요.'
-          : '※ 자동 분석 기반 예비 관찰이에요. 규칙 평가에 필요한 정보가 모이면 더 정확히 검토해 드려요.'}
+          ? '※ 법령 기준으로 검토한 결과예요.'
+          : '※ 자동 분석 기반 예비 관찰이에요. 검토에 필요한 정보가 모이면 더 정확히 봐 드려요.'}
       </Text>
 
       <Text
@@ -248,10 +249,8 @@ export function JudgmentSummaryCard({
         </Button>
       )}
 
-      <Text className="a2ui-legal">
-        본 결과는 첨부 자료를 바탕으로 한 참고용 안내이며, 법적 판단을 대체하지
-        않습니다. 정확한 확인은 전문가와 상담해 주세요.
-      </Text>
+      {/* 결과 화면 법적 고지 — 봉인된 SSOT 문구 그대로(TYPOGRAPHY §4.5/BRAND §6, 단축 금지). */}
+      <Text className="a2ui-legal">{LEGAL_NOTICE_TEXT}</Text>
     </CardShell>
   );
 }

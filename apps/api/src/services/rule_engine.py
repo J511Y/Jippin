@@ -496,7 +496,9 @@ def _hold_for_unknown_wall(evaluation: _Evaluation, rule_input: RuleInput) -> bo
     벽 종류는 철거 가능성 판단의 전제라 모르면 판단 자체가 불가능하다.
     """
 
-    wall_unknown = rule_input.wall_type is None or "wall_type" in rule_input.invalid_fields
+    wall_unknown = (
+        rule_input.wall_type is None or "wall_type" in rule_input.invalid_fields
+    )
     if not wall_unknown:
         return False
     evaluation.hold_reasons.append(HoldReason.INSUFFICIENT_DATA)
@@ -569,7 +571,8 @@ def _evacuation_required(rule_input: RuleInput, ruleset: Ruleset) -> bool:
         return False
     if (
         rule_input.stairwell_count is not None
-        and rule_input.stairwell_count >= ruleset.parameters.staircase_exception_min_count
+        and rule_input.stairwell_count
+        >= ruleset.parameters.staircase_exception_min_count
     ):
         return False
     return True
@@ -809,39 +812,47 @@ def evaluate(rule_input: RuleInput, ruleset: Ruleset = BASELINE_RULESET) -> Rule
         pass  # 내력벽 → DENY 확정.
     elif _hold_for_unknown_wall(evaluation, rule_input):
         pass  # 벽 종류 미상 → HOLD (유일한 HOLD 전제).
-    elif rule_input.balcony_attached is False:
-        # 발코니 확장이 아닌 실내 비내력벽 철거 — 확장 화재안전 룰 미적용.
-        evaluation.legal_basis.add(LEGAL_WALL_NON_LOAD_BEARING)
-        evaluation.reasons.append(
-            "발코니 확장이 아닌 세대 내부 비내력벽 철거로 보입니다. 이 경우 발코니 "
-            "확장에 따른 방화판·방화유리·대피공간 요건은 해당되지 않으며, 구조 안전과 "
-            "행위허가 절차를 중심으로 확인하면 됩니다."
-        )
     else:
-        # 발코니 확장 경로 — 미확인 안전 변수를 보수적 기본값으로 채우고 caveat 로 첨부.
-        overrides: dict[str, object] = {}
-        defaulted: list[str] = []
-        for field_name, default in _CONSERVATIVE_DEFAULTS.items():
-            if getattr(rule_input, field_name) is None:
-                overrides[field_name] = default
-                defaulted.append(field_name)
-        effective = replace(rule_input, **overrides) if overrides else rule_input
-        unconfirmed = tuple(defaulted)
-
-        if rule_input.balcony_attached is None:
+        # 방화구획(fire_zone)은 발코니 확장/실내 철거와 **무관하게** 철거 부위가 방화구획에
+        # 포함되면 자동 판단 불가(RULE_EXCEPTION)다 — 실내 철거 분기보다 먼저 본다(#fire-zone-
+        # before-interior). 미확인(None)·미포함(False)이면 통과하고, 확장 경로의 미확인은
+        # 아래에서 보수적 가정 + caveat 로 첨부한다.
+        _evaluate_fire_zone(evaluation, rule_input)
+        if evaluation.hold_reasons:
+            pass  # 방화구획 포함(RULE_EXCEPTION) → 이후 평가 스킵, HOLD.
+        elif rule_input.balcony_attached is False:
+            # 발코니 확장이 아닌 실내 비내력벽 철거 — 확장 화재안전 룰 미적용.
+            evaluation.legal_basis.add(LEGAL_WALL_NON_LOAD_BEARING)
             evaluation.reasons.append(
-                "발코니 확장(발코니 접합) 여부가 확인되지 않아, 보수적으로 발코니 확장 "
-                "기준으로 검토했습니다."
+                "발코니 확장이 아닌 세대 내부 비내력벽 철거로 보입니다. 이 경우 발코니 "
+                "확장에 따른 방화판·방화유리·대피공간 요건은 해당되지 않으며, 구조 안전과 "
+                "행위허가 절차를 중심으로 확인하면 됩니다."
             )
+        else:
+            # 발코니 확장 경로 — 미확인 안전 변수를 보수적 기본값으로 채우고 caveat 로 첨부.
+            overrides: dict[str, object] = {}
+            defaulted: list[str] = []
+            for field_name, default in _CONSERVATIVE_DEFAULTS.items():
+                if getattr(rule_input, field_name) is None:
+                    overrides[field_name] = default
+                    defaulted.append(field_name)
+            effective = replace(rule_input, **overrides) if overrides else rule_input
+            unconfirmed = tuple(defaulted)
 
-        _evaluate_fire_zone(evaluation, effective)
-        if not evaluation.hold_reasons:
-            # 방화구획 포함(RULE_EXCEPTION) 이면 이후 평가를 건너뛴다.
+            if rule_input.balcony_attached is None:
+                evaluation.reasons.append(
+                    "발코니 확장(발코니 접합) 여부가 확인되지 않아, 보수적으로 발코니 확장 "
+                    "기준으로 검토했습니다."
+                )
+
+            # fire_zone 은 분기 전에 이미 평가했다(미확인이면 통과). 나머지 안전 변수만 평가.
             _evaluate_evacuation(evaluation, effective, ruleset)
             _evaluate_facilities(evaluation, effective, ruleset)
 
-        for field_name in defaulted:
-            evaluation.additional_checks.append(_UNCONFIRMED_CHECK_LABELS[field_name])
+            for field_name in defaulted:
+                evaluation.additional_checks.append(
+                    _UNCONFIRMED_CHECK_LABELS[field_name]
+                )
 
     verdict = _aggregate_verdict(evaluation)
     # 보수적 가정이 섞였으면 확정(ALLOW) 대신 '추가 확인 필요(WARN)' 로 낮춘다.

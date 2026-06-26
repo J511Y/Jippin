@@ -314,10 +314,25 @@ def test_interior_wall_removal_load_bearing_still_denies():
     assert result["verdict"] == "DENY"
 
 
+def test_interior_wall_in_fire_zone_holds():
+    # 실내 철거여도 방화구획 포함이면 자동 판단 불가(RULE_EXCEPTION) — 실내 분기보다
+    # 방화구획 판정이 먼저다(#fire-zone-before-interior).
+    result = evaluate_judgment_values(
+        {"wall_type": "NON_LOAD_BEARING", "balcony_attached": False, "fire_zone": True}
+    ).to_dict()
+    assert result["verdict"] == "HOLD"
+    assert HoldReason.RULE_EXCEPTION.value in result["hold_reasons"]
+
+
 def test_staircase_two_exempts_evacuation_space():
     # 계단실 2개소 이상 → 4층 이상이어도 별도 대피공간/방화문 불필요(v2).
     result = evaluate_judgment_values(
-        {**_FULL_BASE, "floor_count": 5, "stairwell_count": 2, "has_evacuation_space": False}
+        {
+            **_FULL_BASE,
+            "floor_count": 5,
+            "stairwell_count": 2,
+            "has_evacuation_space": False,
+        }
     ).to_dict()
     assert FacilityType.FIRE_DOOR.value not in _facility_types(result)
     # 대피공간 미확보 WARN 이 뜨지 않는다(계단실로 면제).
