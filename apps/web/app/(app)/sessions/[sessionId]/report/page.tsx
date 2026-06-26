@@ -17,10 +17,12 @@ import { useEffect, useState } from 'react';
 
 import { LegalNotice } from '@/components/LegalNotice';
 import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+import { trackPrecheckReportView } from '@/lib/analytics/sessions-funnel';
 import { parseApiError } from '@/lib/api/error';
 import {
   getSessionReport,
   syncExistingToken,
+  type EstimateResult,
   type SessionReportResponse
 } from '@/lib/sessions/api';
 
@@ -47,12 +49,19 @@ export default function SessionReportPage() {
       try {
         await syncExistingToken();
         const data = await getSessionReport(sessionId);
-        if (!ignore) setReport(data);
+        if (!ignore) {
+          setReport(data);
+          // 퍼널: 리포트 진입(판정 준비됨).
+          trackPrecheckReportView(true);
+        }
       } catch (err) {
         const parsed = parseApiError(err);
         if (ignore) return;
-        if (parsed.code === 'REPORT_NOT_READY') setNotReady(true);
-        else setError(parsed.message);
+        if (parsed.code === 'REPORT_NOT_READY') {
+          setNotReady(true);
+          // 퍼널: 리포트 진입(아직 판정 미준비).
+          trackPrecheckReportView(false);
+        } else setError(parsed.message);
       }
     })();
     return () => {
@@ -172,6 +181,8 @@ export default function SessionReportPage() {
               </Stack>
             </Card>
           )}
+
+          {report.estimate && <EstimateCard estimate={report.estimate} />}
         </>
       )}
 
@@ -201,5 +212,83 @@ export default function SessionReportPage() {
         </Button>
       </Stack>
     </Stack>
+  );
+}
+
+/** 원(KRW) 표기 — 천 단위 구분. */
+function won(amount: number): string {
+  return `${amount.toLocaleString('ko-KR')}원`;
+}
+
+/** 견적 항목 1줄의 금액 문구 — 고정 최소액/단가/별도견적을 구분해 표기. */
+function amountText(item: EstimateResult['items'][number]): string {
+  if (typeof item.amount_min === 'number') {
+    return `${won(item.amount_min)}~`;
+  }
+  if (typeof item.unit_amount === 'number') {
+    return `${won(item.unit_amount)}${item.unit ? ` / ${item.unit.replace(/^원\//, '')}` : ''}~`;
+  }
+  return '별도 견적';
+}
+
+/** 예상 견적 카드(REPORT-003) — /faq?category=cost 단가표 기반 예비 안내. */
+function EstimateCard({ estimate }: { estimate: EstimateResult }) {
+  return (
+    <Card withBorder radius="md" padding="md">
+      <Stack gap="sm">
+        <Group justify="space-between" align="center">
+          <Text fw={600}>예상 견적</Text>
+          <Badge color="gray" variant="light">
+            참고용 · 부가세 포함
+          </Badge>
+        </Group>
+
+        <Stack gap={6}>
+          {estimate.items.map((item) => (
+            <Group key={item.code} justify="space-between" align="flex-start" wrap="nowrap">
+              <Stack gap={0} style={{ flex: 1 }}>
+                <Text size="sm" fw={500}>
+                  {item.label}
+                </Text>
+                {item.note && (
+                  <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                    {item.note}
+                  </Text>
+                )}
+              </Stack>
+              <Text size="sm" fw={600} style={{ whiteSpace: 'nowrap' }}>
+                {amountText(item)}
+              </Text>
+            </Group>
+          ))}
+        </Stack>
+
+        {typeof estimate.fixed_total_min === 'number' && (
+          <Group justify="space-between" align="center">
+            <Text size="sm" fw={600}>
+              기본 합계 (최소)
+            </Text>
+            <Text size="sm" fw={700} c="coral">
+              {won(estimate.fixed_total_min)}~
+              {estimate.has_variable_items ? ' + 현장 항목' : ''}
+            </Text>
+          </Group>
+        )}
+
+        <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+          {estimate.disclaimer}
+        </Text>
+        <Button
+          component="a"
+          href={estimate.source_url}
+          variant="subtle"
+          color="jippin"
+          size="compact-sm"
+          w="fit-content"
+        >
+          비용 안내 자세히 보기 →
+        </Button>
+      </Stack>
+    </Card>
   );
 }

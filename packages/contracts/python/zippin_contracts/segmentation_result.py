@@ -31,7 +31,7 @@ class ErrorCode(Enum):
 
 class Label(Enum):
     """
-    모델 클래스 라벨. STR 5 + SPA 13 (floor-plan-model-train 정합).
+    모델 클래스 라벨. STR 5 + SPA 13 (floor-plan-model-train / cmp180_full 정합).
     """
 
     door = "door"
@@ -59,9 +59,6 @@ class Instance(BaseModel):
         extra="forbid",
     )
     label: Label
-    """
-    모델 클래스 라벨. STR 5 + SPA 13 (floor-plan-model-train 정합).
-    """
     count: int = Field(..., ge=0)
     """
     해당 라벨 인스턴스 수.
@@ -72,17 +69,58 @@ class Instance(BaseModel):
     """
 
 
+class Image(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    width: int = Field(..., ge=1)
+    """
+    원본 이미지 가로 픽셀.
+    """
+    height: int = Field(..., ge=1)
+    """
+    원본 이미지 세로 픽셀.
+    """
+
+
+class Region(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    region_id: str
+    """
+    응답 내 안정 ID (예: 'pred:1'). 사용자 벽 선택(selected_walls)의 키가 된다.
+    """
+    class_name: Label
+    score: float | None = Field(None, ge=0.0, le=1.0)
+    """
+    모델 신뢰도.
+    """
+    polygon: list[float]
+    """
+    원본 픽셀 좌표의 평면 배열 [x1, y1, x2, y2, ...].
+    """
+    bbox: list[float] | None = None
+    """
+    [x, y, width, height] (원본 픽셀).
+    """
+    requires_hitl: bool | None = None
+    """
+    사람 검토 필요 여부(벽 클래스=true). 확정 판정 아님 — '후보/검토 필요'로만 표시.
+    """
+
+
 class SegmentationResult(BaseModel):
     """
-    평면도 세그멘테이션 도구(HuggingFace 엣지 엔드포인트) 의 구조화 결과. 도구는 절대 raise 하지 않고 본 형태를 반환한다 — 엔드포인트 미배포/콜드스타트/타임아웃도 ok=false 로 표현된다.
+    평면도 세그멘테이션 도구(HuggingFace Inference Endpoint) 의 구조화 결과. 도구는 절대 raise 하지 않고 본 형태를 반환한다 — 엔드포인트 미배포/콜드스타트/타임아웃도 ok=false 로 표현된다. 1.2.0: 오버레이 렌더용 image + regions(좌표) 추가(추가형, 하위호환).
     """
 
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.1.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.2.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가(추가형).
+    스키마 버전 (semver). 1.2.0: image/regions(오버레이 좌표) 추가. 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가.
     """
     ok: bool
     """
@@ -90,7 +128,7 @@ class SegmentationResult(BaseModel):
     """
     error_code: ErrorCode | None = None
     """
-    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT 등.
+    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE 등.
     """
     mask_asset_id: UUID | None = None
     """
@@ -98,7 +136,15 @@ class SegmentationResult(BaseModel):
     """
     instances: list[Instance] | None = None
     """
-    검출된 인스턴스 요약 목록. 좌표·원본 마스크는 포함하지 않는다(요약만).
+    검출된 인스턴스 요약 목록(라벨별 집계). 좌표는 포함하지 않는다 — 에이전트 추론/룰 입력용 경량 요약.
+    """
+    image: Image | None = None
+    """
+    원본 이미지 픽셀 크기. regions 의 polygon/bbox 가 이 좌표계(원본 픽셀)다 — 오버레이가 표시 크기로 스케일할 때 쓴다.
+    """
+    regions: list[Region] | None = None
+    """
+    오버레이 렌더용 per-region 검출 결과(폴리곤/클래스/신뢰도). LLM 컨텍스트엔 싣지 않고 프론트 오버레이 카드로만 전달한다(대용량).
     """
     summary: str | None = None
     """

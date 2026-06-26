@@ -18,6 +18,11 @@ export type AgentSseEvent =
       status: 'started' | 'succeeded' | 'failed';
       summary: string | null;
       error_code: string | null;
+      /**
+       * write_todos 도구일 때만 채워지는 최신 전체 계획(누적 아님, 최신이 전체 상태).
+       * PlanPanel 이 이 값으로 plan 을 교체한다. 옵셔널 — 하위호환(파서 변경 불필요).
+       */
+      todos?: Array<{ content: string; status: string }>;
     }
   | {
       type: 'state_change';

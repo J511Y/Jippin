@@ -35,9 +35,14 @@ logger = get_logger("zippin.alimtalk")
 
 def _lead_received_template_id(settings: Settings, source_form: str) -> str | None:
     # 상담 접수 알림은 신청 경로(source_form)에 따라 템플릿이 갈린다.
+    # 사전검토(precheck_session)·우리집 체크(property_check)는 간소 폼이라 quick 템플릿을
+    # 공유한다 — 매핑이 없으면 ValueError 로 알림이 누락되므로 신규 source_form 은 반드시
+    # 여기에 등록한다(#precheck-alimtalk).
     return {
         "lead_page": settings.solapi_template_expert_lead_received,
         "main_page": settings.solapi_template_quick_lead_received,
+        "precheck_session": settings.solapi_template_quick_lead_received,
+        "property_check": settings.solapi_template_quick_lead_received,
     }.get(source_form)
 
 

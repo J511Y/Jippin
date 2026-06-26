@@ -128,6 +128,28 @@ def _tool_end_payload(msg: Any, result: dict[str, Any] | None) -> dict[str, Any]
     return {"output": output, "output_summary": summary, "error_code": error_code}
 
 
+def _plan_todos(sig: ToolStart) -> list[dict[str, str]] | None:
+    """write_todos 호출 인자에서 계획 단계 목록을 정규화한다(프론트 PlanPanel 용).
+
+    deepagents write_todos 는 ``{"todos": [{"content": ..., "status": ...}]}`` 로
+    호출된다. content/status 만 문자열로 추려 SSE 로 노출한다(그 외 키는 버림). 비거나
+    형태가 어긋나면 None 을 돌려 tool_step 에 todos 키를 싣지 않는다.
+    """
+
+    raw = sig.input.get("todos") if isinstance(sig.input, dict) else None
+    if not isinstance(raw, list):
+        return None
+    todos: list[dict[str, str]] = [
+        {
+            "content": str(item.get("content", "")),
+            "status": str(item.get("status", "pending")),
+        }
+        for item in raw
+        if isinstance(item, dict)
+    ]
+    return todos or None
+
+
 async def translate_stream(
     raw_stream: AsyncIterator[Any], *, tool_kinds: dict[str, str]
 ) -> AsyncIterator[Signal]:
@@ -155,6 +177,17 @@ async def translate_stream(
 
         if mode == "messages":
             chunk = data[0] if isinstance(data, tuple) and data else data
+            # ToolMessage(도구 *결과*)는 tool_call_id 를 가진다 — content 에 JSON 결과나
+            # write_todos 의 "Updated todo list ..." 같은 내부 텍스트가 실려 있어, 토큰으로
+            # 흘리면 프론트 채팅 버블에 raw 가 노출된다. 도구 활동은 tool_step 이벤트로
+            # 별도 노출되므로 여기선 **AI 토큰만** 흘린다(#tool-message-token-leak).
+            if getattr(chunk, "tool_call_id", None) is not None:
+                continue
+            # _translate_message 의 AIMessage 판별과 정합하게 — 비-AI(human/system/tool)
+            # 메시지 청크는 토큰으로 흘리지 않는다.
+            chunk_type = getattr(chunk, "type", None)
+            if chunk_type not in (None, "ai", "AIMessageChunk", "assistant"):
+                continue
             text = _message_text(getattr(chunk, "content", ""))
             if text and not getattr(chunk, "tool_calls", None):
                 yield TokenSignal(text)
@@ -259,8 +292,26 @@ class AgentRunner:
             run_id=self.run_id,
             settings=settings,
         )
+        # 현재 세션 상태 스냅샷을 system prompt 에 주입 — 에이전트가 OVERLAY 선택·확정
+        # 주소·도면 분석 상태(REST/타경로로 갱신되어 체크포인터엔 없는 사실)를 알게 한다.
+        # 조회 실패는 무시하고 컨텍스트 없이 진행한다(런을 막지 않음).
+        session_context: str | None = None
+        try:
+            from .session_context import build_session_state_context
+
+            session_row = await main_flow.get_owned_session(
+                self.session_id,
+                owner_user_id=self.owner_user_id,
+                owner_is_anonymous=self.owner_is_anonymous,
+            )
+            address_row = await main_flow.get_session_address(self.session_id)
+            session_context = build_session_state_context(session_row, address_row)
+        except Exception:  # noqa: BLE001 - 스냅샷 실패는 런을 막지 않는다
+            log.warning("session_context_build_failed", run_id=str(self.run_id))
         checkpointer = await get_checkpointer()
-        return build_agent(tools=tools, checkpointer=checkpointer)
+        return build_agent(
+            tools=tools, checkpointer=checkpointer, session_context=session_context
+        )
 
     async def _is_cancelled(self) -> bool:
         try:
@@ -441,6 +492,9 @@ class AgentRunner:
                     )
                 if agent is None:
                     agent = await self._build_agent()
+                # 도면 비전 해석은 분석 단계의 AI-002 VLM(segment_floorplan)이 담당하고, 그
+                # 결과(vlm_supplement/교정된 wall_objects)는 세션 컨텍스트로 에이전트에 주입된다 —
+                # 채팅 LLM 에 매 턴 이미지를 싣지 않는다(SDD §4.4 분리).
                 astream_input = (
                     None
                     if reconnect
@@ -592,6 +646,10 @@ class AgentRunner:
         heartbeat = heartbeat_interval
         signals = translate_stream(raw, tool_kinds=TOOL_KINDS)
         pending: asyncio.Task[Any] | None = None
+        # lc_tool_call_id → (tool_name, tool_kind). ToolEnd 신호엔 도구명이 없어
+        # ToolStart 에서 기억해 둔다 — 그래야 완료 tool_step 도 실제 도구명을 실어
+        # 프론트가 화이트라벨/숨김(write_todos·emit_* 등)을 적용할 수 있다.
+        tool_meta: dict[str, tuple[str, str]] = {}
         try:
             while True:
                 remaining = deadline - time.monotonic()
@@ -614,16 +672,38 @@ class AgentRunner:
                     yield sse.token(sig.delta)
                 elif isinstance(sig, ToolStart):
                     await self._writer.project_tool_start(sig)
+                    tool_meta[sig.lc_tool_call_id] = (sig.tool_name, sig.tool_kind)
+                    # 도구 흐름을 로그로 남긴다 — 어떤 도구가 어떤 순서로 돌았는지(특히
+                    # evaluate_rules 가 실제로 돌았는지) 추적 가능하게(#tool-trace).
+                    log.info(
+                        "agent_tool_start",
+                        run_id=str(self.run_id),
+                        tool=sig.tool_name,
+                        kind=sig.tool_kind,
+                    )
+                    # deepagents write_todos 의 계획 단계를 SSE 로 노출한다(프론트 PlanPanel).
+                    # todos 는 도구 호출 인자(sig.input["todos"]) 에 담긴 최신 전체 계획이다.
+                    todos = _plan_todos(sig) if sig.tool_name == "write_todos" else None
                     yield sse.tool_step(
                         tool_name=sig.tool_name,
                         tool_kind=sig.tool_kind,
                         status="started",
+                        todos=todos,
                     )
                 elif isinstance(sig, ToolEnd):
                     await self._writer.project_tool_end(sig)
+                    name, kind = tool_meta.get(sig.lc_tool_call_id, ("tool", "other"))
+                    log.info(
+                        "agent_tool_end",
+                        run_id=str(self.run_id),
+                        tool=name,
+                        kind=kind,
+                        status=sig.status,
+                        error_code=sig.error_code,
+                    )
                     yield sse.tool_step(
-                        tool_name="tool",
-                        tool_kind="other",
+                        tool_name=name,
+                        tool_kind=kind,
                         status="succeeded" if sig.status == "succeeded" else "failed",
                         error_code=sig.error_code,
                     )

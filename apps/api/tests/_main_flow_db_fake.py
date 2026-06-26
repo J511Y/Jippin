@@ -36,6 +36,7 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_insert_floorplan_upload",
     "_db_insert_floorplan_asset",
     "_db_select_selected_floorplan_asset",
+    "_db_search_floorplan_catalog",
     "_db_select_candidate_revision_keys",
     "_db_insert_floorplan_candidates",
     "_db_insert_chat_message",
@@ -93,6 +94,8 @@ class FakeMainFlowDb:
         self.session_addresses: dict[uuid.UUID, dict[str, Any]] = {}
         self.floorplan_uploads: dict[uuid.UUID, dict[str, Any]] = {}
         self.floorplan_assets: dict[uuid.UUID, dict[str, Any]] = {}
+        # 내부 보유 도면 카탈로그(floorplans). 기본 비어 있음(미큐레이션).
+        self.floorplans: dict[uuid.UUID, dict[str, Any]] = {}
         # (session_id, lookup_revision, floorplan_id) -> row
         self.floorplan_candidates: dict[
             tuple[uuid.UUID, int, uuid.UUID | None], dict[str, Any]
@@ -285,6 +288,22 @@ class FakeMainFlowDb:
             return None
         row = self.floorplan_assets.get(asset_id)
         return dict(row) if row is not None else None
+
+    async def _db_search_floorplan_catalog(
+        self, *, apartment_name: str, building_dong: str | None, limit: int
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for r in self.floorplans.values():
+            if r.get("visibility") != "public_catalog":
+                continue
+            if r.get("quality_status") != "verified":
+                continue
+            if apartment_name.lower() not in (r.get("apartment_name") or "").lower():
+                continue
+            if building_dong and r.get("building_dong") != building_dong:
+                continue
+            out.append(dict(r))
+        return out[:limit]
 
     # -- floorplan_candidates ----------------------------------------------
 

@@ -42,6 +42,7 @@ class SseEventStream:
         status: str,
         summary: str | None = None,
         error_code: str | None = None,
+        todos: list[dict[str, Any]] | None = None,
     ) -> str:
         data = self._base("tool_step")
         data["tool_name"] = tool_name
@@ -49,6 +50,10 @@ class SseEventStream:
         data["status"] = status
         data["summary"] = summary
         data["error_code"] = error_code
+        # 계획(deepagents write_todos)일 때만 단계 목록을 싣는다 — 프론트 PlanPanel 용.
+        # [{content, status}] 형태. write_todos 외 도구에서는 키 자체를 생략한다.
+        if todos is not None:
+            data["todos"] = todos
         return _frame("tool_step", data)
 
     def state_change(

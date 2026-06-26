@@ -228,3 +228,21 @@ async def get_agent_run_status(
         owner_is_anonymous=requester.is_anonymous,
     )
     return AgentRunStatusResponse.model_validate(run)
+
+
+@router.post("/agent/warmup")
+async def warmup_segmentation(
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> dict[str, bool]:
+    """세션 진입 시 HF 세그멘테이션 엔드포인트를 미리 깨운다(콜드스타트 체감 제거).
+
+    정적 경로(`/sessions/agent/warmup`)라 `/{session_id}/agent/...` 와 충돌하지 않는다.
+    인증만 요구(익명 허용)하고 세션 소유권은 보지 않는다 — 부수효과는 HF 스케일업
+    트리거뿐이며 스로틀로 비용을 제한한다. fire-and-forget 이라 즉시 반환한다.
+    """
+
+    from ..agent.warmup import maybe_warm_segmentation
+    from ..config import get_settings
+
+    warmed = maybe_warm_segmentation(get_settings())
+    return {"warmed": warmed}

@@ -23,7 +23,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SourceForm = Literal["main_page", "lead_page", "property_check"]
+SourceForm = Literal["main_page", "lead_page", "property_check", "precheck_session"]
 ApplicantKind = Literal["individual", "company"]
 OwnershipStatus = Literal["in_transaction", "owner"]
 InflowSource = Literal["naver_search", "blog", "acquaintance", "cafe", "etc"]

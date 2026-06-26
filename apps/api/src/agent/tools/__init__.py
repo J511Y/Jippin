@@ -14,8 +14,12 @@ from .domain import (
     RunContext,
     check_building_register_impl,
     confirm_address_impl,
+    emit_address_candidates_impl,
+    emit_floorplan_request_impl,
+    emit_judgment_summary_impl,
     emit_ui_component_impl,
     evaluate_rules_impl,
+    lookup_floorplan_candidates_impl,
     search_address_impl,
     set_completion_decision_impl,
 )
@@ -29,10 +33,14 @@ if TYPE_CHECKING:
 TOOL_KINDS: dict[str, str] = {
     "search_address": "external_api",
     "confirm_address": "external_api",
+    "lookup_floorplan_candidates": "external_api",
     "segment_floorplan": "ai_model",
     "check_building_register": "external_api",
     "evaluate_rules": "rule_engine",
     "emit_ui_component": "render",
+    "emit_floorplan_request": "render",
+    "emit_address_candidates": "render",
+    "emit_judgment_summary": "render",
     "set_completion_decision": "rule_engine",
 }
 
@@ -62,6 +70,13 @@ def build_tools(
         return await search_address_impl(keyword=keyword)
 
     @tool
+    async def lookup_floorplan_candidates() -> dict[str, Any]:
+        """확정된 주소(아파트명)로 **내부 보유 도면**을 검색한다. 주소 확정 후 도면 단계
+        진입 전에 호출하라. count>0 이면 후보가 있으니 사용자가 고르게 하고, count==0 이면
+        보유 도면이 없으니 emit_floorplan_request 로 업로드를 요청하라."""
+        return await lookup_floorplan_candidates_impl(session_id=session_id)
+
+    @tool
     async def confirm_address(
         road_address: str | None = None,
         jibun_address: str | None = None,
@@ -71,7 +86,8 @@ def build_tools(
         floor_no: int | None = None,
         exclusive_area_m2: float | None = None,
     ) -> dict[str, Any]:
-        """사용자의 주소/동·호/전용면적을 세션에 확정한다. 충분하면 분석 단계로 진행 가능."""
+        """사용자의 주소/동·호/전용면적을 세션에 확정한다. 충분하면 분석 단계로 진행 가능.
+        도로명/지번을 몰라도 **아파트명+동+호** 만으로 확정·저장된다(도로명 강요 금지)."""
         return await confirm_address_impl(
             session_id=session_id,
             owner_user_id=owner_user_id,
@@ -139,22 +155,73 @@ def build_tools(
         )
 
     @tool
+    async def emit_floorplan_request(reason: str | None = None) -> dict[str, Any]:
+        """평면도가 필요한데 아직 첨부되지 않았을 때, 사용자에게 **도면 업로드 카드**를 띄운다.
+        본문에 업로드 방법을 텍스트로 설명하지 말고 이 도구를 호출하라. reason 에 왜 도면이
+        필요한지 한 문장."""
+        return await emit_floorplan_request_impl(
+            run_context=run_context,
+            run_id=run_id,
+            reason=reason,
+        )
+
+    @tool
+    async def emit_address_candidates(
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """search_address 후보가 여럿이라 사용자가 골라야 할 때 **주소 선택 카드**를 띄운다.
+        본문에 후보를 글로 나열하지 말고 이 도구를 호출하라. candidates 각 원소:
+        {id, road_address, jibun_address?, building_name?}."""
+        return await emit_address_candidates_impl(
+            run_context=run_context,
+            run_id=run_id,
+            candidates=candidates,
+        )
+
+    @tool
+    async def emit_judgment_summary(
+        decision: str,
+        title: str,
+        summary: str,
+        risks: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """최종 판단을 정리해 **결과 카드**로 보여 준다. decision 은
+        possible|conditional|not_possible|needs_expert 중 하나. title 짧은 결론,
+        summary 생활어 설명, risks 주의/위험 항목 목록(선택)."""
+        return await emit_judgment_summary_impl(
+            run_context=run_context,
+            run_id=run_id,
+            session_id=session_id,
+            decision=decision,
+            title=title,
+            summary=summary,
+            risks=risks,
+        )
+
+    @tool
     async def set_completion_decision(
         completion_decision: str, reason: str | None = None
     ) -> dict[str, Any]:
-        """플로우 결정을 기록한다: ASK_MORE/REQUEST_OVERLAY_REVIEW/PROCEED_RULE/HOLD_OR_HANDOFF."""
+        """플로우 결정을 기록한다: ASK_MORE/REQUEST_OVERLAY_REVIEW/PROCEED_RULE/HOLD_OR_HANDOFF.
+        HOLD_OR_HANDOFF(상담 전환)면 상담 인입 카드가 자동으로 함께 뜬다."""
         return await set_completion_decision_impl(
             session_id=session_id,
             completion_decision=completion_decision,
             reason=reason,
+            run_context=run_context,
+            run_id=run_id,
         )
 
     return [
         search_address,
+        lookup_floorplan_candidates,
         confirm_address,
         segment_floorplan,
         check_building_register,
         evaluate_rules,
         emit_ui_component,
+        emit_floorplan_request,
+        emit_address_candidates,
+        emit_judgment_summary,
         set_completion_decision,
     ]

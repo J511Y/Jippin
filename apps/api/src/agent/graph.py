@@ -18,16 +18,26 @@ from ..config import get_settings
 from .prompts import SYSTEM_PROMPT
 
 
-def build_agent(*, tools: list[Any], checkpointer: Any) -> Any:
-    """우리집 체크 deep agent 를 조립해 반환한다(compiled LangGraph)."""
+def build_agent(
+    *, tools: list[Any], checkpointer: Any, session_context: str | None = None
+) -> Any:
+    """우리집 체크 deep agent 를 조립해 반환한다(compiled LangGraph).
+
+    ``session_context`` 가 주어지면 system prompt 끝에 '현재 세션 상태' 스냅샷을 덧붙인다 —
+    에이전트가 REST 로 갱신된 선택(selected_walls)·확정 주소·도면 분석 상태를 알게 해
+    선택을 모르거나 이미 받은 정보를 또 묻는 문제를 막는다(런마다 최신 상태 재주입).
+    """
 
     from deepagents import create_deep_agent
 
     settings = get_settings()
+    instructions = SYSTEM_PROMPT
+    if session_context:
+        instructions = f"{SYSTEM_PROMPT}\n\n{session_context}"
     return create_deep_agent(
         model=_build_model(settings),
         tools=tools,
-        instructions=SYSTEM_PROMPT,
+        instructions=instructions,
         checkpointer=checkpointer,
     )
 
@@ -45,5 +55,15 @@ def _build_model(settings: Any) -> Any:
     if model_str.startswith("openai:") and api_key:
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(model=model_str.split(":", 1)[1], api_key=api_key)
+        # store: 완성본을 OpenAI Platform Logs 에 저장(평가/디버깅). 프리체크 대화는 주소
+        # 등 PII 를 담을 수 있어 **openai_store_logs 가 켜진 경우에만** 저장한다(기본 미저장,
+        # 프로덕션 보호). metadata 로 앱/환경을 태깅해 환경별 필터링이 가능하게 한다.
+        return ChatOpenAI(
+            model=model_str.split(":", 1)[1],
+            api_key=api_key,
+            store=settings.openai_store_logs,
+            model_kwargs={
+                "metadata": {"app": "jippin-agent", "env": str(settings.app_env)}
+            },
+        )
     return model_str

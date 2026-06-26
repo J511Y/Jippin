@@ -32,7 +32,7 @@ export interface CommonJudgmentSchema {
   wall_objects: WallObject[];
   vlm_supplement?: VlmSupplement;
   /**
-   * OVERLAY 가 수집한 사용자 선택 철거 대상 벽체 region_id 목록.
+   * OVERLAY 가 수집한 사용자 선택 철거 대상 벽체 region_id 목록. 기능명세서 §2.5 의 target_wall(단수)를 대체한다 — 복수 벽 동시 선택을 지원하는 정본.
    */
   selected_walls: string[];
   /**

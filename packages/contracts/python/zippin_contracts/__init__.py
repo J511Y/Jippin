@@ -11,7 +11,7 @@ from .error_response import ErrorBody, ErrorResponse
 from .estimate_result import Assumption, Currency, EstimateResult, MoneyRange
 from .home_check import AddressInfo, BuildingHeading, ChangeEntry, DocumentRef, ErrorInfo, ExclusivePart, FieldModel, HomeCheckJob, HomeCheckReport, Kind, Kind1, NeedsInput, NeedsInputOption, PriceEntry, ReportMeta, Signal, Signal1, Source, Status, Violation
 from .rule_eval_result import Code, LegalBasis, RequiredFacility, RuleEvalResult, Verdict
-from .segmentation_result import ErrorCode, Instance, Label, SegmentationResult
+from .segmentation_result import ErrorCode, Image, Instance, Label, Region, SegmentationResult
 
 __all__ = [
     "AddressInfo",
@@ -44,6 +44,7 @@ __all__ = [
     "FieldModel",
     "HomeCheckJob",
     "HomeCheckReport",
+    "Image",
     "Instance",
     "JudgmentValues",
     "Kind",
@@ -60,6 +61,7 @@ __all__ = [
     "PriceEntry",
     "Provider",
     "Reclassification",
+    "Region",
     "ReportMeta",
     "RequiredFacility",
     "Role",

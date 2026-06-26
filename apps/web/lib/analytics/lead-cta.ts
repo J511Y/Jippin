@@ -37,6 +37,8 @@ export const LEAD_SUBMIT_EVENT = 'lead_submit';
  * | mypage_empty    | 마이페이지 상담 0건 빈 상태 "상담 신청하기"   |
  * | report_bottom   | 사전검토 리포트 하단 "전문가 상담 신청하기"   |
  * | sessions_gate   | /sessions ComingSoonGate 오버레이 CTA         |
+ * | precheck_handoff| 사전검토 대화 중 상담 전환(HOLD_OR_HANDOFF) 카드 |
+ * | precheck_report | 사전검토 판정 결과 카드(JudgmentSummary) 하단 상담 CTA |
  */
 export const LEAD_CTA_IDS = [
   'home_hero',
@@ -48,7 +50,9 @@ export const LEAD_CTA_IDS = [
   'mypage_header',
   'mypage_empty',
   'report_bottom',
-  'sessions_gate'
+  'sessions_gate',
+  'precheck_handoff',
+  'precheck_report'
 ] as const;
 
 export type LeadCtaId = (typeof LEAD_CTA_IDS)[number];
@@ -118,7 +122,7 @@ export function readLeadCtaFromLocation(): LeadCtaId | null {
  *            그것도 없으면 '(direct)' (북마크·직접 진입·외부 유입).
  */
 export function trackLeadSubmit(
-  sourceForm: 'main_page' | 'lead_page',
+  sourceForm: 'main_page' | 'lead_page' | 'precheck_session',
   cta?: LeadCtaId
 ): void {
   pushToDataLayer({

@@ -49,21 +49,69 @@ async function requestPresignedUrl(
   return (await response.json()) as PresignResponse;
 }
 
+/**
+ * 도면 사진의 EXIF 방향을 굽혀(upright) 재인코딩한다 — 정렬 정합의 핵심.
+ *
+ * 폰 사진은 EXIF orientation 으로 회전 정보를 담는다. 브라우저는 표시 시 EXIF 를
+ * 적용(upright)하지만, 세그멘테이션 모델(PIL, raw 픽셀)은 EXIF 를 무시한 원본 방향을
+ * 분석해 좌표를 낸다. 그 결과 오버레이 폴리곤이 표시 이미지와 90° 어긋나고 영역을
+ * 벗어난다. 업로드 전에 createImageBitmap(imageOrientation:'from-image')로 EXIF 를
+ * 적용한 픽셀을 canvas 에 다시 그려 **방향이 굽힌(EXIF 없는) upright 이미지**로 저장하면,
+ * 모델과 브라우저가 같은 좌표계를 보게 되어 오버레이가 정확히 겹친다.
+ *
+ * 실패(미지원/디코드 오류)하면 원본을 그대로 올린다(최소 동작 보장).
+ */
+async function normalizeImageOrientation(file: File): Promise<File> {
+  if (
+    typeof window === 'undefined' ||
+    typeof createImageBitmap !== 'function' ||
+    !file.type.startsWith('image/')
+  ) {
+    return file;
+  }
+  try {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      bitmap.close();
+      return file;
+    }
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    // 선화/표가 많은 도면은 PNG 무손실, 사진은 JPEG(용량). 원본이 PNG 면 PNG 유지.
+    const outType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, outType, outType === 'image/jpeg' ? 0.92 : undefined)
+    );
+    if (!blob) return file;
+    const base = file.name.replace(/\.[^.]+$/, '');
+    const ext = outType === 'image/png' ? '.png' : '.jpg';
+    return new File([blob], `${base}${ext}`, { type: outType });
+  } catch {
+    return file;
+  }
+}
+
 export async function uploadSessionFloorplan(
   sessionId: string,
   file: File
 ): Promise<UploadedFloorplan> {
-  const contentType = file.type || 'application/octet-stream';
+  // 방향 정규화 후 정규화된 파일로 presign/PUT/등록한다(모델·표시 좌표 일치).
+  const normalized = await normalizeImageOrientation(file);
+  const contentType = normalized.type || 'application/octet-stream';
   const { upload_url, object_path, bucket } = await requestPresignedUrl(
     sessionId,
-    file,
+    normalized,
     contentType
   );
 
   const put = await fetch(upload_url, {
     method: 'PUT',
     headers: { 'Content-Type': contentType },
-    body: file
+    body: normalized
   });
   if (!put.ok) {
     throw new Error(`도면 업로드에 실패했습니다 (HTTP ${put.status}).`);
@@ -73,7 +121,7 @@ export async function uploadSessionFloorplan(
     bucket,
     object_key: object_path,
     content_type: contentType,
-    byte_size: file.size
+    byte_size: normalized.size
   };
 }
 

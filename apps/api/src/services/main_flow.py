@@ -48,6 +48,7 @@ from ..models import (
     AgentRun,
     ChatMessage,
     ChatToolCall,
+    Floorplan,
     FloorplanAsset,
     FloorplanCandidate,
     FloorplanUpload,
@@ -57,6 +58,7 @@ from ..models import (
 
 _SESSIONS = Session.__table__
 _SESSION_ADDRESSES = SessionAddress.__table__
+_FLOORPLANS = Floorplan.__table__
 _FLOORPLAN_UPLOADS = FloorplanUpload.__table__
 _FLOORPLAN_ASSETS = FloorplanAsset.__table__
 _FLOORPLAN_CANDIDATES = FloorplanCandidate.__table__
@@ -678,6 +680,101 @@ async def get_owned_session(
         owner_user_id=owner_user_id,
         owner_is_anonymous=owner_is_anonymous,
     )
+
+
+async def get_session_address(session_id: uuid.UUID) -> dict[str, Any] | None:
+    """세션 주소 row 를 반환(없으면 None). 에이전트 세션 컨텍스트 스냅샷용 — 호출자가
+    이미 owner-gated 세션을 들고 있으므로 추가 소유권 검사는 하지 않는다."""
+
+    return await _db_select_session_address(session_id)
+
+
+async def get_session_verdict(session_id: uuid.UUID) -> dict[str, Any] | None:
+    """세션에 영속된 ``rule_eval_result``(룰엔진 판정)를 반환(없으면 None). 내부용 —
+    emit_judgment_summary 가 최종 판정이 룰엔진 backing 인지 확인할 때 쓴다."""
+
+    row = await _db_select_session(session_id)
+    rev = row.get("rule_eval_result") if isinstance(row, dict) else None
+    return rev if isinstance(rev, dict) else None
+
+
+async def get_session_judgment_schema(session_id: uuid.UUID) -> dict[str, Any]:
+    """세션의 공통 판단 스키마(JSONB)를 반환(없으면 빈 dict). 내부용 — evaluate_rules 가
+    selected_walls/wall_objects 에서 wall_type 을 유도할 때 쓴다."""
+
+    row = await _db_select_session(session_id)
+    js = row.get("judgment_schema") if isinstance(row, dict) else None
+    return js if isinstance(js, dict) else {}
+
+
+async def _db_search_floorplan_catalog(
+    *, apartment_name: str, building_dong: str | None, limit: int
+) -> list[dict[str, Any]]:
+    async with get_engine().begin() as conn:
+        stmt = sa.select(_FLOORPLANS).where(
+            _FLOORPLANS.c.visibility == "public_catalog",
+            _FLOORPLANS.c.quality_status == "verified",
+            _FLOORPLANS.c.apartment_name.ilike(f"%{apartment_name}%"),
+        )
+        if building_dong:
+            stmt = stmt.where(_FLOORPLANS.c.building_dong == building_dong)
+        stmt = stmt.order_by(_FLOORPLANS.c.updated_at.desc()).limit(limit)
+        rows = (await conn.execute(stmt)).all()
+    return [dict(r._mapping) for r in rows]
+
+
+async def search_floorplan_catalog(
+    *,
+    apartment_name: str | None,
+    building_dong: str | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """내부 보유 도면 카탈로그(``floorplans``)에서 아파트명으로 후보를 검색한다(INPUT-
+    lookupFloorplanCandidates). 공개·검증된(catalog/verified) 행만 반환한다. 아파트명이
+    없으면 검색하지 않는다(빈 목록)."""
+
+    if not apartment_name or not apartment_name.strip():
+        return []
+    return await _db_search_floorplan_catalog(
+        apartment_name=apartment_name.strip(),
+        building_dong=building_dong,
+        limit=limit,
+    )
+
+
+async def merge_judgment_schema(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    """공통 판단 스키마(JSONB)에 top-level 키를 병합한다(owner-gated).
+
+    OVERLAY 가 수집한 ``selected_walls``, AI 분석의 ``wall_objects``/``space_objects``
+    등을 ``sessions.judgment_schema`` 에 누적한다. 전체 CommonJudgmentSchema 검증은
+    RULE 진입 시점에 별도로 하고, 여기선 부분 누적만 한다(top-level merge). 타인/부재
+    세션은 404 (``_resolve_owner_session``).
+    """
+
+    session = await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    current = session.get("judgment_schema")
+    merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
+    merged.update(patch)
+    values: dict[str, Any] = {"judgment_schema": merged}
+    # 분석(wall_objects)·선택(selected_walls)이 바뀌면 그 입력으로 계산된 기존 판정은
+    # stale 이다 — rule_eval_result 를 비워, 입력이 바뀐 새 맥락에서 옛 판정이 리포트/
+    # 판정 카드에 rule-backed 로 보이는 걸 막는다. 다음 evaluate_rules 가 새로 채운다
+    # (#stale-verdict-on-input-change). 주소 변경은 DB 트리거가 별도로 무효화한다.
+    if "selected_walls" in patch or "wall_objects" in patch:
+        values["rule_eval_result"] = None
+        values["rule_evaluated_at"] = None
+    await _db_update_session_fields(session_id, values)
+    return merged
 
 
 async def _db_clear_owner_sessions_expiry(owner_user_id: uuid.UUID) -> None:

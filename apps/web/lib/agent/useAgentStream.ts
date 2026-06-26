@@ -10,15 +10,25 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { ChatMessage, DynamicComponentSpec } from '@/components/a2ui';
+import type { A2uiComponent, ChatActivityStep, ChatMessage } from '@/components/a2ui';
 import { apiBaseUrl } from '@/lib/api-base-url';
 import { getAccessToken, setAccessToken } from '@/lib/auth-token';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
 import { createClient } from '@/lib/supabase/client';
 
 import { parseSseFrame, splitSseBuffer, type AgentSseEvent } from './sse';
+import { toolDisplay, toolStepText } from './tool-labels';
 
 export type AgentStreamStatus = 'idle' | 'streaming' | 'done' | 'error';
+
+// 에이전트 SSE 전용 base URL. `/api` 프록시(Next dev / Vercel rewrite)를 거치면 응답이
+// 버퍼링되어 토큰 스트리밍이 한꺼번에 도착할 수 있다 — `NEXT_PUBLIC_AGENT_BASE_URL` 이
+// 설정되면 백엔드로 **직접** 연결해 프록시 버퍼링을 우회한다(직접 연결은 백엔드 CORS 가
+// 해당 웹 오리진을 허용해야 함). 미설정 시 apiBaseUrl(`/api`)로 폴백(현행 동작 유지).
+function agentBaseUrl(): string {
+  const direct = process.env.NEXT_PUBLIC_AGENT_BASE_URL;
+  return direct && direct.length > 0 ? direct : apiBaseUrl();
+}
 
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -130,20 +140,36 @@ function modeForStatus(status: string): 'reply' | 'reconnect' | null {
   return null;
 }
 
-function toDynamic(component: Record<string, unknown>): DynamicComponentSpec | undefined {
-  const kind = typeof component.kind === 'string' ? component.kind : undefined;
-  if (!kind) return undefined;
-  const payload =
-    component.payload && typeof component.payload === 'object'
-      ? (component.payload as Record<string, unknown>)
-      : {};
-  return { kind, payload };
+/** 도구 진행 단계 한 줄 — UI(MessageThread)가 스피너/체크로 렌더한다. */
+export interface ToolActivityStep {
+  /** 안정 키(같은 toolName 의 마지막 started 를 갱신할 때 재사용). */
+  id: string;
+  toolName: string;
+  status: ToolStepStatusValue;
+  /** 화이트라벨 문구(toolStepText 결과). raw 도구명은 절대 담지 않는다. */
+  text: string;
+}
+
+type ToolStepStatusValue = 'started' | 'succeeded' | 'failed';
+
+/**
+ * deepagents 의 write_todos 계획 한 단계. status 는 들어오는 문자열을 그대로 둔다 —
+ * 알 수 없는 값은 UI(PlanPanel)에서 'pending' 으로 취급한다.
+ */
+export interface PlanTodo {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
 }
 
 export interface UseAgentStream {
   messages: ChatMessage[];
   streamingText: string;
+  /** 하위호환 — 마지막 활동 한 줄. 신규 UI 는 activity 배열을 쓴다. */
   toolActivity: string | null;
+  /** 이번 턴의 도구 활동 타임라인(숨김 도구는 제외). */
+  activity: ToolActivityStep[];
+  /** write_todos 가 세운 최신 전체 계획(턴을 넘어 유지·갱신). 비면 빈 배열. */
+  plan: PlanTodo[];
   status: AgentStreamStatus;
   error: string | null;
   send: (content: string) => Promise<void>;
@@ -154,6 +180,17 @@ export function useAgentStream(sessionId: string): UseAgentStream {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [toolActivity, setToolActivity] = useState<string | null>(null);
+  const [activity, setActivity] = useState<ToolActivityStep[]>([]);
+  // activity state 의 최신 스냅샷 미러. message 커밋 시 그 턴의 활동을 메시지에 귀속
+  // 시키려면(아바타 중복·순서 문제 해소) 함수형 updater 밖에서 현재값을 읽어야 한다.
+  const activityRef = useRef<ToolActivityStep[]>([]);
+  const setActivitySynced = useCallback((next: ToolActivityStep[]) => {
+    activityRef.current = next;
+    setActivity(next);
+  }, []);
+  // 계획은 턴을 넘어 유지·갱신한다(send 시작 시 초기화하지 않음). sessionId 가 바뀌면
+  // 부모가 Conversation 을 key 로 remount 시키므로 자연히 초기화된다.
+  const [plan, setPlan] = useState<PlanTodo[]>([]);
   const [status, setStatus] = useState<AgentStreamStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -172,6 +209,8 @@ export function useAgentStream(sessionId: string): UseAgentStream {
   // useState 리셋은 부모가 AgentChat 을 sessionId 로 key 해 remount 시키는 것으로
   // 처리한다(effect 안 setState 회피).
   useEffect(() => {
+    // 빈 sessionId(=compose 단계) 가드: 히스토리 로드/resume 복원을 no-op 으로 둔다.
+    if (!sessionId) return;
     resumableRunIdRef.current = loadResumeId(sessionId);
     // 마운트/새로고침 시 영속된 transcript 를 복원한다 — 완료된 런은 resume 스트림이
     // 없어 SSE 로 다시 못 받으므로(#load-history-on-mount). 라이브 메시지가 이미 있으면
@@ -181,7 +220,7 @@ export function useAgentStream(sessionId: string): UseAgentStream {
       try {
         const token = await resolveToken();
         const res = await fetch(
-          `${apiBaseUrl()}/sessions/${sessionId}/agent/messages`,
+          `${agentBaseUrl()}/sessions/${sessionId}/agent/messages`,
           { headers: { Authorization: `Bearer ${token}` } },
         );
         if (ignore || !res.ok) return;
@@ -201,12 +240,10 @@ export function useAgentStream(sessionId: string): UseAgentStream {
           role: m.role === 'assistant' ? 'assistant' : 'user',
           content: typeof m.content === 'string' ? m.content : '',
           createdAt: m.created_at ?? new Date().toISOString(),
+          // A2UI 컴포넌트는 raw 그대로 보존한다 — A2uiSurface 가 json-render spec /
+          // 레거시 {kind,payload} 양쪽을 해석한다.
           dynamics:
-            m.role === 'assistant'
-              ? (m.ui_components ?? [])
-                  .map(toDynamic)
-                  .filter((d): d is DynamicComponentSpec => d !== undefined)
-              : undefined,
+            m.role === 'assistant' ? ((m.ui_components ?? []) as A2uiComponent[]) : undefined,
         }));
         setMessages((prev) => (prev.length > 0 ? prev : history));
       } catch {
@@ -232,17 +269,19 @@ export function useAgentStream(sessionId: string): UseAgentStream {
   const send = useCallback(
     async (content: string) => {
       const text = content.trim();
-      if (!text || streamingRef.current) return;
+      // 빈 sessionId(compose 단계)면 send 를 no-op 으로 둔다(SessionChat 이 세션 생성 후 재마운트).
+      if (!text || !sessionId || streamingRef.current) return;
 
       streamingRef.current = true;
       setError(null);
       setStatus('streaming');
       setToolActivity(null);
+      setActivitySynced([]);
       setStreamingText('');
 
       const controller = new AbortController();
       abortRef.current = controller;
-      const base = apiBaseUrl();
+      const base = agentBaseUrl();
       const startUrl = `${base}/sessions/${sessionId}/agent/runs`;
       const resumeUrl = (id: string) =>
         `${base}/sessions/${sessionId}/agent/runs/${id}/resume`;
@@ -298,12 +337,69 @@ export function useAgentStream(sessionId: string): UseAgentStream {
               assembled += ev.delta;
               setStreamingText(assembled);
             } else if (ev.type === 'tool_step') {
-              setToolActivity(`${ev.tool_name} · ${ev.status}`);
+              // write_todos 가 보낸 최신 전체 계획이면 plan 을 그대로 교체한다(누적 아님).
+              // write_todos 는 tool-labels 에서 hidden 이라 활동 타임라인엔 안 뜨고,
+              // 대신 PlanPanel 로 보여 준다. 빈 배열은 의미 없는 갱신이라 무시한다.
+              if (Array.isArray(ev.todos) && ev.todos.length > 0) {
+                setPlan(ev.todos as PlanTodo[]);
+              }
+              // 숨김 도구(set_completion_decision, write_todos 등)는 활동 UI 에 노출하지 않는다.
+              if (!toolDisplay(ev.tool_name).hidden) {
+                const text = toolStepText(ev.tool_name, ev.status, ev.summary);
+                setToolActivity(text);
+                const prev = activityRef.current;
+                if (ev.status === 'started') {
+                  // 같은 도구의 진행 중 단계가 이미 있으면 갱신, 없으면 push.
+                  const existing = prev.find(
+                    (s) => s.toolName === ev.tool_name && s.status === 'started',
+                  );
+                  const step: ToolActivityStep = {
+                    id: existing ? existing.id : uid(),
+                    toolName: ev.tool_name,
+                    status: 'started',
+                    text,
+                  };
+                  setActivitySynced(
+                    existing
+                      ? prev.map((s) => (s === existing ? step : s))
+                      : [...prev, step],
+                  );
+                } else {
+                  // succeeded/failed: 같은 도구의 마지막 started 를 종료 상태로 갱신.
+                  let target: ToolActivityStep | undefined;
+                  for (let i = prev.length - 1; i >= 0; i -= 1) {
+                    const s = prev[i];
+                    if (s && s.toolName === ev.tool_name && s.status === 'started') {
+                      target = s;
+                      break;
+                    }
+                  }
+                  setActivitySynced(
+                    target
+                      ? prev.map((s) =>
+                          s === target ? { ...target, status: ev.status, text } : s,
+                        )
+                      : [
+                          ...prev,
+                          { id: uid(), toolName: ev.tool_name, status: ev.status, text },
+                        ],
+                  );
+                }
+              }
             } else if (ev.type === 'message') {
-              const dynamics = (ev.ui_components ?? [])
-                .map(toDynamic)
-                .filter((d): d is DynamicComponentSpec => d !== undefined);
+              // 방어적 차단: assistant 메시지만 채팅 버블로 만든다. tool/system role 은
+              // 내부 메시지라 raw 누출을 막기 위해 버블화하지 않는다(#raw-leak-guard).
+              if (ev.role !== 'assistant') continue;
+              const dynamics = (ev.ui_components ?? []) as A2uiComponent[];
               const msgId = ev.message_id ?? uid();
+              // 이 턴의 도구 활동을 메시지에 귀속시킨다 — 한 아바타 아래 [활동 → 본문]
+              // 순서로 렌더되도록(도구가 본문보다 먼저 실행되므로). 귀속 후 임시 활동은
+              // 비워, 다음 턴 도구가 새로 쌓이고 진행 중 블록이 중복 표시되지 않게 한다.
+              const turnActivity: ChatActivityStep[] = activityRef.current.map((s) => ({
+                id: s.id,
+                status: s.status,
+                text: s.text,
+              }));
               // resume 재연결 시 서버가 이미 영속된 메시지를 다시 보낼 수 있다 —
               // message_id 로 dedupe 한다(#replay-on-resume).
               setMessages((prev) =>
@@ -317,9 +413,12 @@ export function useAgentStream(sessionId: string): UseAgentStream {
                         content: ev.content,
                         createdAt: new Date().toISOString(),
                         dynamics,
+                        activity: turnActivity.length > 0 ? turnActivity : undefined,
                       },
                     ],
               );
+              setActivitySynced([]);
+              setToolActivity(null);
               assembled = '';
               setStreamingText('');
             } else if (ev.type === 'error') {
@@ -337,6 +436,9 @@ export function useAgentStream(sessionId: string): UseAgentStream {
         return { runStatus, recoveredId };
       };
 
+      // 런이 에러/중단으로 끝났는지 — finally 에서 남은 'started' 단계를 succeeded 로 둘지
+      // failed 로 둘지 가른다. 성공/대기/정상중단은 false 유지(#orphan-tool-step).
+      let errored = false;
       try {
         // --- 0단계: 직전이 drop(reconnect)이면, 새 입력 전에 no-message reconnect 로
         // 끊긴 런을 먼저 drain 한다 — 서버 reconnect 경로가 message 를 무시해 새 입력이
@@ -422,15 +524,18 @@ export function useAgentStream(sessionId: string): UseAgentStream {
             setResumeId(null);
             resumeModeRef.current = null;
           }
+          errored = true;
           setStatus('error');
         } else {
           // done 프레임 없이 스트림이 끊김(네트워크/프록시) — reconnect 로 표시해 다음
           // send 가 no-message drain 후 이어가도록 한다(#done-required).
           resumeModeRef.current = 'reconnect';
           setError((prev) => prev ?? '연결이 끊겼습니다. 다시 보내면 이어서 진행합니다.');
+          errored = true;
           setStatus('error');
         }
       } catch (err) {
+        errored = true;
         if ((err as Error)?.name === 'AbortError') {
           setStatus('idle');
           return;
@@ -440,9 +545,23 @@ export function useAgentStream(sessionId: string): UseAgentStream {
       } finally {
         streamingRef.current = false;
         abortRef.current = null;
+        // 스트림이 끝나면 남은 'started' 단계의 스피너를 멈춘다. 단 **성공으로 끝났을 때만
+        // succeeded** 로 마무리하고, 에러/중단(errored)이면 failed 로 둔다 — 실패한 런 옆에
+        // "분석 완료" 체크가 뜨던 문제를 막는다(#orphan-tool-step).
+        const remaining = activityRef.current;
+        if (remaining.some((s) => s.status === 'started')) {
+          const end: ToolStepStatusValue = errored ? 'failed' : 'succeeded';
+          setActivitySynced(
+            remaining.map((s) =>
+              s.status === 'started'
+                ? { ...s, status: end, text: toolStepText(s.toolName, end) }
+                : s,
+            ),
+          );
+        }
       }
     },
-    [sessionId, setResumeId],
+    [sessionId, setResumeId, setActivitySynced],
   );
 
   const stop = useCallback(() => {
@@ -452,5 +571,5 @@ export function useAgentStream(sessionId: string): UseAgentStream {
     setStatus('idle');
   }, []);
 
-  return { messages, streamingText, toolActivity, status, error, send, stop };
+  return { messages, streamingText, toolActivity, activity, plan, status, error, send, stop };
 }
