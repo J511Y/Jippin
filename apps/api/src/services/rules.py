@@ -23,7 +23,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 #: 기본(베이스라인) 룰셋 버전. 룰 분기 변경 시 반드시 함께 올린다 (FR-RULE-007).
-BASELINE_RULESET_VERSION = "2018-775.v1"
+#: v2 (2026-06-26): 실내 비내력벽 철거(발코니 확장 아님)는 화재안전 룰 미적용,
+#: 계단실 2개소 이상은 대피공간 면제로 매핑, 미확인 안전변수는 보수적 가정 + caveat.
+BASELINE_RULESET_VERSION = "2018-775.v2"
 
 #: 적용 법령 표기 (RULE-001).
 BASELINE_LAW_REFERENCE = (
@@ -163,7 +165,7 @@ class Ruleset:
 BASELINE_RULESET = Ruleset(
     version=BASELINE_RULESET_VERSION,
     law_reference=BASELINE_LAW_REFERENCE,
-    verified_on="2026-06-11",
+    verified_on="2026-06-26",
 )
 
 

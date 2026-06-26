@@ -259,13 +259,15 @@ async def test_evaluate_rules_load_bearing_denies(monkeypatch) -> None:
     assert fake.sessions[session_id]["rule_evaluated_at"] is not None
 
 
-async def test_evaluate_rules_missing_field_holds(monkeypatch) -> None:
+async def test_evaluate_rules_minimal_input_is_conservative_warn(monkeypatch) -> None:
+    # v2: 벽 종류만 알고 나머지 안전 변수가 미확인(발코니 확장 여부도 미상)이면 HOLD 가
+    # 아니라 보수적 가정 + 미확인 caveat → WARN(리포트 생성). 벽 종류만 HOLD 사유다.
     session_id, _fake = await _session_for_rules(monkeypatch)
     res = await domain.evaluate_rules_impl(
         session_id=session_id, judgment_values={"wall_type": "NON_LOAD_BEARING"}
     )
     assert res["ok"] is True
-    assert res["result"]["verdict"] == "HOLD"
+    assert res["result"]["verdict"] == "WARN"
 
 
 async def test_evaluate_rules_drops_unknown_keys(monkeypatch) -> None:
