@@ -99,6 +99,8 @@ class SessionReportResponse(BaseModel):
     rule_eval_result: dict[str, Any]
     evaluated_at: datetime | None
     address: SessionAddressResponse | None
+    #: 예상 견적(REPORT-003). 견적 비대상(불가/보류)이거나 항목이 없으면 None.
+    estimate: dict[str, Any] | None = None
 
 
 class SessionResponse(BaseModel):

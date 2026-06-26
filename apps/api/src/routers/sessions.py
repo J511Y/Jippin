@@ -21,7 +21,7 @@ from ..schemas.sessions import (
     SessionReportResponse,
     SessionResponse,
 )
-from ..services import main_flow
+from ..services import estimate, main_flow
 
 logger = get_logger("zippin.sessions")
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -111,14 +111,17 @@ async def get_session_report(
     )
     session = data["session"]
     address = data["address"]
+    rule_eval_result = session["rule_eval_result"]
     return SessionReportResponse(
         session_id=session["id"],
         status=session["status"],
-        rule_eval_result=session["rule_eval_result"],
+        rule_eval_result=rule_eval_result,
         evaluated_at=session.get("rule_evaluated_at"),
         address=(
             SessionAddressResponse.model_validate(address)
             if address is not None
             else None
         ),
+        # 예상 견적(REPORT-003) — 판정에서 파생, 견적 비대상이면 None.
+        estimate=estimate.compute_estimate(rule_eval_result),
     )

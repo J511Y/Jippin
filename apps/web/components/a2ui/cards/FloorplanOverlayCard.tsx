@@ -52,9 +52,13 @@ export type OverlayRegion = {
   requires_hitl?: boolean;
 };
 
+export type CropFrame = { x: number; y: number; w: number; h: number };
+
 export type FloorplanOverlayPayload = {
   asset_id?: string;
   image?: { width?: number; height?: number };
+  /** 검출 엔티티를 감싼 크롭 프레임(원본 픽셀). viewBox 로 써서 여백을 잘라낸다(MASK 대체). */
+  crop?: CropFrame;
   regions?: OverlayRegion[];
 };
 
@@ -126,8 +130,9 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
 
   const regions = useMemo(() => normalizeRegions(payload.regions), [payload.regions]);
 
-  // 원본 이미지 크기 — 폴리곤이 이 좌표계다. payload.image 우선, 없으면 폴리곤 bbox 로 추정.
-  const dims = useMemo(() => {
+  // 원본 이미지 크기 — <image> 가 이 좌표계로 그려진다. payload.image 우선, 없으면
+  // 폴리곤 bbox 로 추정.
+  const imgDims = useMemo(() => {
     const w = payload.image?.width;
     const h = payload.image?.height;
     if (typeof w === 'number' && typeof h === 'number' && w > 0 && h > 0) {
@@ -143,6 +148,27 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     }
     return { w: Math.ceil(maxX), h: Math.ceil(maxY) };
   }, [payload.image, regions]);
+
+  // 표시 프레임 — 검출 엔티티를 감싼 크롭(서버 계산). viewBox 로 써서 도면 외곽 여백
+  // (치수·표제란)을 잘라낸 채 같은 비율로 확대 표시한다(MASK 대체). 좌표 변환은 없다 —
+  // 이미지와 폴리곤이 같은 원본 좌표계라 viewBox 만 좁히면 둘 다 같은 비율로 커진다.
+  const frame = useMemo<CropFrame>(() => {
+    const c = payload.crop;
+    if (
+      isPlainObject(c) &&
+      typeof c.x === 'number' &&
+      typeof c.y === 'number' &&
+      typeof c.w === 'number' &&
+      typeof c.h === 'number' &&
+      Number.isFinite(c.x) &&
+      Number.isFinite(c.y) &&
+      c.w > 0 &&
+      c.h > 0
+    ) {
+      return { x: c.x, y: c.y, w: c.w, h: c.h };
+    }
+    return { x: 0, y: 0, w: imgDims.w, h: imgDims.h };
+  }, [payload.crop, imgDims]);
 
   // 철거 가능한 건 비내력벽뿐 — 오버레이는 wall_other 후보만 그린다(나머지 벽/공간/개구부는
   // 도면 이미지에 이미 보이므로 굳이 겹치지 않는다 → 선택 대상이 한눈에 또렷해진다).
@@ -271,14 +297,15 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
         {loading ? (
           <div
             className="fp-skeleton"
-            style={{ aspectRatio: `${dims.w} / ${dims.h}` }}
+            style={{ aspectRatio: `${frame.w} / ${frame.h}` }}
             role="status"
             aria-label="도면을 불러오는 중"
           />
         ) : (
           <OverlayCanvas
-            key={`${dims.w}x${dims.h}:${wallRegions.length}`}
-            dims={dims}
+            key={`${frame.x},${frame.y},${frame.w},${frame.h}:${wallRegions.length}`}
+            frame={frame}
+            imgDims={imgDims}
             regions={wallRegions}
             imageUrl={imageUrl}
             imageFailed={imageFailed}
@@ -332,9 +359,14 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
   );
 }
 
-/** SVG 오버레이 + 줌/팬. viewBox 를 조작해 휠/핀치 줌, 드래그/스와이프 팬을 지원한다. */
+/** SVG 오버레이 + 줌/팬. viewBox 를 조작해 휠/핀치 줌, 드래그/스와이프 팬을 지원한다.
+ *
+ * ``frame`` 은 표시 프레임(크롭 영역, 원본 좌표계), ``imgDims`` 는 이미지 자연 크기다.
+ * 이미지는 (0,0,imgDims) 로 그대로 그리고 viewBox 만 frame 으로 좁혀, 도면 여백을 잘라낸
+ * 채 이미지와 오버레이를 같은 비율로 확대 표시한다(MASK 대체 — 좌표 변환 없음). */
 function OverlayCanvas({
-  dims,
+  frame,
+  imgDims,
   regions,
   imageUrl,
   imageFailed,
@@ -342,7 +374,8 @@ function OverlayCanvas({
   onToggle,
   onImageError
 }: {
-  dims: { w: number; h: number };
+  frame: ViewBox;
+  imgDims: { w: number; h: number };
   regions: OverlayRegion[];
   imageUrl: string | null;
   imageFailed: boolean;
@@ -350,8 +383,12 @@ function OverlayCanvas({
   onToggle: (regionId: string) => void;
   onImageError: () => void;
 }) {
-  // 부모가 dims/regions 변화 시 key 로 remount 하므로 view 초기값을 full 로 두면 충분하다.
-  const full: ViewBox = useMemo(() => ({ x: 0, y: 0, w: dims.w, h: dims.h }), [dims]);
+  // 부모가 frame/regions 변화 시 key 로 remount 하므로 view 초기값을 crop 프레임으로 두면
+  // 충분하다. 줌/팬 클램프 경계도 이 프레임 기준이다(이미지 전체가 아니라 크롭 영역).
+  const full: ViewBox = useMemo(
+    () => ({ x: frame.x, y: frame.y, w: frame.w, h: frame.h }),
+    [frame]
+  );
   const [view, setView] = useState<ViewBox>(full);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -366,14 +403,15 @@ function OverlayCanvas({
     return () => clearTimeout(t);
   }, []);
 
-  const zoom = dims.w / view.w;
+  const zoom = full.w / view.w;
 
   const clampView = useCallback(
     (v: ViewBox): ViewBox => {
       const w = Math.min(full.w, Math.max(full.w / MAX_ZOOM, v.w));
       const h = w * (full.h / full.w);
-      const x = Math.min(Math.max(0, v.x), full.w - w);
-      const y = Math.min(Math.max(0, v.y), full.h - h);
+      // 크롭 프레임 원점(full.x/full.y) 기준으로 클램프 — 0 이 아니라 프레임 안으로 가둔다.
+      const x = Math.min(Math.max(full.x, v.x), full.x + full.w - w);
+      const y = Math.min(Math.max(full.y, v.y), full.y + full.h - h);
       return { x, y, w, h };
     },
     [full]
@@ -388,13 +426,13 @@ function OverlayCanvas({
         const py = (clientY - rect.top) / rect.height;
         const focusX = v.x + px * v.w;
         const focusY = v.y + py * v.h;
-        const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, (dims.w / v.w) * factor));
-        const nw = dims.w / nextZoom;
+        const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, (full.w / v.w) * factor));
+        const nw = full.w / nextZoom;
         const nh = nw * (full.h / full.w);
         return clampView({ x: focusX - px * nw, y: focusY - py * nh, w: nw, h: nh });
       });
     },
-    [clampView, dims.w, full.h, full.w]
+    [clampView, full.h, full.w]
   );
 
   // 버튼 줌은 화면 중앙 기준(좌상단 기준이 부자연스럽다는 리뷰 반영).
@@ -494,7 +532,7 @@ function OverlayCanvas({
         style={{
           display: 'block',
           width: '100%',
-          aspectRatio: `${dims.w} / ${dims.h}`,
+          aspectRatio: `${full.w} / ${full.h}`,
           touchAction: 'none',
           cursor: zoom > 1 ? 'grab' : 'default',
           background: '#f8f9fa'
@@ -505,8 +543,8 @@ function OverlayCanvas({
             href={imageUrl}
             x={0}
             y={0}
-            width={dims.w}
-            height={dims.h}
+            width={imgDims.w}
+            height={imgDims.h}
             preserveAspectRatio="xMidYMid meet"
             onError={onImageError}
           />

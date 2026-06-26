@@ -326,26 +326,92 @@ def _polygon_to_maskcoords(polygon: list[float]) -> list[dict[str, float]]:
     ]
 
 
+# 도면 여백(치수·표제란 등)을 잘라내기 위한 크롭 패딩(원본 픽셀). 검출된 엔티티
+# 전체를 감싸는 최대 박스에 이만큼 여유를 둔다(MASK 대체: 인퍼런스 결과 기반 크롭).
+_CROP_PADDING_PX = 24.0
+
+
+def _compute_crop_box(
+    regions: list[dict[str, Any]], image: dict[str, Any] | None
+) -> dict[str, float] | None:
+    """검출된 모든 region 폴리곤을 감싸는 최대 박스 + 24px 크롭 영역을 계산한다.
+
+    MASK-001(수치 마스킹) 대체 구현 — 도면 외곽 여백(치수·면적 수치·표제란)을 잘라
+    내기 위해, 세그멘테이션이 잡아낸 엔티티 전체의 bounding box 에 패딩을 둔 크롭
+    프레임을 돌려준다. 프론트(FloorplanOverlay)가 이 프레임을 SVG viewBox 로 써서
+    이미지와 오버레이를 같은 비율로 확대·표시한다(좌표 변환 없음 — 같은 좌표계).
+
+    검출 region 이 없으면 None(전체 표시로 폴백). image 크기가 있으면 그 안으로 클램프.
+    """
+
+    min_x = min_y = float("inf")
+    max_x = max_y = float("-inf")
+    for r in regions:
+        poly = r.get("polygon") if isinstance(r, dict) else None
+        if not isinstance(poly, list):
+            continue
+        for i in range(0, len(poly) - 1, 2):
+            x, y = poly[i], poly[i + 1]
+            if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                continue
+            min_x, max_x = min(min_x, float(x)), max(max_x, float(x))
+            min_y, max_y = min(min_y, float(y)), max(max_y, float(y))
+    if min_x == float("inf") or max_x <= min_x or max_y <= min_y:
+        return None
+
+    x0 = min_x - _CROP_PADDING_PX
+    y0 = min_y - _CROP_PADDING_PX
+    x1 = max_x + _CROP_PADDING_PX
+    y1 = max_y + _CROP_PADDING_PX
+    # 이미지 경계로 클램프(여백을 둔 박스가 캔버스 밖으로 나가지 않게).
+    img_w = (
+        float(image["width"])
+        if isinstance(image, dict) and image.get("width")
+        else None
+    )
+    img_h = (
+        float(image["height"])
+        if isinstance(image, dict) and image.get("height")
+        else None
+    )
+    x0 = max(0.0, x0)
+    y0 = max(0.0, y0)
+    if img_w is not None:
+        x1 = min(img_w, x1)
+    if img_h is not None:
+        y1 = min(img_h, y1)
+    w = x1 - x0
+    h = y1 - y0
+    if w <= 0 or h <= 0:
+        return None
+    return {
+        "x": round(x0, 2),
+        "y": round(y0, 2),
+        "w": round(w, 2),
+        "h": round(h, 2),
+    }
+
+
 def build_overlay_spec(
     *, asset_id: Any, image: dict[str, Any] | None, regions: list[dict[str, Any]]
 ) -> dict[str, Any]:
     """오버레이 카드(FloorplanOverlay) json-render spec — 서버가 구성한다(LLM 미관여).
 
     asset_id 로 프론트가 표시용 서명 URL 을 발급받고, image(원본 크기)로 좌표를 스케일해
-    polygon 을 그린다.
+    polygon 을 그린다. ``crop`` 은 검출 엔티티를 감싼 크롭 프레임으로, 프론트가 viewBox 로
+    써서 도면 외곽 여백(치수·표제란)을 잘라낸 채 확대 표시한다(MASK 대체).
     """
+    props: dict[str, Any] = {
+        "asset_id": str(asset_id),
+        "image": image or {},
+        "regions": regions,
+    }
+    crop = _compute_crop_box(regions, image)
+    if crop is not None:
+        props["crop"] = crop
     return {
         "root": "ov",
-        "elements": {
-            "ov": {
-                "type": "FloorplanOverlay",
-                "props": {
-                    "asset_id": str(asset_id),
-                    "image": image or {},
-                    "regions": regions,
-                },
-            }
-        },
+        "elements": {"ov": {"type": "FloorplanOverlay", "props": props}},
     }
 
 

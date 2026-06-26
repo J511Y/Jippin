@@ -443,6 +443,52 @@ async def test_session_floorplan_emits_overlay_and_persists_objects(
     assert {s["id"] for s in js["space_objects"]} == {"pred:3"}
 
 
+def test_compute_crop_box_pads_and_clamps() -> None:
+    # 검출 엔티티 전체 bbox(50..150) + 24px 패딩, 이미지(0..200) 안으로 클램프.
+    from src.agent.tools.segmentation import _compute_crop_box
+
+    regions = [
+        {"polygon": [50, 60, 150, 60, 150, 140, 50, 140]},
+        {"polygon": [80, 70, 120, 70, 120, 100, 80, 100]},
+    ]
+    crop = _compute_crop_box(regions, {"width": 200, "height": 200})
+    assert crop == {"x": 26.0, "y": 36.0, "w": 148.0, "h": 128.0}
+
+
+def test_compute_crop_box_clamps_to_image_bounds() -> None:
+    # 패딩이 캔버스 밖으로 나가면 이미지 경계로 자른다(음수/초과 방지).
+    from src.agent.tools.segmentation import _compute_crop_box
+
+    regions = [{"polygon": [0, 0, 100, 0, 100, 100, 0, 100]}]
+    crop = _compute_crop_box(regions, {"width": 100, "height": 100})
+    assert crop == {"x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0}
+
+
+def test_compute_crop_box_none_without_regions() -> None:
+    from src.agent.tools.segmentation import _compute_crop_box
+
+    assert _compute_crop_box([], {"width": 100, "height": 100}) is None
+
+
+def test_build_overlay_spec_includes_crop() -> None:
+    from src.agent.tools.segmentation import build_overlay_spec
+
+    spec = build_overlay_spec(
+        asset_id="a1",
+        image={"width": 300, "height": 300},
+        regions=[
+            {
+                "region_id": "pred:1",
+                "class_name": "wall_other",
+                "polygon": [50, 50, 150, 50, 150, 150, 50, 150],
+            }
+        ],
+    )
+    props = spec["elements"]["ov"]["props"]
+    assert "crop" in props
+    assert props["crop"]["x"] == 26.0 and props["crop"]["y"] == 26.0
+
+
 def test_merge_overlapping_regions() -> None:
     # 겹치는 같은-클래스 벽 둘 → 하나로 병합(merged:N), 떨어진 벽 → 원본 id 유지.
     from src.agent.tools.segmentation import _merge_overlapping_regions

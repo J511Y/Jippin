@@ -85,6 +85,26 @@ export interface FloorplanAssetResponse {
   scan_status: string;
 }
 
+export interface EstimateItem {
+  code: string;
+  label: string;
+  amount_min: number | null;
+  unit_amount: number | null;
+  unit: string | null;
+  note: string | null;
+}
+
+export interface EstimateResult {
+  policy_version: string;
+  currency: string;
+  vat_included: boolean;
+  source_url: string;
+  items: EstimateItem[];
+  fixed_total_min: number | null;
+  has_variable_items: boolean;
+  disclaimer: string;
+}
+
 export interface SessionReportResponse {
   schema_version: string;
   session_id: string;
@@ -92,6 +112,7 @@ export interface SessionReportResponse {
   rule_eval_result: Record<string, unknown>;
   evaluated_at: string | null;
   address: Record<string, unknown> | null;
+  estimate: EstimateResult | null;
 }
 
 export async function createSession(): Promise<SessionResponse> {
