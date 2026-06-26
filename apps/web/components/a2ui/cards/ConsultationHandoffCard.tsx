@@ -17,7 +17,7 @@ import { Stack, Text } from '@mantine/core';
 import { IconHeadset } from '@tabler/icons-react';
 import { useId, useState } from 'react';
 
-import { ConsultationLeadForm } from '@/components/leads/ConsultationLeadForm';
+import { QuickPrecheckConsultForm } from '@/components/leads/QuickPrecheckConsultForm';
 
 import { CardHeader, CardRule, CardShell } from './CardShell';
 
@@ -39,12 +39,6 @@ export function isConsultationHandoffPayload(
 
 const DEFAULT_REASON =
   '지금 단계에서는 자동으로 확인하기 어려운 부분이 있어요. 전문가가 직접 도면을 보고 더 정확히 안내해 드릴게요.';
-
-/** 사전검토 맥락(주소)을 상담 내용 기본값으로 — 담당자가 어떤 검토에서 넘어왔는지 안다. */
-function buildDefaultMessage(address?: string): string {
-  const base = '사전검토 중 자동 확인이 어려워 전문가 상담을 신청합니다.';
-  return address?.trim() ? `${base} (현장 주소: ${address.trim()})` : base;
-}
 
 export function ConsultationHandoffCard({
   payload
@@ -80,9 +74,10 @@ export function ConsultationHandoffCard({
           <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.6 }}>
             {reason}
           </Text>
-          <ConsultationLeadForm
+          {/* 사전검토 빠른 상담폼 — 이름/연락처만(로그인 시 자동) + 세션이 아는 주소로 바로 제출. */}
+          <QuickPrecheckConsultForm
+            prefillAddress={address}
             ctaId="precheck_handoff"
-            defaultMessage={buildDefaultMessage(address)}
             onSubmitted={() => setSubmitted(true)}
           />
         </Stack>

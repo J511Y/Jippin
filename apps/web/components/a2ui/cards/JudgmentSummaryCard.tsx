@@ -16,15 +16,18 @@
  * risks 는 string 배열일 때만 채택. 형태가 어긋나면 null 반환 → JSON fallback.
  */
 
-import { Stack, Text } from '@mantine/core';
+import { Button, Stack, Text } from '@mantine/core';
 import {
   IconCircleCheck,
   IconCircleX,
+  IconHeadset,
   IconInfoCircle,
   IconScale,
   IconUserSearch
 } from '@tabler/icons-react';
-import { useId, type CSSProperties, type ReactNode } from 'react';
+import { useId, useState, type CSSProperties, type ReactNode } from 'react';
+
+import { QuickPrecheckConsultForm } from '@/components/leads/QuickPrecheckConsultForm';
 
 import { type CardAccent, CardHeader, CardRule, CardShell } from './CardShell';
 
@@ -41,6 +44,9 @@ export type JudgmentSummaryPayload = {
   risks?: string[];
   /** true 면 룰엔진(evaluate_rules) 판정 기반, false/미지정이면 규칙 평가 전 예비 결과. */
   rule_backed?: boolean;
+  /** 하단 상담 CTA → 빠른 상담폼 prefill 용. */
+  session_id?: string;
+  prefill_address?: string;
 };
 
 const KNOWN_DECISIONS: readonly JudgmentDecision[] = [
@@ -149,6 +155,10 @@ export function JudgmentSummaryCard({
   const style = DECISION_STYLES[decision];
   const risks = (payload.risks ?? []).filter((r) => r.trim().length > 0);
   const titleId = useId();
+  const [showConsult, setShowConsult] = useState(false);
+  const [consultSubmitted, setConsultSubmitted] = useState(false);
+  const prefillAddress =
+    typeof payload.prefill_address === 'string' ? payload.prefill_address : undefined;
 
   return (
     <CardShell accent={style.accent} labelledBy={titleId}>
@@ -207,6 +217,36 @@ export function JudgmentSummaryCard({
       ) : null}
 
       <CardRule />
+
+      {/* 상담 인입 — 결과를 본 직후 전문가 상담으로 자연스럽게 잇는다. 클릭하면 같은
+          대화 화면에서 빠른 상담폼이 펼쳐지고, 주소 등은 이미 세션이 알고 있어 바로 제출. */}
+      {consultSubmitted ? (
+        <Text size="sm" c="var(--jippin-brand-copy)" mb="sm" style={{ lineHeight: 1.55 }}>
+          상담 신청이 접수되었어요. 담당자가 영업일 기준 1일 이내에 연락드릴게요.
+        </Text>
+      ) : showConsult ? (
+        <Stack gap="xs" mb="sm">
+          <Text size="sm" fw={600} c="var(--jippin-brand-ink)">
+            전문가 상담 신청
+          </Text>
+          <QuickPrecheckConsultForm
+            prefillAddress={prefillAddress}
+            ctaId="precheck_report"
+            onSubmitted={() => setConsultSubmitted(true)}
+          />
+        </Stack>
+      ) : (
+        <Button
+          color="coral"
+          radius="md"
+          fullWidth
+          mb="sm"
+          leftSection={<IconHeadset size={18} aria-hidden />}
+          onClick={() => setShowConsult(true)}
+        >
+          전문가 상담 신청하기
+        </Button>
+      )}
 
       <Text className="a2ui-legal">
         본 결과는 첨부 자료를 바탕으로 한 참고용 안내이며, 법적 판단을 대체하지

@@ -73,10 +73,12 @@ export const a2uiCatalog = defineCatalog(schema, {
         title: z.string(),
         summary: z.string(),
         risks: z.array(z.string()).optional(),
-        rule_backed: z.boolean().optional()
+        rule_backed: z.boolean().optional(),
+        session_id: z.string().optional(),
+        prefill_address: z.string().optional()
       }),
       description:
-        '최종 판단 요약 카드. decision: possible|conditional|not_possible|needs_expert. rule_backed=룰엔진 판정 기반 여부.'
+        '최종 판단 요약 카드. decision: possible|conditional|not_possible|needs_expert. rule_backed=룰엔진 판정 기반 여부. 하단 상담 CTA(빠른 상담폼) 포함.'
     },
     FloorplanConfirm: {
       props: z.object({

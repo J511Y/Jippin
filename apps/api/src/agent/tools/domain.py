@@ -638,9 +638,19 @@ async def emit_judgment_summary_impl(
         "title": str(title),
         "summary": str(summary),
         "rule_backed": rule_backed,
+        "session_id": str(session_id),
     }
     if risks:
         props["risks"] = [str(r) for r in risks]
+    # 판정 카드 하단 상담 CTA(빠른 상담폼)에서 현장 주소를 prefill 할 수 있게 확정 주소를 싣는다.
+    try:
+        addr = await main_flow.get_session_address(session_id)
+        if isinstance(addr, dict):
+            road = addr.get("road_address") or addr.get("jibun_address")
+            if road:
+                props["prefill_address"] = str(road)
+    except Exception:  # noqa: BLE001 - 주소 조회 실패는 카드 방출을 막지 않는다
+        pass
     spec = {
         "root": "j",
         "elements": {"j": {"type": "JudgmentSummary", "props": props}},
