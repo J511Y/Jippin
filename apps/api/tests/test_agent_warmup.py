@@ -25,7 +25,7 @@ async def test_skips_when_endpoint_unset(monkeypatch) -> None:
 
 
 async def test_warms_once_then_throttles(monkeypatch) -> None:
-    monkeypatch.setattr(warmup, "_last_warm_monotonic", 0.0)
+    monkeypatch.setattr(warmup, "_last_warm_monotonic", None)  # 아직 워밍 안 함
     fired: list[tuple[str, str | None]] = []
 
     async def fake_fire(endpoint: str, token: str | None) -> None:
@@ -48,7 +48,7 @@ async def test_warms_once_then_throttles(monkeypatch) -> None:
 
 async def test_throttle_window_expiry(monkeypatch) -> None:
     # 스로틀 창이 지나면 다시 fire 한다(monotonic 을 과거로 밀어 흉내).
-    monkeypatch.setattr(warmup, "_last_warm_monotonic", 0.0)
+    monkeypatch.setattr(warmup, "_last_warm_monotonic", None)  # 아직 워밍 안 함
 
     async def noop(endpoint: str, token: str | None) -> None:
         return None

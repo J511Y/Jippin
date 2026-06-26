@@ -35,7 +35,10 @@ _TINY_PNG_DATA_URL = (
     "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 )
 
-_last_warm_monotonic: float = 0.0
+# None = 아직 한 번도 워밍 안 함. 0.0 같은 숫자 기본값을 쓰면, 프로세스 부팅 직후
+# time.monotonic() 이 throttle 창보다 작은 동안(예: 컨테이너 부팅 후 120s 이내) 첫 워밍이
+# now - 0.0 < throttle 로 스로틀돼 **영영 안 뜨는** 버그가 된다(#warmup-fresh-boot).
+_last_warm_monotonic: float | None = None
 # 백그라운드 태스크가 GC 되지 않도록 참조를 잡아 둔다.
 _bg_tasks: set[asyncio.Task[None]] = set()
 
@@ -67,7 +70,10 @@ def maybe_warm_segmentation(settings: "Settings") -> bool:
     if not endpoint:
         return False
     now = time.monotonic()
-    if now - _last_warm_monotonic < _WARMUP_THROTTLE_SECONDS:
+    if (
+        _last_warm_monotonic is not None
+        and now - _last_warm_monotonic < _WARMUP_THROTTLE_SECONDS
+    ):
         return False
     try:
         loop = asyncio.get_running_loop()
