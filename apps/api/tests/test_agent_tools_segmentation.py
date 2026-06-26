@@ -419,11 +419,12 @@ async def test_session_floorplan_emits_overlay_and_persists_objects(
             run_context=ctx,
             run_id=run["id"],
         )
-    # LLM 반환분: 좌표 제거 + 오버레이 플래그.
+    # LLM 반환분: 원시 분석값(좌표·regions·image·instances) 전부 제거 + 오버레이 플래그만.
     assert res["ok"] is True
     assert res["overlay_emitted"] is True
-    assert res["regions"] == []
-    assert res["image"] is None
+    assert "regions" not in res
+    assert "image" not in res
+    assert "instances" not in res
     assert res["region_count"] == 4  # 4개 모두 polygon 유효(door 포함)
 
     # 오버레이 카드(FloorplanOverlay)가 방출됐다.
@@ -582,8 +583,12 @@ async def test_session_floorplan_merges_vlm_reclassification(monkeypatch) -> Non
             run_id=run["id"],
         )
     assert res["ok"] is True
-    assert res["vlm_reclassified"] == ["pred:1"]
-    assert "구조벽 의심" in res["vlm_notes"][0]
+    assert res["overlay_emitted"] is True
+    # LLM 반환엔 원시 분석값(vlm_notes/vlm_reclassified/instances)을 싣지 않는다
+    # (#no-analysis-dump) — 보정/관찰은 아래 영속된 judgment_schema 로만 검증한다.
+    assert "vlm_notes" not in res
+    assert "vlm_reclassified" not in res
+    assert "instances" not in res
 
     session = await main_flow.get_owned_session(
         session_id, owner_user_id=owner, owner_is_anonymous=False

@@ -688,17 +688,17 @@ async def segment_session_floorplan(
             summary += f" (벽 {len(vlm_ids)}곳은 이미지 기준으로 분류를 보정했어요.)"
         if low_conf:
             summary += " 다만 분석 신뢰도가 낮아 재확인이 필요할 수 있어요."
-    # 좌표는 카드로만 — LLM 반환분에서 떼어 낸다. VLM 관찰(notes)은 에이전트가 바로 쓰도록 싣는다.
+    # LLM 반환은 **최소·생활어 요약만** 싣는다. 좌표·instances·VLM notes/confidence/
+    # reclassify 같은 원시 분석값은 절대 싣지 않는다 — 모델이 그 raw 데이터를 받으면 답변
+    # 본문에 JSON/분석 덤프로 그대로 토해 내(스트리밍 중 raw JSON 이 보이고 끝나서야 카드가
+    # 뜸) B2C 경험을 깬다(#no-analysis-dump). 상세는 오버레이 카드가 보여 주고, VLM 관찰은
+    # 다음 턴 '[현재 세션 상태]' 스냅샷으로 에이전트에 전달돼 설명에 쓰인다.
     return {
-        **result,
+        "schema_version": SCHEMA_VERSION,
+        "ok": True,
         "summary": summary,
-        "regions": [],
-        "image": None,
         "overlay_emitted": True,
         "region_count": len(regions),
-        "vlm_notes": (supplement or {}).get("notes") or [],
-        "vlm_confidence": (supplement or {}).get("confidence"),
-        "vlm_reclassified": sorted(vlm_ids),
         "analysis_low_confidence": low_conf,
     }
 
