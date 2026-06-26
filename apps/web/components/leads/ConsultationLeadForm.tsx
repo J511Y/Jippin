@@ -18,7 +18,7 @@ import { notifications } from '@mantine/notifications';
 import { IconPaperclip, IconSearch } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { PhoneInput } from '@/components/inputs/PhoneInput';
-import { trackLeadSubmit } from '@/lib/analytics/lead-cta';
+import { trackLeadSubmit, type LeadCtaId } from '@/lib/analytics/lead-cta';
 import { parseApiError } from '@/lib/api/error';
 import {
   createLead,
@@ -70,11 +70,27 @@ const INFLOW_OPTIONS = [
   { value: 'etc', label: '기타' }
 ];
 
+export interface ConsultationLeadFormProps {
+  /** 인입 식별자 — 제출 추적 cta(예: 사전검토 상담 전환 'precheck_handoff'). 기본 URL ?cta. */
+  ctaId?: LeadCtaId;
+  /** 상담 내용 기본값 — 사전검토 맥락(주소 등)을 미리 채워 담당자에게 전달. */
+  defaultMessage?: string;
+  /** 제출 성공 콜백 — 인라인 카드가 완료 상태로 전환하는 등에 쓴다. */
+  onSubmitted?: () => void;
+}
+
 /**
  * 상담 신청 전체 폼 (CMP-DIRECT). 도로명주소 검색 + 평면도 첨부(Supabase Storage) 포함.
  * 비로그인(익명)도 제출 가능.
+ *
+ * props 없이 쓰면 기존 /leads/new 동작 그대로. props 를 주면 사전검토 대화 중 상담 전환
+ * 카드(ConsultationHandoff) 등에 인라인으로 재사용한다.
  */
-export function ConsultationLeadForm() {
+export function ConsultationLeadForm({
+  ctaId,
+  defaultMessage,
+  onSubmitted
+}: ConsultationLeadFormProps = {}) {
   const [submitting, setSubmitting] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   // 로그인 회원은 이름/연락처가 이미 계정에 있으므로 prefill 후 잠근다(개별 잠금).
@@ -87,7 +103,10 @@ export function ConsultationLeadForm() {
   const [homeCheckId, setHomeCheckId] = useState<string | null>(null);
 
   const form = useForm<FullLeadValues>({
-    initialValues: INITIAL_VALUES,
+    initialValues: {
+      ...INITIAL_VALUES,
+      message: defaultMessage?.trim() ? defaultMessage.trim() : ''
+    },
     validate: {
       applicant_name: validateRequiredText('이름을 입력해 주세요.'),
       applicant_phone: validateKoreanPhone,
@@ -196,9 +215,9 @@ export function ConsultationLeadForm() {
         message: values.message.trim() || null,
         attachments
       });
-      // 인입 식별자는 현재 URL 의 ?cta= 에서 읽는다(직접 진입이면 '(direct)').
+      // 인입 식별자 — props.ctaId 우선, 없으면 현재 URL 의 ?cta=(직접 진입이면 '(direct)').
       // 제출 핸들러 안에서만 location 을 읽으므로 useSearchParams/Suspense 가 필요 없다.
-      trackLeadSubmit('lead_page');
+      trackLeadSubmit('lead_page', ctaId);
       notifications.show({
         color: 'teal',
         title: '상담 신청이 접수되었어요',
@@ -208,6 +227,7 @@ export function ConsultationLeadForm() {
       // setInitialValues 로 이름/연락처를 심어둬 잠긴 필드가 그대로 유지된다.
       form.reset();
       setFile(null);
+      onSubmitted?.();
     } catch (error) {
       // 업로드는 성공했는데 리드 생성이 실패하면 orphan 평면도(연결 row 없는 PII)가
       // 남는다 — best-effort 로 정리한다(클라이언트엔 삭제 권한이 없어 서버 경로 사용).

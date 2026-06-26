@@ -201,11 +201,14 @@ def build_tools(
     async def set_completion_decision(
         completion_decision: str, reason: str | None = None
     ) -> dict[str, Any]:
-        """플로우 결정을 기록한다: ASK_MORE/REQUEST_OVERLAY_REVIEW/PROCEED_RULE/HOLD_OR_HANDOFF."""
+        """플로우 결정을 기록한다: ASK_MORE/REQUEST_OVERLAY_REVIEW/PROCEED_RULE/HOLD_OR_HANDOFF.
+        HOLD_OR_HANDOFF(상담 전환)면 상담 인입 카드가 자동으로 함께 뜬다."""
         return await set_completion_decision_impl(
             session_id=session_id,
             completion_decision=completion_decision,
             reason=reason,
+            run_context=run_context,
+            run_id=run_id,
         )
 
     return [

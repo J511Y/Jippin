@@ -37,6 +37,7 @@ export const LEAD_SUBMIT_EVENT = 'lead_submit';
  * | mypage_empty    | 마이페이지 상담 0건 빈 상태 "상담 신청하기"   |
  * | report_bottom   | 사전검토 리포트 하단 "전문가 상담 신청하기"   |
  * | sessions_gate   | /sessions ComingSoonGate 오버레이 CTA         |
+ * | precheck_handoff| 사전검토 대화 중 상담 전환(HOLD_OR_HANDOFF) 카드 |
  */
 export const LEAD_CTA_IDS = [
   'home_hero',
@@ -48,7 +49,8 @@ export const LEAD_CTA_IDS = [
   'mypage_header',
   'mypage_empty',
   'report_bottom',
-  'sessions_gate'
+  'sessions_gate',
+  'precheck_handoff'
 ] as const;
 
 export type LeadCtaId = (typeof LEAD_CTA_IDS)[number];

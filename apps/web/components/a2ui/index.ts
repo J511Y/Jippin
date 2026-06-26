@@ -4,6 +4,7 @@ export { A2uiSurface } from './A2uiSurface';
 export { a2uiCatalog, a2uiRegistry } from './jsonrender';
 export { toSpec } from './adapt';
 export { AddressCandidatesCard } from './cards/AddressCandidatesCard';
+export { ConsultationHandoffCard } from './cards/ConsultationHandoffCard';
 export { FloorplanConfirmCard } from './cards/FloorplanConfirmCard';
 export { FloorplanRequestCard } from './cards/FloorplanRequestCard';
 export { JudgmentSummaryCard } from './cards/JudgmentSummaryCard';

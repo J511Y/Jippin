@@ -21,6 +21,10 @@ import {
   type AddressCandidatesPayload
 } from '@/components/a2ui/cards/AddressCandidatesCard';
 import {
+  ConsultationHandoffCard,
+  type ConsultationHandoffPayload
+} from '@/components/a2ui/cards/ConsultationHandoffCard';
+import {
   FloorplanConfirmCard,
   type FloorplanConfirmPayload
 } from '@/components/a2ui/cards/FloorplanConfirmCard';
@@ -88,10 +92,22 @@ export const a2uiCatalog = defineCatalog(schema, {
           .object({ width: z.number(), height: z.number() })
           .partial()
           .optional(),
+        crop: z
+          .object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
+          .optional(),
         regions: z.array(overlayRegion).default([])
       }),
       description:
         '도면 위에 AI 분석 영역(벽/공간)을 폴리곤 오버레이로 표시하고 비내력벽 후보를 선택받는 카드(OVERLAY).'
+    },
+    ConsultationHandoff: {
+      props: z.object({
+        reason: z.string().optional(),
+        prefill_address: z.string().optional(),
+        from_session: z.string().optional()
+      }),
+      description:
+        '사전검토가 리포트까지 못 가고 상담 전환(HOLD_OR_HANDOFF)될 때, 안내 + 상담 신청 폼을 인라인으로 보여 주는 카드.'
     }
   },
   // 카드 인터랙션은 useChatActions(상위 컨텍스트)로 처리하므로 json-render 액션은 없음.
@@ -115,6 +131,9 @@ const { registry: a2uiRegistry } = defineRegistry(a2uiCatalog, {
     ),
     FloorplanOverlay: ({ props }) => (
       <FloorplanOverlayCard payload={props as FloorplanOverlayPayload} />
+    ),
+    ConsultationHandoff: ({ props }) => (
+      <ConsultationHandoffCard payload={props as ConsultationHandoffPayload} />
     )
   }
 });
@@ -127,5 +146,6 @@ export const A2UI_TYPE_BY_KIND: Record<string, string> = {
   'address-candidates': 'AddressCandidates',
   'judgment-summary': 'JudgmentSummary',
   'floorplan-confirm': 'FloorplanConfirm',
-  'floorplan-overlay': 'FloorplanOverlay'
+  'floorplan-overlay': 'FloorplanOverlay',
+  'consultation-handoff': 'ConsultationHandoff'
 };

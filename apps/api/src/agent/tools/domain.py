@@ -114,13 +114,41 @@ async def confirm_address_impl(
     )
 
 
+def build_consultation_handoff_spec(
+    *, reason: str | None, prefill_address: str | None, session_id: uuid.UUID
+) -> dict[str, Any]:
+    """상담 인입 카드(ConsultationHandoff) json-render spec — 서버 구성(LLM 미관여).
+
+    사전검토가 리포트까지 가지 못하고 상담 전환이 필요할 때(HOLD_OR_HANDOFF) 띄운다.
+    카드는 안내 문구(reason)와 함께 상담 폼을 보여 주고, 확정된 주소를 prefill 한다.
+    """
+
+    props: dict[str, Any] = {"from_session": str(session_id)}
+    if isinstance(reason, str) and reason.strip():
+        props["reason"] = reason.strip()
+    if isinstance(prefill_address, str) and prefill_address.strip():
+        props["prefill_address"] = prefill_address.strip()
+    return {
+        "root": "ch",
+        "elements": {"ch": {"type": "ConsultationHandoff", "props": props}},
+    }
+
+
 async def set_completion_decision_impl(
     *,
     session_id: uuid.UUID,
     completion_decision: str,
     reason: str | None = None,
+    run_context: "RunContext | None" = None,
+    run_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    """FLOW_GUARD 결정을 세션에 기록한다(ASK_MORE/REQUEST_OVERLAY_REVIEW/...)."""
+    """FLOW_GUARD 결정을 세션에 기록한다(ASK_MORE/REQUEST_OVERLAY_REVIEW/...).
+
+    HOLD_OR_HANDOFF(사전검토가 리포트까지 못 가고 상담 전환이 필요한 모든 실패 지점 —
+    도면 없음/분석 실패/판단값 수집 실패/저신뢰 등)면 **상담 인입 카드를 결정적으로
+    방출**한다. LLM 이 별도 도구를 부르지 않아도 어떤 handoff 경로든 상담 폼이 뜨도록
+    여기서 보장한다(best-effort — 카드 방출 실패는 결정 기록을 막지 않는다).
+    """
 
     allowed = {"ASK_MORE", "REQUEST_OVERLAY_REVIEW", "PROCEED_RULE", "HOLD_OR_HANDOFF"}
     if completion_decision not in allowed:
@@ -134,10 +162,37 @@ async def set_completion_decision_impl(
         )
     except Exception as exc:  # noqa: BLE001
         return _safe_error(exc, "SET_DECISION_FAILED", tool="set_completion_decision")
+
+    handoff_emitted = False
+    if (
+        completion_decision == "HOLD_OR_HANDOFF"
+        and run_context is not None
+        and run_id is not None
+    ):
+        prefill_address: str | None = None
+        try:
+            addr = await main_flow.get_session_address(session_id)
+            if isinstance(addr, dict):
+                prefill_address = addr.get("road_address") or addr.get("jibun_address")
+        except Exception:  # noqa: BLE001 - 주소 조회 실패는 prefill 없이 진행
+            prefill_address = None
+        spec = build_consultation_handoff_spec(
+            reason=reason, prefill_address=prefill_address, session_id=session_id
+        )
+        try:
+            await emit_ui_component_impl(
+                run_context=run_context, run_id=run_id, components=[spec]
+            )
+            handoff_emitted = True
+            log.info("consultation_handoff_emitted", session_id=str(session_id))
+        except Exception:  # noqa: BLE001 - 카드 방출 실패는 결정 기록을 막지 않는다
+            log.warning("consultation_handoff_emit_failed", session_id=str(session_id))
+
     return _ok(
         completion_decision=row.get("completion_decision"),
         status=row.get("status"),
         reason=reason,
+        handoff_emitted=handoff_emitted,
     )
 
 

@@ -36,13 +36,31 @@ function currentIndex(steps: StepState[]): number {
   return firstPending;
 }
 
-/** 단계 상태 아이콘 — completed=체크(success), in_progress=스피너, pending=빈 원(dimmed). */
-function StepIcon({ state }: { state: StepState }) {
+/** 단계 상태 아이콘 — completed=체크(success), in_progress=스피너/현재 점, pending=빈 원.
+ *
+ * ``animated=false`` 면 진행 중 단계에 스피너 대신 정적 '현재' 점을 쓴다(PC 계획 패널은
+ * 끊임없이 도는 스피너가 산만해 제거 — 굵게·강조색으로 현재 단계를 표시). */
+function StepIcon({ state, animated = true }: { state: StepState; animated?: boolean }) {
   if (state === 'completed') {
     return <IconCheck size={16} color="var(--mantine-color-success-6)" aria-hidden />;
   }
   if (state === 'in_progress') {
-    return <Loader size={14} color="jippin" aria-hidden />;
+    if (animated) {
+      return <Loader size={14} color="jippin" aria-hidden />;
+    }
+    // 정적 현재 마커 — 채워진 점(jippin)으로 진행 단계를 스피너 없이 표시.
+    return (
+      <Box
+        aria-hidden
+        style={{
+          width: 12,
+          height: 12,
+          borderRadius: 999,
+          background: 'var(--mantine-color-jippin-6)',
+          boxSizing: 'border-box'
+        }}
+      />
+    );
   }
   return (
     <Box
@@ -69,12 +87,14 @@ function StepRow({
   index,
   content,
   state,
-  current
+  current,
+  animated = true
 }: {
   index: number;
   content: string;
   state: StepState;
   current: boolean;
+  animated?: boolean;
 }) {
   return (
     <Group
@@ -85,7 +105,7 @@ function StepRow({
       aria-label={`${index + 1}단계: ${content} (${statusLabel(state)})`}
     >
       <Box style={{ flex: '0 0 auto', width: 16, display: 'grid', placeItems: 'center', marginTop: 1 }}>
-        <StepIcon state={state} />
+        <StepIcon state={state} animated={animated} />
       </Box>
       <Text
         size="sm"
@@ -123,7 +143,8 @@ export function PlanPanel({ plan, busy }: PlanPanelProps) {
   const headState = states[headIndex] ?? 'pending';
   const headContent = plan[headIndex]?.content ?? '';
 
-  const list = (
+  // animated=false 면 진행 단계 스피너 대신 정적 점(PC 패널). 모바일은 기존대로 스피너.
+  const renderList = (animated: boolean) => (
     <Stack gap={10} role="list">
       {plan.map((todo, i) => (
         <StepRow
@@ -132,6 +153,7 @@ export function PlanPanel({ plan, busy }: PlanPanelProps) {
           content={todo.content}
           state={states[i] ?? 'pending'}
           current={i === active}
+          animated={animated}
         />
       ))}
     </Stack>
@@ -139,7 +161,8 @@ export function PlanPanel({ plan, busy }: PlanPanelProps) {
 
   return (
     <>
-      {/* 데스크톱: 좌측 사이드바 세로 목록 */}
+      {/* 데스크톱: 좌측 사이드바 세로 목록 — 진행 '단계' 스피너는 제거(정적 점)하고,
+          패널 헤더의 busy 표시(전체 응답 대기)는 유지한다. */}
       <Box className="plan-desktop" visibleFrom="sm">
         <Stack gap="sm">
           <Group justify="space-between" align="center" gap="xs" wrap="nowrap">
@@ -153,7 +176,7 @@ export function PlanPanel({ plan, busy }: PlanPanelProps) {
               {completedCount}/{total}
             </Text>
           </Group>
-          {list}
+          {renderList(false)}
         </Stack>
       </Box>
 
@@ -195,7 +218,7 @@ export function PlanPanel({ plan, busy }: PlanPanelProps) {
           </Group>
         </UnstyledButton>
         <Collapse expanded={opened}>
-          <Box pt="sm">{list}</Box>
+          <Box pt="sm">{renderList(true)}</Box>
         </Collapse>
       </Box>
     </>

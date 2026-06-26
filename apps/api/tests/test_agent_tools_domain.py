@@ -423,3 +423,43 @@ async def test_judgment_summary_flags_llm_only_without_rule(monkeypatch) -> None
     props = ui[0]["elements"]["j"]["props"]
     assert props["rule_backed"] is False
     assert props["decision"] == "conditional"
+
+
+async def test_handoff_emits_consultation_card(monkeypatch) -> None:
+    # HOLD_OR_HANDOFF → 상담 인입 카드 자동 방출(reason 머리말 + 확정 주소 prefill).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    fake.session_addresses[uuid.uuid4()] = {
+        "id": uuid.uuid4(),
+        "session_id": session_id,
+        "road_address": "서울특별시 강남구 테헤란로 1",
+    }
+    res = await domain.set_completion_decision_impl(
+        session_id=session_id,
+        completion_decision="HOLD_OR_HANDOFF",
+        reason="자동으로 확인이 어려워 전문가가 봐 드릴게요.",
+        run_context=ctx,
+        run_id=run_id,
+    )
+    assert res["ok"] is True
+    assert res["handoff_emitted"] is True
+    ui, _snap = ctx.drain_ui()
+    props = ui[0]["elements"]["ch"]["props"]
+    assert ui[0]["elements"]["ch"]["type"] == "ConsultationHandoff"
+    assert props["reason"] == "자동으로 확인이 어려워 전문가가 봐 드릴게요."
+    assert props["prefill_address"] == "서울특별시 강남구 테헤란로 1"
+    assert props["from_session"] == str(session_id)
+
+
+async def test_non_handoff_decision_emits_no_card(monkeypatch) -> None:
+    # ASK_MORE 등 일반 결정은 카드를 방출하지 않는다(상담 인입은 handoff 전용).
+    session_id, run_id, _fake, ctx = await _session_run_ctx(monkeypatch)
+    res = await domain.set_completion_decision_impl(
+        session_id=session_id,
+        completion_decision="ASK_MORE",
+        run_context=ctx,
+        run_id=run_id,
+    )
+    assert res["ok"] is True
+    assert res.get("handoff_emitted") is False
+    ui, _snap = ctx.drain_ui()
+    assert ui == []
