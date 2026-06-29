@@ -308,7 +308,9 @@ async def generate_session_report_pdf(
     try:
         pdf_bytes = _html_to_pdf(html)
     except Exception as exc:  # noqa: BLE001
-        logger.error("report_pdf_render_failed", session_id=str(session_id), error=str(exc))
+        logger.error(
+            "report_pdf_render_failed", session_id=str(session_id), error=str(exc)
+        )
         raise ZippinException(
             "리포트 PDF 생성에 실패했습니다. 잠시 후 다시 시도해 주세요.",
             code="REPORT_PDF_RENDER_FAILED",

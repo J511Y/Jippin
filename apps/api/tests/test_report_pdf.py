@@ -298,7 +298,12 @@ def test_build_context_empty_facilities_sets_note() -> None:
         estimate_dict=None,
         address=None,
         judgment_schema={},
-        overlay={"available": False, "svg": None, "caption": "", "unavailable_reason": "x"},
+        overlay={
+            "available": False,
+            "svg": None,
+            "caption": "",
+            "unavailable_reason": "x",
+        },
         origin="https://jippin.ai",
         now=datetime(2026, 6, 29, tzinfo=timezone.utc),
     )["report"]

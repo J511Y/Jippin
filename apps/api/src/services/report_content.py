@@ -257,7 +257,8 @@ def facility_views(rule_eval_result: dict[str, Any]) -> list[dict[str, Any]]:
         out.append(
             {
                 "code": code,
-                "label": rule_label if isinstance(rule_label, str) and rule_label
+                "label": rule_label
+                if isinstance(rule_label, str) and rule_label
                 else content["label"],
                 "headline": content["headline"],
                 "points": list(content["points"]),

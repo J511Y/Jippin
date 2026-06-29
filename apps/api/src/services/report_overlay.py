@@ -113,7 +113,9 @@ def build_overlay(
         }
 
     try:
-        from PIL import Image  # 지연 임포트 — Pillow 는 WeasyPrint 의존성으로 함께 설치됨.
+        from PIL import (
+            Image,
+        )  # 지연 임포트 — Pillow 는 WeasyPrint 의존성으로 함께 설치됨.
 
         with Image.open(BytesIO(image_bytes)) as img:
             width, height = img.size
