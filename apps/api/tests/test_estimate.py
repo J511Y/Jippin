@@ -42,7 +42,7 @@ def test_warn_is_estimable() -> None:
     assert est["has_variable_items"] is False
 
 
-def test_fire_glass_and_door_are_quote_only() -> None:
+def test_fire_glass_is_per_meter_door_and_detector_quote_only() -> None:
     est = compute_estimate(
         _rule_result(
             verdict="ALLOW",
@@ -52,8 +52,14 @@ def test_fire_glass_and_door_are_quote_only() -> None:
     )
     assert est is not None
     by_code = {i["code"]: i for i in est["items"]}
-    for code in ("FIRE_GLASS", "FIRE_DOOR", "FIRE_DETECTOR"):
+    # 방화유리는 m당 143,000원(고정 합계엔 안 들어가는 변동 항목).
+    assert by_code["FIRE_GLASS"]["amount_min"] is None
+    assert by_code["FIRE_GLASS"]["unit_amount"] == 143_000
+    assert by_code["FIRE_GLASS"]["unit"] == "원/m"
+    # 방화문·화재감지기는 현장/별도 견적(금액 미산정).
+    for code in ("FIRE_DOOR", "FIRE_DETECTOR"):
         assert by_code[code]["amount_min"] is None
+        assert by_code[code]["unit_amount"] is None
     assert est["has_variable_items"] is True
 
 

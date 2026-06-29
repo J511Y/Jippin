@@ -21,6 +21,7 @@ import { trackPrecheckReportView } from '@/lib/analytics/sessions-funnel';
 import { parseApiError } from '@/lib/api/error';
 import {
   getSessionReport,
+  issueSessionReportPdf,
   syncExistingToken,
   type EstimateResult,
   type SessionReportResponse
@@ -42,6 +43,22 @@ export default function SessionReportPage() {
   const [report, setReport] = useState<SessionReportResponse | null>(null);
   const [notReady, setNotReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  // PDF 리포트 발부 — 서버가 생성·보관한 PDF 의 단기 서명 URL 을 받아 새 탭으로 연다.
+  const handleIssuePdf = async () => {
+    setPdfLoading(true);
+    setPdfError(null);
+    try {
+      const { url } = await issueSessionReportPdf(sessionId);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setPdfError(parseApiError(err).message);
+    } finally {
+      setPdfLoading(false);
+    }
+  };
 
   useEffect(() => {
     let ignore = false;
@@ -183,6 +200,36 @@ export default function SessionReportPage() {
           )}
 
           {report.estimate && <EstimateCard estimate={report.estimate} />}
+
+          {/* PDF 리포트 발부 — 도면 오버레이·벽체 판단·견적·일정·상담을 담은 디자인
+              리포트를 서버에서 생성해 단기 서명 URL 로 내려준다. */}
+          <Card withBorder radius="md" padding="md">
+            <Stack gap="sm">
+              <Group justify="space-between" align="center" wrap="nowrap">
+                <Stack gap={2} style={{ flex: 1 }}>
+                  <Text fw={600}>PDF 리포트 발부</Text>
+                  <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                    도면 분석·벽체 판단·예상 견적·진행 일정·상담 안내를 담은 리포트를
+                    PDF 로 내려받을 수 있어요.
+                  </Text>
+                </Stack>
+                <Button
+                  color="jippin"
+                  radius="md"
+                  onClick={handleIssuePdf}
+                  loading={pdfLoading}
+                  style={{ whiteSpace: 'nowrap' }}
+                >
+                  PDF로 받기
+                </Button>
+              </Group>
+              {pdfError && (
+                <Alert color="red" variant="light" radius="md" py="xs">
+                  {pdfError}
+                </Alert>
+              )}
+            </Stack>
+          </Card>
         </>
       )}
 

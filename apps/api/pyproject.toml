@@ -31,6 +31,13 @@ dependencies = [
     "langsmith>=0.1,<0.5",
     "deepagents>=0.0.5",
     "shapely>=2.1.2",
+    # 사전검토 PDF 리포트 발부 (CMP-DIRECT) — Jinja2 HTML 템플릿 → WeasyPrint PDF.
+    # WeasyPrint 는 시스템 라이브러리(pango/cairo/gdk-pixbuf)에 의존한다 —
+    # Dockerfile runtime 스테이지가 해당 lib + 한글 폰트(fonts-nanum)를 설치한다.
+    # Pillow 는 WeasyPrint 의존이지만 도면 오버레이에서 직접 쓰므로 명시 선언한다.
+    "jinja2>=3.1,<4.0",
+    "weasyprint>=62,<66",
+    "pillow>=10,<12",
 ]
 
 [dependency-groups]

@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     # 발급 PDF 보관 Supabase Storage 버킷명 (migration 0014 와 정합).
     home_check_doc_bucket: str = Field(default="home-check-docs")
 
+    # 사전검토 PDF 리포트 보관 Supabase Storage 버킷명. 운영자가 버킷 생성 필요
+    # (인프라 선행). 발부된 PDF 는 이 버킷에 service-role 로 업로드되고 단기 서명
+    # URL 로만 다운로드된다(브라우저에 직접 노출 안 됨).
+    session_report_bucket: str = Field(default="session-reports")
+
     # CMP-609 Phase A 라우터 (sessions/floorplans/chat) 의 운영 노출 가드.
     # `services.main_flow` 는 DB-backed (CMP-608 상당) 로 전환되어 세션 유실
     # 위험은 없지만, Phase A 기능 자체가 미공개 상태이므로 운영 default 는
