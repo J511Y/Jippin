@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SessionStatus = Literal[
     "draft",
@@ -82,6 +82,27 @@ class SessionAddressResponse(BaseModel):
     created_at: datetime
 
 
+class SessionReportResponse(BaseModel):
+    """`GET /sessions/{id}/report` — 세션에 영속된 룰 판정(rule-eval-result) 기반 리포트.
+
+    ``rule_eval_result`` 는 rule-eval-result 계약 그대로의 객체(verdict/
+    required_facilities/permit_required/legal_basis/user_message/evaluated_at 등)다.
+    판정이 아직 없으면 본 응답 대신 404 REPORT_NOT_READY 가 나간다(라우터).
+
+    법적 고지는 별도 필드로 내려보내지 않는다 — 리포트 화면이 봉인된
+    ``<LegalNotice>``(AGENTS.md §4.6 정본 문구)를 직접 렌더한다(문구 중복/불일치 방지).
+    """
+
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    session_id: uuid.UUID
+    status: SessionStatus
+    rule_eval_result: dict[str, Any]
+    evaluated_at: datetime | None
+    address: SessionAddressResponse | None
+    #: 예상 견적(REPORT-003). 견적 비대상(불가/보류)이거나 항목이 없으면 None.
+    estimate: dict[str, Any] | None = None
+
+
 class SessionResponse(BaseModel):
     """DB-shaped ``sessions`` row.
 
@@ -106,7 +127,20 @@ class SessionResponse(BaseModel):
     judgment_schema: dict[str, Any]
     judgment_schema_version: str | None
     completion_decision: str | None
+    # 리포트 준비 신호 — verdict(rule_eval_result) 영속 여부로만 판정한다. 클라이언트는
+    # 이 값으로 리포트 단계 완료를 표시해야 한다(completion_decision 은 ASK_MORE 등에도
+    # 채워져 report-ready 와 무관하므로 쓰면 안 됨, #report-readiness).
+    has_report: bool = False
     last_activity_at: datetime
     expires_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_has_report(cls, data: Any) -> Any:
+        # 세션 row dict 의 rule_eval_result 존재로 has_report 를 파생한다(main_flow 는
+        # 항상 dict 를 넘긴다). dict 가 아니면 기본 False 로 둔다.
+        if isinstance(data, dict) and "has_report" not in data:
+            return {**data, "has_report": data.get("rule_eval_result") is not None}
+        return data

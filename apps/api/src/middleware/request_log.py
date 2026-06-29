@@ -31,6 +31,12 @@ RequestLogRecord = dict[str, Any]
 # 기록 대상에서 제외한다. 헬스 상태는 Fly 체크 결과로 충분하다.
 SKIP_PATHS: frozenset[str] = frozenset({"/healthz"})
 
+# 본문(body)을 저장하지 않을 경로 substring. 에이전트 채팅(start/resume)은 자유 입력
+# 텍스트(전체 주소·리모델링 상세 등 PII)를 담으므로 본문 로깅에서 제외한다 — 메타
+# (메서드/상태/소요시간)는 그대로 남긴다. redactor 가 nested message.content 를 못
+# 가리므로 경로 단위로 막는다.
+BODY_SKIP_SUBSTRINGS: tuple[str, ...] = ("/agent/runs",)
+
 
 class RequestLogMiddleware:
     """Capture API request/response metadata and enqueue a best-effort DB insert."""
@@ -156,9 +162,13 @@ def build_request_log_record(
         "url": request.url.path,
         "parameter": query_params_to_dict(request.query_params),
         "method": request.method,
-        "body": decode_body_bytes(
-            request_body,
-            content_type=headers.get("content-type"),
+        "body": (
+            None
+            if any(s in request.url.path for s in BODY_SKIP_SUBSTRINGS)
+            else decode_body_bytes(
+                request_body,
+                content_type=headers.get("content-type"),
+            )
         ),
         "response_code": response_status,
         "response_message": response_message,

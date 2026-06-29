@@ -51,24 +51,43 @@ class ErrorInfo(BaseModel):
 
 class Kind(Enum):
     """
-    폴백 종류. dong_ho=동·호 자동매칭 실패로 선택 필요, secure_no=보안문자 입력 필요.
+    폴백 종류. dong_ho=주소·동·호 후보 선택 필요, secure_no=보안문자 입력 필요.
     """
 
     dong_ho = "dong_ho"
     secure_no = "secure_no"
 
 
-class NeedsInput(BaseModel):
+class FieldModel(Enum):
+    """
+    kind=dong_ho 일 때 사용자가 골라야 하는 축(address=주소, dong=동, ho=호). options 와 함께 채워진다.
+    """
+
+    address = "address"
+    dong = "dong"
+    ho = "ho"
+    NoneType_None = None
+
+
+class NeedsInputOption(BaseModel):
+    """
+    동·호·주소 선택 후보 1건.
+    """
+
     model_config = ConfigDict(
         extra="forbid",
     )
-    kind: Kind
+    value: str
     """
-    폴백 종류. dong_ho=동·호 자동매칭 실패로 선택 필요, secure_no=보안문자 입력 필요.
+    재개(continue) 시 selection 으로 그대로 전송할 CODEF 식별자(호=commHoNum, 동=commDongNum, 주소=지번/도로명).
     """
-    message: str
+    label: str
     """
-    사용자 안내용 메시지.
+    사용자 표시용 명칭(호=reqHo, 동=reqDong, 주소=도로명/지번).
+    """
+    area: str | None = None
+    """
+    전유면적(㎡, reqArea). 호 후보에만 제공 — 같은 번호의 호를 면적으로 구분하는 데 쓴다.
     """
 
 
@@ -268,6 +287,28 @@ class ReportMeta(BaseModel):
     """
 
 
+class NeedsInput(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Kind
+    """
+    폴백 종류. dong_ho=주소·동·호 후보 선택 필요, secure_no=보안문자 입력 필요.
+    """
+    message: str
+    """
+    사용자 안내용 메시지.
+    """
+    field: FieldModel | None = None
+    """
+    kind=dong_ho 일 때 사용자가 골라야 하는 축(address=주소, dong=동, ho=호). options 와 함께 채워진다.
+    """
+    options: list[NeedsInputOption] | None = None
+    """
+    선택 후보 목록(CODEF reqAddrList/reqDongNumList/reqHoNumList 정규화). 사용자가 하나를 골라 재개한다. CODEF 자동매칭이 0건/복수건일 때만 채워진다.
+    """
+
+
 class HomeCheckReport(BaseModel):
     """
     전유부+표제부 병행 조회 결과의 PII-free 리포트.
@@ -324,9 +365,9 @@ class HomeCheckJob(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.0.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.1.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver).
+    스키마 버전 (semver). 1.1.0: NeedsInput 에 field/options(주소·동·호 후보) 추가(하위호환 — 추가 선택 필드).
     """
     id: str
     """

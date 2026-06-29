@@ -3,7 +3,7 @@
 import { Paper, Stack, Text } from '@mantine/core';
 import type { CSSProperties } from 'react';
 import type { ChatMessage } from '@/components/a2ui/types';
-import { DynamicComponent } from '@/components/a2ui/DynamicComponent';
+import { A2uiSurface } from '@/components/a2ui/A2uiSurface';
 
 type Props = {
   messages: ChatMessage[];
@@ -26,6 +26,8 @@ export function MessageList({ messages, className, style }: Props) {
     <Stack component="ol" data-testid="a2ui-message-list" gap="sm" className={className} style={style}>
       {messages.map((message) => {
         const isUser = message.role === 'user';
+        // 복수 동적 컴포넌트를 모두 렌더한다(dynamics 우선, 단일 dynamic 은 하위호환).
+        const dynamics = message.dynamics ?? (message.dynamic ? [message.dynamic] : []);
         // 디자인 QA (2026-06-05): 에이전트 메시지에도 명확한 버블 경계가 필요하다.
         // 이전엔 배경이 거의 투명해서 user 버블과 시각 무게가 비대칭이었다.
         // 1pt border + 약간 더 진한 surface 톤으로 구간 인식을 살린다.
@@ -49,9 +51,11 @@ export function MessageList({ messages, className, style }: Props) {
             <Text size="sm" style={{ whiteSpace: 'pre-wrap', wordBreak: 'keep-all', overflowWrap: 'break-word' }}>
               {message.content}
             </Text>
-            {message.dynamic ? (
+            {dynamics.length > 0 ? (
               <Stack mt="xs">
-                <DynamicComponent spec={message.dynamic} />
+                {dynamics.map((component, index) => (
+                  <A2uiSurface key={`${message.id}-dyn-${index}`} component={component} />
+                ))}
               </Stack>
             ) : null}
           </Paper>

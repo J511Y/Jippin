@@ -18,6 +18,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from src.services import main_flow
 
 # main_flow 의 seam 이 이름 변경/추가되면 monkeypatch 가 즉시 실패하도록
@@ -25,10 +27,16 @@ from src.services import main_flow
 _SEAM_NAMES: tuple[str, ...] = (
     "_db_insert_session",
     "_db_select_session",
+    "_db_list_sessions",
+    "_db_clear_owner_sessions_expiry",
+    "_db_set_session_verdict_if_inputs",
     "_db_clear_session_expiry",
     "_db_select_session_address",
     "_db_upsert_session_address",
     "_db_insert_floorplan_upload",
+    "_db_insert_floorplan_asset",
+    "_db_select_selected_floorplan_asset",
+    "_db_search_floorplan_catalog",
     "_db_select_candidate_revision_keys",
     "_db_insert_floorplan_candidates",
     "_db_insert_chat_message",
@@ -36,7 +44,42 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_select_chat_tool_call",
     "_db_insert_chat_tool_call",
     "_db_complete_chat_tool_call",
+    # agent projection / runs (CMP-DIRECT)
+    "_db_select_chat_message_by_lc_id",
+    "_db_select_chat_tool_call_by_lc_id",
+    "_db_list_chat_messages",
+    "_db_update_session_fields",
+    "_db_insert_agent_run",
+    "_db_select_agent_run",
+    "_db_select_active_agent_run",
+    "_db_mark_agent_run_running",
+    "_db_update_agent_run",
+    "_db_cancel_agent_run",
+    "_db_finalize_agent_run",
+    "_db_claim_resumable_agent_run",
+    "_db_append_pending_ui",
+    "_db_take_pending_ui",
+    "_db_set_run_analysis_inputs",
+    "_db_get_run_analysis_inputs",
 )
+
+# agent_runs 의 활성(=세션당 1개 부분 유니크) 상태 집합.
+_ACTIVE_RUN_STATUSES: frozenset[str] = frozenset(
+    {"pending", "running", "awaiting_input", "interrupted"}
+)
+
+
+class _FakeDbError(Exception):
+    """psycopg 의 .sqlstate 를 흉내내는 orig — 호출자가 유니크/FK 위반을 구분."""
+
+    def __init__(self, message: str, sqlstate: str) -> None:
+        super().__init__(message)
+        self.sqlstate = sqlstate
+
+
+def _fake_integrity_error(message: str, sqlstate: str = "23505") -> IntegrityError:
+    # 기본 23505(unique_violation) — 활성 런/lc-id 부분 유니크 위반 재현용.
+    return IntegrityError(message, None, _FakeDbError(message, sqlstate))
 
 
 def _now() -> datetime:
@@ -50,12 +93,16 @@ class FakeMainFlowDb:
         self.sessions: dict[uuid.UUID, dict[str, Any]] = {}
         self.session_addresses: dict[uuid.UUID, dict[str, Any]] = {}
         self.floorplan_uploads: dict[uuid.UUID, dict[str, Any]] = {}
+        self.floorplan_assets: dict[uuid.UUID, dict[str, Any]] = {}
+        # 내부 보유 도면 카탈로그(floorplans). 기본 비어 있음(미큐레이션).
+        self.floorplans: dict[uuid.UUID, dict[str, Any]] = {}
         # (session_id, lookup_revision, floorplan_id) -> row
         self.floorplan_candidates: dict[
             tuple[uuid.UUID, int, uuid.UUID | None], dict[str, Any]
         ] = {}
         self.chat_messages: dict[uuid.UUID, dict[str, Any]] = {}
         self.chat_tool_calls: dict[uuid.UUID, dict[str, Any]] = {}
+        self.agent_runs: dict[uuid.UUID, dict[str, Any]] = {}
 
     # -- helpers ---------------------------------------------------------
 
@@ -80,6 +127,8 @@ class FakeMainFlowDb:
             "judgment_schema": {},
             "judgment_schema_version": values.get("judgment_schema_version"),
             "completion_decision": None,
+            "rule_eval_result": None,
+            "rule_evaluated_at": None,
             "last_activity_at": now,
             "expires_at": values.get("expires_at"),
             "created_at": now,
@@ -91,6 +140,23 @@ class FakeMainFlowDb:
     async def _db_select_session(self, session_id: uuid.UUID) -> dict[str, Any] | None:
         row = self.sessions.get(session_id)
         return dict(row) if row is not None else None
+
+    async def _db_clear_owner_sessions_expiry(self, owner_user_id: uuid.UUID) -> None:
+        for row in self.sessions.values():
+            if row["user_id"] == owner_user_id and row.get("expires_at") is not None:
+                row["expires_at"] = None
+                row["updated_at"] = _now()
+
+    async def _db_list_sessions(
+        self, owner_user_id: uuid.UUID, limit: int
+    ) -> list[dict[str, Any]]:
+        rows = [
+            r
+            for r in self.sessions.values()
+            if r["user_id"] == owner_user_id and r.get("status") != "deleted"
+        ]
+        rows.sort(key=lambda r: r["last_activity_at"], reverse=True)
+        return [dict(r) for r in rows[:limit]]
 
     async def _db_clear_session_expiry(self, session_id: uuid.UUID) -> dict[str, Any]:
         row = self.sessions[session_id]
@@ -119,6 +185,21 @@ class FakeMainFlowDb:
             ),
             None,
         )
+        # migration 0016 trg_session_addresses_invalidate_verdict 미러: INSERT(새 주소)는
+        # 항상, UPDATE 는 식별 주소 필드가 실제로 바뀔 때만 verdict 를 무효화한다. 같은
+        # 주소 재확인(no-op upsert)은 리포트를 떨어뜨리지 않는다(#address-noop-update).
+        _ADDRESS_FIELDS = (
+            "road_address",
+            "jibun_address",
+            "apartment_name",
+            "building_dong",
+            "unit_ho",
+            "floor_no",
+            "exclusive_area_m2",
+            "size_type",
+            "building_identity",
+            "address_provider",
+        )
         if existing is None:
             row: dict[str, Any] = {
                 "id": uuid.uuid4(),
@@ -127,22 +208,30 @@ class FakeMainFlowDb:
                 **address_values,
             }
             self.session_addresses[row["id"]] = row
+            address_changed = True
         else:
             # ON CONFLICT (session_id) DO UPDATE — id/created_at/normalized_at
             # 은 보존된다 (set 절 밖).
-            existing.update(
-                {
-                    key: value
-                    for key, value in address_values.items()
-                    if key not in ("session_id", "user_id")
-                }
+            merged = {
+                key: value
+                for key, value in address_values.items()
+                if key not in ("session_id", "user_id")
+            }
+            address_changed = any(
+                existing.get(f) != merged.get(f, existing.get(f))
+                for f in _ADDRESS_FIELDS
             )
+            existing.update(merged)
             row = existing
 
         session = self.sessions[session_id]
         session["address_id"] = row["id"]
         if session["status"] == "draft":
             session["status"] = "address_ready"
+        if address_changed:
+            session["rule_eval_result"] = None
+            session["rule_evaluated_at"] = None
+            session["completion_decision"] = None
         self._touch_session(session_id)
         return dict(row)
 
@@ -163,6 +252,58 @@ class FakeMainFlowDb:
         self.floorplan_uploads[row["id"]] = row
         self._touch_session(session_id)
         return dict(row)
+
+    # -- floorplan_assets --------------------------------------------------
+
+    async def _db_insert_floorplan_asset(
+        self, values: dict[str, Any]
+    ) -> dict[str, Any]:
+        now = _now()
+        row: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "floorplan_id": None,
+            "floorplan_upload_id": None,
+            "session_id": None,
+            "owner_user_id": None,
+            "sha256_hex": None,
+            "width_px": None,
+            "height_px": None,
+            "page_count": None,
+            "scan_status": "pending",
+            "created_at": now,
+            "updated_at": now,
+            **values,
+        }
+        self.floorplan_assets[row["id"]] = row
+        return dict(row)
+
+    async def _db_select_selected_floorplan_asset(
+        self, session_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        session = self.sessions.get(session_id)
+        if session is None:
+            return None
+        asset_id = session.get("selected_floorplan_asset_id")
+        if asset_id is None:
+            return None
+        row = self.floorplan_assets.get(asset_id)
+        return dict(row) if row is not None else None
+
+    async def _db_search_floorplan_catalog(
+        self, *, apartment_name: str, building_dong: str | None, limit: int
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for r in self.floorplans.values():
+            if r.get("visibility") != "public_catalog":
+                continue
+            if r.get("quality_status") != "verified":
+                continue
+            if apartment_name.lower() not in (r.get("apartment_name") or "").lower():
+                continue
+            if building_dong and r.get("building_dong") != building_dong:
+                continue
+            out.append(dict(r))
+        return out[:limit]
 
     # -- floorplan_candidates ----------------------------------------------
 
@@ -202,6 +343,14 @@ class FakeMainFlowDb:
     async def _db_insert_chat_message(
         self, values: dict[str, Any], *, session_id: uuid.UUID
     ) -> dict[str, Any]:
+        # 부분 유니크(session_id, metadata->>'lc_message_id') 백스톱 — resume race.
+        lc_id = (values.get("metadata") or {}).get("lc_message_id")
+        if lc_id is not None and any(
+            r["session_id"] == values["session_id"]
+            and (r.get("metadata") or {}).get("lc_message_id") == lc_id
+            for r in self.chat_messages.values()
+        ):
+            raise _fake_integrity_error("duplicate lc_message_id")
         row: dict[str, Any] = {
             "id": uuid.uuid4(),
             "created_at": _now(),
@@ -217,6 +366,28 @@ class FakeMainFlowDb:
         row = self.chat_messages.get(message_id)
         return dict(row) if row is not None else None
 
+    async def _db_select_chat_message_by_lc_id(
+        self, session_id: uuid.UUID, lc_message_id: str
+    ) -> dict[str, Any] | None:
+        for row in self.chat_messages.values():
+            if (
+                row["session_id"] == session_id
+                and (row.get("metadata") or {}).get("lc_message_id") == lc_message_id
+            ):
+                return dict(row)
+        return None
+
+    async def _db_list_chat_messages(
+        self, session_id: uuid.UUID, limit: int
+    ) -> list[dict[str, Any]]:
+        rows = [
+            r
+            for r in self.chat_messages.values()
+            if r["session_id"] == session_id and r.get("role") in ("user", "assistant")
+        ]
+        rows.sort(key=lambda r: r.get("created_at"))
+        return [dict(r) for r in rows[:limit]]
+
     # -- chat_tool_calls -----------------------------------------------------
 
     async def _db_select_chat_tool_call(
@@ -225,9 +396,29 @@ class FakeMainFlowDb:
         row = self.chat_tool_calls.get(tool_call_id)
         return dict(row) if row is not None else None
 
+    async def _db_select_chat_tool_call_by_lc_id(
+        self, session_id: uuid.UUID, lc_tool_call_id: str
+    ) -> dict[str, Any] | None:
+        for row in self.chat_tool_calls.values():
+            if (
+                row["session_id"] == session_id
+                and (row.get("metadata") or {}).get("lc_tool_call_id")
+                == lc_tool_call_id
+            ):
+                return dict(row)
+        return None
+
     async def _db_insert_chat_tool_call(
         self, values: dict[str, Any], *, session_id: uuid.UUID
     ) -> dict[str, Any]:
+        # 부분 유니크(session_id, metadata->>'lc_tool_call_id') 백스톱 — resume race.
+        lc_id = (values.get("metadata") or {}).get("lc_tool_call_id")
+        if lc_id is not None and any(
+            r["session_id"] == values["session_id"]
+            and (r.get("metadata") or {}).get("lc_tool_call_id") == lc_id
+            for r in self.chat_tool_calls.values()
+        ):
+            raise _fake_integrity_error("duplicate lc_tool_call_id")
         row: dict[str, Any] = {
             "id": uuid.uuid4(),
             "output": None,
@@ -258,6 +449,217 @@ class FakeMainFlowDb:
         row["completed_at"] = _now()
         self._touch_session(session_id)
         return dict(row)
+
+    # -- sessions (service-field update) ------------------------------------
+
+    async def _db_update_session_fields(
+        self, session_id: uuid.UUID, values: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        row = self.sessions.get(session_id)
+        if row is None:
+            return None
+        # migration 0016 trg_sessions_invalidate_verdict 미러: 입력 포인터가 바뀌면
+        # 영속된 verdict 를 무효화한다(#verdict-input-consistency).
+        pointer_keys = (
+            "address_id",
+            "selected_floorplan_id",
+            "selected_floorplan_upload_id",
+            "selected_floorplan_asset_id",
+        )
+        pointer_changed = any(
+            k in values and values[k] != row.get(k) for k in pointer_keys
+        )
+        row.update(values)
+        if pointer_changed:
+            row["rule_eval_result"] = None
+            row["rule_evaluated_at"] = None
+            row["completion_decision"] = None
+        self._touch_session(session_id)
+        return dict(row)
+
+    async def _db_set_session_verdict_if_inputs(
+        self,
+        session_id: uuid.UUID,
+        values: dict[str, Any],
+        expected_asset_id: Any,
+        expected_address_id: Any,
+    ) -> dict[str, Any] | None:
+        row = self.sessions.get(session_id)
+        if row is None:
+            return None
+        # _UNSET 인 입력은 검사 생략(main_flow._UNSET 미러).
+        if (
+            expected_asset_id is not main_flow._UNSET
+            and row.get("selected_floorplan_asset_id") != expected_asset_id
+        ):
+            return None
+        if (
+            expected_address_id is not main_flow._UNSET
+            and row.get("address_id") != expected_address_id
+        ):
+            return None
+        row.update(values)
+        row["updated_at"] = _now()
+        return dict(row)
+
+    # -- agent_runs ----------------------------------------------------------
+
+    async def _db_insert_agent_run(
+        self, values: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        # ON CONFLICT (id) DO NOTHING — 같은 id 가 이미 있으면 None(멱등 재생성).
+        run_id = values.get("id")
+        if run_id is not None and run_id in self.agent_runs:
+            return None
+        # 세션당 활성 런 1개 부분 유니크 백스톱.
+        if any(
+            r["session_id"] == values["session_id"]
+            and r["status"] in _ACTIVE_RUN_STATUSES
+            for r in self.agent_runs.values()
+        ):
+            raise _fake_integrity_error("agent run already active for session")
+        now = _now()
+        row: dict[str, Any] = {
+            "id": uuid.uuid4(),
+            "status": "pending",
+            "current_step": None,
+            "langsmith_run_id": None,
+            "langsmith_run_url": None,
+            "error_code": None,
+            "error_message": None,
+            "input_summary": {},
+            "pending_ui": [],
+            "pending_judgment_snapshot": None,
+            "analysis_inputs": None,
+            "started_at": None,
+            "finished_at": None,
+            "created_at": now,
+            "updated_at": now,
+            **values,
+        }
+        self.agent_runs[row["id"]] = row
+        return dict(row)
+
+    async def _db_select_agent_run(self, run_id: uuid.UUID) -> dict[str, Any] | None:
+        row = self.agent_runs.get(run_id)
+        return dict(row) if row is not None else None
+
+    async def _db_update_agent_run(
+        self, run_id: uuid.UUID, values: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return None
+        row.update(values)
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_select_active_agent_run(
+        self, session_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        rows = [
+            row
+            for row in self.agent_runs.values()
+            if row["session_id"] == session_id and row["status"] in _ACTIVE_RUN_STATUSES
+        ]
+        if not rows:
+            return None
+        rows.sort(key=lambda r: r["created_at"], reverse=True)
+        return dict(rows[0])
+
+    async def _db_mark_agent_run_running(
+        self, run_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        # 조건부: status == 'pending' → running.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] != "pending":
+            return None
+        row["status"] = "running"
+        row["started_at"] = _now()
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_cancel_agent_run(self, run_id: uuid.UUID) -> dict[str, Any] | None:
+        # 조건부: status NOT IN terminal → cancelled.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] in {"succeeded", "failed", "cancelled"}:
+            return None
+        row["status"] = "cancelled"
+        row["finished_at"] = _now()
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_finalize_agent_run(
+        self, run_id: uuid.UUID, status: str
+    ) -> dict[str, Any] | None:
+        # 조건부: status NOT IN terminal → 주어진 terminal status.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] in {"succeeded", "failed", "cancelled"}:
+            return None
+        row["status"] = status
+        row["finished_at"] = _now()
+        row["updated_at"] = _now()
+        return dict(row)
+
+    async def _db_claim_resumable_agent_run(
+        self, run_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        # 조건부 UPDATE: status IN (awaiting_input, interrupted) → running.
+        row = self.agent_runs.get(run_id)
+        if row is None or row["status"] not in {"awaiting_input", "interrupted"}:
+            return None
+        row["status"] = "running"
+        row["started_at"] = _now()
+        row["updated_at"] = _now()
+        row["finished_at"] = None
+        row["error_code"] = None
+        row["error_message"] = None
+        return dict(row)
+
+    async def _db_append_pending_ui(
+        self,
+        run_id: uuid.UUID,
+        components: list[dict[str, Any]],
+        snapshot: dict[str, Any] | None,
+    ) -> None:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return
+        row["pending_ui"] = list(row.get("pending_ui") or []) + list(components or [])
+        if snapshot is not None:
+            row["pending_judgment_snapshot"] = snapshot
+        row["updated_at"] = _now()
+
+    async def _db_take_pending_ui(
+        self, run_id: uuid.UUID
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return [], None
+        ui = list(row.get("pending_ui") or [])
+        snap = row.get("pending_judgment_snapshot")
+        row["pending_ui"] = []
+        row["pending_judgment_snapshot"] = None
+        row["updated_at"] = _now()
+        return ui, snap
+
+    async def _db_set_run_analysis_inputs(
+        self, run_id: uuid.UUID, payload: dict[str, Any]
+    ) -> None:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return
+        row["analysis_inputs"] = dict(payload)
+        row["updated_at"] = _now()
+
+    async def _db_get_run_analysis_inputs(
+        self, run_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        row = self.agent_runs.get(run_id)
+        if row is None:
+            return None
+        payload = row.get("analysis_inputs")
+        return dict(payload) if payload is not None else None
 
 
 def install_main_flow_fake(monkeypatch) -> FakeMainFlowDb:

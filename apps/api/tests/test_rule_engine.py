@@ -270,18 +270,77 @@ def _facility_types(result) -> list[str]:
 
 
 def test_allow_full_facilities():
+    # _FULL_BASE 는 3층(저층)이라 대피공간·방화문은 불필요(v2 스코핑) — 감지기+방화판만.
     result = evaluate_judgment_values(_FULL_BASE).to_dict()
     assert result["verdict"] == "ALLOW"
     assert result["permit_requirement"] == "PERMIT_REQUIRED"
     assert _facility_types(result) == [
         FacilityType.FIRE_DETECTOR.value,
         FacilityType.FIRE_PANEL.value,
-        FacilityType.FIRE_DOOR.value,
     ]
     # FR-RULE-006 — 결론 카드마다 근거 1개 이상.
     assert result["legal_basis"]
     for facility in result["required_facilities"]:
         assert facility["legal_basis"]["section"]
+
+
+def test_high_floor_full_facilities_includes_fire_door():
+    # 5층 + 대피공간 확보 → 감지기+방화판+방화문 (4층 이상 대피공간 출입구 방화문).
+    result = evaluate_judgment_values({**_FULL_BASE, "floor_count": 5}).to_dict()
+    assert result["verdict"] == "ALLOW"
+    assert _facility_types(result) == [
+        FacilityType.FIRE_DETECTOR.value,
+        FacilityType.FIRE_PANEL.value,
+        FacilityType.FIRE_DOOR.value,
+    ]
+
+
+def test_interior_wall_removal_skips_fire_safety():
+    # 발코니 확장 아님(balcony_attached=False) → 화재안전 룰 미적용, 시설 0, 가능성 ALLOW.
+    result = evaluate_judgment_values(
+        {"wall_type": "NON_LOAD_BEARING", "balcony_attached": False}
+    ).to_dict()
+    assert result["verdict"] == "ALLOW"
+    assert result["required_facilities"] == []
+    assert result["hold_reasons"] == []
+    assert any("내부 비내력벽" in r for r in result["reasons"])
+
+
+def test_interior_wall_removal_load_bearing_still_denies():
+    # 실내 철거여도 내력벽이면 DENY (벽체 판정은 분기와 무관).
+    result = evaluate_judgment_values(
+        {"wall_type": "LOAD_BEARING", "balcony_attached": False}
+    ).to_dict()
+    assert result["verdict"] == "DENY"
+
+
+def test_interior_wall_in_fire_zone_holds():
+    # 실내 철거여도 방화구획 포함이면 자동 판단 불가(RULE_EXCEPTION) — 실내 분기보다
+    # 방화구획 판정이 먼저다(#fire-zone-before-interior).
+    result = evaluate_judgment_values(
+        {"wall_type": "NON_LOAD_BEARING", "balcony_attached": False, "fire_zone": True}
+    ).to_dict()
+    assert result["verdict"] == "HOLD"
+    assert HoldReason.RULE_EXCEPTION.value in result["hold_reasons"]
+
+
+def test_staircase_two_exempts_evacuation_space():
+    # 계단실 2개소 이상 → 4층 이상이어도 별도 대피공간/방화문 불필요(v2).
+    result = evaluate_judgment_values(
+        {
+            **_FULL_BASE,
+            "floor_count": 5,
+            "stairwell_count": 2,
+            "has_evacuation_space": False,
+        }
+    ).to_dict()
+    assert FacilityType.FIRE_DOOR.value not in _facility_types(result)
+    # 대피공간 미확보 WARN 이 뜨지 않는다(계단실로 면제).
+    assert result["verdict"] != "WARN" or all(
+        "대피공간" not in c for c in result["additional_checks"]
+    )
+    rule_ids = [b["rule_id"] for b in result["legal_basis"]]
+    assert "R-FIRE-05" in rule_ids  # 직통계단 2개소 예외 근거
 
 
 def test_fixed_window_requires_fire_glass_instead_of_panel():
@@ -327,7 +386,7 @@ def test_first_floor_with_sprinkler_requires_nothing():
 
 
 def test_high_floor_without_evacuation_space_warns_without_fire_door():
-    """P2 수정 — 대피공간 미확인 시 방화문을 산출하지 않고 WARN 으로 안내."""
+    """대피공간 미확보(4층+, 계단실 1개) 시 방화문을 산출하지 않고 WARN 으로 안내."""
 
     result = evaluate_judgment_values(
         CORPUS["warn_no_evacuation_space_high_floor"]
@@ -335,7 +394,6 @@ def test_high_floor_without_evacuation_space_warns_without_fire_door():
     assert result["verdict"] == "WARN"
     assert FacilityType.FIRE_DOOR.value not in _facility_types(result)
     assert any("대피" in check for check in result["additional_checks"])
-    assert any("방화문" in check for check in result["additional_checks"])
 
 
 def test_fire_door_added_only_with_confirmed_evacuation_space():
@@ -379,16 +437,38 @@ def test_fire_zone_holds_and_short_circuits_remaining_rules():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("missing_field", sorted(REQUIRED_INPUT_FIELDS))
-def test_any_single_missing_required_field_yields_explicit_hold(missing_field: str):
-    values = {k: v for k, v in _FULL_BASE.items() if k != missing_field}
+def test_missing_wall_type_holds():
+    # 벽 종류 미상은 철거 가능성 판단의 전제라 **유일하게 HOLD** 다.
+    values = {k: v for k, v in _FULL_BASE.items() if k != "wall_type"}
     result = evaluate_judgment_values(values).to_dict()
     assert result["verdict"] == Verdict.HOLD.value
     assert HoldReason.INSUFFICIENT_DATA.value in result["hold_reasons"]
-    # 누락 항목이 추가 확인 목록에 명시된다 — 시설 추측 산출 금지.
-    assert result["additional_checks"]
     assert result["required_facilities"] == []
     assert result["permit_requirement"] == PermitRequirement.UNDETERMINED.value
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    [
+        "floor_count",
+        "has_sprinkler",
+        "has_evacuation_space",
+        "stairwell_count",
+        "window_form",
+        "fire_zone",
+    ],
+)
+def test_missing_safety_field_is_conservative_not_hold(missing_field: str):
+    # v2: 안전 변수 미확인은 HOLD 가 아니라 보수적 가정 + 미확인 caveat → WARN.
+    values = {k: v for k, v in _FULL_BASE.items() if k != missing_field}
+    result = evaluate_judgment_values(values).to_dict()
+    assert result["verdict"] != Verdict.HOLD.value
+    assert HoldReason.INSUFFICIENT_DATA.value not in result["hold_reasons"]
+    # 미확인 항목이 추가 확인 목록에 첨부된다.
+    assert result["additional_checks"]
+    # 보수적 가정이 섞이면 확정(ALLOW) 대신 WARN 으로 낮춘다.
+    assert result["verdict"] == Verdict.WARN.value
+    assert result["user_message"] and "확인되지 않아" in result["user_message"]
 
 
 @pytest.mark.parametrize("optional_field", sorted(OPTIONAL_INPUT_FIELDS))
@@ -414,10 +494,13 @@ def test_required_field_set_matches_engine_and_contract():
     assert set(all_missing.missing_fields()) == set(REQUIRED_INPUT_FIELDS)
 
 
-def test_all_missing_lists_every_required_field():
+def test_all_missing_holds_on_wall_type_only():
+    # v2: 전부 누락이면 벽 종류 미상으로 HOLD 하고, 추가 확인은 벽 종류 1건만 묻는다
+    # (나머지 안전 변수는 확장 경로의 보수적 가정 대상이라 HOLD 사유가 아니다).
     result = evaluate_judgment_values({}).to_dict()
     assert result["verdict"] == Verdict.HOLD.value
-    assert len(result["additional_checks"]) == len(REQUIRED_INPUT_FIELDS)
+    assert len(result["additional_checks"]) == 1
+    assert "내력벽" in result["additional_checks"][0]
 
 
 def test_invalid_values_are_never_guessed():
@@ -487,13 +570,14 @@ def test_generated_contract_enum_instances_accepted_same_as_strings():
 
 
 def test_generated_contract_null_window_member_treated_as_missing():
-    # 계약 WindowForm 의 null 멤버 — .value 가 None 이므로 미수집과 동일.
+    # 계약 WindowForm 의 null 멤버 — .value 가 None 이므로 미수집과 동일. v2 에선 창호
+    # 미확인은 보수적 기본값(비고정형)으로 가정해 HOLD 가 아니라 WARN(미확인 caveat)이다.
     parsed = RuleInput.from_judgment_values(
         {**_FULL_BASE, "window_form": ContractWindowForm.NoneType_None}
     )
     assert parsed.window_form is None
     assert parsed.invalid_fields == ()
-    assert evaluate(parsed).verdict is Verdict.HOLD
+    assert evaluate(parsed).verdict is Verdict.WARN
 
 
 def test_generated_contract_unknown_wall_type_instance_demoted():

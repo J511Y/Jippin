@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -10,7 +11,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Sealed APP_ENV enum; DB branch selection comes from environment URLs.
 # Any other value is treated as a human error signal and blocks boot.
@@ -55,6 +56,9 @@ class Settings(BaseSettings):
     )
     # 평면도 첨부 Supabase Storage 버킷명 (migration 0009 와 정합).
     lead_floorplan_bucket: str = Field(default="lead-floorplans")
+    # 사전검토 세션 도면 업로드 Supabase Storage 버킷명. 운영자가 버킷 생성 + PUT CORS
+    # 설정 필요(인프라 선행). 세그멘테이션은 이 버킷의 서명 URL 만 사용한다.
+    session_floorplan_bucket: str = Field(default="session-floorplans")
 
     # 우리집 체크(home-check) — CODEF 세움터 집합건축물대장 전유부+표제부 조회.
     # 결정 정본: docs/adr/0008-home-check-building-register.md.
@@ -92,6 +96,80 @@ class Settings(BaseSettings):
     # 계속 False 다. 테스트/로컬 dev 만 명시적으로 활성화하고, 출시 시점에
     # 별도 이슈로 켠다.
     phase_a_skeleton_enabled: bool = Field(default=False)
+
+    # ── 에이전트 세션 (우리집 체크 대화형 에이전트) — CMP-DIRECT ────────────────
+    # deepagents(LangGraph) 런타임. 운영 default 는 False — main.py 에서
+    # phase_a_skeleton_enabled 와 함께 켜져야 agent 라우터가 등록된다. LLM/추적/HF
+    # 시크릿은 Fly secrets 로 주입한다(.env.example 의 agent 섹션 참조).
+    agent_enabled: bool = Field(default=False)
+    agent_model: str = Field(default="openai:gpt-5.4-mini")
+    # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
+    agent_run_wallclock_timeout_seconds: int = Field(default=600)
+
+    # AI-002 VLM 도면 문맥 해석(SDD §4.4). Mask2Former 레이블을 OpenAI Vision 으로 보완·
+    # 정합성 검증한다. 모델/키는 agent 와 공유(gpt-5.4-mini). 비활성/실패 시 세그멘테이션
+    # 단독으로 degrade(VLM_TIMEOUT). 0.6 미만 신뢰도는 ANALYSIS_LOW_CONFIDENCE 로 재업로드 권장.
+    vlm_floorplan_enabled: bool = Field(default=True)
+    vlm_floorplan_timeout_seconds: int = Field(default=60)
+
+    openai_api_key: str | None = Field(default=None)
+
+    # OpenAI Platform 저장(store=True) — 완성본/이미지를 프로바이더 Logs 에 보관해 평가·
+    # 디버깅에 쓴다. 프리체크 대화는 전체 주소·도면 파생 정보를 담을 수 있어 **기본 미저장**
+    # (프로덕션 보호). 관측이 필요한 비프로덕션에서만 명시적으로 켠다.
+    openai_store_logs: bool = Field(default=False)
+
+    # LangSmith 트레이싱 — env-var 자동 계측. langchain_tracing_v2=true 일 때만 동작.
+    langchain_tracing_v2: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING"),
+    )
+    langsmith_api_key: str | None = Field(default=None)
+    langsmith_project: str = Field(default="jippin-agent")
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com")
+
+    # LangGraph 체크포인터 — 전용 langgraph 스키마(migration 0015). 체크포인터는
+    # psycopg prepared statement 때문에 트랜잭션 풀러(6543)에서 깨지므로 direct
+    # (5432) database_url 을 쓴다(아래 _validate_agent_checkpointer_url).
+    langgraph_db_schema: str = Field(default="langgraph")
+    checkpointer_pool_min_size: int = Field(default=1)
+    checkpointer_pool_max_size: int = Field(default=5)
+
+    # HuggingFace 평면도 세그멘테이션 엣지 엔드포인트. 미설정/미배포 시 도구가
+    # SEGMENTATION_ENDPOINT_UNAVAILABLE 로 degrade 한다(에이전트 흐름은 유지).
+    hf_segmentation_endpoint_url: str | None = Field(default=None)
+    hf_segmentation_token: str | None = Field(default=None)
+    # 배포가 CPU(intel-spr) + scale-to-zero(15분) 라, 유휴 후 첫 요청은 콜드스타트로
+    # TTFB 가 수십 초~수 분이다(모델 카드: "long request timeout"). 전용 엔드포인트는
+    # 보통 503 재시도가 아니라 연결을 잡고 늘어지므로 per-request timeout 을 넉넉히 잡는다
+    # (run wall-clock 600s 이내). 503 재시도는 폴백으로 둔다.
+    hf_segmentation_timeout_seconds: int = Field(default=300)
+    # 이 전용 엔드포인트는 scale-to-zero 에서 깨어나는 동안 **503** 을 즉시 돌려준다
+    # (Retry-After/estimated_time 힌트 없음). CPU 스케일업이 수 분 걸릴 수 있어, 고정
+    # 폴링 간격으로 준비될 때까지 재시도한다 — max_retries × poll 이 run wall-clock(600s)
+    # 안에 들도록 잡는다(30 × 10s = 300s).
+    hf_segmentation_cold_start_max_retries: int = Field(default=30)
+    hf_segmentation_cold_start_poll_seconds: int = Field(default=10)
+    # 추론 파라미터(모델 카드 cmp180_full). 학습은 1536 square resize. CPU 지연이 크면
+    # max_inference_side 를 1280/1024 로 낮춰 절충할 수 있다(디테일 ↔ 지연).
+    hf_segmentation_threshold: float = Field(default=0.5)
+    hf_segmentation_mask_threshold: float = Field(default=0.5)
+    hf_segmentation_max_inference_side: int = Field(default=1536)
+    # 세그멘테이션에 넘길 이미지 URL 의 허용 호스트(스토리지 서명 URL 호스트). 비우면
+    # SSRF 가드(https + 사설/로컬/메타데이터 차단)만 적용하고 공개 https 는 허용한다.
+    # 운영에서는 스토리지 호스트로 채워 세션 경계를 강제하길 권장한다. (콤마 구분)
+    # NoDecode: 콤마 문자열(또는 빈 문자열)을 pydantic-settings 의 JSON 디코딩 전에
+    # _parse_comma_list 가 받도록 한다 — list[str] 기본 동작은 env 값을 JSON 으로 파싱해
+    # `HOSTS=` 빈 문자열에서 settings 생성이 실패한다(#empty-list-env).
+    hf_segmentation_allowed_image_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )
+    # AV 스캔 파이프라인이 아직 없으므로, 엣지 검증(업로드 시 content-type=image/* +
+    # owner-folder + 서명 URL 만 사용)을 거친 pending 도면을 기본 허용한다. 그렇지 않으면
+    # 모든 업로드가 SEGMENTATION_NOT_SCANNED 로 막혀 분석/리포트가 불가능하다(#unblock-
+    # analysis). 단 infected/failed/rejected 는 항상 차단한다. AV 스캔이 붙으면 운영자가
+    # False 로 좁혀 'clean'/'not_required' 만 분석하도록 강제할 수 있다.
+    agent_allow_unscanned_floorplans: bool = Field(default=True)
 
     oauth_state_redis_url: str | None = Field(default=None)
     auth_oauth_state_ttl_seconds: int = Field(
@@ -215,7 +293,8 @@ class Settings(BaseSettings):
     # IP 한도의 신뢰 가능한 출처 헤더. 프록시(Fly)가 설정하는 헤더만 신뢰한다 — 클라이언트가
     # 위조 가능한 X-Forwarded-For 는 쓰지 않는다. 빈 값이면 소켓 peer(request.client.host)만 사용.
     phone_otp_trusted_ip_header: str = Field(default="fly-client-ip")
-    kakao_sync_required_term_tags: list[str] = Field(
+    # NoDecode: 콤마 문자열을 JSON 디코딩 전에 _parse_comma_list 가 받도록 한다.
+    kakao_sync_required_term_tags: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["service_terms", "privacy_policy"]
     )
 
@@ -284,9 +363,13 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("kakao_sync_required_term_tags", mode="before")
+    @field_validator(
+        "kakao_sync_required_term_tags",
+        "hf_segmentation_allowed_image_hosts",
+        mode="before",
+    )
     @classmethod
-    def _parse_kakao_sync_required_term_tags(cls, v: object) -> object:
+    def _parse_comma_list(cls, v: object) -> object:
         if isinstance(v, str):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
@@ -361,6 +444,38 @@ class Settings(BaseSettings):
                 self.frontend_auth_terms_url = f"{origin}/auth/terms"
             if "cors_allow_origins" not in provided:
                 self.cors_allow_origins = [origin]
+        return self
+
+    @model_validator(mode="after")
+    def _validate_agent_checkpointer_url(self) -> "Settings":
+        """fail-safe: agent 활성화 시 체크포인터는 direct(:5432) DATABASE_URL 만 허용.
+
+        LangGraph Postgres 체크포인터(psycopg)는 prepared statement 를 쓰므로
+        Supabase 트랜잭션 풀러(:6543)에서 ``prepared statement already exists`` 로
+        깨진다. 운영 사고를 부팅 시점에 차단한다 — pooler URL 로 agent 를 켜면 boot
+        실패가 정상 동작이다.
+        """
+
+        # agent 라우터는 이제 phase_a 와 무관하게 agent_enabled 만으로 등록된다(main.py).
+        # 따라서 과거의 phase_a_skeleton_enabled 선행 요구는 제거한다 — AGENT_ENABLED 만
+        # 켠 배포가 settings 생성 단계에서 깨지지 않도록(#stale-phase-prereq).
+        if self.agent_enabled and self.database_url and ":6543" in self.database_url:
+            raise ValueError(
+                "AGENT_ENABLED=true 는 LangGraph 체크포인터용 direct(:5432) "
+                "DATABASE_URL 을 요구한다. 트랜잭션 풀러(:6543)는 psycopg prepared "
+                "statement 를 깨뜨린다. DATABASE_URL 을 direct 연결로 설정하라."
+            )
+        # OpenAI 모델인데 키가 없으면 모든 런이 _build_agent 에서 깨진다 — 사용자가
+        # 깨진 채팅을 보는 대신 부팅 시점에 차단한다(서비스는 unavailable 로 유지).
+        if (
+            self.agent_enabled
+            and self.agent_model.startswith("openai")
+            and not self.openai_api_key
+        ):
+            raise ValueError(
+                "AGENT_ENABLED=true + OpenAI 모델은 OPENAI_API_KEY 를 요구한다. "
+                "키를 설정하거나 AGENT_ENABLED 를 끈다."
+            )
         return self
 
 

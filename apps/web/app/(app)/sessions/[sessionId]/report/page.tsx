@@ -1,26 +1,88 @@
-import { Badge, Button, Card, Group, Stack, Text, Title } from '@mantine/core';
-import type { Metadata } from 'next';
-import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+'use client';
+
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Group,
+  List,
+  Loader,
+  Stack,
+  Text,
+  Title
+} from '@mantine/core';
+import { useParams } from 'next/navigation';
+import { useEffect, useState } from 'react';
+
 import { LegalNotice } from '@/components/LegalNotice';
+import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+import { trackPrecheckReportView } from '@/lib/analytics/sessions-funnel';
+import { parseApiError } from '@/lib/api/error';
+import {
+  getSessionReport,
+  syncExistingToken,
+  type EstimateResult,
+  type SessionReportResponse
+} from '@/lib/sessions/api';
 
-type ReportPageProps = {
-  params: Promise<{ sessionId: string }>;
+const VERDICT: Record<string, { label: string; color: string }> = {
+  ALLOW: { label: '가능성 있음', color: 'success' },
+  WARN: { label: '조건부 가능', color: 'yellow' },
+  HOLD: { label: '추가 확인 필요', color: 'gray' },
+  DENY: { label: '어려움', color: 'red' }
 };
 
-export const metadata: Metadata = {
-  title: '사전검토 리포트',
-  robots: { index: false, follow: false }
-};
+type Facility = { label?: string; measurement_basis?: string };
+type LegalBasis = { statute?: string; article?: string; summary?: string };
 
-export default async function SessionReportPage({ params }: ReportPageProps) {
-  const { sessionId } = await params;
+export default function SessionReportPage() {
+  const params = useParams<{ sessionId: string }>();
+  const sessionId = params.sessionId;
+  const [report, setReport] = useState<SessionReportResponse | null>(null);
+  const [notReady, setNotReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ignore = false;
+    void (async () => {
+      try {
+        await syncExistingToken();
+        const data = await getSessionReport(sessionId);
+        if (!ignore) {
+          setReport(data);
+          // 퍼널: 리포트 진입(판정 준비됨).
+          trackPrecheckReportView(true);
+        }
+      } catch (err) {
+        const parsed = parseApiError(err);
+        if (ignore) return;
+        if (parsed.code === 'REPORT_NOT_READY') {
+          setNotReady(true);
+          // 퍼널: 리포트 진입(아직 판정 미준비).
+          trackPrecheckReportView(false);
+        } else setError(parsed.message);
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [sessionId]);
+
+  const result = report?.rule_eval_result as
+    | {
+        verdict?: string;
+        user_message?: string;
+        permit_required?: boolean;
+        required_facilities?: Facility[];
+        legal_basis?: LegalBasis[];
+      }
+    | undefined;
+  const verdict = result?.verdict ? VERDICT[result.verdict] : undefined;
 
   return (
     <Stack gap="lg">
       <Stack gap="xs">
-        <Badge color="jippin" variant="light" radius="sm" w="fit-content">
-          리포트 미리보기 · {sessionId}
-        </Badge>
         <Title order={1}>AI 사전검토 리포트</Title>
         <Text c="dimmed" size="sm" style={{ wordBreak: 'keep-all' }}>
           도면과 주소 분석을 바탕으로 정리한 사전 판단 결과입니다. 최종 행위허가는
@@ -28,38 +90,106 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
         </Text>
       </Stack>
 
-      <Card withBorder radius="md" padding="md">
-        <Stack gap="sm">
-          <Group justify="space-between">
-            <Text fw={600}>판단 결과</Text>
-            <Badge color="success" variant="filled">
-              조건부 가능
-            </Badge>
-          </Group>
-          <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-            대상 벽은 비내력벽일 가능성이 높으나, 일부 배관 간섭 구간에 대해 현장
-            확인이 필요합니다. (placeholder 내용)
-          </Text>
-        </Stack>
-      </Card>
+      {error && (
+        <Alert color="red" variant="light" radius="md">
+          {error}
+        </Alert>
+      )}
 
-      <Card withBorder radius="md" padding="md">
-        <Stack gap="xs">
-          <Text fw={600}>주요 위험 구간</Text>
-          <Text size="sm" c="dimmed">
-            · 배수 배관 인접 (예시)
-          </Text>
-          <Text size="sm" c="dimmed">
-            · 콘센트/전기 라인 인접 (예시)
-          </Text>
-        </Stack>
-      </Card>
+      {notReady && (
+        <Card withBorder radius="md" padding="lg">
+          <Stack gap="sm">
+            <Text fw={600}>리포트가 아직 준비되지 않았어요</Text>
+            <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+              AI 도우미와의 대화를 완료하면 판정 결과가 여기에 표시됩니다.
+            </Text>
+            <Button
+              component="a"
+              href={`/sessions/${sessionId}`}
+              color="jippin"
+              radius="md"
+              w="fit-content"
+            >
+              대화로 돌아가기 →
+            </Button>
+          </Stack>
+        </Card>
+      )}
+
+      {report === null && !notReady && !error && (
+        <Group justify="center" py="lg">
+          <Loader size="sm" color="jippin" />
+        </Group>
+      )}
+
+      {report !== null && result && (
+        <>
+          <Card withBorder radius="md" padding="md">
+            <Stack gap="sm">
+              <Group justify="space-between">
+                <Text fw={600}>판단 결과</Text>
+                <Badge color={verdict?.color ?? 'gray'} variant="filled">
+                  {verdict?.label ?? result.verdict ?? '판정'}
+                </Badge>
+              </Group>
+              {result.user_message && (
+                <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                  {result.user_message}
+                </Text>
+              )}
+              {/* HOLD(데이터 부족)면 엔진이 permit_required 를 보수적으로 true 로 직렬화하지만
+                  실제 행위허가 필요 여부는 미정이다. boolean 만 보고 '필요'로 단정하지 않는다. */}
+              <Text size="xs" c="dimmed">
+                행위허가{' '}
+                {result.verdict === 'HOLD'
+                  ? '미정 (추가 확인 필요)'
+                  : result.permit_required
+                    ? '필요'
+                    : '불요(또는 신고 대상)'}
+              </Text>
+            </Stack>
+          </Card>
+
+          {(result.required_facilities ?? []).length > 0 && (
+            <Card withBorder radius="md" padding="md">
+              <Stack gap="xs">
+                <Text fw={600}>필요 안전시설</Text>
+                <List size="sm" spacing={4}>
+                  {(result.required_facilities ?? []).map((f, i) => (
+                    <List.Item key={i}>
+                      {f.label}
+                      {f.measurement_basis ? ` — ${f.measurement_basis}` : ''}
+                    </List.Item>
+                  ))}
+                </List>
+              </Stack>
+            </Card>
+          )}
+
+          {(result.legal_basis ?? []).length > 0 && (
+            <Card withBorder radius="md" padding="md">
+              <Stack gap="xs">
+                <Text fw={600}>법적 근거</Text>
+                <List size="sm" spacing={4}>
+                  {(result.legal_basis ?? []).map((l, i) => (
+                    <List.Item key={i}>
+                      {[l.statute, l.article].filter(Boolean).join(' ')}
+                      {l.summary ? ` — ${l.summary}` : ''}
+                    </List.Item>
+                  ))}
+                </List>
+              </Stack>
+            </Card>
+          )}
+
+          {report.estimate && <EstimateCard estimate={report.estimate} />}
+        </>
+      )}
 
       {/* AGENTS.md §4.6: 리포트 화면 안에 inline LegalNotice 를 보장. */}
       <LegalNotice variant="inline" />
 
       <Stack gap="sm">
-        {/* 기존 fromSession(전환 컨텍스트) 파라미터와 cta(인입 추적)를 함께 부착. */}
         <LeadCtaButton
           cta="report_bottom"
           fromSession={sessionId}
@@ -82,5 +212,83 @@ export default async function SessionReportPage({ params }: ReportPageProps) {
         </Button>
       </Stack>
     </Stack>
+  );
+}
+
+/** 원(KRW) 표기 — 천 단위 구분. */
+function won(amount: number): string {
+  return `${amount.toLocaleString('ko-KR')}원`;
+}
+
+/** 견적 항목 1줄의 금액 문구 — 고정 최소액/단가/별도견적을 구분해 표기. */
+function amountText(item: EstimateResult['items'][number]): string {
+  if (typeof item.amount_min === 'number') {
+    return `${won(item.amount_min)}~`;
+  }
+  if (typeof item.unit_amount === 'number') {
+    return `${won(item.unit_amount)}${item.unit ? ` / ${item.unit.replace(/^원\//, '')}` : ''}~`;
+  }
+  return '별도 견적';
+}
+
+/** 예상 견적 카드(REPORT-003) — /faq?category=cost 단가표 기반 예비 안내. */
+function EstimateCard({ estimate }: { estimate: EstimateResult }) {
+  return (
+    <Card withBorder radius="md" padding="md">
+      <Stack gap="sm">
+        <Group justify="space-between" align="center">
+          <Text fw={600}>예상 견적</Text>
+          <Badge color="gray" variant="light">
+            참고용 · 부가세 포함
+          </Badge>
+        </Group>
+
+        <Stack gap={6}>
+          {estimate.items.map((item) => (
+            <Group key={item.code} justify="space-between" align="flex-start" wrap="nowrap">
+              <Stack gap={0} style={{ flex: 1 }}>
+                <Text size="sm" fw={500}>
+                  {item.label}
+                </Text>
+                {item.note && (
+                  <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                    {item.note}
+                  </Text>
+                )}
+              </Stack>
+              <Text size="sm" fw={600} style={{ whiteSpace: 'nowrap' }}>
+                {amountText(item)}
+              </Text>
+            </Group>
+          ))}
+        </Stack>
+
+        {typeof estimate.fixed_total_min === 'number' && (
+          <Group justify="space-between" align="center">
+            <Text size="sm" fw={600}>
+              기본 합계 (최소)
+            </Text>
+            <Text size="sm" fw={700} c="coral">
+              {won(estimate.fixed_total_min)}~
+              {estimate.has_variable_items ? ' + 현장 항목' : ''}
+            </Text>
+          </Group>
+        )}
+
+        <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+          {estimate.disclaimer}
+        </Text>
+        <Button
+          component="a"
+          href={estimate.source_url}
+          variant="subtle"
+          color="jippin"
+          size="compact-sm"
+          w="fit-content"
+        >
+          비용 안내 자세히 보기 →
+        </Button>
+      </Stack>
+    </Card>
   );
 }

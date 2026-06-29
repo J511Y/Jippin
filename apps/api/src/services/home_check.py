@@ -38,6 +38,7 @@ from ..schemas.home_check import (
     HomeCheckReport,
     MyHomeChecksResponse,
     NeedsInput,
+    NeedsInputOption,
     PriceEntry,
     ReportMeta,
     Violation,
@@ -59,7 +60,7 @@ DISCLAIMER = (
 )
 
 _VIOLATION_VALUE = "위반건축물"
-_SCHEMA_VERSION = "1.0.0"
+_SCHEMA_VERSION = "1.1.0"
 
 # re-export 로 라우터가 services 경유로 응답 모델을 쓰게 한다(기존 컨벤션 유지).
 __all__ = ["MyHomeChecksResponse"]
@@ -117,6 +118,40 @@ async def create_home_check(
             )
         ).one()
     return dict(row._mapping)
+
+
+async def find_reusable_home_check(
+    *,
+    user_id: uuid.UUID,
+    road_addr: str,
+    dong: str,
+    ho: str,
+) -> dict[str, Any] | None:
+    """같은 입력(소유자+도로명+동+호)으로 아직 진행 중(querying/needs_input)인 잡을
+    돌려준다(없으면 None).
+
+    에이전트 도구가 잡 생성 후 결과 체크포인트 전에 끊겨 같은 tool call 이 replay 되면
+    create_home_check 가 동일 주소로 또 하나의 querying 잡을 만들고 느린 CODEF 작업을
+    중복 실행한다. 진행 중 잡이 있으면 그것을 재사용해 멱등하게 만든다(#codef-idempotent).
+    completed/failed(terminal)은 매칭하지 않으므로 재조회는 정상적으로 새 잡을 만든다.
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(HomeCheck)
+                .where(
+                    HomeCheck.user_id == user_id,
+                    HomeCheck.road_addr == road_addr,
+                    HomeCheck.addr_dong == (dong or None),
+                    HomeCheck.addr_ho == ho,
+                    HomeCheck.status.in_(("querying", "needs_input")),
+                )
+                .order_by(HomeCheck.created_at.desc())
+                .limit(1)
+            )
+        ).first()
+    return dict(row._mapping) if row else None
 
 
 async def get_home_check_row(
@@ -227,7 +262,7 @@ async def resume_home_check(
     home_check_id: uuid.UUID,
     *,
     resume_token: str,
-    product: str,
+    selection: str | None,
     dong: str | None,
     ho: str | None,
     secure_no: str | None,
@@ -236,7 +271,12 @@ async def resume_home_check(
     other_dong: str,
     other_ho: str,
 ) -> None:
-    """needs_input 재개 — 폴백이 났던 제품은 resume_*, 다른 제품은 정상 fetch 로 다시 호출한다."""
+    """needs_input 재개 — 전유부 resume + 표제부 재조회.
+
+    needs_input(추가입력)은 **전유부에서만** 발생한다 — 표제부는 best-effort 라
+    2-way 자동매칭 실패를 사용자 재질문 대신 caution 으로 흡수한다(``_process``).
+    따라서 재개는 항상 전유부 resume 이고, 표제부는 정상 fetch 로 다시 시도한다.
+    """
 
     client = _new_client()
     query = BuildingRegisterQuery(
@@ -245,20 +285,12 @@ async def resume_home_check(
         ho=other_ho,
         jibun_addr=other_jibun_addr,
     )
-    if product == "heading":
-        heading_factory = lambda: client.resume_building_heading(  # noqa: E731
-            resume_token, dong=dong, secure_no=secure_no
-        )
-        exclusive_factory = lambda: client.fetch_exclusive_part(query)  # noqa: E731
-    else:
-        exclusive_factory = lambda: client.resume_exclusive_part(  # noqa: E731
-            resume_token, dong=dong, ho=ho, secure_no=secure_no
-        )
-        heading_factory = lambda: client.fetch_building_heading(query)  # noqa: E731
     await _process(
         home_check_id,
-        exclusive_factory=exclusive_factory,
-        heading_factory=heading_factory,
+        exclusive_factory=lambda: client.resume_exclusive_part(
+            resume_token, selection=selection, dong=dong, ho=ho, secure_no=secure_no
+        ),
+        heading_factory=lambda: client.fetch_building_heading(query),
     )
 
 
@@ -288,16 +320,16 @@ async def _process(
         await _mark_unexpected(home_check_id)
         return
 
-    # 표제부 — needs_input 은 사용자 입력 필요라 전체 잡을 needs_input 으로, 그 외 오류는
-    # caution 사유로 흡수(표제부 실패 시 heading=None 으로 진행).
+    # 표제부 — best-effort. 모든 실패(2-way 추가입력 포함)를 caution 으로 흡수한다.
+    # needs_input 까지 사용자에게 되묻지 않는 이유: ① 표제부는 건물 위반표시 보조신호일
+    # 뿐이고(ADR-0008 §2.4), ② 전유부에서 이미 주소·동·호를 받았는데 표제부 때문에 또
+    # 묻는 건 UX 후퇴이며, ③ 전유부·표제부가 둘 다 주소 모호일 때 재질문이 서로 맞물려
+    # 루프가 된다. heading=None → "건물 위반표시 미확인" caution 사유로 표시된다.
     heading: BuildingHeadingResult | None = None
     heading_error = False
     try:
         heading = await heading_factory()
-    except CodefNeedsUserInput as exc:
-        await _mark_needs_input(home_check_id, exc, product="heading")
-        return
-    except CodefError:
+    except CodefError:  # CodefNeedsUserInput(서브클래스) 포함.
         heading_error = True
     except Exception:  # noqa: BLE001
         heading_error = True
@@ -552,12 +584,15 @@ async def _mark_needs_input(
         {
             "status": "needs_input",
             # resume_token 은 PII 가 아니다(1차 결과 복원용 핸들) — 보안문자 이미지 등 PII 는
-            # 저장하지 않는다.
+            # 저장하지 않는다. field/options 는 CODEF 후보(주소/동/호)로, 프론트가 드롭다운으로
+            # 제시한다(동·호 번호 자체는 PII 가 아님).
             "result_fields": {
                 "resume_token": exc.resume_token,
                 "product": product,
                 "kind": exc.kind,
                 "message": exc.message,
+                "field": exc.field,
+                "options": exc.options,
             },
             "queried_at": datetime.now(timezone.utc),
         },
@@ -567,6 +602,8 @@ async def _mark_needs_input(
         home_check_id=str(home_check_id),
         product=product,
         kind=exc.kind,
+        field=exc.field,
+        option_count=len(exc.options or []),
     )
 
 
@@ -809,9 +846,15 @@ async def serialize_job(
         job_kwargs["report"] = await _build_report(row, with_documents=with_documents)
     elif status == "needs_input":
         fields = row.get("result_fields") or {}
+        raw_options = fields.get("options") or None
+        options = (
+            [NeedsInputOption(**opt) for opt in raw_options] if raw_options else None
+        )
         job_kwargs["needs_input"] = NeedsInput(
             kind=fields.get("kind") or "dong_ho",
             message=fields.get("message") or "추가 입력이 필요합니다.",
+            field=fields.get("field"),
+            options=options,
         )
     elif status == "failed":
         job_kwargs["error"] = ErrorInfo(

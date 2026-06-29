@@ -46,7 +46,7 @@ from __future__ import annotations
 import enum
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from .rules import (
@@ -198,6 +198,43 @@ _FIELD_CHECK_LABELS: dict[str, str] = {
         "이 건물에 기존 행위허가(또는 신고) 이력이 있는지 확인이 필요합니다."
     ),
     "fire_zone": "철거 부위가 방화구획에 포함되는지 확인이 필요합니다.",
+}
+
+
+#: 발코니 확장 경로에서 안전 변수가 미확인(None)일 때 쓰는 **보수적(안전측) 기본값**.
+#: 운영자 결정(2026-06-26): 미확인 항목은 HOLD 로 막지 말고, "면제받지 못함 / 시설·대피
+#: 공간 필요" 방향으로 가정해 리포트를 내고 해당 항목을 미확인 caveat 로 첨부한다. 그래야
+#: 평면도/사용자가 못 준 정보 때문에 리포트가 영영 안 나오는 일을 막는다.
+#: - floor_count: 1층 예외 X·4층 대피공간 O 가 되도록 5 로 가정(요건 최대).
+#: - fire_zone: True 면 RULE_EXCEPTION 으로 자동판단 불가가 되어 리포트가 막히므로,
+#:   미확인은 False 로 가정(생성 우선) + caveat 로 "포함 시 별도 검토" 안내.
+_CONSERVATIVE_DEFAULTS: dict[str, object] = {
+    "floor_count": 5,
+    "has_sprinkler": False,
+    "has_evacuation_space": False,
+    "stairwell_count": 1,
+    "window_form": WindowForm.OTHER,
+    "fire_zone": False,
+}
+
+#: 미확인으로 보수적 가정한 필드를 리포트에 첨부할 생활어 라벨(추가 확인 항목).
+_UNCONFIRMED_CHECK_LABELS: dict[str, str] = {
+    "floor_count": "세대 층수가 확인되지 않아 보수적으로 가정했어요(정확한 층수를 알려 주시면 더 정확해져요).",
+    "has_sprinkler": "스프링클러 설치 여부가 확인되지 않아, 없는 것으로 보고 방화시설이 필요하다고 판단했어요.",
+    "has_evacuation_space": "대피공간·경량칸막이 확보 여부가 확인되지 않아, 없는 것으로 보고 판단했어요.",
+    "stairwell_count": "이용 가능한 계단실 수가 확인되지 않아, 예외(2개소 이상)에 해당하지 않는 것으로 보았어요.",
+    "window_form": "외부 창호 형태가 확인되지 않아, 일반(비고정형) 기준으로 보았어요.",
+    "fire_zone": "방화구획 포함 여부가 확인되지 않았어요. 포함되는 경우 별도 검토가 필요해요.",
+}
+
+#: user_message 한 줄에 묶어 넣을 미확인 항목 짧은 이름.
+_UNCONFIRMED_FIELD_NAMES: dict[str, str] = {
+    "floor_count": "층수",
+    "has_sprinkler": "스프링클러 유무",
+    "has_evacuation_space": "대피공간 유무",
+    "stairwell_count": "계단실 수",
+    "window_form": "창호 형태",
+    "fire_zone": "방화구획 포함 여부",
 }
 
 
@@ -451,22 +488,25 @@ class _Evaluation:
     warn: bool = False
 
 
-def _hold_for_missing(evaluation: _Evaluation, rule_input: RuleInput) -> None:
-    """누락·비정상 입력 → 추측 없이 보류 (FR-RULE-002 수용 기준)."""
+def _hold_for_unknown_wall(evaluation: _Evaluation, rule_input: RuleInput) -> bool:
+    """벽 종류 미상/비정상이면 보류 — **유일하게 HOLD 로 막는 전제 조건**.
 
-    missing = rule_input.missing_fields()
-    flagged = tuple(
-        dict.fromkeys(missing + rule_input.invalid_fields)
-    )  # 등재 순서 유지 + 중복 제거
-    if not flagged:
-        return
+    나머지 안전 변수(층수·스프링클러·대피공간·계단실·창호·방화구획)는 발코니 확장
+    경로에서 보수적 기본값으로 채워 평가하므로 HOLD 사유가 아니다(운영 스코핑). 단,
+    벽 종류는 철거 가능성 판단의 전제라 모르면 판단 자체가 불가능하다.
+    """
+
+    wall_unknown = (
+        rule_input.wall_type is None or "wall_type" in rule_input.invalid_fields
+    )
+    if not wall_unknown:
+        return False
     evaluation.hold_reasons.append(HoldReason.INSUFFICIENT_DATA)
     evaluation.reasons.append(
-        "판단에 필요한 정보가 아직 모두 확인되지 않았습니다. 아래 항목을 "
-        "확인해 주시면 다시 검토할 수 있습니다."
+        "철거하려는 벽이 내력벽인지 비내력벽인지부터 확인이 필요합니다."
     )
-    for name in flagged:
-        evaluation.additional_checks.append(_FIELD_CHECK_LABELS[name])
+    evaluation.additional_checks.append(_FIELD_CHECK_LABELS["wall_type"])
+    return True
 
 
 def _evaluate_wall(evaluation: _Evaluation, rule_input: RuleInput) -> None:
@@ -514,14 +554,52 @@ def _evaluate_fire_zone(evaluation: _Evaluation, rule_input: RuleInput) -> None:
         )
 
 
+def _evacuation_required(rule_input: RuleInput, ruleset: Ruleset) -> bool:
+    """별도 대피공간 구획이 **필요한지** 여부 (건축법 시행령 §46④ + 운영 스코핑).
+
+    아래 중 하나라도 해당하면 대피공간을 별도로 구획하지 않아도 된다(불필요):
+    - 저층(3층 이하): ``floor_count < evacuation_space_min_floor``.
+    - 직통계단(계단실) 2개소 이상: ``stairwell_count >= staircase_exception_min_count``.
+    - 경량칸막이/대피공간 이미 확보: ``has_evacuation_space is True`` (호출부에서 처리).
+
+    여기서는 층수·계단실만으로 '필요 여부'를 본다(경량칸막이 확보는 호출부에서 충족
+    처리). 미확인 입력은 호출 전에 보수적 기본값으로 채워진다(확장 경로).
+    """
+
+    assert rule_input.floor_count is not None
+    if rule_input.floor_count < ruleset.parameters.evacuation_space_min_floor:
+        return False
+    if (
+        rule_input.stairwell_count is not None
+        and rule_input.stairwell_count
+        >= ruleset.parameters.staircase_exception_min_count
+    ):
+        return False
+    return True
+
+
 def _evaluate_evacuation(
     evaluation: _Evaluation, rule_input: RuleInput, ruleset: Ruleset
 ) -> None:
-    """R-EVAC-01 — 4층 이상 세대의 대피공간 확보 (건축법 시행령 §46④)."""
+    """R-EVAC-01 — 대피공간 확보 (건축법 시행령 §46④ + 면제 스코핑).
 
-    assert rule_input.floor_count is not None  # 누락은 사전에 HOLD 처리됨
+    저층(3층 이하)·계단실 2개소 이상·경량칸막이 보유 중 하나면 별도 대피공간이
+    불필요하다. 모두 아닌데 대피공간/경량칸막이도 확인되지 않으면 WARN + 추가 확인.
+    """
+
+    assert rule_input.floor_count is not None
     if rule_input.floor_count < ruleset.parameters.evacuation_space_min_floor:
+        return  # 저층 — 별도 대피공간 불필요.
+
+    if not _evacuation_required(rule_input, ruleset):
+        # 4층 이상이지만 계단실 2개소 이상으로 별도 대피공간이 면제될 가능성.
+        evaluation.legal_basis.add(LEGAL_FIRE_DOOR_STAIRCASE_EXCEPTION)
+        evaluation.reasons.append(
+            "이용 가능한 직통계단(계단실)이 2개소 이상으로 확인되어, 별도 "
+            "대피공간을 구획하지 않아도 될 가능성이 있습니다."
+        )
         return
+
     if rule_input.has_evacuation_space is True:
         evaluation.legal_basis.add(LEGAL_EVACUATION_SPACE)
         evaluation.reasons.append(
@@ -531,10 +609,7 @@ def _evaluate_evacuation(
     else:
         # 대피공간 미확보 — 확장 자체가 불가능한 것은 아니고 대체 시설
         # (경량칸막이·하향식 피난구 등) 설치로 충족할 수 있어, 불가 단정
-        # 대신 WARN + 추가 확인으로 분기한다 (보수 분기, 건축법 시행령
-        # 제46조 제4항 각 호의 대체 수단을 자동 판별할 수 없음).
-        # 대피공간이 확인되지 않은 상태에서는 그 출입구 방화문도 산출하지
-        # 않는다 (_evaluate_facilities 참고) — 확보 방안 확인이 선행 조건.
+        # 대신 WARN + 추가 확인으로 분기한다 (보수 분기).
         evaluation.warn = True
         evaluation.legal_basis.add(LEGAL_EVACUATION_SPACE)
         evaluation.reasons.append(
@@ -543,8 +618,8 @@ def _evaluate_evacuation(
         )
         evaluation.additional_checks.append(
             "대피공간·경량칸막이 등 대체 대피 경로 확보 방안을 확인해 "
-            "주세요. 대피공간을 확보하는 경우 그 출입구 방화문 설치 여부도 "
-            "함께 검토가 필요합니다."
+            "주세요. 직통계단이 2개소 이상이면 별도 대피공간 없이도 가능할 수 "
+            "있습니다."
         )
 
 
@@ -626,19 +701,14 @@ def _evaluate_facilities(
             )
 
     # ── 방화문 (R-FIRE-04) — 대피공간 출입구 (자동 닫힘 구조).
-    # 예외: 1층 세대(R-FIRE-06), 계단실 2개소 이상(R-FIRE-05).
-    # 대피공간 존재가 확인된 경우에만 산출한다 — 미확인 상태에서는
-    # _evaluate_evacuation 의 WARN + 추가 확인이 선행한다 (실재하지 않는
-    # 출입구에 설치 시설을 산출하지 않는다).
-    if is_first_floor:
-        pass  # 1층 예외 사유는 위에서 이미 기록.
-    elif rule_input.stairwell_count >= params.staircase_exception_min_count:
-        evaluation.legal_basis.add(LEGAL_FIRE_DOOR_STAIRCASE_EXCEPTION)
-        evaluation.reasons.append(
-            "계단실이 2개소 이상으로 확인되어 방화문 설치 의무가 제외될 "
-            "가능성이 있습니다."
-        )
-    elif rule_input.has_evacuation_space is True:
+    # 대피공간이 **실제로 필요하고(_evacuation_required) 확보된 경우에만** 그 출입구에
+    # 산출한다. 1층 예외, 그리고 계단실 2개소 이상 면제(대피공간 자체가 불필요)이면
+    # 방화문도 불필요하다 — 면제 판단은 _evacuation_required 가 단일 소유한다(중복 분기 제거).
+    if (
+        not is_first_floor
+        and _evacuation_required(rule_input, ruleset)
+        and rule_input.has_evacuation_space is True
+    ):
         evaluation.legal_basis.add(LEGAL_FIRE_DOOR)
         evaluation.facilities.append(
             RequiredFacility(
@@ -649,7 +719,6 @@ def _evaluate_facilities(
                 legal_basis=LEGAL_FIRE_DOOR,
             )
         )
-    # else: 대피공간 미확인 — 방화문 산출 보류 (4층 이상이면 위 WARN 이 안내).
 
 
 def _aggregate_verdict(evaluation: _Evaluation) -> Verdict:
@@ -702,35 +771,94 @@ _USER_MESSAGES: dict[Verdict, str] = {
 }
 
 
+def _build_user_message(verdict: Verdict, unconfirmed: tuple[str, ...]) -> str:
+    """판정별 기본 문구에 미확인 항목 안내를 한 줄로 덧붙인다(리포트에 첨부 — 운영 스코핑).
+
+    엄격한 rule-eval-result 계약을 건드리지 않고 미확인 항목을 사용자에게 노출하는
+    채널이다(리포트 화면이 user_message 를 그대로 보여 준다).
+    """
+
+    base = _USER_MESSAGES[verdict]
+    if unconfirmed:
+        labels = ", ".join(_UNCONFIRMED_FIELD_NAMES[name] for name in unconfirmed)
+        base += (
+            f" 다만 {labels}은(는) 확인되지 않아 보수적으로 가정했어요 — 현장 확인 시 "
+            "결과가 달라질 수 있어요."
+        )
+    return base
+
+
 def evaluate(rule_input: RuleInput, ruleset: Ruleset = BASELINE_RULESET) -> RuleVerdict:
     """공통 판단 스키마 입력을 평가해 :class:`RuleVerdict` 를 산출한다.
 
-    순수·결정적 함수 — 동일 ``(rule_input, ruleset)`` 에 대해 항상 동일한
-    결과를 반환한다 (NFR-QUAL-002). FLOW_GUARD 가 PROCEED_RULE 을 반환한
-    완성 스키마를 전제로 하지만, 방어적으로 누락 입력도 보류로 처리한다.
+    순수·결정적 함수 — 동일 ``(rule_input, ruleset)`` 에 대해 항상 동일한 결과를
+    반환한다 (NFR-QUAL-002).
+
+    스코핑(운영자 결정 2026-06-26):
+    - **실내 비내력벽 철거(발코니 확장 아님 = balcony_attached False)** 는 발코니 확장
+      방화시설·대피공간 룰을 **적용하지 않는다** — 구조/행위허가 위주.
+    - **발코니 확장** 경로에서 안전 변수(층수·스프링클러·대피공간·계단실·창호·방화구획)가
+      미확인이면 HOLD 로 막지 않고 **보수적 기본값으로 가정 + 미확인 caveat 첨부**.
+    - **벽 종류(wall_type)만** 미상이면 HOLD — 철거 가능성 판단의 전제이기 때문.
     """
 
     evaluation = _Evaluation()
+    unconfirmed: tuple[str, ...] = ()
 
-    # 1단계 — 벽체 판정. 내력벽이 확인되면 다른 변수가 누락이어도 DENY 가
-    # 확정적이다 (내력벽 금지는 다른 변수와 무관, R-WALL-01).
+    # 1단계 — 벽체 판정. 내력벽이 확인되면 다른 변수와 무관하게 DENY (R-WALL-01).
     _evaluate_wall(evaluation, rule_input)
 
-    if not evaluation.deny:
-        # 2단계 — 입력 충분성. 하나라도 누락/비정상이면 추측 없이 보류.
-        _hold_for_missing(evaluation, rule_input)
+    if evaluation.deny:
+        pass  # 내력벽 → DENY 확정.
+    elif _hold_for_unknown_wall(evaluation, rule_input):
+        pass  # 벽 종류 미상 → HOLD (유일한 HOLD 전제).
+    else:
+        # 방화구획(fire_zone)은 발코니 확장/실내 철거와 **무관하게** 철거 부위가 방화구획에
+        # 포함되면 자동 판단 불가(RULE_EXCEPTION)다 — 실내 철거 분기보다 먼저 본다(#fire-zone-
+        # before-interior). 미확인(None)·미포함(False)이면 통과하고, 확장 경로의 미확인은
+        # 아래에서 보수적 가정 + caveat 로 첨부한다.
+        _evaluate_fire_zone(evaluation, rule_input)
+        if evaluation.hold_reasons:
+            pass  # 방화구획 포함(RULE_EXCEPTION) → 이후 평가 스킵, HOLD.
+        elif rule_input.balcony_attached is False:
+            # 발코니 확장이 아닌 실내 비내력벽 철거 — 확장 화재안전 룰 미적용.
+            evaluation.legal_basis.add(LEGAL_WALL_NON_LOAD_BEARING)
+            evaluation.reasons.append(
+                "발코니 확장이 아닌 세대 내부 비내력벽 철거로 보입니다. 이 경우 발코니 "
+                "확장에 따른 방화판·방화유리·대피공간 요건은 해당되지 않으며, 구조 안전과 "
+                "행위허가 절차를 중심으로 확인하면 됩니다."
+            )
+        else:
+            # 발코니 확장 경로 — 미확인 안전 변수를 보수적 기본값으로 채우고 caveat 로 첨부.
+            overrides: dict[str, object] = {}
+            defaulted: list[str] = []
+            for field_name, default in _CONSERVATIVE_DEFAULTS.items():
+                if getattr(rule_input, field_name) is None:
+                    overrides[field_name] = default
+                    defaulted.append(field_name)
+            effective = replace(rule_input, **overrides) if overrides else rule_input
+            unconfirmed = tuple(defaulted)
 
-        if not evaluation.hold_reasons:
-            # 3단계 — 방화구획 판정. RULE_EXCEPTION 보류가 설정되면 이후
-            # 평가를 건너뛴다 — 수동 검토 케이스에 시설 목록을 내지 않는다.
-            _evaluate_fire_zone(evaluation, rule_input)
+            if rule_input.balcony_attached is None:
+                evaluation.reasons.append(
+                    "발코니 확장(발코니 접합) 여부가 확인되지 않아, 보수적으로 발코니 확장 "
+                    "기준으로 검토했습니다."
+                )
 
-        if not evaluation.hold_reasons:
-            # 4단계 — 개별 규칙 평가 (입력·자동 판단 범위가 모두 확보된 경우).
-            _evaluate_evacuation(evaluation, rule_input, ruleset)
-            _evaluate_facilities(evaluation, rule_input, ruleset)
+            # fire_zone 은 분기 전에 이미 평가했다(미확인이면 통과). 나머지 안전 변수만 평가.
+            _evaluate_evacuation(evaluation, effective, ruleset)
+            _evaluate_facilities(evaluation, effective, ruleset)
+
+            for field_name in defaulted:
+                evaluation.additional_checks.append(
+                    _UNCONFIRMED_CHECK_LABELS[field_name]
+                )
 
     verdict = _aggregate_verdict(evaluation)
+    # 보수적 가정이 섞였으면 확정(ALLOW) 대신 '추가 확인 필요(WARN)' 로 낮춘다.
+    if verdict is Verdict.ALLOW and unconfirmed:
+        verdict = Verdict.WARN
+
     permit = _permit_requirement(verdict)
     if verdict is not Verdict.HOLD:
         evaluation.legal_basis.add(LEGAL_PERMIT_PROCEDURE)
@@ -739,7 +867,7 @@ def evaluate(rule_input: RuleInput, ruleset: Ruleset = BASELINE_RULESET) -> Rule
         verdict=verdict,
         permit_requirement=permit,
         possibility_label=_POSSIBILITY_LABELS[verdict],
-        user_message=_USER_MESSAGES[verdict],
+        user_message=_build_user_message(verdict, unconfirmed),
         reasons=tuple(evaluation.reasons),
         additional_checks=tuple(evaluation.additional_checks),
         hold_reasons=tuple(dict.fromkeys(evaluation.hold_reasons)),

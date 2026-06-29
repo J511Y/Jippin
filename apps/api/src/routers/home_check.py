@@ -125,7 +125,6 @@ async def continue_home_check(
 
     fields = row.get("result_fields") or {}
     resume_token = fields.get("resume_token")
-    product = fields.get("product") or "exclusive"
     if not resume_token:
         raise ZippinException(
             "재개 정보가 없어 처음부터 다시 조회해 주세요.",
@@ -133,13 +132,13 @@ async def continue_home_check(
             http_status=409,
         )
 
-    # 잡을 다시 querying 으로 되돌리고 백그라운드 재개.
+    # 잡을 다시 querying 으로 되돌리고 백그라운드 재개(재개는 항상 전유부).
     await home_check_service.reset_for_resume(home_check_id)
     background_tasks.add_task(
         home_check_service.resume_home_check,
         home_check_id,
         resume_token=resume_token,
-        product=product,
+        selection=payload.selection,
         dong=payload.dong,
         ho=payload.ho,
         secure_no=payload.secure_no,
@@ -151,7 +150,6 @@ async def continue_home_check(
     logger.info(
         "home_check_resumed",
         home_check_id=str(home_check_id),
-        product=product,
     )
     refreshed = await home_check_service.get_home_check_row(
         home_check_id=home_check_id, user_id=requester.user_id

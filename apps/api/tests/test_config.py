@@ -53,6 +53,31 @@ def test_anonymous_session_ttl_defaults_to_env_example_value() -> None:
     assert settings.anon_session_ttl_days == 30
 
 
+def test_empty_hosts_env_does_not_break_boot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #empty-list-env: 콤마 리스트 필드는 NoDecode 로 JSON 디코딩을 건너뛰므로
+    # `HOSTS=` 빈 문자열에서도 settings 생성이 깨지지 않고 [] 가 된다.
+    monkeypatch.setenv("HF_SEGMENTATION_ALLOWED_IMAGE_HOSTS", "")
+    settings = Settings()
+    assert settings.hf_segmentation_allowed_image_hosts == []
+
+
+def test_comma_hosts_env_parses_to_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HF_SEGMENTATION_ALLOWED_IMAGE_HOSTS", "a.example, b.example")
+    settings = Settings()
+    assert settings.hf_segmentation_allowed_image_hosts == ["a.example", "b.example"]
+
+
+def test_comma_term_tags_env_parses_to_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 같은 NoDecode 경로 — 콤마 문자열이 JSON 으로 파싱되지 않는다.
+    monkeypatch.setenv("KAKAO_SYNC_REQUIRED_TERM_TAGS", "service_terms,marketing")
+    settings = Settings()
+    assert settings.kakao_sync_required_term_tags == ["service_terms", "marketing"]
+
+
 # --- Derivation from primitives (CMP-DIRECT) ---------------------------------
 # {supabase_ref, public_web_origin} expand into the per-environment URLs so the
 # operator only sets the two primitives. Explicit env values still win.
@@ -156,3 +181,49 @@ def test_public_web_origin_allows_port() -> None:
     settings = Settings(public_web_origin="http://localhost:3000")
     assert settings.cors_allow_origins == ["http://localhost:3000"]
     assert settings.frontend_auth_success_url == "http://localhost:3000/auth/success"
+
+
+# --- 에이전트 활성화 fail-safe (CMP-DIRECT) ---------------------------------
+
+
+def test_agent_enabled_does_not_require_phase_a() -> None:
+    # agent 라우터가 phase_a 게이트에서 분리됐으므로 phase_a 없이 agent 만 켜도 settings
+    # 생성이 깨지지 않는다(#stale-phase-prereq). 다른 필수(OPENAI 키 등)는 충족시킨다.
+    settings = Settings(
+        agent_enabled=True,
+        phase_a_skeleton_enabled=False,
+        openai_api_key="sk-test-not-a-real-key",
+    )
+    assert settings.agent_enabled is True
+    assert settings.phase_a_skeleton_enabled is False
+
+
+def test_agent_enabled_requires_openai_key() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(
+            agent_enabled=True,
+            phase_a_skeleton_enabled=True,
+            openai_api_key=None,
+        )
+    assert "OPENAI_API_KEY" in str(exc.value)
+
+
+def test_agent_enabled_rejects_pooler_url() -> None:
+    with pytest.raises(ValidationError) as exc:
+        Settings(
+            agent_enabled=True,
+            phase_a_skeleton_enabled=True,
+            openai_api_key="test-openai-key",
+            database_url="postgresql://host:6543/db",
+        )
+    assert ":6543" in str(exc.value)
+
+
+def test_agent_enabled_boots_with_valid_config() -> None:
+    settings = Settings(
+        agent_enabled=True,
+        phase_a_skeleton_enabled=True,
+        openai_api_key="test-openai-key",
+        database_url="postgresql://host:5432/db",
+    )
+    assert settings.agent_enabled is True

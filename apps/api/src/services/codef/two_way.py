@@ -91,6 +91,153 @@ def has_secure_no(extra_info: dict[str, Any]) -> bool:
     return bool(str(extra_info.get("reqSecureNo") or "").strip())
 
 
+# ---------------------------------------------------------------------------
+# 후보 축(주소/동/호) 일반화 — CODEF 는 1차 CF-03002 에서 "그때 필요한 축만" 돌려준다.
+# (예: 동이 없는 집합건물은 reqHoNumList 만, method="hoNum".) 그래서 세 축을 한꺼번에
+# 요구하지 않고, **응답에 실제로 존재하는 축만** 매칭/선택한다.
+# ---------------------------------------------------------------------------
+# 2차 요청 파라미터로 보낼 때 우선순위(주소 → 동 → 호). CODEF 가 여러 축을 동시에 줄 때도
+# 결정적 순서로 처리한다.
+FIELD_ORDER: tuple[str, ...] = ("address", "dong", "ho")
+
+# 각 축의 후보 리스트 키 / 2차 요청 파라미터 키.
+_FIELD_LIST_KEY = {
+    "address": "reqAddrList",
+    "dong": "reqDongNumList",
+    "ho": "reqHoNumList",
+}
+_FIELD_PARAM_KEY = {
+    "address": "reqAddress",
+    "dong": "dongNum",
+    "ho": "hoNum",
+}
+
+
+def field_candidates(extra_info: dict[str, Any], field: str) -> list[dict[str, Any]]:
+    """extraInfo 에서 해당 축(주소/동/호)의 후보 dict 리스트를 꺼낸다(없으면 빈 리스트)."""
+
+    raw = extra_info.get(_FIELD_LIST_KEY[field]) or []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def field_param_key(field: str) -> str:
+    """2차 요청에서 해당 축이 채우는 파라미터 키(reqAddress/dongNum/hoNum)."""
+
+    return _FIELD_PARAM_KEY[field]
+
+
+def candidate_value(field: str, candidate: dict[str, Any]) -> str:
+    """후보 → 2차 요청에 그대로 보낼 식별자(호=commHoNum, 동=commDongNum, 주소=지번/도로명).
+
+    호/동은 식별번호(comm*)가 비면 명칭(req*)으로 폴백한다 — CODEF 가 commHoNum 없이
+    reqHo 만 주는 후보도 있고, match_ho/match_dong 도 req* 를 매칭키로 인정하므로 빈
+    식별자로 2차를 보내 실패하는 걸 막는다.
+    """
+
+    if field == "ho":
+        return str(candidate.get("commHoNum") or candidate.get("reqHo") or "")
+    if field == "dong":
+        return str(candidate.get("commDongNum") or candidate.get("reqDong") or "")
+    return str(
+        candidate.get("commAddrLotNumber") or candidate.get("commAddrRoadName") or ""
+    )
+
+
+def candidate_label(field: str, candidate: dict[str, Any]) -> str:
+    """후보 → 사용자 표시용 명칭. 식별자만 있고 명칭이 없으면 식별자로 폴백한다.
+
+    주소는 같은 도로명에 지번만 다른 후보가 섞일 수 있어, 도로명+지번을 함께 보여줘
+    드롭다운에서 구분 가능하게 한다(둘 다 있으면 "도로명 (지번)").
+    """
+
+    if field == "ho":
+        return str(candidate.get("reqHo") or candidate.get("commHoNum") or "")
+    if field == "dong":
+        return str(candidate.get("reqDong") or candidate.get("commDongNum") or "")
+    road = str(candidate.get("commAddrRoadName") or "").strip()
+    lot = str(candidate.get("commAddrLotNumber") or "").strip()
+    if road and lot:
+        return f"{road} ({lot})"
+    return road or lot
+
+
+# 후보 목록이 비정상적으로 클 때의 안전 상한(직렬화/렌더 보호). 실무 reqHoNumList 는
+# 대단지여도 수백 건이라 충분하다. 초과 시 잘렸음을 로깅한다(호출부).
+MAX_OPTIONS = 600
+
+
+def field_options(
+    candidates: list[dict[str, Any]], field: str, *, limit: int = MAX_OPTIONS
+) -> list[dict[str, Any]]:
+    """후보 dict 리스트 → 계약(NeedsInputOption) shape {value,label,area?} 로 정규화한다.
+
+    value 가 빈(식별 불가) 후보는 버린다 — 재개 시 보낼 식별자가 없기 때문.
+    """
+
+    options: list[dict[str, Any]] = []
+    for cand in candidates[:limit]:
+        value = candidate_value(field, cand)
+        if not value:
+            continue
+        option: dict[str, Any] = {
+            "value": value,
+            "label": candidate_label(field, cand) or value,
+        }
+        if field == "ho":
+            area = str(cand.get("reqArea") or "").strip()
+            option["area"] = area or None
+        options.append(option)
+    return options
+
+
+def resolve_candidate(
+    field: str,
+    candidates: list[dict[str, Any]],
+    *,
+    dong: str,
+    ho: str,
+    selected_value: str | None,
+) -> dict[str, Any] | None:
+    """해당 축의 후보를 자동 확정한다. 확정 불가(0건/복수건/불일치) → None(사용자 선택 필요).
+
+    우선순위:
+      1) selected_value(사용자가 후보에서 고른 식별자)와 정확히 일치하는 후보.
+      2) 후보가 단 1건이면 그 후보(자동선택).
+      3) 동/호는 사용자 입력을 정규화해 **유일 매칭**되면 그 후보.
+      4) 주소는 신뢰할 사용자 키가 없어 자동확정하지 않는다(복수면 선택 요구).
+    """
+
+    if not candidates:
+        return None
+    if selected_value is not None:
+        for cand in candidates:
+            if candidate_value(field, cand) == selected_value:
+                return cand
+        return None  # 고른 값이 후보에 없다(만료/불일치) → 다시 선택 요구.
+    if len(candidates) == 1:
+        return candidates[0]
+    if field == "ho":
+        return match_ho(candidates, ho)
+    if field == "dong":
+        return match_dong(candidates, dong)
+    return None
+
+
+_SELECT_MESSAGES = {
+    "address": "여러 건물이 검색됐어요. 아래 목록에서 해당 주소를 선택해 주세요.",
+    "dong": "조회된 동 목록에서 해당 동을 선택해 주세요.",
+    "ho": "조회된 호 목록에서 해당 호를 선택해 주세요. (면적으로 구분할 수 있어요)",
+}
+
+
+def select_message(field: str) -> str:
+    """축별 사용자 안내 메시지."""
+
+    return _SELECT_MESSAGES.get(
+        field, "추가 선택이 필요합니다. 목록에서 선택해 주세요."
+    )
+
+
 class ResumeStore:
     """2-way 1차 컨텍스트를 Redis 에 단기 저장/복원한다.
 

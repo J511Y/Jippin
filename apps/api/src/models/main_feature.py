@@ -75,6 +75,12 @@ class Session(TimestampMixin, Base):
     )
     judgment_schema_version: Mapped[str | None] = mapped_column(sa.Text)
     completion_decision: Mapped[str | None] = mapped_column(sa.Text)
+    # 룰 판정 정본(rule-eval-result 계약) — 리포트(GET /sessions/{id}/report)의 source.
+    # NULL = 리포트 미준비. migration 0016 와 정합.
+    rule_eval_result: Mapped[dict[str, object] | None] = mapped_column(postgresql.JSONB)
+    rule_evaluated_at: Mapped[datetime | None] = mapped_column(
+        postgresql.TIMESTAMP(timezone=True)
+    )
     last_activity_at: Mapped[datetime] = mapped_column(
         postgresql.TIMESTAMP(timezone=True),
         nullable=False,
@@ -249,7 +255,9 @@ class FloorplanAsset(TimestampMixin, Base):
             "scan_status IN ('pending', 'clean', 'infected', 'failed', 'not_required')",
             name="floorplan_assets_scan_status_allowed",
         ),
-        sa.CheckConstraint("byte_size >= 0", name="floorplan_assets_byte_size_nonnegative"),
+        sa.CheckConstraint(
+            "byte_size >= 0", name="floorplan_assets_byte_size_nonnegative"
+        ),
         sa.UniqueConstraint("bucket", "object_key"),
     )
 
@@ -300,7 +308,9 @@ class FloorplanCandidate(CreatedAtMixin, Base):
 
     __tablename__ = "floorplan_candidates"
     __table_args__ = (
-        sa.CheckConstraint("lookup_revision > 0", name="floorplan_candidates_lookup_revision_positive"),
+        sa.CheckConstraint(
+            "lookup_revision > 0", name="floorplan_candidates_lookup_revision_positive"
+        ),
         sa.CheckConstraint("rank > 0", name="floorplan_candidates_rank_positive"),
         sa.CheckConstraint(
             "confidence >= 0 AND confidence <= 1",
@@ -479,6 +489,81 @@ class ChatToolCall(Base):
     )
 
 
+class AgentRun(TimestampMixin, Base):
+    """Lifecycle/metadata row for one deepagents run (CMP-DIRECT, migration 0015).
+
+    Conversation state lives in ``langgraph.*`` (checkpointer SoT) and is
+    projected into ``chat_messages`` / ``chat_tool_calls``. This table only
+    tracks the run's lifecycle, LangSmith link, and error state. Backend
+    service-role only — no ``authenticated`` write grant.
+    """
+
+    __tablename__ = "agent_runs"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ("
+            "'pending', 'running', 'awaiting_input', 'interrupted', "
+            "'succeeded', 'failed', 'cancelled'"
+            ")",
+            name="agent_runs_status_allowed",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        sa.ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        sa.ForeignKey("auth.users.id", ondelete="SET NULL"),
+    )
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        sa.Text,
+        nullable=False,
+        server_default=sa.text("'pending'"),
+    )
+    model: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    current_step: Mapped[str | None] = mapped_column(sa.Text)
+    langsmith_run_id: Mapped[str | None] = mapped_column(sa.Text)
+    langsmith_run_url: Mapped[str | None] = mapped_column(sa.Text)
+    error_code: Mapped[str | None] = mapped_column(sa.Text)
+    error_message: Mapped[str | None] = mapped_column(sa.Text)
+    input_summary: Mapped[dict[str, object]] = mapped_column(
+        postgresql.JSONB,
+        nullable=False,
+        server_default=jsonb_empty_object,
+    )
+    # A2UI 버퍼 내구화 — emit_ui_component payload 를 런에 보관(resume 생존), 메시지
+    # 투영 시 drain 한다(#a2ui-durable).
+    pending_ui: Mapped[list[object]] = mapped_column(
+        postgresql.JSONB,
+        nullable=False,
+        server_default=jsonb_empty_array,
+    )
+    pending_judgment_snapshot: Mapped[dict[str, object] | None] = mapped_column(
+        postgresql.JSONB
+    )
+    # 분석 시작 시점의 입력 지문(asset_id/address_id) — resume 시 RunContext 로 복원해
+    # verdict 영속을 분석-입력 기준 조건부로 유지한다(#analysis-input-fingerprint).
+    analysis_inputs: Mapped[dict[str, object] | None] = mapped_column(postgresql.JSONB)
+    started_at: Mapped[datetime | None] = mapped_column(
+        postgresql.TIMESTAMP(timezone=True)
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        postgresql.TIMESTAMP(timezone=True)
+    )
+
+
 sa.Index(None, Session.user_id, Session.created_at.desc())
 sa.Index(None, Session.status, Session.last_activity_at)
 sa.Index(None, Session.address_id)
@@ -492,7 +577,12 @@ sa.Index(
 )
 
 sa.Index(None, SessionAddress.user_id, SessionAddress.created_at.desc())
-sa.Index(None, SessionAddress.apartment_name, SessionAddress.building_dong, SessionAddress.size_type)
+sa.Index(
+    None,
+    SessionAddress.apartment_name,
+    SessionAddress.building_dong,
+    SessionAddress.size_type,
+)
 sa.Index(None, SessionAddress.session_id)
 
 sa.Index(None, Floorplan.apartment_name, Floorplan.building_dong, Floorplan.size_type)
@@ -543,3 +633,14 @@ sa.Index(None, ChatToolCall.tool_name, ChatToolCall.started_at.desc())
 sa.Index(None, ChatToolCall.status, ChatToolCall.started_at.desc())
 sa.Index(None, ChatToolCall.parent_tool_call_id)
 sa.Index(None, ChatToolCall.user_id)
+
+sa.Index(None, AgentRun.session_id, AgentRun.created_at.desc())
+sa.Index(None, AgentRun.status, AgentRun.started_at.desc())
+sa.Index(
+    "uq_agent_runs_one_active_per_session",
+    AgentRun.session_id,
+    unique=True,
+    postgresql_where=AgentRun.status.in_(
+        ["pending", "running", "awaiting_input", "interrupted"]
+    ),
+)

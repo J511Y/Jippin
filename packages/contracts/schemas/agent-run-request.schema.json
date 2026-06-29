@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jippin.local/contracts/agent-run-request.schema.json",
+  "title": "AgentRunRequest",
+  "description": "에이전트 세션 런 시작 요청 body. `POST /sessions/{session_id}/agent/runs` 정본. 클라이언트는 role='user' message 만 보낼 수 있고, assistant/tool message 는 런타임만 생성한다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "message"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "const": "1.0.0",
+      "description": "스키마 버전 (semver). 본 시점 고정값."
+    },
+    "message": {
+      "$ref": "#/$defs/UserMessage",
+      "description": "이번 턴의 사용자 입력 메시지."
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "런타임/관측용 부가 정보. 신뢰할 수 없는 입력이므로 service-controlled 필드로 승격하지 않는다."
+    }
+  },
+  "$defs": {
+    "UserMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "content"],
+      "properties": {
+        "role": {
+          "type": "string",
+          "const": "user",
+          "description": "공개 endpoint 에서 클라이언트가 만들 수 있는 유일한 role."
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000,
+          "description": "사용자 발화 본문. 요청 메모리/DB row/LLM 호출 비대화를 막기 위해 최대 8000자."
+        }
+      }
+    }
+  }
+}

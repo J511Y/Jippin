@@ -95,6 +95,10 @@ paths = [
   '''\.env\.example''',
   '''infra/compose/\.env\.example''',
 ]
+# 주: agent fail-safe config 테스트(apps/api/tests/test_config.py)의 더미 DB URL
+# 히스토리 거짓양성은 파일 전체를 면제하지 않고 `.gitleaksignore` 의 fingerprint 2개
+# (특정 commit:file:rule:line)로만 좁게 무시한다 — 그 파일에 실제 시크릿이 새로
+# 들어오면 여전히 잡히도록.
 
 # 가짜/예시 토큰 (런북·문서 안의 placeholder)
 regexes = [

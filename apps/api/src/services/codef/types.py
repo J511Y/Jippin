@@ -93,8 +93,12 @@ class CodefInvalidInput(CodefError):
 class CodefNeedsUserInput(CodefError):
     """2-way 자동매칭 실패 → 사용자 추가 입력 필요.
 
-    ``kind`` 가 "dong_ho" 면 동·호 선택, "secure_no" 면 보안문자 입력이 필요하다.
+    ``kind`` 가 "dong_ho" 면 주소·동·호 선택, "secure_no" 면 보안문자 입력이 필요하다.
     ``resume_token`` 으로 1차 결과를 복원해 2차를 이어 호출한다(``resume_*``).
+
+    ``field``/``options`` 는 dong_ho 일 때 **사용자에게 보여줄 후보 목록**이다(주소/동/호 중
+    하나). CODEF 가 돌려준 후보를 그대로 버리지 않고 프론트가 드롭다운으로 제시하게 한다.
+    ``options`` 원소는 contract NeedsInputOption shape: ``{value, label, area?}``.
     """
 
     def __init__(
@@ -102,7 +106,12 @@ class CodefNeedsUserInput(CodefError):
         kind: Literal["dong_ho", "secure_no"],
         resume_token: str,
         message: str = "",
+        *,
+        field: Literal["address", "dong", "ho"] | None = None,
+        options: list[dict] | None = None,
     ):
         super().__init__(message)
         self.kind = kind
         self.resume_token = resume_token
+        self.field = field
+        self.options = options

@@ -26,6 +26,8 @@
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/s3-request-presigner": "^3.1063.0",
     "@hookform/resolvers": "^5.4.0",
+    "@json-render/core": "^0.19",
+    "@json-render/react": "^0.19",
     "@mantine/core": "^9.3.0",
     "@mantine/dates": "^9.3.0",
     "@mantine/form": "^9.3.0",

@@ -22,10 +22,16 @@ from .crypto import encrypt_password
 from .token import CodefTokenProvider
 from .transport import CodefEnvelope, CodefTransport
 from .two_way import (
+    FIELD_ORDER,
+    MAX_OPTIONS,
     ResumeStore,
+    candidate_value,
+    field_candidates,
+    field_options,
+    field_param_key,
     has_secure_no,
-    match_dong,
-    match_ho,
+    resolve_candidate,
+    select_message,
 )
 from .types import (
     BuildingHeadingResult,
@@ -42,6 +48,10 @@ _log = structlog.get_logger(__name__)
 
 _EXCLUSIVE_PATH = "/v1/kr/public/lt/eais/aggregate-buildings"
 _HEADING_PATH = "/v1/kr/public/lt/eais/building-ledger-heading"
+
+# CODEF 2-way 는 단계형일 수 있다(주소 선택 → 응답이 또 동 후보 → …). 같은 잡 안에서
+# 자동매칭으로 여러 단계를 이어갈 수 있게 루프를 돌되, 무한루프 방지 상한을 둔다.
+_MAX_TWO_WAY_ROUNDS = 6
 
 # result.code 기반 오류 분류는 error_codes.classify(정본 표) 를 1순위로 쓰고,
 # 미등록 코드만 메시지 substring 으로 보수적 보강한다.
@@ -285,100 +295,45 @@ class CodefBuildingRegisterClient:
         if envelope.is_success:
             return _parse_exclusive(envelope.data_dict())
 
-        # CF-03002 → 자동매칭 시도.
-        return await self._resolve_exclusive_two_way(
-            envelope, body, dong=query.dong, ho=query.ho
+        # CF-03002 → method 기반 자동매칭 루프.
+        data = await self._drive_two_way(
+            product="exclusive",
+            path=_EXCLUSIVE_PATH,
+            operation="exclusive_two_way",
+            first_body=body,
+            data=envelope.data_dict(),
+            dong=query.dong,
+            ho=query.ho,
         )
-
-    async def _resolve_exclusive_two_way(
-        self,
-        envelope: CodefEnvelope,
-        first_body: dict[str, Any],
-        *,
-        dong: str,
-        ho: str,
-    ) -> ExclusivePartResult:
-        data = envelope.data_dict()
-        extra = data.get("extraInfo") or {}
-        two_way_info = _extract_two_way_info(data)
-        _log_two_way_shape("exclusive", extra)
-
-        if has_secure_no(extra):
-            token = await self._save_resume(
-                "exclusive", first_body, data, two_way_info, dong=dong, ho=ho
-            )
-            raise CodefNeedsUserInput("secure_no", token, "보안문자 입력이 필요합니다.")
-
-        addr_choice = _pick_single_address(extra)
-        dong_match = match_dong(extra.get("reqDongNumList") or [], dong)
-        ho_match = match_ho(extra.get("reqHoNumList") or [], ho)
-
-        if dong_match is None or ho_match is None or addr_choice is None:
-            token = await self._save_resume(
-                "exclusive", first_body, data, two_way_info, dong=dong, ho=ho
-            )
-            raise CodefNeedsUserInput("dong_ho", token, "동·호를 선택해 주세요.")
-
-        second_body = _build_exclusive_second_body(
-            first_body, addr_choice, dong_match, ho_match, two_way_info
-        )
-        envelope2 = await self._request_guarded(
-            _EXCLUSIVE_PATH,
-            second_body,
-            operation="exclusive_second",
-            timeout=self._two_way_timeout,
-        )
-        if not envelope2.is_success:
-            raise CodefNotFound(
-                "2차 조회 결과를 찾을 수 없습니다.", code=envelope2.code
-            )
-        return _parse_exclusive(envelope2.data_dict())
+        return _parse_exclusive(data)
 
     async def resume_exclusive_part(
         self,
         resume_token: str,
         *,
+        selection: str | None = None,
         dong: str | None = None,
         ho: str | None = None,
         secure_no: str | None = None,
     ) -> ExclusivePartResult:
         ctx = await self._resume.load(resume_token)
         first_body = self._rebuild_credentials(ctx["first_body"], product="exclusive")
-        extra = ctx["extra_info"]
-        two_way_info = ctx["two_way_info"]
         # 보안문자만 재개하는 경우 동·호가 안 올 수 있다 → 1차에 저장한 값으로 보강.
         dong = dong or ctx.get("dong") or ""
         ho = ho or ctx.get("ho") or ""
-
-        # 주소 후보가 복수면 동·호만으로는 건물을 특정할 수 없다 → 임의로 첫 후보를
-        # 고르면 다른 건물 리포트를 낼 위험이 있으므로 추정하지 않고 입력을 다시 요구한다.
-        addr_choice = _pick_single_address(extra)
-        dong_match = match_dong(extra.get("reqDongNumList") or [], dong)
-        ho_match = match_ho(extra.get("reqHoNumList") or [], ho)
-        if addr_choice is None or dong_match is None or ho_match is None:
-            raise CodefNeedsUserInput(
-                "dong_ho",
-                resume_token,
-                "동·호 또는 주소 후보가 모호해 자동 선택할 수 없습니다. 다시 확인해 주세요.",
-            )
-
-        second_body = _build_exclusive_second_body(
-            first_body, addr_choice, dong_match, ho_match, two_way_info
-        )
-        if secure_no:
-            second_body["secureNo"] = secure_no
-            refresh = extra.get("reqSecureNoRefresh")
-            if refresh:
-                second_body["secureNoRefresh"] = refresh
-        envelope = await self._request_guarded(
-            _EXCLUSIVE_PATH,
-            second_body,
+        data = await self._drive_two_way(
+            product="exclusive",
+            path=_EXCLUSIVE_PATH,
             operation="exclusive_resume",
-            timeout=self._two_way_timeout,
+            first_body=first_body,
+            data=_resume_data(ctx),
+            dong=dong,
+            ho=ho,
+            resolved=ctx.get("resolved") or {},
+            selections=_resume_selections(ctx, selection),
+            secure_no=secure_no,
         )
-        if not envelope.is_success:
-            raise CodefNotFound("2차 조회 결과를 찾을 수 없습니다.", code=envelope.code)
-        return _parse_exclusive(envelope.data_dict())
+        return _parse_exclusive(data)
 
     # ------------------------------------------------------------------
     # 표제부
@@ -403,87 +358,154 @@ class CodefBuildingRegisterClient:
         if envelope.is_success:
             return _parse_heading(envelope.data_dict())
 
-        return await self._resolve_heading_two_way(envelope, body, dong=query.dong)
+        data = await self._drive_two_way(
+            product="heading",
+            path=_HEADING_PATH,
+            operation="heading_two_way",
+            first_body=body,
+            data=envelope.data_dict(),
+            dong=query.dong,
+            ho="",
+        )
+        return _parse_heading(data)
 
-    async def _resolve_heading_two_way(
+    # 참고: 표제부는 best-effort 라 home-check 오케스트레이터가 2-way 추가입력을 caution 으로
+    # 흡수한다(사용자 재질문 안 함). 따라서 heading 전용 resume 진입점은 두지 않는다 —
+    # 재개는 전유부(resume_exclusive_part)에서만 일어난다.
+
+    # ------------------------------------------------------------------
+    # 2-way 자동매칭 루프 (전유부/표제부 공용) — method/후보 기반 (ADR-0008 §2.2).
+    #
+    # CODEF 는 1차 CF-03002 에서 **그때 필요한 축만**(주소/동/호 중 일부) 후보로 돌려준다.
+    # (실측: 동 없는 집합건물은 reqHoNumList 만, method="hoNum".) 따라서 세 축을 한꺼번에
+    # 요구하지 않고 **응답에 실제로 존재하는 축만** 자동확정한다. 단일후보는 자동선택,
+    # 동·호는 사용자 입력으로 유일매칭, 확정 불가면 후보를 실어 needs_input 으로 폴백한다.
+    # 2차 응답이 또 CF-03002(단계형)면 다음 축으로 루프를 이어간다.
+    # ------------------------------------------------------------------
+    async def _drive_two_way(
         self,
-        envelope: CodefEnvelope,
-        first_body: dict[str, Any],
         *,
+        product: str,
+        path: str,
+        operation: str,
+        first_body: dict[str, Any],
+        data: dict[str, Any],
         dong: str,
-    ) -> BuildingHeadingResult:
-        data = envelope.data_dict()
+        ho: str,
+        resolved: dict[str, Any] | None = None,
+        selections: dict[str, str] | None = None,
+        secure_no: str | None = None,
+    ) -> dict[str, Any]:
         extra = data.get("extraInfo") or {}
         two_way_info = _extract_two_way_info(data)
-        _log_two_way_shape("heading", extra)
+        resolved = dict(resolved or {})
+        selections = dict(selections or {})
 
-        if has_secure_no(extra):
-            token = await self._save_resume(
-                "heading", first_body, data, two_way_info, dong=dong, ho=""
+        for _ in range(_MAX_TWO_WAY_ROUNDS):
+            present = [f for f in FIELD_ORDER if field_candidates(extra, f)]
+            secure_needed = has_secure_no(extra)
+            _log_two_way_step(product, extra, present, secure_needed=secure_needed)
+
+            if secure_needed and not secure_no:
+                token = await self._save_resume(
+                    product, first_body, extra, two_way_info, resolved, dong=dong, ho=ho
+                )
+                raise CodefNeedsUserInput(
+                    "secure_no", token, "보안문자를 입력해 주세요."
+                )
+
+            if not present and not secure_needed:
+                # 2-way 인데 처리할 후보 축도 보안문자도 없다 → 분류 불가.
+                _log.warning("codef.two_way_unresolvable", product=product)
+                raise CodefUpstreamError("추가인증 응답을 해석할 수 없습니다.")
+
+            # acc = 지금까지 확정된 후보 축 파라미터(이전 라운드/재개 선택 포함). 같은 응답에
+            # 여러 축이 모호할 때, 앞 축을 확정한 뒤 뒤 축에서 needs_input 이 나도 앞 선택을
+            # 잃지 않도록 acc 를 저장한다(저장 후 재개하면 이미 확정된 축은 다시 묻지 않음).
+            acc: dict[str, Any] = dict(resolved)
+            for field in present:
+                key = field_param_key(field)
+                if key in acc:
+                    continue  # 이전 라운드/재개에서 이미 확정 — 다시 매칭/질문하지 않는다.
+                candidates = field_candidates(extra, field)
+                chosen = resolve_candidate(
+                    field,
+                    candidates,
+                    dong=dong,
+                    ho=ho,
+                    selected_value=selections.get(field),
+                )
+                if chosen is None:
+                    token = await self._save_resume(
+                        product,
+                        first_body,
+                        extra,
+                        two_way_info,
+                        acc,  # 이번 라운드에서 앞서 확정한 축까지 보존.
+                        pending_field=field,
+                        dong=dong,
+                        ho=ho,
+                    )
+                    options = field_options(candidates, field)
+                    if len(candidates) > MAX_OPTIONS:
+                        _log.warning(
+                            "codef.two_way_options_truncated",
+                            product=product,
+                            field=field,
+                            total=len(candidates),
+                            kept=len(options),
+                        )
+                    _log.info(
+                        "codef.two_way_needs_input",
+                        product=product,
+                        field=field,
+                        candidate_count=len(candidates),
+                    )
+                    raise CodefNeedsUserInput(
+                        "dong_ho",
+                        token,
+                        select_message(field),
+                        field=field,  # type: ignore[arg-type]
+                        options=options,
+                    )
+                acc[key] = candidate_value(field, chosen)
+
+            resolved = acc  # 다음 (단계형) 라운드로 누적.
+            selections = {}
+
+            round_params = dict(acc)
+            if secure_needed:
+                round_params["secureNo"] = (
+                    secure_no  # 일회성 — resolved 엔 넣지 않는다.
+                )
+                refresh = extra.get("reqSecureNoRefresh")
+                if refresh:
+                    round_params["secureNoRefresh"] = refresh
+                secure_no = None
+
+            body = {
+                **first_body,
+                **round_params,
+                "is2Way": True,
+                "twoWayInfo": two_way_info,
+            }
+            envelope = await self._request_guarded(
+                path, body, operation=operation, timeout=self._two_way_timeout
             )
-            raise CodefNeedsUserInput("secure_no", token, "보안문자 입력이 필요합니다.")
+            if envelope.is_success:
+                return envelope.data_dict()
+            if not envelope.is_two_way:
+                raise CodefNotFound(
+                    "2차 조회 결과를 찾을 수 없습니다.", code=envelope.code
+                )
+            # 단계형 — 다음 라운드의 후보/세션으로 갱신.
+            data = envelope.data_dict()
+            extra = data.get("extraInfo") or {}
+            two_way_info = _extract_two_way_info(data)
 
-        addr_choice = _pick_single_address(extra)
-        dong_match = match_dong(extra.get("reqDongNumList") or [], dong)
-        if dong_match is None or addr_choice is None:
-            token = await self._save_resume(
-                "heading", first_body, data, two_way_info, dong=dong, ho=""
-            )
-            raise CodefNeedsUserInput("dong_ho", token, "동을 선택해 주세요.")
-
-        second_body = _build_heading_second_body(
-            first_body, addr_choice, dong_match, two_way_info
+        raise CodefUpstreamError(
+            "추가인증 단계가 예상보다 많습니다. 잠시 후 다시 시도해 주세요."
         )
-        envelope2 = await self._request_guarded(
-            _HEADING_PATH,
-            second_body,
-            operation="heading_second",
-            timeout=self._two_way_timeout,
-        )
-        if not envelope2.is_success:
-            raise CodefNotFound(
-                "2차 조회 결과를 찾을 수 없습니다.", code=envelope2.code
-            )
-        return _parse_heading(envelope2.data_dict())
-
-    async def resume_building_heading(
-        self,
-        resume_token: str,
-        *,
-        dong: str | None = None,
-        secure_no: str | None = None,
-    ) -> BuildingHeadingResult:
-        ctx = await self._resume.load(resume_token)
-        first_body = self._rebuild_credentials(ctx["first_body"], product="heading")
-        extra = ctx["extra_info"]
-        two_way_info = ctx["two_way_info"]
-        # 보안문자만 재개하는 경우 동이 안 올 수 있다 → 1차에 저장한 값으로 보강.
-        dong = dong or ctx.get("dong") or ""
-
-        # 주소 후보가 복수면 임의로 첫 후보를 고르지 않는다(다른 건물 리포트 방지).
-        addr_choice = _pick_single_address(extra)
-        dong_match = match_dong(extra.get("reqDongNumList") or [], dong)
-        if addr_choice is None or dong_match is None:
-            raise CodefNeedsUserInput(
-                "dong_ho",
-                resume_token,
-                "동 또는 주소 후보가 모호해 자동 선택할 수 없습니다. 다시 확인해 주세요.",
-            )
-
-        second_body = _build_heading_second_body(
-            first_body, addr_choice, dong_match, two_way_info
-        )
-        if secure_no:
-            second_body["secureNo"] = secure_no
-        envelope = await self._request_guarded(
-            _HEADING_PATH,
-            second_body,
-            operation="heading_resume",
-            timeout=self._two_way_timeout,
-        )
-        if not envelope.is_success:
-            raise CodefNotFound("2차 조회 결과를 찾을 수 없습니다.", code=envelope.code)
-        return _parse_heading(envelope.data_dict())
 
     # ------------------------------------------------------------------
     # resume 토큰 저장/복원 — 평문 password 는 저장하지 않는다.
@@ -492,9 +514,11 @@ class CodefBuildingRegisterClient:
         self,
         product: str,
         first_body: dict[str, Any],
-        data: dict[str, Any],
+        extra: dict[str, Any],
         two_way_info: dict[str, Any],
+        resolved: dict[str, Any],
         *,
+        pending_field: str | None = None,
         dong: str = "",
         ho: str = "",
     ) -> str:
@@ -504,14 +528,16 @@ class CodefBuildingRegisterClient:
             for k, v in first_body.items()
             if k not in ("password", "userPassword", "id", "userId")
         }
+        # 1차에 입력한 동·호는 first_body 가 아니라 별도 보존(보안문자 재개 시 재매칭용).
         payload = {
             "product": product,
             "first_body": sanitized,
-            "extra_info": data.get("extraInfo") or {},
+            "extra_info": extra,
             "two_way_info": two_way_info,
-            # 사용자가 1차에 입력한 동·호를 보존한다 — 보안문자(secure_no) 재개 시
-            # 프론트가 동·호를 다시 안 보내도 서버가 매칭할 수 있게(PII 아님).
-            "dong": dong,
+            "resolved": resolved,
+            # 사용자에게 물은 축 — resume 의 selection 이 이 축에 적용된다.
+            "pending_field": pending_field,
+            "dong": dong or sanitized.get("dong") or "",
             "ho": ho,
         }
         return await self._resume.save(payload)
@@ -530,27 +556,30 @@ class CodefBuildingRegisterClient:
 # ---------------------------------------------------------------------------
 # 2-way body 빌더 / 후보 선택 헬퍼
 # ---------------------------------------------------------------------------
-def _log_two_way_shape(product: str, extra: dict[str, Any]) -> None:
-    """2-way 후보 구조를 비-PII 로 남긴다 — dev 스모크에서 보안문자 발생·후보 형태 확인용."""
+def _log_two_way_step(
+    product: str,
+    extra: dict[str, Any],
+    present: list[str],
+    *,
+    secure_needed: bool,
+) -> None:
+    """2-way 한 라운드의 후보 구조를 비-PII 로 남긴다.
+
+    어느 축(주소/동/호)이 후보로 왔는지·개수·보안문자 발생을 기록한다 — 운영에서
+    needs_input 이 왜 떴는지(축/개수)를 추적할 수 있게 한다. 동·호 **값**은 PII 소지라
+    남기지 않고 개수만 남긴다.
+    """
 
     _log.info(
-        "codef.two_way",
+        "codef.two_way_step",
         product=product,
-        has_secure_no=has_secure_no(extra),
+        present_fields=present,
+        secure_no=secure_needed,
         addr_candidates=len(extra.get("reqAddrList") or []),
         dong_candidates=len(extra.get("reqDongNumList") or []),
         ho_candidates=len(extra.get("reqHoNumList") or []),
-        secure_no_refresh=extra.get("reqSecureNoRefresh"),
+        secure_no_refresh=bool(extra.get("reqSecureNoRefresh")),
     )
-
-
-def _pick_single_address(extra: dict[str, Any]) -> dict[str, Any] | None:
-    """reqAddrList 가 단일이면 그 주소를, 복수면 자동선택 불가로 None."""
-
-    addr_list = extra.get("reqAddrList") or []
-    if len(addr_list) == 1 and isinstance(addr_list[0], dict):
-        return addr_list[0]
-    return None
 
 
 def _extract_two_way_info(data: dict[str, Any]) -> dict[str, Any]:
@@ -562,46 +591,20 @@ def _extract_two_way_info(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _req_address(addr_choice: dict[str, Any]) -> str:
-    return str(
-        addr_choice.get("commAddrLotNumber")
-        or addr_choice.get("commAddrRoadName")
-        or ""
-    )
+def _resume_data(ctx: dict[str, Any]) -> dict[str, Any]:
+    """resume ctx(저장된 1차 컨텍스트) → _drive_two_way 가 받는 data dict 로 복원한다."""
+
+    two_way_info = ctx.get("two_way_info") or {}
+    return {"extraInfo": ctx.get("extra_info") or {}, **two_way_info}
 
 
-def _build_exclusive_second_body(
-    first_body: dict[str, Any],
-    addr_choice: dict[str, Any],
-    dong_match: dict[str, Any],
-    ho_match: dict[str, Any],
-    two_way_info: dict[str, Any],
-) -> dict[str, Any]:
-    body = dict(first_body)
-    body["reqAddress"] = _req_address(addr_choice)
-    body["dongNum"] = str(
-        dong_match.get("commDongNum") or dong_match.get("reqDong") or ""
-    )
-    body["hoNum"] = str(ho_match.get("commHoNum") or ho_match.get("reqHo") or "")
-    body["is2Way"] = True
-    body["twoWayInfo"] = two_way_info
-    return body
+def _resume_selections(ctx: dict[str, Any], selection: str | None) -> dict[str, str]:
+    """사용자가 고른 selection 을 1차에 물었던 축(pending_field)에 매핑한다."""
 
-
-def _build_heading_second_body(
-    first_body: dict[str, Any],
-    addr_choice: dict[str, Any],
-    dong_match: dict[str, Any],
-    two_way_info: dict[str, Any],
-) -> dict[str, Any]:
-    body = dict(first_body)
-    body["reqAddress"] = _req_address(addr_choice)
-    body["dongNum"] = str(
-        dong_match.get("commDongNum") or dong_match.get("reqDong") or ""
-    )
-    body["is2Way"] = True
-    body["twoWayInfo"] = two_way_info
-    return body
+    field = ctx.get("pending_field")
+    if selection and field:
+        return {field: selection}
+    return {}
 
 
 # ---------------------------------------------------------------------------
