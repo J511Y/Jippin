@@ -36,7 +36,7 @@ export default function NotFound() {
           </Button>
           <Button
             component="a"
-            href="/sessions/new"
+            href="/sessions"
             variant="subtle"
             color="jippin"
             size="sm"

@@ -168,7 +168,7 @@ export default function HomePage() {
               <Group gap="sm" mt="xs" data-reveal>
                 <Button
                   component="a"
-                  href="/sessions/new"
+                  href="/sessions"
                   size="lg"
                   color="jippin"
                   radius="md"

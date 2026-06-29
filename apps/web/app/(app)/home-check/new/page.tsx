@@ -5,8 +5,10 @@ import { HomeCheckNewForm } from '@/components/home-check/HomeCheckNewForm';
 
 export const metadata: Metadata = {
   title: '내 집 체크 시작',
-  // 조회 결과 페이지(잡 단위)는 색인 대상이 아니며, 시작 폼은 색인 무방하나 canonical 만 둔다.
-  alternates: { canonical: '/home-check/new' }
+  // 시작 폼은 랜딩(`/home-check`)과 주제가 같은 thin/중복 콘텐츠라 색인하지 않고
+  // canonical 을 랜딩으로 통합한다. follow 는 살려 내부 크롤 경로는 유지.
+  robots: { index: false, follow: true },
+  alternates: { canonical: '/home-check' }
 };
 
 export default function HomeCheckNewPage() {

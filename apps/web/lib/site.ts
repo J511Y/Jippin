@@ -156,3 +156,188 @@ export function buildHomeJsonLd() {
     ]
   };
 }
+
+/**
+ * `/home-check`(우리집 체크) 랜딩 JSON-LD.
+ *
+ * 운영에 새로 열린 기능이라 홈 `@graph` 에는 없는 별도 서비스(위반건축물 셀프 진단)다.
+ * WebPage + Service + BreadcrumbList 로 LLM(GEO)·검색이 "우리집 체크"를 집핀의 독립
+ * 서비스로 인식하게 한다. 지원/미지원 대상(집합건물 vs 단독·다가구)을 description 에
+ * 명시해 "오피스텔도 되나요?" 같은 질의에 정확히 답하도록 한다.
+ */
+export function buildHomeCheckJsonLd() {
+  const orgId = `${SITE_URL}/#organization`;
+  const pageUrl = absoluteUrl('/home-check');
+  return {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'WebPage',
+        '@id': `${pageUrl}#webpage`,
+        url: pageUrl,
+        name: '우리집 체크 — 위반건축물 셀프 진단',
+        inLanguage: 'ko-KR',
+        isPartOf: { '@id': `${SITE_URL}/#website` },
+        about: { '@id': `${pageUrl}#service` }
+      },
+      {
+        '@type': 'Service',
+        '@id': `${pageUrl}#service`,
+        name: '우리집 체크 (건축물대장 위반건축물 셀프 진단)',
+        serviceType: '건축물대장 전유부·표제부 조회 기반 위반건축물 확인',
+        provider: { '@id': orgId },
+        areaServed: { '@type': 'Country', name: '대한민국' },
+        description:
+          '아파트·연립·다세대(빌라)·오피스텔·도시형 생활주택 등 집합건물 세대의 건축물대장(전유부·표제부)을 조회해 위반건축물(노란딱지) 표시 여부와 확장·변경 등재 여부를 로그인 없이 셀프로 확인합니다. 단독주택·다가구주택·상가 단독건물은 일반건축물대장 소관이라 현재 미지원입니다.',
+        offers: {
+          '@type': 'Offer',
+          price: '0',
+          priceCurrency: 'KRW',
+          description: '우리집 체크 무료 — 로그인 없이 건축물대장 셀프 조회'
+        }
+      },
+      {
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: '홈', item: SITE_URL },
+          { '@type': 'ListItem', position: 2, name: '우리집 체크', item: pageUrl }
+        ]
+      }
+    ]
+  };
+}
+
+/**
+ * `/prices`(가격) JSON-LD. 가격은 전형적 LLM 질의("베란다 확장 비용", "사전검토
+ * 무료냐")라 OfferCatalog 로 단계별 제공물을 구조화한다. 정가가 없는 "문의" 단계는
+ * 허위 가격 schema 를 넣지 않고 description 으로만 표기한다(price 미기재).
+ */
+export function buildPricesJsonLd() {
+  const orgId = `${SITE_URL}/#organization`;
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'Service',
+    '@id': `${absoluteUrl('/prices')}#pricing`,
+    name: '집핀 서비스 — AI 사전검토·행위허가 대행 가격',
+    provider: { '@id': orgId },
+    areaServed: { '@type': 'Country', name: '대한민국' },
+    hasOfferCatalog: {
+      '@type': 'OfferCatalog',
+      name: '집핀 서비스 가격',
+      itemListElement: [
+        {
+          '@type': 'Offer',
+          name: 'AI 사전검토',
+          price: '0',
+          priceCurrency: 'KRW',
+          description: '도면과 주소만으로 받는 무료 AI 행위허가 가능성 사전검토. 로그인 없이 즉시 시작.'
+        },
+        {
+          '@type': 'Offer',
+          name: '전문가 단건 상담',
+          priceCurrency: 'KRW',
+          description: '담당 전문가가 진행하는 1:1 맞춤 도면 검토·현장 리스크 피드백(가격 문의).'
+        },
+        {
+          '@type': 'Offer',
+          name: '행위허가 대행',
+          priceCurrency: 'KRW',
+          description: '입주민 동의서 징구부터 행위허가 신청·승인까지 전 과정 대행(가격 문의).'
+        }
+      ]
+    }
+  };
+}
+
+/**
+ * 사전검토 4단계(도면 업로드 → 인식 → 판별 → 리포트). 랜딩의 HowTo JSON-LD 와 화면
+ * 카피를 한 소스로 유지하기 위한 SSOT(홈 `STEPS` 와 문구 일치).
+ */
+export const PRECHECK_STEPS: { name: string; text: string }[] = [
+  {
+    name: '도면·주소 업로드',
+    text: '평면도 한 장과 주소만 입력하면 끝. 로그인 없이 약 1분이면 됩니다.'
+  },
+  {
+    name: '도면 자동 인식',
+    text: 'AI 가 평면도에서 벽체·개구부·치수를 인식해 구조를 읽어냅니다.'
+  },
+  {
+    name: '구조 판별 · 위험 진단',
+    text: '내력벽·비내력벽을 판별하고, 행위허가 필요 여부와 주의 구간을 진단합니다.'
+  },
+  {
+    name: '사전검토 리포트',
+    text: '철거·확장 가능성을 신호등 리포트로 즉시 확인하고, 바로 상담으로 이어갈 수 있습니다.'
+  }
+];
+
+/**
+ * `/sessions/landing`(사전검토 안내) JSON-LD.
+ *
+ * 인터랙티브 세션(`/sessions/*`)은 noindex 라 GEO 가치가 없으므로, 색인 가능한 서버렌더
+ * 랜딩이 사전검토의 사실(무료·1분·로그인 불필요·내력/비내력 판별·행위허가)을 LLM·검색에
+ * 노출하는 단일 인입면이 된다. WebPage + Service + HowTo + FAQPage + BreadcrumbList.
+ */
+export function buildSessionsLandingJsonLd() {
+  const orgId = `${SITE_URL}/#organization`;
+  const pageUrl = absoluteUrl('/sessions/landing');
+  return {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'WebPage',
+        '@id': `${pageUrl}#webpage`,
+        url: pageUrl,
+        name: 'AI 사전검토 — 벽 철거·베란다 확장 가능 여부 1분 진단',
+        inLanguage: 'ko-KR',
+        isPartOf: { '@id': `${SITE_URL}/#website` },
+        about: { '@id': `${SITE_URL}/#service` }
+      },
+      {
+        '@type': 'Service',
+        '@id': `${pageUrl}#service`,
+        name: 'AI 사전검토 (벽 철거·확장 가능 여부 진단)',
+        serviceType: '평면도·주소 기반 행위허가 가능성 AI 사전검토',
+        provider: { '@id': orgId },
+        areaServed: { '@type': 'Country', name: '대한민국' },
+        description:
+          '평면도 한 장과 주소만으로 벽 철거·베란다(발코니) 확장 가능 여부, 내력벽·비내력벽 판별, 행위허가 필요 여부, 주의 구간을 약 1분 만에 진단합니다. 로그인 불필요, 무료.',
+        offers: {
+          '@type': 'Offer',
+          price: '0',
+          priceCurrency: 'KRW',
+          description: 'AI 사전검토 무료 — 로그인 없이 약 1분'
+        }
+      },
+      {
+        '@type': 'HowTo',
+        '@id': `${pageUrl}#howto`,
+        name: '도면 한 장으로 1분 AI 사전검토 받는 법',
+        totalTime: 'PT1M',
+        step: PRECHECK_STEPS.map((s, i) => ({
+          '@type': 'HowToStep',
+          position: i + 1,
+          name: s.name,
+          text: s.text
+        }))
+      },
+      {
+        '@type': 'FAQPage',
+        '@id': `${pageUrl}#faq`,
+        mainEntity: SITE_FAQ.map((f) => ({
+          '@type': 'Question',
+          name: f.question,
+          acceptedAnswer: { '@type': 'Answer', text: f.answer }
+        }))
+      },
+      {
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: '홈', item: SITE_URL },
+          { '@type': 'ListItem', position: 2, name: 'AI 사전검토', item: pageUrl }
+        ]
+      }
+    ]
+  };
+}
