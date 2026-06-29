@@ -51,13 +51,6 @@ _WALL_TYPE_META: dict[str, dict[str, str]] = {
     },
 }
 
-# 그룹 요약용 한 줄 판단(같은 종류 벽을 묶어 한 번만 보여줄 때).
-_WALL_TYPE_SHORT: dict[str, str] = {
-    "NON_LOAD_BEARING": "공간을 나누는 가벽으로 보여 철거 검토 대상이에요.",
-    "LOAD_BEARING": "건물 하중을 지지하는 벽으로 보여 철거할 수 없어요.",
-    "UNKNOWN": "도면만으로는 단정하기 어려워 전문가 정밀 검토가 필요해요.",
-}
-
 #: 내력벽 vs 비내력벽 차이 설명(리포트 도면 섹션 교육 박스). /faq?category=glossary 정본.
 #: 사용자는 도면에서 비내력벽 후보만 선택할 수 있어, 개별 반복 설명 대신 차이를 보여준다.
 WALL_EDU: list[dict[str, str]] = [
@@ -225,14 +218,6 @@ def wall_view(wall_type: str | None) -> dict[str, str]:
         wall_type if isinstance(wall_type, str) else "", _WALL_TYPE_META["UNKNOWN"]
     )
     return dict(meta)
-
-
-def wall_short(wall_type: str | None) -> str:
-    """wall_type → 그룹 요약용 한 줄 판단."""
-
-    return _WALL_TYPE_SHORT.get(
-        wall_type if isinstance(wall_type, str) else "", _WALL_TYPE_SHORT["UNKNOWN"]
-    )
 
 
 def facility_views(rule_eval_result: dict[str, Any]) -> list[dict[str, Any]]:

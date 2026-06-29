@@ -47,13 +47,24 @@ export default function SessionReportPage() {
   const [pdfError, setPdfError] = useState<string | null>(null);
 
   // PDF 리포트 발부 — 서버가 생성·보관한 PDF 의 단기 서명 URL 을 받아 새 탭으로 연다.
+  // 팝업 차단 회피: 생성(await)을 기다린 뒤 window.open 을 호출하면 사용자 제스처가
+  // 끊긴 것으로 보여 차단될 수 있다. 클릭 즉시 빈 탭을 먼저 열고 URL 도착 후 이동한다.
   const handleIssuePdf = async () => {
     setPdfLoading(true);
     setPdfError(null);
+    const pdfTab = window.open('about:blank', '_blank');
     try {
       const { url } = await issueSessionReportPdf(sessionId);
-      window.open(url, '_blank', 'noopener,noreferrer');
+      if (pdfTab) {
+        // 역-탭내빙 방지: opener 끊고 신뢰된 서명 URL 로 이동.
+        pdfTab.opener = null;
+        pdfTab.location.href = url;
+      } else {
+        // 빈 탭이 막혔으면(차단/모바일) 현재 탭에서 연다.
+        window.location.href = url;
+      }
     } catch (err) {
+      pdfTab?.close();
       setPdfError(parseApiError(err).message);
     } finally {
       setPdfLoading(false);

@@ -131,33 +131,6 @@ def _address_line(address: dict[str, Any] | None) -> str | None:
     return line or None
 
 
-def _wall_groups(judgment_schema: dict[str, Any]) -> list[dict[str, Any]]:
-    """selected_walls → 종류별로 묶은 요약. 사용자는 비내력벽만 선택할 수 있어
-    벽마다 같은 문단을 반복하지 않고, 같은 종류는 번호만 모아 한 줄로 보여준다."""
-
-    entries = report_overlay.selected_wall_entries(judgment_schema)
-    order: list[str] = []
-    numbers: dict[str, list[str]] = {}
-    for e in entries:
-        wt = e.get("wall_type") or "UNKNOWN"
-        if wt not in numbers:
-            numbers[wt] = []
-            order.append(wt)
-        numbers[wt].append(report_overlay.circled(e["index"]))
-    groups: list[dict[str, Any]] = []
-    for wt in order:
-        view = report_content.wall_view(wt)
-        groups.append(
-            {
-                "numbers": numbers[wt],
-                "label": view["label"],
-                "tone": view["tone"],
-                "short": report_content.wall_short(wt),
-            }
-        )
-    return groups
-
-
 def _report_id(session_id: uuid.UUID) -> str:
     return "JP-" + session_id.hex[:6].upper()
 
@@ -187,7 +160,6 @@ def _build_context(
             "address_line": _address_line(address),
             "verdict": report_content.verdict_view(rule_eval_result),
             "overlay": overlay,
-            "wall_groups": _wall_groups(judgment_schema),
             "wall_edu": report_content.WALL_EDU,
             "wall_caveat": report_content.WALL_CAVEAT,
             "facilities": facilities,

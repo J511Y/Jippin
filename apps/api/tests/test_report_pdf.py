@@ -6,11 +6,13 @@ HTML 렌더(Jinja2)까지는 검증한다. 실제 PDF 바이트 생성은 라이
 
 from __future__ import annotations
 
+import base64
 import io
 import uuid
 from datetime import datetime, timezone
 
 import pytest
+from PIL import Image
 
 from src.services import report_content, report_overlay, report_pdf
 
@@ -140,8 +142,6 @@ def test_build_overlay_degrades_without_image() -> None:
 
 
 def _png(width: int = 400, height: int = 300) -> bytes:
-    from PIL import Image
-
     buf = io.BytesIO()
     Image.new("RGB", (width, height), "white").save(buf, "PNG")
     return buf.getvalue()
@@ -178,6 +178,26 @@ def test_build_overlay_renders_svg_with_image_and_badges() -> None:
     assert "polyline" in svg
     # 선택 벽 번호 배지(①=1) 가 텍스트로 들어간다.
     assert ">1</text>" in svg
+
+
+def test_build_overlay_downsamples_large_image() -> None:
+    # 큰 도면은 임베드용 래스터만 축소(viewBox·좌표는 원본 px 유지).
+    ov = report_overlay.build_overlay(
+        image_bytes=_png(3000, 2200),
+        content_type="image/png",
+        judgment_schema={"selected_walls": [], "wall_objects": []},
+        entries=[],
+    )
+    assert ov["available"] is True
+    svg = ov["svg"]
+    assert 'viewBox="0 0 3000 2200"' in svg  # 좌표 정합 — 원본 크기 유지
+    assert 'width="3000" height="2200"' in svg
+    # 임베드된 PNG 를 디코드해 실제로 ≤1600px 로 줄었는지 확인.
+    marker = "data:image/png;base64,"
+    start = svg.index(marker) + len(marker)
+    end = svg.index('"', start)
+    embedded = Image.open(io.BytesIO(base64.b64decode(svg[start:end])))
+    assert max(embedded.size) <= 1600
 
 
 def test_build_overlay_handles_corrupt_image() -> None:
@@ -280,9 +300,7 @@ def test_build_context_shape() -> None:
     assert ctx["report_id"] == "JP-2A4F1C"
     assert ctx["generated_at_kr"] == "2026년 6월 29일"
     assert ctx["verdict"]["label"] == "조건부 가능"
-    # 벽체는 종류별로 묶인다 — 한 비내력벽 선택 → 그룹 1개, 번호 ①.
-    assert ctx["wall_groups"][0]["numbers"] == ["①"]
-    assert ctx["wall_groups"][0]["tone"] == "success"
+    # 벽체 판단은 개별 반복 대신 내력벽/비내력벽 교육 박스로 보여준다.
     assert ctx["wall_edu"] == report_content.WALL_EDU
     assert ctx["wall_caveat"] == report_content.WALL_CAVEAT
     assert [f["code"] for f in ctx["facilities"]] == ["FIRE_PANEL", "FIRE_DETECTOR"]

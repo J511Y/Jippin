@@ -112,6 +112,9 @@ def build_overlay(
             "unavailable_reason": "분석에 사용한 도면 이미지를 불러오지 못했어요.",
         }
 
+    # 임베드 래스터 최대 변(px). 원본은 50MiB 까지 허용되므로, 좌표·viewBox 는 원본 px
+    # 공간 그대로 두고 base64 로 박는 래스터만 축소해 메모리·PDF 크기 폭증을 막는다.
+    max_embed_dim = 1600
     try:
         from PIL import (
             Image,
@@ -119,7 +122,23 @@ def build_overlay(
 
         with Image.open(BytesIO(image_bytes)) as img:
             width, height = img.size
-            mime = Image.MIME.get(img.format or "", content_type or "image/png")
+            if max(width, height) > max_embed_dim:
+                # 임베드용으로만 축소(좌표는 원본 px → <image> 가 같은 박스로 늘려 정합).
+                img.thumbnail((max_embed_dim, max_embed_dim))
+                save_img = (
+                    img
+                    if img.mode in ("RGB", "RGBA", "L", "LA", "P")
+                    else img.convert("RGB")
+                )
+                buf = BytesIO()
+                save_img.save(buf, format="PNG", optimize=True)
+                embed_bytes = buf.getvalue()
+                embed_mime = "image/png"
+            else:
+                embed_bytes = image_bytes
+                embed_mime = Image.MIME.get(
+                    img.format or "", content_type or "image/png"
+                )
     except Exception:  # noqa: BLE001 — 손상/미지원 포맷이면 degrade.
         return {
             "available": False,
@@ -148,7 +167,9 @@ def build_overlay(
             max_v = max(max_v, x, y)
     scale_x, scale_y = (width, height) if 0 < max_v <= 1.5 else (1.0, 1.0)
 
-    data_uri = f"data:{mime};base64," + base64.b64encode(image_bytes).decode("ascii")
+    data_uri = f"data:{embed_mime};base64," + base64.b64encode(embed_bytes).decode(
+        "ascii"
+    )
 
     parts: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" '
