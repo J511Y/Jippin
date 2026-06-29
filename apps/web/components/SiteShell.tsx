@@ -33,8 +33,10 @@ type NavItem = {
 };
 
 // '상담'(/contacts) 메뉴는 제거됨 — 상담 현황은 마이페이지로 이동했다(CMP-DIRECT).
+// '사전검토'는 사이트 내 사용자를 곧장 채팅 진입(`/sessions`)으로 보낸다. 색인 가능한
+// 안내 페이지(`/sessions/landing`)는 외부 마케팅 인입 전용이라 내비에 노출하지 않는다.
 const NAV_ITEMS: NavItem[] = [
-  { href: '/sessions/new', label: '사전검토', match: (p) => p.startsWith('/sessions') },
+  { href: '/sessions', label: '사전검토', match: (p) => p.startsWith('/sessions') },
   { href: '/home-check', label: '우리집 체크', match: (p) => p.startsWith('/home-check') },
   { href: '/prices', label: '가격', match: (p) => p.startsWith('/prices') },
   { href: '/faq', label: '자주묻는질문', match: (p) => p.startsWith('/faq') }
@@ -47,14 +49,16 @@ const NAV_ITEMS: NavItem[] = [
 const WIDE_ROUTE_PREFIXES = ['/sessions', '/faq', '/mypage', '/home-check'];
 
 // 대화형 채팅 경로 — 헤더 아래 남는 viewport 를 풀높이로 쓰도록 컨테이너 세로 패딩을
-// 없애고 100dvh 기반 풀높이 레이아웃을 허용한다. /sessions, /sessions/new,
-// /sessions/[id] 가 모두 동일 폭(lg)·풀높이를 갖게 해 compose→대화 전환 시 폭/높이
-// 점프를 막는다. 단 리포트(/sessions/[id]/report)는 일반 문서 레이아웃을 유지한다.
+// 없애고 100dvh 기반 풀높이 레이아웃을 허용한다. 채팅 진입(/sessions)과 세션 상세
+// (/sessions/[id])가 동일 폭(lg)·풀높이를 갖게 해 compose→대화 전환 시 폭/높이 점프를
+// 막는다. 안내 랜딩(/sessions/landing)·리포트(/sessions/[id]/report)는 일반 문서 레이아웃.
 function isChatRoute(pathname: string): boolean {
-  // 채팅 화면은 /sessions/new 와 /sessions/[id] 뿐이다. 목록(/sessions)·리포트
-  // (/sessions/[id]/report)는 일반 문서 레이아웃(세로 패딩 + 비풀높이)을 유지한다.
-  if (pathname === '/sessions' || pathname === '/sessions/') return false;
+  // 공개 안내 랜딩은 일반 문서 레이아웃(스크롤 + 세로 패딩).
+  if (pathname === '/sessions/landing') return false;
+  // 채팅 진입(/sessions) 과 세션 상세(/sessions/[id]) 가 풀높이 채팅 화면이다.
+  if (pathname === '/sessions' || pathname === '/sessions/') return true;
   if (!pathname.startsWith('/sessions/')) return false;
+  // 리포트(/sessions/[id]/report)는 일반 문서 레이아웃을 유지한다.
   if (pathname.endsWith('/report')) return false;
   return true;
 }
@@ -246,8 +250,10 @@ export function SiteShell({ children }: { children: ReactNode }) {
       </AppShell.Header>
 
       <AppShell.Main>
-        {pathname === '/' || pathname === '/prices' ? (
-          // 랜딩(홈·가격)은 풀블리드 섹션을 직접 제어한다.
+        {pathname === '/' ||
+        pathname === '/prices' ||
+        pathname === '/sessions/landing' ? (
+          // 마케팅 랜딩(홈·가격·사전검토 랜딩)은 풀블리드 섹션을 직접 제어한다.
           children
         ) : isChatRoute(pathname) ? (
           // 대화형 채팅 — 헤더 아래 viewport 를 '정확히' 채우고(고정 높이 + overflow:hidden),

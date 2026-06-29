@@ -56,8 +56,9 @@ def compute_estimate(rule_eval_result: dict[str, Any] | None) -> dict[str, Any] 
     - 행위허가 대행(기본 패키지) 330,000원 — permit_required 일 때.
     - 입주민 동의서 대행 165,000원~ — 행위허가 동반(동 50% 동의) 시.
     - 방화판 시공 50,000원/m~ — 필요 방화시설에 방화판(FIRE_PANEL)이 있을 때(길이 미정).
-    - 방화유리(FIRE_GLASS)·방화문(AUTOMATIC_DOOR_CLOSER)·화재감지기(FIRE_DETECTOR)는
-      현장/별도 견적 안내 항목으로만(금액 미산정).
+    - 방화유리 시공 143,000원/m~ — 필요 방화시설에 방화유리(FIRE_GLASS)가 있을 때(길이 미정).
+    - 방화문(AUTOMATIC_DOOR_CLOSER)·화재감지기(FIRE_DETECTOR)는 현장/별도 견적
+      안내 항목으로만(금액 미산정).
     """
 
     if not isinstance(rule_eval_result, dict):
@@ -108,7 +109,9 @@ def compute_estimate(rule_eval_result: dict[str, Any] | None) -> dict[str, Any] 
             _item(
                 "FIRE_GLASS",
                 "방화유리 시공",
-                note="유리 자재·시공 조건에 따라 별도 견적으로 안내해 드려요",
+                unit_amount=143_000,
+                unit="원/m",
+                note="설치 길이에 따라 달라져요(현장 확인 후 산정)",
             )
         )
     if "AUTOMATIC_DOOR_CLOSER" in codes:

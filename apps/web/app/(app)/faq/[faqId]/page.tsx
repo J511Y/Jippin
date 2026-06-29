@@ -177,7 +177,7 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
             자세한 내용은 전문가 상담으로 이어가세요.
           </Text>
           <Group gap="sm">
-            <Button component="a" href="/sessions/new" radius="md">
+            <Button component="a" href="/sessions" radius="md">
               무료로 사전검토 시작
             </Button>
             <LeadCtaButton cta="faq_detail" variant="default" radius="md">

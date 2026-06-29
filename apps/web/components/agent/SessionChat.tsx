@@ -3,7 +3,7 @@
 /**
  * 세션 채팅 컨테이너 (CMP-DIRECT 채팅 UX 재설계).
  *
- * ChatGPT/Gemini 식 UX 의 정점. activeId 가 없으면(=/sessions/new) 중앙 인사말 + 단일
+ * ChatGPT/Gemini 식 UX 의 정점. activeId 가 없으면(=/sessions 진입) 중앙 인사말 + 단일
  * 입력창 + 예시 칩(compose)을 보여 주고, 첫 전송 시 익명 세션 보장 → createSession →
  * `history.replaceState` 로 URL 만 교체(리마운트 없음) → 대화 레이아웃으로 부드럽게 전환한다.
  * activeId 가 있으면 곧장 대화 레이아웃(Conversation)을 마운트한다.

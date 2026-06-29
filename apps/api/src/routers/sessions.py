@@ -18,10 +18,11 @@ from ..schemas.sessions import (
     SessionAddressInput,
     SessionAddressResponse,
     SessionCreateRequest,
+    SessionReportPdfResponse,
     SessionReportResponse,
     SessionResponse,
 )
-from ..services import estimate, main_flow
+from ..services import estimate, main_flow, report_pdf
 
 logger = get_logger("zippin.sessions")
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -125,3 +126,22 @@ async def get_session_report(
         # 예상 견적(REPORT-003) — 판정에서 파생, 견적 비대상이면 None.
         estimate=estimate.compute_estimate(rule_eval_result),
     )
+
+
+@router.post("/{session_id}/report/pdf", response_model=SessionReportPdfResponse)
+async def issue_session_report_pdf(
+    session_id: uuid.UUID = Path(...),
+    requester: RequestUser = Depends(require_supabase_request_user),
+) -> SessionReportPdfResponse:
+    """디자인된 PDF 리포트를 발부(생성·보관)하고 단기 서명 다운로드 URL 을 반환한다.
+
+    판정 정본(``sessions.rule_eval_result``)이 없으면 report_pdf 가 위임한
+    main_flow 가 404 REPORT_NOT_READY 를 던진다 — 가짜 판정을 만들지 않는다.
+    """
+
+    result = await report_pdf.generate_session_report_pdf(
+        session_id=session_id,
+        owner_user_id=requester.user_id,
+        owner_is_anonymous=requester.is_anonymous,
+    )
+    return SessionReportPdfResponse(**result)
