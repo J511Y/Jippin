@@ -16,7 +16,7 @@ import type { Metadata } from 'next';
 
 import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
 import { type LeadCtaId } from '@/lib/analytics/lead-cta';
-import { SITE_OG_IMAGE } from '@/lib/site';
+import { buildPricesJsonLd, safeJsonLd, SITE_OG_IMAGE } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: '가격 — AI 사전검토·행위허가 대행',
@@ -62,7 +62,7 @@ const PLANS: Plan[] = [
       '실시간 질의응답',
       '로그인 없이 즉시 시작'
     ],
-    cta: { href: '/sessions/new', label: '사전검토 시작', color: 'jippin', variant: 'default' }
+    cta: { href: '/sessions', label: '사전검토 시작', color: 'jippin', variant: 'default' }
   },
   {
     name: '전문가 단건 상담',
@@ -94,6 +94,11 @@ const PLANS: Plan[] = [
 export default function PricesPage() {
   return (
     <Box>
+      {/* JSON-LD: Service · OfferCatalog (가격 질의 SEO/GEO) */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(buildPricesJsonLd()) }}
+      />
       {/* ── 헤더 ─────────────────────────────────────────────── */}
       <Box
         style={{

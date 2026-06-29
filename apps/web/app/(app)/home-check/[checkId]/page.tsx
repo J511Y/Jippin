@@ -9,8 +9,9 @@ type HomeCheckResultPageProps = {
 
 export const metadata: Metadata = {
   title: '우리집 체크 결과',
-  // 잡 단위 결과는 개인 조회 결과라 색인하지 않는다.
-  robots: { index: false, follow: false }
+  // 잡 단위 결과는 개인 조회 결과라 색인하지 않되, follow 는 살려 공개 페이지로의
+  // 내부 크롤 경로는 유지한다.
+  robots: { index: false, follow: true }
 };
 
 export default async function HomeCheckResultPage({ params }: HomeCheckResultPageProps) {

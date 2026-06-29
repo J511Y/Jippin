@@ -6,20 +6,27 @@ import type { ReactNode } from 'react';
 import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
 
 /**
- * `/sessions/*` 는 개인 사전검토 워크플로우(주소·도면·판정)라 크롤러 색인 대상이 아니다.
- * 세션 상세/리포트 URL 이 공유·노출돼도 색인되지 않도록 라우트 그룹 전체에 noindex 를
- * 건다(클라이언트 페이지는 metadata 를 export 할 수 없으므로 서버 layout 에서 보장).
+ * 사전검토 인터랙티브 워크플로우(`/sessions`·`/sessions/[id]`·`/report`) 전용 레이아웃.
+ *
+ * 색인 정책: 이 라우트들은 개인 검토 화면(주소·도면·판정)이라 색인 대상이 아니다.
+ * follow 는 살려 리포트·CTA 가 가리키는 공개 페이지로의 내부 크롤 경로는 유지한다.
+ * (공개 GEO 인입면은 `(workflow)` 그룹 밖의 `/sessions/landing` 이 담당하며, 그 페이지는
+ *  이 noindex·게이트의 영향을 받지 않는다 — #sessions-landing-outside-workflow)
+ *
+ * 클라이언트 페이지(`SessionChat`)는 metadata 를 export 할 수 없으므로 noindex 를 서버
+ * layout 에서 일괄 보장한다.
  */
 export const metadata: Metadata = {
-  robots: { index: false, follow: false }
+  robots: { index: false, follow: true }
 };
 
 // AI 분석을 구동하는 에이전트가 꺼져 있으면 세션 생성→리포트가 dead workflow 가 된다
-// (도면을 올려도 분석이 안 돌아 리포트가 영영 NOT_READY). 그 빌드에선 전체 플로우를
-// 노출하지 않고 안내 + 상담 인입으로 대체한다(#gate-when-agent-disabled).
+// (도면을 올려도 분석이 안 돌아 리포트가 영영 NOT_READY). 그 빌드에선 워크플로우를
+// 노출하지 않고 안내 + 상담 인입으로 대체한다(#gate-when-agent-disabled). 단 공개
+// 랜딩(`/sessions/landing`)은 이 그룹 밖이라 게이트와 무관하게 항상 노출된다.
 const AGENT_ENABLED = process.env.NEXT_PUBLIC_AGENT_ENABLED === 'true';
 
-export default function SessionsLayout({ children }: { children: ReactNode }) {
+export default function SessionsWorkflowLayout({ children }: { children: ReactNode }) {
   if (!AGENT_ENABLED) {
     return (
       <Stack align="center" justify="center" mih="min(60vh, 520px)" px="md">

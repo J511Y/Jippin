@@ -30,11 +30,20 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       priority: 0.8
     },
     {
-      // 검토(사전검토 세션) 랜딩 — GEO/SEO 인입 페이지로 색인 허용.
-      url: `${SITE_URL}/sessions`,
+      // 사전검토 안내 랜딩 — GEO/SEO 인입면(서버렌더 + HowTo/FAQ JSON-LD). 실제 대화형
+      // 세션(`/sessions/*`)은 개인 워크플로우라 `(workflow)` 그룹에서 noindex 하므로,
+      // 색인 대상은 이 공개 랜딩 하나로 한정한다 — #sessions-noindex-sitemap-conflict.
+      url: `${SITE_URL}/sessions/landing`,
       lastModified,
       changeFrequency: 'weekly',
       priority: 0.8
+    },
+    {
+      // 우리집 체크 랜딩 — 위반건축물 셀프 진단 공개 정보 페이지로 색인 허용.
+      url: `${SITE_URL}/home-check`,
+      lastModified,
+      changeFrequency: 'monthly',
+      priority: 0.7
     },
     {
       // 자주묻는질문 — FAQ 리치결과/GEO 인입 페이지로 색인 허용.
