@@ -107,3 +107,79 @@ async def head_object(
     except ValueError:
         content_length = None
     return content_type, content_length
+
+
+async def download_object(
+    settings: Settings,
+    *,
+    bucket: str,
+    object_path: str,
+    operation: str = "download_object",
+) -> bytes | None:
+    """service-role 로 저장 객체의 원본 바이트를 받는다 — 실패하면 None(호출자 degrade).
+
+    리포트 PDF 가 도면 이미지를 인라인(data URI)으로 합성할 때, 짧은-수명 서명 URL 을
+    거치지 않고 서버가 직접 authenticated 엔드포인트에서 내려받기 위해 쓴다.
+    """
+
+    base = storage_base(settings)
+    if base is None:
+        return None
+    safe_path = quote(object_path, safe="/")
+    url = f"{base}/object/authenticated/{bucket}/{safe_path}"
+    headers = {
+        "Authorization": f"Bearer {settings.supabase_service_role_key}",
+        "apikey": settings.supabase_service_role_key or "",
+    }
+
+    async def _do() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            return await client.get(url, headers=headers)
+
+    try:
+        response = await log_http_call("supabase_storage", operation, _do)
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200:
+        return None
+    return response.content
+
+
+async def upload_object(
+    settings: Settings,
+    *,
+    bucket: str,
+    object_path: str,
+    content: bytes,
+    content_type: str,
+    upsert: bool = True,
+    operation: str = "upload_object",
+) -> bool:
+    """service-role 로 객체를 업로드한다(기본 upsert). 성공 여부를 반환(실패 시 False).
+
+    ``home_check`` 의 ``_upload_pdf`` 패턴을 일반화한다 — 발부 PDF 등 서버 생성
+    산출물을 Storage 에 보관할 때 공용으로 쓴다.
+    """
+
+    base = storage_base(settings)
+    if base is None:
+        return False
+    safe_path = quote(object_path, safe="/")
+    url = f"{base}/object/{bucket}/{safe_path}"
+    headers = {
+        "Authorization": f"Bearer {settings.supabase_service_role_key}",
+        "apikey": settings.supabase_service_role_key or "",
+        "Content-Type": content_type,
+    }
+    if upsert:
+        headers["x-upsert"] = "true"
+
+    async def _do() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            return await client.post(url, content=content, headers=headers)
+
+    try:
+        response = await log_http_call("supabase_storage", operation, _do)
+    except httpx.HTTPError:
+        return False
+    return response.status_code in (200, 201)
