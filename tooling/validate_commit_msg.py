@@ -82,13 +82,28 @@ def read_file(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def commits_in_range(rev_range: str) -> list[tuple[str, str]]:
-    """git log --format='%H%x00%s' <range> 결과를 [(sha, subject), ...] 로 반환."""
-    out = subprocess.check_output(
-        ["git", "log", "--format=%H%x00%s", rev_range],
-        text=True,
-        encoding="utf-8",
+def _ref_exists(ref: str) -> bool:
+    """ref 가 로컬에서 resolve 되는지(존재하는지)."""
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            capture_output=True,
+        ).returncode
+        == 0
     )
+
+
+def commits_in_range(rev_range: str) -> list[tuple[str, str]]:
+    """git log --format='%H%x00%s' <range> 결과를 [(sha, subject), ...] 로 반환.
+
+    이미 ``origin/main`` 에 머지된(=릴리스된) 커밋은 **재검증하지 않는다** — 백머지/릴리스
+    PR 이 main 의 과거 이력을 검사 범위(base..head)로 끌고 와도, 이미 통과·배포된 그 커밋
+    들로 실패하는 일을 막는다(#skip-released-commits). 새로 추가되는 커밋만 검증한다.
+    origin/main 이 없는 환경(로컬 등)에선 제외 없이 기존대로 검증한다."""
+    args = ["git", "log", "--format=%H%x00%s", rev_range]
+    if _ref_exists("origin/main"):
+        args.append("^origin/main")
+    out = subprocess.check_output(args, text=True, encoding="utf-8")
     rows: list[tuple[str, str]] = []
     for line in out.splitlines():
         if not line.strip():
