@@ -37,6 +37,19 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:${PATH}" \
     API_PORT=8000
 
+# WeasyPrint(사전검토 PDF 리포트) 런타임 의존 — Pango/Pangoft2 + gdk-pixbuf + ffi,
+# 그리고 한글 폰트(fonts-nanum: NanumGothic). 폰트 미설치 시 PDF 한글이 □(tofu)로
+# 깨지므로 필수. WeasyPrint 53+ 는 cairo 를 쓰지 않아 libcairo2 는 제외한다.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+        libgdk-pixbuf-2.0-0 \
+        libffi8 \
+        fontconfig \
+        fonts-nanum \
+    && fc-cache -f \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system --gid 1001 app && \
     useradd  --system --uid 1001 --gid app --home /home/app --shell /usr/sbin/nologin app && \
     mkdir -p /app /home/app && chown -R app:app /app /home/app

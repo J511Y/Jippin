@@ -312,6 +312,59 @@ def test_put_session_address_transitions_to_address_ready(monkeypatch):
         assert after["status"] == "address_ready"
 
 
+def test_issue_report_pdf_wires_service_and_owner(monkeypatch, fake_db):
+    """POST /sessions/{id}/report/pdf 가 owner 컨텍스트로 발부 서비스를 호출하고
+    서명 URL 응답을 그대로 내려준다(실 PDF 생성은 test_report_pdf 가 커버)."""
+
+    from datetime import datetime, timezone
+
+    from src.routers import sessions as sessions_router
+
+    captured: dict = {}
+
+    async def fake_generate(*, session_id, owner_user_id, owner_is_anonymous=False):
+        captured["session_id"] = session_id
+        captured["owner_user_id"] = owner_user_id
+        captured["owner_is_anonymous"] = owner_is_anonymous
+        return {
+            "url": "https://signed.example/report.pdf?token=x",
+            "report_id": "JP-ABC123",
+            "byte_size": 4242,
+            "generated_at": datetime(2026, 6, 29, tzinfo=timezone.utc),
+            "expires_in": 3600,
+        }
+
+    monkeypatch.setattr(
+        sessions_router.report_pdf, "generate_session_report_pdf", fake_generate
+    )
+    client, pem, kid, _ = _client(monkeypatch)
+    token, subject = helpers.mint_token(pem, kid, is_anonymous=False)
+    sid = "2a4f1c00-0000-4000-8000-000000000000"
+    with client:
+        response = client.post(
+            f"/sessions/{sid}/report/pdf",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["url"] == "https://signed.example/report.pdf?token=x"
+    assert body["report_id"] == "JP-ABC123"
+    assert body["byte_size"] == 4242
+    assert body["expires_in"] == 3600
+    assert str(captured["session_id"]) == sid
+    assert str(captured["owner_user_id"]) == str(subject)
+    assert captured["owner_is_anonymous"] is False
+
+
+def test_issue_report_pdf_requires_bearer(monkeypatch, fake_db):
+    client, _pem, _kid, _ = _client(monkeypatch)
+    sid = "2a4f1c00-0000-4000-8000-000000000000"
+    with client:
+        response = client.post(f"/sessions/{sid}/report/pdf")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "SUPABASE_SESSION_BEARER_REQUIRED"
+
+
 def test_put_session_address_rejects_empty_payload(monkeypatch):
     """빈 payload 로는 ``address_ready`` 전이를 허용하지 않는다 (board P2-2)."""
 

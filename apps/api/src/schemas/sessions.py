@@ -103,6 +103,26 @@ class SessionReportResponse(BaseModel):
     estimate: dict[str, Any] | None = None
 
 
+class SessionReportPdfResponse(BaseModel):
+    """`POST /sessions/{id}/report/pdf` — 발부된 PDF 리포트의 단기 다운로드 링크.
+
+    PDF 는 ``session_report_bucket`` 에 service-role 로 보관되고, 브라우저에는
+    버킷 객체를 직접 노출하지 않고 단기(기본 1h) 서명 URL 로만 전달한다. 판정이
+    아직 없으면 본 응답 대신 404 REPORT_NOT_READY 가 나간다(라우터).
+    """
+
+    #: 단기 서명 다운로드 URL.
+    url: str
+    #: 리포트 식별자(예: JP-2A4F1C) — 파일 표기/추적용.
+    report_id: str
+    #: 생성된 PDF 바이트 크기.
+    byte_size: int
+    #: PDF 생성 시각(UTC).
+    generated_at: datetime
+    #: 서명 URL 유효 기간(초).
+    expires_in: int
+
+
 class SessionResponse(BaseModel):
     """DB-shaped ``sessions`` row.
 

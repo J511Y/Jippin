@@ -1,0 +1,293 @@
+{#- 집핀 AI 사전검토 PDF 리포트 — 모던 핀테크 톤(컬러 카드·판정 히어로·가로 스테퍼).
+    WeasyPrint 렌더(JS 없음). 컨텍스트 계약: report.* (services/report_pdf.py 조립). -#}
+{%- macro vicon(tone) -%}
+  {%- if tone == 'success' -%}
+    <svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.3L19 7" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  {%- elif tone == 'danger' -%}
+    <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>
+  {%- elif tone == 'warning' -%}
+    <svg viewBox="0 0 24 24"><path d="M12 5v9" stroke="#fff" stroke-width="3" stroke-linecap="round"/><circle cx="12" cy="19" r="1.6" fill="#fff"/></svg>
+  {%- else -%}
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="7.5" r="1.6" fill="#fff"/><path d="M12 11v8" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>
+  {%- endif -%}
+{%- endmacro -%}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>{{ report.report_id }} · 집핀 AI 사전검토 리포트</title>
+<style>
+  :root {
+    --teal: #147A73; --teal-d: #0F5F59; --navy: #153B5C; --coral: #F26B4F;
+    --ink: #0D1B2A; --copy: #51666F; --muted: #8A9CA3;
+    --page: #EEF3F2; --card: #FFFFFF; --line: #E3EAE8; --soft: #F5F8F7;
+    --success: #1B7F46; --success-s: #E8F5EE;
+    --warning: #9A6300; --warning-s: #FFF4E2;
+    --danger:  #C0392B; --danger-s: #FBEAE8;
+    --info:    #1F6F8B; --info-s: #E8F1F5;
+    --neutral: #51666F; --neutral-s: #F1F4F5;
+  }
+  @page {
+    size: A4; margin: 12mm 11mm 13mm 11mm; background: var(--page);
+    @bottom-left  { content: "집핀 AI 사전검토 리포트"; font-family: 'NanumGothic', sans-serif; font-size: 7.5pt; color: #9AAAB0; }
+    @bottom-center{ content: counter(page) " / " counter(pages); font-family: 'NanumGothic', sans-serif; font-size: 7.5pt; color: #9AAAB0; }
+    @bottom-right { content: "jippin.ai"; font-family: 'NanumGothic', sans-serif; font-size: 7.5pt; color: var(--teal); font-weight: 700; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'NanumGothic', 'NanumBarunGothic', sans-serif;
+    font-size: 9.2pt; line-height: 1.45; color: var(--ink); word-break: keep-all;
+  }
+  .display { font-family: 'NanumSquare', 'NanumGothic', sans-serif; }
+  p { margin: 0; }
+
+  /* ---- card scaffold ---- */
+  .card {
+    background: var(--card); border: 0.8pt solid var(--line); border-radius: 11pt;
+    padding: 8pt 11pt; margin-bottom: 13pt;
+  }
+  .sec-head { display: flex; align-items: center; gap: 7pt; margin-bottom: 7pt; break-after: avoid; }
+  .sec-num {
+    font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 9pt; color: #fff;
+    background: var(--teal); width: 17pt; height: 17pt; border-radius: 50%;
+    text-align: center; line-height: 17pt; flex: none;
+  }
+  .sec-title { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 12.5pt; color: var(--ink); }
+
+  /* ---- header (underline, not card) ---- */
+  .doc-head {
+    padding: 0 2pt 10pt; margin-bottom: 14pt; border-bottom: 1.5pt solid #CFD7D4;
+    display: flex; align-items: flex-end; justify-content: space-between;
+  }
+  .hh-brand .wm { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 22pt; letter-spacing: -0.5pt; line-height: 1; color: var(--teal); }
+  .hh-brand .sub { font-size: 8.5pt; color: var(--copy); margin-top: 4pt; }
+  .hh-meta { text-align: right; font-size: 8pt; color: var(--copy); line-height: 1.7; white-space: nowrap; }
+  .hh-meta b { color: var(--ink); font-weight: 700; }
+
+  /* ---- verdict hero ---- */
+  .verdict { border-radius: 10pt; padding: 9pt 12pt; margin-bottom: 14pt; break-inside: avoid; border: 0.8pt solid var(--line); color: var(--ink); }
+  .v-success { background: var(--success-s); } .v-warning { background: var(--warning-s); }
+  .v-danger { background: var(--danger-s); } .v-info { background: var(--info-s); } .v-neutral { background: var(--neutral-s); }
+  .v-top { display: flex; align-items: center; gap: 9pt; }
+  .v-disc { width: 24pt; height: 24pt; border-radius: 50%; flex: none; padding: 5.5pt; }
+  .v-disc svg { width: 100%; height: 100%; display: block; }
+  .v-success .v-disc { background: var(--success); } .v-warning .v-disc { background: var(--warning); }
+  .v-danger .v-disc { background: var(--danger); } .v-info .v-disc { background: var(--info); } .v-neutral .v-disc { background: var(--neutral); }
+  .v-head { flex: 1; }
+  .v-label { display: inline-block; font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 14pt; line-height: 1.15; letter-spacing: -0.3pt; white-space: nowrap; vertical-align: middle; }
+  .v-success .v-label { color: var(--success); } .v-warning .v-label { color: var(--warning); }
+  .v-danger .v-label { color: var(--danger); } .v-info .v-label { color: var(--info); } .v-neutral .v-label { color: var(--neutral); }
+  .v-permit { display: inline-block; font-size: 8pt; font-weight: 700; border: 1pt solid var(--line); border-radius: 20pt; padding: 1.5pt 9pt; margin-left: 8pt; color: var(--copy); background: #fff; vertical-align: middle; }
+  .v-summary { font-size: 9pt; line-height: 1.5; color: var(--copy); margin-top: 6pt; }
+
+  /* ---- floor plan ---- */
+  .fp-wrap { background: var(--soft); border: 0.8pt solid var(--line); border-radius: 9pt; padding: 8pt; text-align: center; }
+  .fp-wrap svg { max-width: 100%; max-height: 50mm; width: auto; height: auto; border-radius: 4pt; }
+  .fp-cap { font-size: 7.8pt; color: var(--muted); margin-top: 5pt; }
+  .notice { background: var(--soft); border: 1pt dashed var(--line); border-radius: 8pt; padding: 14pt; text-align: center; font-size: 9pt; color: var(--copy); }
+
+  .walls { margin-top: 8pt; }
+  .wall {
+    display: flex; align-items: flex-start; gap: 11pt; padding: 6pt 0; border-top: 0.8pt solid var(--line);
+  }
+  .wall:first-child { border-top: none; }
+  .w-tag { flex: none; width: 118pt; }
+  .w-top { display: flex; align-items: center; gap: 5pt; margin-bottom: 3pt; }
+  .w-num { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 11pt; color: var(--ink); margin-right: 1pt; }
+  .w-pick { font-size: 7pt; font-weight: 800; color: var(--coral); border: 1pt solid var(--coral); border-radius: 4pt; padding: 0.5pt 4pt; margin-left: 3pt; }
+  .chip { display: inline-block; font-size: 7.8pt; font-weight: 700; border-radius: 20pt; padding: 1.5pt 8pt; white-space: nowrap; }
+  .c-success { background: var(--success-s); color: var(--success); } .c-danger { background: var(--danger-s); color: var(--danger); }
+  .c-info { background: var(--info-s); color: var(--info); } .c-warning { background: var(--warning-s); color: var(--warning); }
+  .c-neutral { background: var(--neutral-s); color: var(--neutral); }
+  .w-desc { flex: 1; font-size: 8.7pt; color: var(--copy); line-height: 1.5; }
+
+  /* ---- 내력벽/비내력벽 교육 박스 ---- */
+  .edu { margin-top: 8pt; border-top: 0.8pt solid var(--line); padding-top: 7pt; }
+  .edu-t { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 9.5pt; color: var(--ink); margin-bottom: 5pt; }
+  .edu-cols { display: flex; gap: 8pt; }
+  .edu-col { flex: 1; border-radius: 8pt; padding: 7pt 9pt; }
+  .edu-success { background: var(--success-s); } .edu-danger { background: var(--danger-s); }
+  .edu-info { background: var(--info-s); } .edu-neutral { background: var(--neutral-s); }
+  .edu-l { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 9.5pt; margin-bottom: 2pt; }
+  .edu-success .edu-l { color: var(--success); } .edu-danger .edu-l { color: var(--danger); }
+  .edu-info .edu-l { color: var(--info); } .edu-neutral .edu-l { color: var(--neutral); }
+  .edu-d { font-size: 8.2pt; color: var(--copy); line-height: 1.5; }
+  .edu-cav { margin-top: 7pt; font-size: 7.8pt; color: var(--muted); line-height: 1.45; }
+
+  /* ---- facilities ---- */
+  .fac { background: var(--soft); border-radius: 9pt; border-left: 3pt solid var(--teal); padding: 7pt 10pt; margin-bottom: 5pt; break-inside: avoid; }
+  .fac:last-child { margin-bottom: 0; }
+  .fac-h { display: flex; align-items: baseline; gap: 7pt; margin-bottom: 3pt; }
+  .fac-tag { font-size: 7.6pt; font-weight: 800; color: #fff; background: var(--teal); border-radius: 4pt; padding: 1.5pt 7pt; flex: none; }
+  .fac-title { font-family: 'NanumSquare', sans-serif; font-weight: 700; font-size: 10pt; color: var(--ink); }
+  .fac ul { margin: 0; padding-left: 14pt; }
+  .fac li { font-size: 8.6pt; color: var(--copy); line-height: 1.45; }
+
+  /* ---- estimate ---- */
+  .est { width: 100%; border-collapse: collapse; }
+  .est td { padding: 6pt 2pt; border-bottom: 0.8pt solid var(--line); vertical-align: top; }
+  .est .lbl { font-weight: 700; color: var(--ink); font-size: 9.3pt; }
+  .est .note { font-size: 7.8pt; color: var(--muted); line-height: 1.4; margin-top: 1pt; }
+  .est .amt { text-align: right; white-space: nowrap; font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 10.5pt; color: var(--teal-d); }
+  .est-total td { border-bottom: none; padding-top: 9pt; }
+  .est-total .lbl { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 10.5pt; color: var(--navy); }
+  .est-total .amt { color: var(--coral); font-size: 15pt; }
+  .est-foot { margin-top: 9pt; background: var(--soft); border-radius: 8pt; padding: 8pt 11pt; font-size: 8pt; color: var(--copy); line-height: 1.5; }
+  .est-foot .src { color: var(--info); margin-top: 3pt; }
+
+  /* ---- schedule stepper ---- */
+  .steps { display: flex; gap: 7pt; }
+  .step { flex: 1; background: var(--soft); border: 0.8pt solid var(--line); border-radius: 9pt; padding: 8pt 9pt; }
+  .step-b { display: inline-block; font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 7.5pt; color: #fff; background: var(--navy); border-radius: 20pt; padding: 1.5pt 8pt; }
+  .step-ph { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 10.5pt; color: var(--ink); margin: 6pt 0 5pt; }
+  .step ul { margin: 0; padding-left: 13pt; }
+  .step li { font-size: 8pt; color: var(--copy); line-height: 1.5; }
+  .step-d { margin-top: 6pt; font-size: 7.8pt; font-weight: 700; color: var(--teal-d); }
+
+  /* ---- consultation ---- */
+  .consult { background: var(--navy); border-radius: 12pt; padding: 14pt 16pt; color: #fff; break-inside: avoid; display: flex; align-items: center; justify-content: space-between; gap: 14pt; }
+  .consult .free { display: inline-block; font-size: 8pt; font-weight: 800; background: var(--coral); border-radius: 20pt; padding: 2pt 10pt; }
+  .consult .ch { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 14pt; margin: 6pt 0 5pt; line-height: 1.3; }
+  .consult .cb { font-size: 8.6pt; color: #C9D6E2; line-height: 1.55; }
+  .consult .cbtn { flex: none; text-align: center; }
+  .consult .cbtn a { display: inline-block; font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 10.5pt; color: var(--navy); background: #fff; border-radius: 8pt; padding: 9pt 16pt; text-decoration: none; white-space: nowrap; }
+  .consult .csite { display: block; font-size: 8pt; color: #C9D6E2; margin-top: 6pt; }
+
+  .legal { margin-top: 6pt; padding: 0 4pt; font-size: 7pt; color: var(--muted); line-height: 1.5; }
+  .legal b { color: var(--copy); font-weight: 700; }
+</style>
+</head>
+<body>
+
+  {# ── 헤더 (언더라인) ── #}
+  <div class="doc-head">
+    <div class="hh-brand">
+      <div class="wm">집핀</div>
+      <div class="sub">우리집 체크 · AI 사전검토 리포트</div>
+    </div>
+    <div class="hh-meta">
+      발급일 <b>{{ report.generated_at_kr }}</b><br/>
+      리포트번호 <b>{{ report.report_id }}</b>
+      {% if report.address_line %}<br/><span style="color:#8A9CA3">{{ report.address_line }}</span>{% endif %}
+    </div>
+  </div>
+
+  {# ── 판정 히어로 ── #}
+  <div class="verdict v-{{ report.verdict.tone | default('neutral') }}">
+    <div class="v-top">
+      <div class="v-disc">{{ vicon(report.verdict.tone) }}</div>
+      <div class="v-head">
+        <div class="v-label">{{ report.verdict.label }}</div>
+        {% if report.verdict.permit_text %}<span class="v-permit">{{ report.verdict.permit_text }}</span>{% endif %}
+      </div>
+    </div>
+    {% if report.verdict.summary %}<p class="v-summary">{{ report.verdict.summary }}</p>{% endif %}
+  </div>
+
+  {# ── 1. 도면 분석 ── #}
+  <div class="card">
+    <div class="sec-head"><span class="sec-num">1</span><span class="sec-title">희망 위치</span></div>
+    {% if report.overlay and report.overlay.available %}
+    <div class="fp-wrap">
+      {{ report.overlay.svg | safe }}
+      {% if report.overlay.caption %}<div class="fp-cap">{{ report.overlay.caption }}</div>{% endif %}
+    </div>
+    {% else %}
+    <div class="notice">{{ (report.overlay.unavailable_reason if report.overlay else None) | default('도면 분석 이미지를 준비할 수 없습니다.') }}</div>
+    {% endif %}
+    {% if report.wall_edu %}
+    <div class="edu">
+      <div class="edu-t">내력벽과 비내력벽, 무엇이 다른가요?</div>
+      <div class="edu-cols">
+        {% for e in report.wall_edu %}
+        <div class="edu-col edu-{{ e.tone | default('neutral') }}">
+          <div class="edu-l">{{ e.label }}</div>
+          <div class="edu-d">{{ e.desc }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% if report.wall_caveat %}<div class="edu-cav">{{ report.wall_caveat }}</div>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── 2. 철거 시 챙겨야 할 요소 ── #}
+  <div class="card">
+    <div class="sec-head"><span class="sec-num">2</span><span class="sec-title">철거 시 챙겨야 할 요소</span></div>
+    {% if report.facilities %}
+      {% for fac in report.facilities %}
+      <div class="fac">
+        <div class="fac-h"><span class="fac-tag">{{ fac.label }}</span><span class="fac-title">{{ fac.headline }}</span></div>
+        {% if fac.points %}<ul>{% for pt in fac.points %}<li>{{ pt }}</li>{% endfor %}</ul>{% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="notice">{{ report.facilities_empty_note | default('이번 검토에서 별도로 챙겨야 할 철거 요소는 확인되지 않았어요.') }}</div>
+    {% endif %}
+  </div>
+
+  {# ── 3. 예상 견적 ── #}
+  {% if report.estimate %}
+  <div class="card">
+    <div class="sec-head"><span class="sec-num">3</span><span class="sec-title">예상 견적</span></div>
+    {% if report.estimate['items'] %}
+    <table class="est">
+      {% for item in report.estimate['items'] %}
+      <tr>
+        <td><div class="lbl">{{ item.label }}</div>{% if item.note %}<div class="note">{{ item.note }}</div>{% endif %}</td>
+        <td class="amt">{{ item.amount_text }}</td>
+      </tr>
+      {% endfor %}
+      {% if report.estimate.fixed_total_text %}
+      <tr class="est-total"><td class="lbl">기본 합계 (최소)</td><td class="amt">{{ report.estimate.fixed_total_text }}</td></tr>
+      {% endif %}
+    </table>
+    {% endif %}
+    <div class="est-foot">
+      {{ report.estimate.disclaimer }}
+      {% if report.estimate.source_url %}<div class="src">자세한 비용 안내 · {{ report.estimate.source_url }}</div>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── 4. 진행 일정 ── #}
+  {% if report.schedule %}
+  <div class="card">
+    <div class="sec-head"><span class="sec-num">4</span><span class="sec-title">진행 일정</span></div>
+    <div class="steps">
+      {% for s in report.schedule %}
+      <div class="step">
+        <span class="step-b">{{ s.step }}</span>
+        <div class="step-ph">{{ s.phase }}</div>
+        {% if s['items'] %}<ul>{% for it in s['items'] %}<li>{{ it }}</li>{% endfor %}</ul>{% endif %}
+        {% if s.duration %}<div class="step-d">{{ s.duration }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── 5. 상담 안내 ── #}
+  {% if report.consultation %}
+  <div class="consult">
+    <div>
+      <span class="free">100% 무료</span>
+      <div class="ch">{{ report.consultation.headline }}</div>
+      <div class="cb">{{ report.consultation.body }}</div>
+    </div>
+    {% if report.consultation.url %}
+    <div class="cbtn">
+      <a href="{{ report.consultation.url }}">무료 상담 신청 →</a>
+      {% if report.consultation.site %}<span class="csite">{{ report.consultation.site }}</span>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if report.legal_notice %}
+  <div class="legal"><b>법적 고지 · </b>{{ report.legal_notice }}</div>
+  {% endif %}
+
+</body>
+</html>

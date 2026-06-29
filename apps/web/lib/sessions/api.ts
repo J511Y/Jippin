@@ -153,6 +153,28 @@ export async function getSessionReport(id: string): Promise<SessionReportRespons
   return response.data;
 }
 
+/** 발부된 PDF 리포트의 단기 서명 다운로드 링크(`POST /sessions/{id}/report/pdf`). */
+export interface SessionReportPdfResponse {
+  url: string;
+  report_id: string;
+  byte_size: number;
+  generated_at: string;
+  expires_in: number;
+}
+
+/**
+ * 디자인된 PDF 리포트를 발부(서버 생성·Storage 보관)하고 단기 서명 URL 을 받는다.
+ * 판정 미준비면 404 REPORT_NOT_READY 가 떨어진다(호출부가 안내).
+ */
+export async function issueSessionReportPdf(
+  id: string
+): Promise<SessionReportPdfResponse> {
+  const response = await apiClient.post<SessionReportPdfResponse>(
+    `/sessions/${id}/report/pdf`
+  );
+  return response.data;
+}
+
 /** 오버레이가 도면 이미지를 표시할 짧은-수명 서명 URL 을 발급받는다(렌더 시점 호출). */
 export async function getFloorplanAssetSignedUrl(
   sessionId: string,

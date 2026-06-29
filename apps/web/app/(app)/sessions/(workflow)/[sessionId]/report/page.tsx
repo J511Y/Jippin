@@ -21,6 +21,7 @@ import { trackPrecheckReportView } from '@/lib/analytics/sessions-funnel';
 import { parseApiError } from '@/lib/api/error';
 import {
   getSessionReport,
+  issueSessionReportPdf,
   syncExistingToken,
   type EstimateResult,
   type SessionReportResponse
@@ -42,6 +43,33 @@ export default function SessionReportPage() {
   const [report, setReport] = useState<SessionReportResponse | null>(null);
   const [notReady, setNotReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  // PDF 리포트 발부 — 서버가 생성·보관한 PDF 의 단기 서명 URL 을 받아 새 탭으로 연다.
+  // 팝업 차단 회피: 생성(await)을 기다린 뒤 window.open 을 호출하면 사용자 제스처가
+  // 끊긴 것으로 보여 차단될 수 있다. 클릭 즉시 빈 탭을 먼저 열고 URL 도착 후 이동한다.
+  const handleIssuePdf = async () => {
+    setPdfLoading(true);
+    setPdfError(null);
+    const pdfTab = window.open('about:blank', '_blank');
+    try {
+      const { url } = await issueSessionReportPdf(sessionId);
+      if (pdfTab) {
+        // 역-탭내빙 방지: opener 끊고 신뢰된 서명 URL 로 이동.
+        pdfTab.opener = null;
+        pdfTab.location.href = url;
+      } else {
+        // 빈 탭이 막혔으면(차단/모바일) 현재 탭에서 연다.
+        window.location.href = url;
+      }
+    } catch (err) {
+      pdfTab?.close();
+      setPdfError(parseApiError(err).message);
+    } finally {
+      setPdfLoading(false);
+    }
+  };
 
   useEffect(() => {
     let ignore = false;
@@ -183,6 +211,36 @@ export default function SessionReportPage() {
           )}
 
           {report.estimate && <EstimateCard estimate={report.estimate} />}
+
+          {/* PDF 리포트 발부 — 도면 오버레이·벽체 판단·견적·일정·상담을 담은 디자인
+              리포트를 서버에서 생성해 단기 서명 URL 로 내려준다. */}
+          <Card withBorder radius="md" padding="md">
+            <Stack gap="sm">
+              <Group justify="space-between" align="center" wrap="nowrap">
+                <Stack gap={2} style={{ flex: 1 }}>
+                  <Text fw={600}>PDF 리포트 발부</Text>
+                  <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                    도면 분석·벽체 판단·예상 견적·진행 일정·상담 안내를 담은 리포트를
+                    PDF 로 내려받을 수 있어요.
+                  </Text>
+                </Stack>
+                <Button
+                  color="jippin"
+                  radius="md"
+                  onClick={handleIssuePdf}
+                  loading={pdfLoading}
+                  style={{ whiteSpace: 'nowrap' }}
+                >
+                  PDF로 받기
+                </Button>
+              </Group>
+              {pdfError && (
+                <Alert color="red" variant="light" radius="md" py="xs">
+                  {pdfError}
+                </Alert>
+              )}
+            </Stack>
+          </Card>
         </>
       )}
 
