@@ -246,6 +246,19 @@ def test_estimate_view_none_when_no_items() -> None:
     assert report_pdf._estimate_view({"items": []}, origin="https://x") is None
 
 
+def test_generated_at_kr_uses_kst() -> None:
+    # 2026-06-29 23:30 UTC → KST 2026-06-30 08:30 → 발급일은 6월 30일이어야 한다.
+    assert (
+        report_pdf._generated_at_kr(datetime(2026, 6, 29, 23, 30, tzinfo=timezone.utc))
+        == "2026년 6월 30일"
+    )
+    # 00:00 UTC → KST 09:00 → 같은 날.
+    assert (
+        report_pdf._generated_at_kr(datetime(2026, 6, 29, 0, 0, tzinfo=timezone.utc))
+        == "2026년 6월 29일"
+    )
+
+
 def test_address_line_composes_with_suffixes() -> None:
     line = report_pdf._address_line(
         {

@@ -38,6 +38,12 @@ dependencies = [
     "jinja2>=3.1,<4.0",
     "weasyprint>=62,<66",
     "pillow>=10,<12",
+    # ZoneInfo("Asia/Seoul") 보장 — python:3.13-slim 은 OS tz DB 가 없을 수 있어
+    # 순수 파이썬 tz 데이터셋을 명시 설치한다(발급일 KST 표기).
+    "tzdata>=2024.1",
+    # 동기 렌더(WeasyPrint)를 워커 스레드로 오프로드(anyio.to_thread). FastAPI 의
+    # 전이 의존이지만 직접 임포트하므로 명시 선언한다.
+    "anyio>=4,<5",
 ]
 
 [dependency-groups]

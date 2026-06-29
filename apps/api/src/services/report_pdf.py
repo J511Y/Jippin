@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+import anyio
 
 from ..config import Settings, get_settings
 from ..errors import ZippinException
@@ -135,8 +138,13 @@ def _report_id(session_id: uuid.UUID) -> str:
     return "JP-" + session_id.hex[:6].upper()
 
 
+#: 발급일 표기는 운영/사용자 기준 한국 시간(UTC 00:00~08:59 가 전날로 찍히지 않게).
+_KST = ZoneInfo("Asia/Seoul")
+
+
 def _generated_at_kr(now: datetime) -> str:
-    return f"{now.year}년 {now.month}월 {now.day}일"
+    kst = now.astimezone(_KST)
+    return f"{kst.year}년 {kst.month}월 {kst.day}일"
 
 
 def _build_context(
@@ -186,6 +194,13 @@ def _html_to_pdf(html: str) -> bytes:
     from weasyprint import HTML  # 지연 임포트 — pango/cairo 의존.
 
     return HTML(string=html).write_pdf()
+
+
+def _render_pdf(context: dict[str, Any]) -> bytes:
+    """Jinja 렌더 + WeasyPrint(둘 다 동기·블로킹). 호출자는 to_thread 로 감싸
+    이벤트 루프를 막지 않는다(도면 포함 렌더는 수백 ms~초가 걸릴 수 있음)."""
+
+    return _html_to_pdf(render_html(context))
 
 
 def _origin(settings: Settings) -> str:
@@ -276,9 +291,10 @@ async def generate_session_report_pdf(
         origin=origin,
         now=now,
     )
-    html = render_html(context)
     try:
-        pdf_bytes = _html_to_pdf(html)
+        # 동기·블로킹 렌더(Jinja+WeasyPrint)는 워커 스레드로 — 이벤트 루프 head-of-line
+        # 블로킹 방지.
+        pdf_bytes = await anyio.to_thread.run_sync(_render_pdf, context)
     except Exception as exc:  # noqa: BLE001
         logger.error(
             "report_pdf_render_failed", session_id=str(session_id), error=str(exc)
@@ -289,9 +305,10 @@ async def generate_session_report_pdf(
             http_status=502,
         ) from exc
 
-    # 4) Storage 보관(upsert) + 서명 URL.
+    # 4) Storage 보관 + 서명 URL. 발급마다 타임스탬프로 새 객체를 만들어 이미 발급된
+    #    서명 URL 이 재발급으로 덮어쓰이지 않게 한다(링크 수명 동안 불변).
     bucket = settings.session_report_bucket
-    object_path = f"{session_id}/ai-precheck-report.pdf"
+    object_path = f"{session_id}/ai-precheck-report-{now:%Y%m%dT%H%M%SZ}.pdf"
     uploaded = await storage.upload_object(
         settings,
         bucket=bucket,
