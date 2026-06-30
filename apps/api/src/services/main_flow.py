@@ -167,9 +167,14 @@ async def _db_advance_session_status(
 
     target_rank = _STATUS_RANK[target]
     async with get_engine().begin() as conn:
+        # 같은 세션의 동시 전이를 직렬화한다 — FOR UPDATE 로 행을 잠가, 두 트랜잭션이
+        # 같은 현재 status 를 읽고 낮은 rank 로 덮어쓰거나 잘못된 forward 이벤트를 남기는
+        # race 를 막는다(병행 주소확정/도면업로드, handoff 와 에이전트 전이 경합 등).
         current = (
             await conn.execute(
-                sa.select(_SESSIONS.c.status).where(_SESSIONS.c.id == session_id)
+                sa.select(_SESSIONS.c.status)
+                .where(_SESSIONS.c.id == session_id)
+                .with_for_update()
             )
         ).scalar_one_or_none()
         if current is None or current in _TERMINAL_STATUSES:

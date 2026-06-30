@@ -192,7 +192,10 @@ async def create_lead(
         )
         if linked_session_id is not None:
             lead_values["session_id"] = linked_session_id
-            if address_fallback and not (lead_values.get("road_addr_part1") or "").strip():
+            if (
+                address_fallback
+                and not (lead_values.get("road_addr_part1") or "").strip()
+            ):
                 lead_values["road_addr_part1"] = address_fallback
 
     attachments = _validate_attachments(

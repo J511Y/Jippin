@@ -75,7 +75,11 @@ async def test_create_lead_links_owned_session_and_fills_address(monkeypatch) ->
         return {"id": session_id, "user_id": owner}
 
     async def fake_get_address(sid):  # type: ignore[no-untyped-def]
-        return {"apartment_name": "장미마을", "building_dong": "802동", "unit_ho": "1406호"}
+        return {
+            "apartment_name": "장미마을",
+            "building_dong": "802동",
+            "unit_ho": "1406호",
+        }
 
     monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
     monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)

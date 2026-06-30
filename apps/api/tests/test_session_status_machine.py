@@ -22,7 +22,11 @@ async def _new_session(fake):
 
 
 def _events(fake, session_id):
-    return [e["to_status"] for e in fake.session_status_events if e["session_id"] == session_id]
+    return [
+        e["to_status"]
+        for e in fake.session_status_events
+        if e["session_id"] == session_id
+    ]
 
 
 async def test_create_session_records_draft_event(monkeypatch) -> None:

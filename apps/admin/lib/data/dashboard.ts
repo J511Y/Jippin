@@ -172,20 +172,28 @@ async function getSessionFunnelFallback(
     .limit(50000);
   if (error || !rows) return counts;
 
-  // 세션별 최고 도달 rank.
+  const handoffRank = rank.get('handoff'); // 8
+  // 파이프라인(handoff 제외)의 세션별 최고 도달 rank + handoff 도달 세션 집합.
   const maxRank = new Map<string, number>();
+  const handoffSessions = new Set<string>();
   for (const row of rows as Array<{ session_id: string; to_status: string }>) {
     const r = rank.get(row.to_status);
     if (r === undefined) continue;
+    if (r === handoffRank) {
+      handoffSessions.add(row.session_id);
+      continue; // handoff 는 파이프라인 누적에 넣지 않는다.
+    }
     const prev = maxRank.get(row.session_id) ?? -1;
     if (r > prev) maxRank.set(row.session_id, r);
   }
-  // 각 단계 S: max_rank >= rank(S) 인 세션 수(누적).
+  // 파이프라인 단계(0~7): max_rank >= rank(S) 누적. handoff(8): 실제 도달 세션 수.
   for (const [, sessionMax] of maxRank) {
     for (const [stage, stageRank] of rank) {
+      if (stageRank === handoffRank) continue;
       if (sessionMax >= stageRank) counts.set(stage, (counts.get(stage) ?? 0) + 1);
     }
   }
+  counts.set('handoff', handoffSessions.size);
   return counts;
 }
 
