@@ -3,7 +3,7 @@
 # ──────────────────────────────────────────────────────────────────────
 # AGENTS.md §4.1 / docs/CONTRIBUTING.md §2 봉인.
 # 첫 줄 정규식 필수:
-#   ^(✨|🐛|📝|♻️|✅|🔧|🚀|🔒|🚧) (feat|fix|docs|refactor|test|chore|perf|security|wip)\(([a-z0-9][a-z0-9-]*)\): .+
+#   ^(✨|🐛|📝|♻️|✅|🔧|🚀|🔒|🚧|🔖) (feat|fix|docs|refactor|test|chore|perf|security|wip|release)\(([a-z0-9][a-z0-9-]*)\): .+
 # 위반 시 .githooks/commit-msg 및 CI gitmoji-validate job 차단.
 #
 # 활성화: git config commit.template .gitmessage
@@ -19,6 +19,7 @@
 #   🚀 perf       성능 개선
 #   🔒 security   보안 패치 (시크릿 회전 포함)
 #   🚧 wip        임시 (PR 머지 전 반드시 squash)
+#   🔖 release    릴리스 컷 / dev→main 승급·백머지
 #
 # [scope] 영문 소문자/숫자/하이픈만. 예) auth / overlay / cmp-531 / contracts
 #

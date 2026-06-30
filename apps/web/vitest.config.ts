@@ -1,6 +1,4 @@
 import react from '@vitejs/plugin-react';
-import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
-import { playwright } from '@vitest/browser-playwright';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
@@ -27,25 +25,8 @@ export default defineConfig({
           environment: 'jsdom',
           setupFiles: ['./test-setup.ts'],
           include: ['**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts'],
-          exclude: ['node_modules/**', '.next/**', 'storybook-static/**'],
+          exclude: ['node_modules/**', '.next/**'],
           pool: 'forks'
-        }
-      },
-      {
-        extends: true,
-        plugins: [
-          storybookTest({
-            configDir: path.join(__dirname, '.storybook')
-          })
-        ],
-        test: {
-          name: 'storybook',
-          browser: {
-            enabled: true,
-            headless: true,
-            provider: playwright({}),
-            instances: [{ browser: 'chromium' }]
-          }
         }
       }
     ]

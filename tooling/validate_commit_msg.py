@@ -40,11 +40,11 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
 if sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-# AGENTS.md §4.1 의 9개 prefix.
+# AGENTS.md §4.1 의 10개 prefix.
 # 정규식은 docs/CONTRIBUTING.md §2.1 과 1:1.
 GITMOJI_PATTERN = re.compile(
-    r"^(✨|🐛|📝|♻️|✅|🔧|🚀|🔒|🚧) "
-    r"(feat|fix|docs|refactor|test|chore|perf|security|wip)"
+    r"^(✨|🐛|📝|♻️|✅|🔧|🚀|🔒|🚧|🔖) "
+    r"(feat|fix|docs|refactor|test|chore|perf|security|wip|release)"
     r"\(([a-z0-9][a-z0-9-]*)\): .+"
 )
 
@@ -70,8 +70,8 @@ def validate_subject(subject: str) -> str | None:
         return (
             "gitmoji 정규식 위반.\n"
             "  허용 형식: <이모지> <prefix>(<scope>): <설명>\n"
-            "  허용 이모지: ✨ 🐛 📝 ♻️ ✅ 🔧 🚀 🔒 🚧\n"
-            "  허용 prefix: feat fix docs refactor test chore perf security wip\n"
+            "  허용 이모지: ✨ 🐛 📝 ♻️ ✅ 🔧 🚀 🔒 🚧 🔖\n"
+            "  허용 prefix: feat fix docs refactor test chore perf security wip release\n"
             "  scope: 영문 소문자/숫자/하이픈. 예) ✨ feat(auth): 카카오 콜백\n"
             "  자세한 규칙: docs/CONTRIBUTING.md §2"
         )
