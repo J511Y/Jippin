@@ -6,7 +6,7 @@ AGENTS.md §4.3 / docs/CONTRIBUTING.md §3 봉인.
 
 ## 관련 이슈
 
-- Paperclip 이슈: `CMP-###`
+- (선택) 관련 이슈가 있으면 식별자 표기 — Paperclip 보드 운용 중단으로 더 이상 필수 아님
 - (해당 시) 관련 ADR: `ADR-####`
 
 ## 변경 요약
@@ -35,7 +35,6 @@ AGENTS.md §4.3 / docs/CONTRIBUTING.md §3 봉인.
 
 ## 체크리스트 (AGENTS.md §4.3)
 
-- [ ] 관련 Paperclip 이슈 식별자(`CMP-###`)를 본 PR 본문 첫 줄에 명시
 - [ ] 영향 모듈을 위 목록에서 모두 체크
 - [ ] 공통 컨트랙트(`packages/contracts/schemas/*.schema.json`) 변경 시 `schema_version` bump 및 TS/Python 바인딩 재생성
 - [ ] 비밀번호 · API 키 · 도면 원본 등 민감 자료 미포함 (시크릿 스캔 CI 통과)
@@ -58,9 +57,9 @@ AGENTS.md §4.3 / docs/CONTRIBUTING.md §3 봉인.
 
 ## 후속 작업
 
-<!-- 본 PR 머지 후 분기할 자식 이슈 (있으면). -->
+<!-- 본 PR 머지 후 분기할 후속 작업 (있으면). -->
 
-- 없음 또는 `CMP-###`
+- 없음
 
 ---
 

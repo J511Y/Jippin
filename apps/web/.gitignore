@@ -10,7 +10,6 @@ next-env.d.ts
 # production
 build
 dist
-storybook-static
 
 # env
 .env

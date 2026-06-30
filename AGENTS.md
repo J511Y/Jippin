@@ -110,6 +110,7 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 | 🚀 | `perf:` | 성능 개선 |
 | 🔒 | `security:` | 보안 패치 |
 | 🚧 | `wip:` | 임시 (PR 머지 전 squash) |
+| 🔖 | `release:` | 릴리스 컷 / `dev`→`main` 승급·백머지 |
 
 예: `✨ feat(auth): kakao oauth callback`
 
@@ -120,13 +121,12 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - 작업 브랜치는 `dev` 에서 분기한다. 명명: `<type>/<scope>-<short>` (예: `feat/auth-kakao-callback`, `docs/cmp-557a-auth-policy`, `fix/auth-jwt-leak`, `refactor/api-audit-mixin`).
 - 흐름: `main` ← (release PR) ← `dev` ← (작업 PR) ← `feature/* | fix/* | docs/* | refactor/* | chore/* | perf/* | test/* | security/*`.
 - **PR base 기본값 = `dev`.** `main` 으로의 PR 은 운영 release 컷 또는 핫픽스에 한정하며 CTO/DevOps 승인 필요.
-- PR 본문·제목에는 관련 Paperclip 이슈 식별자(`CMP-###`)와 영향 모듈을 표기한다. **보드 이슈 없이 사람과의 직접 대화로 수행한 작업은 `CMP-DIRECT`** 를 식별자로 쓴다 (pr-title-lint 가 허용).
+- PR 본문·제목에는 영향 모듈을 표기한다. 관련 이슈가 있으면 식별자를 본문에 적어도 좋으나, Paperclip 보드 운용을 중단해 `CMP-###` 표기는 더 이상 필수가 아니다 (pr-title-lint 가 강제하지 않음).
 - 머지 방식: **Squash and merge** (gitmoji prefix 유지).
 - `dev` → `main` 승급 자동화는 `.github/workflows/` 의 release 워크플로우(CMP-539 가드 적용)에 따른다.
 
 ### 4.3 PR 체크리스트
 
-- [ ] 관련 이슈 식별자 명시 (보드 이슈 없는 직접 대화 작업은 `CMP-DIRECT`)
 - [ ] 영향 모듈 명시 (`AUTH` / `INPUT` / …)
 - [ ] 공통 컨트랙트(`packages/contracts/`) 변경 시 schema_version bump
 - [ ] 비밀번호·키·도면 등 민감 자료 미포함
@@ -342,7 +342,9 @@ node -e "const d=JSON.parse(require('fs').readFileSync('.tmp/resp.json','utf8'))
 - **`ci.yml` → `migrate-check`** (PR) — Supabase SQL migration drift 가드. `apps/api/src/models/**/*.py` 가 변경됐는데 `supabase/migrations/*.sql` 동행이 없으면 fail. Neon / Alembic 의존 없음, secret 불필요. 정본: [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) §6.3.2. `ci-status` 메타 게이트에 포함되어 브랜치 보호의 required check 1개 (`ci-status`) 로 자동 보장.
 - **`deploy.yml`** (push to `dev` / `main`) — 어플리케이션 빌드 smoke + 클라우드 배포 스텁. **DB migration 미실행** (Supabase GitHub Integration 단독 책임). 후속 클라우드 target (Vercel / Fly / Cloud Run / Lightsail) 은 별도 이슈에서 채운다.
 - **`supabase-status.yml`** (PR) — path-filter deadlock 회피 wrapper. `supabase/**` 변경 없는 PR 은 자체 succeed (skip 의미), 변경 있는 PR 은 `vars.SUPABASE_INTEGRATION_CHECK_NAME` 으로 지정된 Supabase 측 check context 결과를 polling 해 그대로 반영. 변수 미설정 시 fail (운영 사고를 초록색으로 숨기지 않음). 정본: [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) §6.3 / §6.3.1.
-- **`secret-scan.yml`** / **`main-promotion-guard.yml`** / **`pr-title-lint.yml`** — 변경 없음 (CMP-533 / branch-strategy 가드).
+- **`secret-scan.yml`** / **`main-promotion-guard.yml`** — 변경 없음 (CMP-533 / branch-strategy 가드).
+- **`pr-title-lint.yml`** (PR) — PR 제목이 gitmoji 형식(`<이모지> <prefix>(<scope>): <설명>`)인지만 검증한다. **`CMP-###` 이슈 태그 요구는 폐지** (Paperclip 보드 운용 중단). gitmoji prefix 는 §4.1 의 10종(`release` 🔖 포함)을 따른다.
+- **`ci.yml` → `test-web`** (PR/push) — `apps/web` 의 vitest **unit 테스트**만 실행한다. Storybook 운영 중단으로 컴포넌트 테스트·`build-storybook` 스텝은 제거됐다.
 - **`_archive/neon-pr-branch.yml.archived`** — 비활성. Neon GitHub integration 시절의 PR preview 잡을 이력 참조용으로 보존. GitHub Actions 는 `.yml` 확장자만 워크플로우로 인식하므로 본 파일은 실행되지 않는다.
 
 DB 마이그레이션 적용 책임 (cutover 후 봉인):

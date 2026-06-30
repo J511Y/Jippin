@@ -6,10 +6,7 @@ const config: Config = {
   content: [
     './app/**/*.{ts,tsx}',
     './components/**/*.{ts,tsx}',
-    './lib/**/*.{ts,tsx}',
-    './.storybook/**/*.{ts,tsx}',
-    './components/**/*.stories.{ts,tsx}',
-    './app/**/*.stories.{ts,tsx}'
+    './lib/**/*.{ts,tsx}'
   ],
   theme: {
     extend: {
