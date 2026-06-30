@@ -95,6 +95,14 @@ def test_supabase_ref_derives_jwks_and_issuer() -> None:
     )
 
 
+def test_supabase_ref_derives_storage_project_url() -> None:
+    # Storage(서명/HEAD)는 supabase_url 을 단독으로 요구하고 issuer 로 폴백하지 않는다.
+    # ref 에서 project root(suffix 없음)로 파생해야 SUPABASE_REF 만으로 평면도 업로드
+    # 검증/PDF 서명이 동작한다 (없으면 FLOORPLAN_ASSET_UNVERIFIED).
+    settings = Settings(supabase_ref="vrxdfratsckukzyxrlce")
+    assert settings.supabase_url == "https://vrxdfratsckukzyxrlce.supabase.co"
+
+
 def test_blank_supabase_urls_still_derive_from_ref() -> None:
     # A `.env` copied from `.env.example` provides these as empty strings;
     # derivation must still fire (else auth reports AUTH_SESSION_CONFIG_MISSING).
@@ -102,6 +110,7 @@ def test_blank_supabase_urls_still_derive_from_ref() -> None:
         supabase_ref="vrxdfratsckukzyxrlce",
         supabase_jwks_url="",
         supabase_jwt_issuer="",
+        supabase_url="",
     )
     assert (
         settings.supabase_jwks_url
@@ -111,6 +120,7 @@ def test_blank_supabase_urls_still_derive_from_ref() -> None:
         settings.supabase_jwt_issuer
         == "https://vrxdfratsckukzyxrlce.supabase.co/auth/v1"
     )
+    assert settings.supabase_url == "https://vrxdfratsckukzyxrlce.supabase.co"
 
 
 def test_explicit_supabase_urls_win_over_ref() -> None:
@@ -118,15 +128,18 @@ def test_explicit_supabase_urls_win_over_ref() -> None:
         supabase_ref="vrxdfratsckukzyxrlce",
         supabase_jwks_url="https://override.example/jwks.json",
         supabase_jwt_issuer="https://override.example/auth/v1",
+        supabase_url="https://override.example",
     )
     assert settings.supabase_jwks_url == "https://override.example/jwks.json"
     assert settings.supabase_jwt_issuer == "https://override.example/auth/v1"
+    assert settings.supabase_url == "https://override.example"
 
 
 def test_no_supabase_ref_leaves_urls_unset() -> None:
     settings = Settings()
     assert settings.supabase_jwks_url is None
     assert settings.supabase_jwt_issuer is None
+    assert settings.supabase_url is None
 
 
 def test_public_web_origin_derives_frontend_urls_and_cors() -> None:
