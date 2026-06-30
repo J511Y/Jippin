@@ -159,10 +159,16 @@ async def _db_advance_session_status(
     reason: str | None,
     run_id: uuid.UUID | None,
 ) -> dict[str, Any] | None:
-    """status 를 forward-only 로 전이하고 이력 1행을 남긴다(단일 트랜잭션).
+    """마일스톤 도달을 기록하고 status 를 forward-only 로 전이한다(단일 트랜잭션).
 
-    현재 status 가 종료 상태(expired/deleted)이거나, target rank 가 현재 이하면 no-op(None).
-    reference-scope 트리거가 전이를 거부하면 트랜잭션 전체가 롤백돼 이벤트도 남지 않는다.
+    두 관심사를 분리한다:
+      - **이력**(session_status_events): target 마일스톤을 단계별 1회 기록한다(이미 같은
+        to_status 이벤트가 있으면 생략). status 가 이미 더 높아도 기록한다 — 순서가
+        뒤바뀐 마일스톤(도면 먼저 올리고 주소를 나중에 확정)도 퍼널에 잡히게(리뷰 지적).
+      - **status(배지)**: target rank 가 현재보다 높을 때만 전진한다(뒤로 안 감).
+    종료 상태(expired/deleted)면 아무것도 하지 않는다. reference-scope 등 트리거가 전이를
+    거부하면 트랜잭션 전체가 롤백된다. 반환은 status 가 실제 전진했을 때만 갱신된 row, 아니면
+    None(전진 안 함; 이벤트는 기록됐을 수 있음).
     """
 
     target_rank = _STATUS_RANK[target]
@@ -179,6 +185,30 @@ async def _db_advance_session_status(
         ).scalar_one_or_none()
         if current is None or current in _TERMINAL_STATUSES:
             return None
+
+        # 마일스톤 이벤트 — 단계별 1회(중복 방지). status 전진 여부와 무관하게 기록한다.
+        already = (
+            await conn.execute(
+                sa.select(_SESSION_STATUS_EVENTS.c.id)
+                .where(
+                    _SESSION_STATUS_EVENTS.c.session_id == session_id,
+                    _SESSION_STATUS_EVENTS.c.to_status == target,
+                )
+                .limit(1)
+            )
+        ).first()
+        if already is None:
+            await conn.execute(
+                sa.insert(_SESSION_STATUS_EVENTS).values(
+                    session_id=session_id,
+                    from_status=current,
+                    to_status=target,
+                    reason=reason,
+                    run_id=run_id,
+                )
+            )
+
+        # status(배지)는 forward-only — 더 높을 때만 전진.
         if _STATUS_RANK.get(current, -1) >= target_rank:
             return None
         row = (
@@ -193,15 +223,6 @@ async def _db_advance_session_status(
                 .returning(*_SESSIONS.c)
             )
         ).one()
-        await conn.execute(
-            sa.insert(_SESSION_STATUS_EVENTS).values(
-                session_id=session_id,
-                from_status=current,
-                to_status=target,
-                reason=reason,
-                run_id=run_id,
-            )
-        )
     return dict(row._mapping)
 
 

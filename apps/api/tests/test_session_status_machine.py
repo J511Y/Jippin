@@ -97,21 +97,49 @@ async def test_set_verdict_advances_to_report_ready(monkeypatch) -> None:
     assert _events(fake, sid)[-1] == "report_ready"
 
 
-async def test_advance_is_forward_only_and_terminal_safe(monkeypatch) -> None:
+async def test_status_is_forward_only_but_milestone_recorded(monkeypatch) -> None:
+    # 더 낮은 단계 target: status(배지)는 전진하지 않지만 마일스톤 이벤트는 기록된다.
     fake = install_main_flow_fake(monkeypatch)
     _owner, sid = await _new_session(fake)
     await main_flow.advance_session_status(session_id=sid, target="report_ready")
-    before = list(_events(fake, sid))
-    # 더 낮은 단계로는 전이하지 않는다(no-op, 이벤트도 안 쌓임).
     res = await main_flow.advance_session_status(session_id=sid, target="address_ready")
-    assert res is None
-    assert _events(fake, sid) == before
-    assert fake.sessions[sid]["status"] == "report_ready"
-    # 종료 상태는 advance 가 건드리지 않는다.
+    assert res is None  # status 전진 안 함
+    assert fake.sessions[sid]["status"] == "report_ready"  # 배지 유지
+    assert "address_ready" in _events(fake, sid)  # 마일스톤은 기록됨
+
+
+async def test_milestone_deduped_per_stage(monkeypatch) -> None:
+    # 같은 단계로 두 번 advance 해도 이벤트는 1건(퍼널 distinct 와 별개로 로그도 깔끔).
+    fake = install_main_flow_fake(monkeypatch)
+    _owner, sid = await _new_session(fake)
+    await main_flow.advance_session_status(session_id=sid, target="report_ready")
+    await main_flow.advance_session_status(session_id=sid, target="report_ready")
+    assert _events(fake, sid).count("report_ready") == 1
+
+
+async def test_out_of_order_milestone_recorded(monkeypatch) -> None:
+    # 도면 먼저(floorplan_selected) → 주소 나중(address_ready): 둘 다 이벤트로 잡혀야 한다
+    # (forward-only no-op 가 address_ready 마일스톤을 떨어뜨리던 문제, 리뷰 지적).
+    fake = install_main_flow_fake(monkeypatch)
+    _owner, sid = await _new_session(fake)
+    await main_flow.advance_session_status(session_id=sid, target="floorplan_selected")
+    await main_flow.advance_session_status(session_id=sid, target="address_ready")
+    ev = _events(fake, sid)
+    assert "floorplan_selected" in ev and "address_ready" in ev
+    assert (
+        fake.sessions[sid]["status"] == "floorplan_selected"
+    )  # 배지는 더 높은 단계 유지
+
+
+async def test_terminal_status_is_untouched(monkeypatch) -> None:
+    # 종료 상태는 advance 가 status 도 이벤트도 건드리지 않는다.
+    fake = install_main_flow_fake(monkeypatch)
+    _owner, sid = await _new_session(fake)
     fake.sessions[sid]["status"] = "deleted"
     res = await main_flow.advance_session_status(session_id=sid, target="handoff")
     assert res is None
     assert fake.sessions[sid]["status"] == "deleted"
+    assert "handoff" not in _events(fake, sid)
 
 
 async def test_advance_rejects_unknown_status(monkeypatch) -> None:

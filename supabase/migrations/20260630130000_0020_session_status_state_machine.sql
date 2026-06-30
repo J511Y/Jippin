@@ -224,23 +224,41 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
-  -- report_ready 인데 판정/입력이 더는 유효하지 않으면(verdict NULL 또는 도면·주소 포인터
-  -- 소실) 남은 신호에 맞는 하위 단계로 status 를 낮춘다.
+  -- report_ready 인데 판정/입력이 더는 유효하지 않으면(verdict NULL 또는 **세 도면 소스
+  -- 모두** 소실 또는 주소 소실) 남은 신호에 맞는 하위 단계로 status 를 낮춘다. 도면 소스는
+  -- reference-scope 와 동일하게 asset/catalog(id)/upload 중 하나라도 있으면 유효로 본다 —
+  -- asset_id 만 보면 카탈로그·업로드 기반 report_ready 가 무관한 업데이트에 강등된다(리뷰 지적).
   if new.status = 'report_ready'
     and (
       new.rule_eval_result is null
-      or new.selected_floorplan_asset_id is null
+      or (
+        new.selected_floorplan_asset_id is null
+        and new.selected_floorplan_id is null
+        and new.selected_floorplan_upload_id is null
+      )
       or new.address_id is null
     )
   then
     new.status := case
-      when new.selected_floorplan_asset_id is not null
+      when (
+             new.selected_floorplan_asset_id is not null
+             or new.selected_floorplan_id is not null
+             or new.selected_floorplan_upload_id is not null
+           )
            and new.address_id is not null
            and (new.judgment_schema ? 'selected_walls') then 'collecting_info'
-      when new.selected_floorplan_asset_id is not null
+      when (
+             new.selected_floorplan_asset_id is not null
+             or new.selected_floorplan_id is not null
+             or new.selected_floorplan_upload_id is not null
+           )
            and new.address_id is not null
            and (new.judgment_schema ? 'wall_objects') then 'awaiting_overlay'
-      when new.selected_floorplan_asset_id is not null then 'floorplan_selected'
+      when (
+             new.selected_floorplan_asset_id is not null
+             or new.selected_floorplan_id is not null
+             or new.selected_floorplan_upload_id is not null
+           ) then 'floorplan_selected'
       when new.address_id is not null then 'address_ready'
       else 'draft'
     end;
@@ -260,7 +278,11 @@ create trigger trg_sessions_p_status_verdict_consistency
     new.status = 'report_ready'
     and (
       new.rule_eval_result is null
-      or new.selected_floorplan_asset_id is null
+      or (
+        new.selected_floorplan_asset_id is null
+        and new.selected_floorplan_id is null
+        and new.selected_floorplan_upload_id is null
+      )
       or new.address_id is null
     )
   )

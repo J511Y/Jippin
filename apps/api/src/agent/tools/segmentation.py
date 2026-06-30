@@ -624,12 +624,6 @@ async def segment_session_floorplan(
     )
     if not result.get("ok") or not result.get("regions"):
         return result
-    # 분석 성공 시에만 status 를 analyzing 으로 전진한다 — 서명/엔드포인트/도면판정 실패로
-    # early-return 하는 경로에서 배지가 analyzing 에 stuck 되지 않게(리뷰 지적). 직후
-    # merge_judgment_schema 가 awaiting_overlay 로 다시 전진한다(best-effort).
-    await main_flow.advance_session_status(
-        session_id=session_id, target="analyzing", reason="segmentation_succeeded"
-    )
     # 분석 성공 — 오버레이 카드 방출 + 공통 판단 스키마(wall/space objects) 누적 + LLM
     # 반환분에서 좌표 제거(컨텍스트 leanness). 카드 방출/판단 누적 실패는 분석 자체를
     # 무르지 않는다(best-effort) — 좌표 없는 요약만 LLM 에 돌려도 흐름은 유지된다.
@@ -660,6 +654,13 @@ async def segment_session_floorplan(
                 "올려 주세요."
             ),
         )
+
+    # 분석 성공(세그멘테이션 + VLM 평면도 검증 통과) 시에만 status 를 analyzing 으로 전진한다 —
+    # 서명/엔드포인트/도면판정/not-floorplan 실패로 early-return 하는 경로에서 배지가 analyzing
+    # 에 stuck 되지 않게(리뷰 지적). 직후 merge_judgment_schema 가 awaiting_overlay 로 전진한다.
+    await main_flow.advance_session_status(
+        session_id=session_id, target="analyzing", reason="segmentation_succeeded"
+    )
 
     # AI-003 정합성 검증·정규화 — VLM 교정(reclassifications)을 regions 에 머지한다.
     vlm_ids: set[str] = set()

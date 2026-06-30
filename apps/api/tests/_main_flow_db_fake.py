@@ -159,27 +159,36 @@ class FakeMainFlowDb:
         reason: str | None,
         run_id: uuid.UUID | None,
     ) -> dict[str, Any] | None:
-        """forward-only 전이 + 이력 1행(real seam 미러, reference-scope 트리거는 미적용)."""
+        """마일스톤 이벤트(단계별 1회) + forward-only status(real seam 미러).
+
+        reference-scope 트리거는 미적용. status 가 이미 더 높아도 마일스톤 이벤트는
+        단계별 1회 기록하고(중복 방지), status 는 더 높을 때만 전진한다.
+        """
 
         rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
         row = self.sessions.get(session_id)
         if row is None or row["status"] in ("expired", "deleted"):
             return None
-        if rank.get(row["status"], -1) >= rank[target]:
-            return None
         from_status = row["status"]
+        already = any(
+            e["session_id"] == session_id and e["to_status"] == target
+            for e in self.session_status_events
+        )
+        if not already:
+            self.session_status_events.append(
+                {
+                    "session_id": session_id,
+                    "from_status": from_status,
+                    "to_status": target,
+                    "reason": reason,
+                    "run_id": run_id,
+                    "occurred_at": _now(),
+                }
+            )
+        if rank.get(from_status, -1) >= rank[target]:
+            return None
         row["status"] = target
         self._touch_session(session_id)
-        self.session_status_events.append(
-            {
-                "session_id": session_id,
-                "from_status": from_status,
-                "to_status": target,
-                "reason": reason,
-                "run_id": run_id,
-                "occurred_at": _now(),
-            }
-        )
         return dict(row)
 
     async def _db_select_session(self, session_id: uuid.UUID) -> dict[str, Any] | None:

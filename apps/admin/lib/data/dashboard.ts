@@ -168,7 +168,17 @@ async function getSessionFunnelFallback(
     .select('session_id, to_status, sessions!inner(status)')
     .neq('sessions.status', 'deleted')
     .limit(50000);
-  if (error || !rows) return counts;
+
+  if (error) {
+    // 0020 미적용 환경(이벤트 테이블/RPC 부재) — events 가 없으면 빈 퍼널 대신 현재
+    // sessions.status 분포라도 보여 준다(배포 윈도우 폴백, 이전 동작과 동등).
+    const { data: srows } = await supabase.from('sessions').select('status').limit(10000);
+    for (const row of (srows ?? []) as Array<{ status: string }>) {
+      if (known.has(row.status)) counts.set(row.status, (counts.get(row.status) ?? 0) + 1);
+    }
+    return counts;
+  }
+  if (!rows) return counts;
 
   // 단계×세션 중복 제거 후, 단계별 distinct 세션 수.
   const seen = new Set<string>();
