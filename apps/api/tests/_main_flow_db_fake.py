@@ -26,6 +26,7 @@ from src.services import main_flow
 # 명시적 목록을 유지한다 (drift 가드).
 _SEAM_NAMES: tuple[str, ...] = (
     "_db_insert_session",
+    "_db_advance_session_status",
     "_db_select_session",
     "_db_list_sessions",
     "_db_clear_owner_sessions_expiry",
@@ -103,6 +104,9 @@ class FakeMainFlowDb:
         self.chat_messages: dict[uuid.UUID, dict[str, Any]] = {}
         self.chat_tool_calls: dict[uuid.UUID, dict[str, Any]] = {}
         self.agent_runs: dict[uuid.UUID, dict[str, Any]] = {}
+        # sessions.status forward-only 전이 이력 (append-only). 각 항목:
+        # {session_id, from_status, to_status, reason, run_id, occurred_at}.
+        self.session_status_events: list[dict[str, Any]] = []
 
     # -- helpers ---------------------------------------------------------
 
@@ -135,6 +139,56 @@ class FakeMainFlowDb:
             "updated_at": now,
         }
         self.sessions[row["id"]] = row
+        self.session_status_events.append(
+            {
+                "session_id": row["id"],
+                "from_status": None,
+                "to_status": "draft",
+                "reason": "session_created",
+                "run_id": None,
+                "occurred_at": now,
+            }
+        )
+        return dict(row)
+
+    async def _db_advance_session_status(
+        self,
+        session_id: uuid.UUID,
+        target: str,
+        *,
+        reason: str | None,
+        run_id: uuid.UUID | None,
+    ) -> dict[str, Any] | None:
+        """마일스톤 이벤트(단계별 1회) + forward-only status(real seam 미러).
+
+        reference-scope 트리거는 미적용. status 가 이미 더 높아도 마일스톤 이벤트는
+        단계별 1회 기록하고(중복 방지), status 는 더 높을 때만 전진한다.
+        """
+
+        rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
+        row = self.sessions.get(session_id)
+        if row is None or row["status"] in ("expired", "deleted"):
+            return None
+        from_status = row["status"]
+        already = any(
+            e["session_id"] == session_id and e["to_status"] == target
+            for e in self.session_status_events
+        )
+        if not already:
+            self.session_status_events.append(
+                {
+                    "session_id": session_id,
+                    "from_status": from_status,
+                    "to_status": target,
+                    "reason": reason,
+                    "run_id": run_id,
+                    "occurred_at": _now(),
+                }
+            )
+        if rank.get(from_status, -1) >= rank[target]:
+            return None
+        row["status"] = target
+        self._touch_session(session_id)
         return dict(row)
 
     async def _db_select_session(self, session_id: uuid.UUID) -> dict[str, Any] | None:
@@ -226,8 +280,8 @@ class FakeMainFlowDb:
 
         session = self.sessions[session_id]
         session["address_id"] = row["id"]
-        if session["status"] == "draft":
-            session["status"] = "address_ready"
+        # status(draft→address_ready) 전이는 public upsert_session_address 가
+        # advance_session_status 로 처리한다(real seam 미러) — 여기선 포인터만.
         if address_changed:
             session["rule_eval_result"] = None
             session["rule_evaluated_at"] = None

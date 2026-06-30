@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 import sqlalchemy as sa
 
+from . import main_flow
 from ..config import get_settings
 from ..db import get_engine
 from ..errors import ZippinException
@@ -47,6 +48,55 @@ _LEAD_FIELDS: tuple[str, ...] = (
 
 def _bad_request(message: str, code: str) -> ZippinException:
     return ZippinException(message, code=code, http_status=422)
+
+
+def session_address_display(addr: dict[str, Any] | None) -> str | None:
+    """세션 주소 row 를 표시용 한 줄 주소로 환산한다(상담 리드 road_addr_part1·카드 prefill).
+
+    도로명/지번이 있으면 그대로, 없으면 아파트명+동+호로 폴백한다 — 사전검토는
+    아파트명만으로도 주소를 확정할 수 있어(``confirm_address_impl``), 도로명이 없는
+    세션에서 만든 상담 리드의 주소가 공란이 되던 문제를 막는다(0019).
+    """
+
+    if not isinstance(addr, dict):
+        return None
+    for key in ("road_address", "jibun_address"):
+        value = (addr.get(key) or "").strip()
+        if value:
+            return value
+    parts = [
+        str(addr[key]).strip()
+        for key in ("apartment_name", "building_dong", "unit_ho")
+        if addr.get(key)
+    ]
+    joined = " ".join(part for part in parts if part)
+    return joined or None
+
+
+async def _resolve_precheck_session(
+    *, session_id: uuid.UUID, user_id: uuid.UUID
+) -> tuple[uuid.UUID | None, str | None]:
+    """사전검토 세션 귀속을 해석한다(본인 세션일 때만).
+
+    ``(linked_session_id, address_fallback)`` 를 돌린다 — 타인/부재 세션 id 는 무시해
+    (IDOR/오귀속 방지) ``(None, None)`` 이다. address_fallback 은 세션 확정 주소(도로명/
+    지번, 없으면 아파트명+동+호)로, 호출자가 road_addr_part1 이 비어 있을 때만 채운다.
+    조회 실패는 연결만 생략하고 상담 접수 자체를 막지 않는다(best-effort).
+    """
+
+    try:
+        session = await main_flow._db_select_session(session_id)
+    except Exception:  # noqa: BLE001 - 세션 조회 실패는 연결을 생략(상담 접수는 진행)
+        return None, None
+    if session is None or session.get("user_id") != user_id:
+        return None, None
+    try:
+        display = session_address_display(
+            await main_flow.get_session_address(session_id)
+        )
+    except Exception:  # noqa: BLE001 - 주소 폴백 실패는 연결만 남기고 진행
+        display = None
+    return session_id, (display[:255] if display else None)
 
 
 def _validate_attachments(
@@ -133,12 +183,34 @@ async def create_lead(
     lead_values["user_id"] = user_id
     lead_values["is_anonymous"] = is_anonymous
 
+    # 사전검토 세션 귀속 — 본인 세션이면 session_id 를 연결하고, 주소가 비어 있으면 세션
+    # 확정 주소(아파트명 포함)로 폴백해 상담 메뉴 주소 공란을 막는다(0019).
+    session_id = payload.get("session_id")
+    if session_id is not None:
+        linked_session_id, address_fallback = await _resolve_precheck_session(
+            session_id=session_id, user_id=user_id
+        )
+        if linked_session_id is not None:
+            lead_values["session_id"] = linked_session_id
+            if (
+                address_fallback
+                and not (lead_values.get("road_addr_part1") or "").strip()
+            ):
+                lead_values["road_addr_part1"] = address_fallback
+
     attachments = _validate_attachments(
         list(payload.get("attachments") or []),
         user_id=user_id,
         default_bucket=settings.lead_floorplan_bucket,
     )
     row = await _insert_lead(lead_values, attachments)
+    # 사전검토 세션에서 온 상담이면 그 세션을 handoff(상담 전환)로 전진(best-effort).
+    if lead_values.get("session_id") is not None:
+        await main_flow.advance_session_status(
+            session_id=lead_values["session_id"],
+            target="handoff",
+            reason="consultation_submitted",
+        )
     # 우리집 체크 인입이면 원천 잡에 귀속 연결(소유자 본인 잡만, best-effort).
     home_check_id = payload.get("home_check_id")
     if home_check_id:

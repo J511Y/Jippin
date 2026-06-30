@@ -77,6 +77,9 @@ export function ConsultationHandoffCard({
           {/* 사전검토 빠른 상담폼 — 이름/연락처만(로그인 시 자동) + 세션이 아는 주소로 바로 제출. */}
           <QuickPrecheckConsultForm
             prefillAddress={address}
+            fromSession={
+              typeof payload.from_session === 'string' ? payload.from_session : undefined
+            }
             ctaId="precheck_handoff"
             onSubmitted={() => setSubmitted(true)}
           />

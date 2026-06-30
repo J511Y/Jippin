@@ -29,6 +29,8 @@ import { normalizeKoreanPhone, validateKoreanPhone, validateRequiredText } from 
 export interface QuickPrecheckConsultFormProps {
   /** 세션에서 확정된 현장 주소(도로명) — 그대로 제출하고 읽기전용으로 보여 준다. */
   prefillAddress?: string;
+  /** 원천 사전검토 세션 id — 백엔드가 리드에 연결하고 주소 폴백에 쓴다. */
+  fromSession?: string;
   /** 인입 식별자 — 제출 추적 cta. */
   ctaId?: LeadCtaId;
   /** 제출 성공 콜백 — 카드가 완료 상태로 전환. */
@@ -43,6 +45,7 @@ interface QuickValues {
 
 export function QuickPrecheckConsultForm({
   prefillAddress,
+  fromSession,
   ctaId,
   onSubmitted
 }: QuickPrecheckConsultFormProps) {
@@ -96,6 +99,7 @@ export function QuickPrecheckConsultForm({
         applicant_phone:
           normalizeKoreanPhone(values.applicant_phone) ?? values.applicant_phone,
         road_addr_part1: prefillAddress?.trim() || null,
+        session_id: fromSession ?? null,
         message: values.message.trim() || null
       });
       trackLeadSubmit('precheck_session', ctaId);
