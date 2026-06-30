@@ -232,6 +232,9 @@ export function JudgmentSummaryCard({
           </Text>
           <QuickPrecheckConsultForm
             prefillAddress={prefillAddress}
+            fromSession={
+              typeof payload.session_id === 'string' ? payload.session_id : undefined
+            }
             ctaId="precheck_report"
             onSubmitted={() => setConsultSubmitted(true)}
           />

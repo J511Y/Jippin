@@ -44,6 +44,7 @@ from sqlalchemy.exc import IntegrityError
 from ..config import get_settings
 from ..db import get_engine
 from ..errors import ZippinException
+from ..logging import get_logger
 from ..models import (
     AgentRun,
     ChatMessage,
@@ -54,10 +55,12 @@ from ..models import (
     FloorplanUpload,
     Session,
     SessionAddress,
+    SessionStatusEvent,
 )
 
 _SESSIONS = Session.__table__
 _SESSION_ADDRESSES = SessionAddress.__table__
+_SESSION_STATUS_EVENTS = SessionStatusEvent.__table__
 _FLOORPLANS = Floorplan.__table__
 _FLOORPLAN_UPLOADS = FloorplanUpload.__table__
 _FLOORPLAN_ASSETS = FloorplanAsset.__table__
@@ -69,6 +72,24 @@ _AGENT_RUNS = AgentRun.__table__
 # completion_decision 처럼 None 자체가 유효한 값(결정 해제)인 필드의 "미지정"을
 # 구분하기 위한 sentinel — set_session_decision 참조.
 _UNSET: Any = object()
+
+# 사전검토 세션 퍼널 단계 순서(0008 status check 의 진행 단계, 종료 상태 제외). status 는
+# 이 순서로만 전진하며(forward-only) 뒤로 가지 않는다 — advance_session_status 가 강제한다.
+STATUS_ORDER: tuple[str, ...] = (
+    "draft",
+    "address_ready",
+    "floorplan_selected",
+    "analyzing",
+    "awaiting_overlay",
+    "collecting_info",
+    "ready_for_rule",
+    "report_ready",
+    "handoff",
+)
+_STATUS_RANK: dict[str, int] = {name: i for i, name in enumerate(STATUS_ORDER)}
+_TERMINAL_STATUSES: frozenset[str] = frozenset({"expired", "deleted"})
+
+_log = get_logger("zippin.main_flow")
 
 
 def _now() -> datetime:
@@ -108,7 +129,11 @@ def _touch_session_stmt(session_id: uuid.UUID) -> sa.Update:
 
 
 async def _db_insert_session(values: dict[str, Any]) -> dict[str, Any]:
-    """`sessions` INSERT. id/created_at 등 server default 는 RETURNING 으로 회수."""
+    """`sessions` INSERT + 진입 이벤트(draft). id/created_at 등은 RETURNING 으로 회수.
+
+    세션 생성 자체를 퍼널 진입(draft 도달)으로 기록해, 누적 퍼널의 모수(draft)가 전체
+    세션이 되게 한다 — 이후 단계 이벤트는 advance_session_status 가 쌓는다.
+    """
 
     async with get_engine().begin() as conn:
         row = (
@@ -116,7 +141,93 @@ async def _db_insert_session(values: dict[str, Any]) -> dict[str, Any]:
                 sa.insert(_SESSIONS).values(**values).returning(*_SESSIONS.c)
             )
         ).one()
+        await conn.execute(
+            sa.insert(_SESSION_STATUS_EVENTS).values(
+                session_id=row._mapping["id"],
+                from_status=None,
+                to_status="draft",
+                reason="session_created",
+            )
+        )
     return dict(row._mapping)
+
+
+async def _db_advance_session_status(
+    session_id: uuid.UUID,
+    target: str,
+    *,
+    reason: str | None,
+    run_id: uuid.UUID | None,
+) -> dict[str, Any] | None:
+    """status 를 forward-only 로 전이하고 이력 1행을 남긴다(단일 트랜잭션).
+
+    현재 status 가 종료 상태(expired/deleted)이거나, target rank 가 현재 이하면 no-op(None).
+    reference-scope 트리거가 전이를 거부하면 트랜잭션 전체가 롤백돼 이벤트도 남지 않는다.
+    """
+
+    target_rank = _STATUS_RANK[target]
+    async with get_engine().begin() as conn:
+        current = (
+            await conn.execute(
+                sa.select(_SESSIONS.c.status).where(_SESSIONS.c.id == session_id)
+            )
+        ).scalar_one_or_none()
+        if current is None or current in _TERMINAL_STATUSES:
+            return None
+        if _STATUS_RANK.get(current, -1) >= target_rank:
+            return None
+        row = (
+            await conn.execute(
+                sa.update(_SESSIONS)
+                .where(_SESSIONS.c.id == session_id)
+                .values(
+                    status=target,
+                    last_activity_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                )
+                .returning(*_SESSIONS.c)
+            )
+        ).one()
+        await conn.execute(
+            sa.insert(_SESSION_STATUS_EVENTS).values(
+                session_id=session_id,
+                from_status=current,
+                to_status=target,
+                reason=reason,
+                run_id=run_id,
+            )
+        )
+    return dict(row._mapping)
+
+
+async def advance_session_status(
+    *,
+    session_id: uuid.UUID,
+    target: str,
+    reason: str | None = None,
+    run_id: uuid.UUID | None = None,
+) -> dict[str, Any] | None:
+    """도구/플로우 마일스톤에서 세션 status 를 한 단계 전진시킨다(best-effort, runtime-only).
+
+    forward-only(뒤로 안 감) + 종료 상태 보호. 전이가 reference-scope 트리거에 막히거나
+    (예: 주소/도면 없이 분석 단계 진입) 기타 오류가 나도 **사용자 플로우를 막지 않도록**
+    예외를 삼키고 None 을 반환한다 — status 는 진행 상황의 투영일 뿐 정본 데이터가 아니다.
+    실제 전이가 일어났으면 갱신된 세션 row 를 반환한다.
+    """
+
+    if target not in _STATUS_RANK:
+        raise ValueError(f"advance_session_status: 알 수 없는 상태 {target!r}.")
+    try:
+        return await _db_advance_session_status(
+            session_id, target, reason=reason, run_id=run_id
+        )
+    except Exception:  # noqa: BLE001 - 상태 전이 실패는 도구/플로우를 막지 않는다
+        _log.warning(
+            "session_status_advance_failed",
+            session_id=str(session_id),
+            target=target,
+        )
+        return None
 
 
 async def _db_select_session(session_id: uuid.UUID) -> dict[str, Any] | None:
@@ -183,17 +294,14 @@ async def _db_upsert_session_address(
                 ).returning(*_SESSION_ADDRESSES.c)
             )
         ).one()
+        # address_id 포인터만 갱신한다. status(draft→address_ready) 전이는 공개 함수
+        # upsert_session_address 가 advance_session_status 로 일원화해(이력 기록 포함)
+        # 처리한다 — 모든 상태 전이를 한 경로로 모아 session_status_events 에 남긴다.
         await conn.execute(
             sa.update(_SESSIONS)
             .where(_SESSIONS.c.id == session_id)
             .values(
                 address_id=row._mapping["id"],
-                # draft 에서만 address_ready 로 전이 — 이후 단계 status 는
-                # 주소 재입력으로 되돌리지 않는다 (in-memory 구현과 동일).
-                status=sa.case(
-                    (_SESSIONS.c.status == "draft", "address_ready"),
-                    else_=_SESSIONS.c.status,
-                ),
                 last_activity_at=sa.func.now(),
                 updated_at=sa.func.now(),
             )
@@ -774,6 +882,16 @@ async def merge_judgment_schema(
         values["rule_eval_result"] = None
         values["rule_evaluated_at"] = None
     await _db_update_session_fields(session_id, values)
+    # 분석/선택 마일스톤에 따라 status 전진. selected_walls(사용자 선택)는 wall_objects
+    # (분석 산출)보다 뒤 단계라 우선 처리한다(둘 다 오면 collecting_info).
+    if "selected_walls" in patch:
+        await advance_session_status(
+            session_id=session_id, target="collecting_info", reason="walls_selected"
+        )
+    elif "wall_objects" in patch:
+        await advance_session_status(
+            session_id=session_id, target="awaiting_overlay", reason="analysis_complete"
+        )
     return merged
 
 
@@ -944,7 +1062,12 @@ async def upsert_session_address(
     address_values: dict[str, Any] = {field: row[field] for field in _ADDRESS_FIELDS}
     address_values["session_id"] = session_id
     address_values["user_id"] = owner_user_id
-    return await _db_upsert_session_address(address_values, session_id=session_id)
+    saved = await _db_upsert_session_address(address_values, session_id=session_id)
+    # 충분한 주소가 확정됐으니 status 를 address_ready 로 전진(draft 에서만 실제 전이).
+    await advance_session_status(
+        session_id=session_id, target="address_ready", reason="address_confirmed"
+    )
+    return saved
 
 
 # ---------------------------------------------------------------------------
@@ -1050,6 +1173,10 @@ async def create_floorplan_asset(
     await _db_update_session_fields(
         session_id, {"selected_floorplan_asset_id": asset["id"]}
     )
+    # 도면 asset 이 세션에 연결됐으니 status 를 floorplan_selected 로 전진.
+    await advance_session_status(
+        session_id=session_id, target="floorplan_selected", reason="floorplan_selected"
+    )
     return asset
 
 
@@ -1133,9 +1260,15 @@ async def set_session_verdict(
         "rule_eval_result": dict(rule_eval_result),
         "rule_evaluated_at": _now(),
     }
-    return await _db_set_session_verdict_if_inputs(
+    persisted = await _db_set_session_verdict_if_inputs(
         session_id, values, expected_asset_id, expected_address_id
     )
+    # 판정이 실제로 영속됐을 때만(입력이 안 바뀌었을 때) 리포트 준비됨으로 전진.
+    if persisted is not None:
+        await advance_session_status(
+            session_id=session_id, target="report_ready", reason="report_ready"
+        )
+    return persisted
 
 
 async def save_floorplan_candidate_snapshot(

@@ -581,6 +581,31 @@ async def test_handoff_emits_consultation_card(monkeypatch) -> None:
     assert props["from_session"] == str(session_id)
 
 
+async def test_handoff_prefill_falls_back_to_apartment(monkeypatch) -> None:
+    # 도로명/지번이 없고 아파트명+동+호만 있는 세션도 prefill_address 가 채워져야 한다
+    # (상담 리드 주소 공란 방지, 0019).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    fake.session_addresses[session_id] = {
+        "id": uuid.uuid4(),
+        "session_id": session_id,
+        "road_address": None,
+        "jibun_address": None,
+        "apartment_name": "장미마을",
+        "building_dong": "802동",
+        "unit_ho": "1406호",
+    }
+    res = await domain.set_completion_decision_impl(
+        session_id=session_id,
+        completion_decision="HOLD_OR_HANDOFF",
+        run_context=ctx,
+        run_id=run_id,
+    )
+    assert res["handoff_emitted"] is True
+    ui, _snap = ctx.drain_ui()
+    props = ui[0]["elements"]["ch"]["props"]
+    assert props["prefill_address"] == "장미마을 802동 1406호"
+
+
 async def test_non_handoff_decision_emits_no_card(monkeypatch) -> None:
     # ASK_MORE 등 일반 결정은 카드를 방출하지 않는다(상담 인입은 handoff 전용).
     session_id, run_id, _fake, ctx = await _session_run_ctx(monkeypatch)

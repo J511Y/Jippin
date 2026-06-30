@@ -607,6 +607,11 @@ async def segment_session_floorplan(
             error_code="SEGMENTATION_NOT_SCANNED",
             summary="도면 보안 검사가 끝난 뒤 분석할 수 있습니다.",
         )
+    # 분석 시작 — status 를 analyzing 으로 전진(best-effort; 분석 성공 후 merge_judgment_schema
+    # 가 awaiting_overlay 로 다시 전진한다). 주소/도면 참조가 없으면 트리거가 막아 no-op.
+    await main_flow.advance_session_status(
+        session_id=session_id, target="analyzing", reason="segmentation_started"
+    )
     signed = await storage.sign_object_url(
         settings,
         bucket=asset["bucket"],

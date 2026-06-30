@@ -179,6 +179,19 @@ async def set_completion_decision_impl(
     except Exception as exc:  # noqa: BLE001
         return _safe_error(exc, "SET_DECISION_FAILED", tool="set_completion_decision")
 
+    # FLOW_GUARD 결정에 따라 세션 status 를 전진(forward-only, best-effort).
+    _decision_status = {
+        "REQUEST_OVERLAY_REVIEW": "awaiting_overlay",
+        "PROCEED_RULE": "ready_for_rule",
+        "HOLD_OR_HANDOFF": "handoff",
+    }.get(completion_decision)
+    if _decision_status is not None:
+        await main_flow.advance_session_status(
+            session_id=session_id,
+            target=_decision_status,
+            reason=f"decision:{completion_decision}",
+        )
+
     handoff_emitted = False
     if (
         completion_decision == "HOLD_OR_HANDOFF"
@@ -187,9 +200,11 @@ async def set_completion_decision_impl(
     ):
         prefill_address: str | None = None
         try:
-            addr = await main_flow.get_session_address(session_id)
-            if isinstance(addr, dict):
-                prefill_address = addr.get("road_address") or addr.get("jibun_address")
+            # 도로명/지번이 없으면 아파트명+동+호로 폴백한다 — prefill 이 비어 상담 리드
+            # 주소가 공란이 되던 문제 방지(#address-apt-identity, 0019).
+            prefill_address = leads.session_address_display(
+                await main_flow.get_session_address(session_id)
+            )
         except Exception:  # noqa: BLE001 - 주소 조회 실패는 prefill 없이 진행
             prefill_address = None
         spec = build_consultation_handoff_spec(
@@ -665,12 +680,13 @@ async def emit_judgment_summary_impl(
     if risks:
         props["risks"] = [str(r) for r in risks]
     # 판정 카드 하단 상담 CTA(빠른 상담폼)에서 현장 주소를 prefill 할 수 있게 확정 주소를 싣는다.
+    # 도로명/지번이 없으면 아파트명+동+호로 폴백한다(0019).
     try:
-        addr = await main_flow.get_session_address(session_id)
-        if isinstance(addr, dict):
-            road = addr.get("road_address") or addr.get("jibun_address")
-            if road:
-                props["prefill_address"] = str(road)
+        prefill = leads.session_address_display(
+            await main_flow.get_session_address(session_id)
+        )
+        if prefill:
+            props["prefill_address"] = prefill
     except Exception:  # noqa: BLE001 - 주소 조회 실패는 카드 방출을 막지 않는다
         pass
     spec = {

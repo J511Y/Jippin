@@ -152,6 +152,43 @@ export async function getLeadDailyCounts(daysBack = 30): Promise<DailyLeadCount[
   return out;
 }
 
+/**
+ * 누적 퍼널 폴백(RPC 미적용 환경) — `session_status_events`(0020) 이력에서 세션별 최고
+ * 도달 단계를 구해 "이 단계 이상 도달" 누적으로 센다. 단순 group-by(현재 분포)와 달리
+ * 단조 감소(좁아짐)가 보장된다. deleted 세션은 모수에서 제외. RPC 경로가 정본이며, 이
+ * 폴백은 동일한 누적 의미를 재현한다.
+ */
+async function getSessionFunnelFallback(
+  supabase: ReturnType<typeof createServiceRoleClient>
+): Promise<Map<string, number>> {
+  const rank = new Map(
+    SESSION_FUNNEL_ORDER.map((name, i): [string, number] => [name, i])
+  );
+  const counts = new Map<string, number>();
+  const { data: rows, error } = await supabase
+    .from('session_status_events')
+    .select('session_id, to_status, sessions!inner(status)')
+    .neq('sessions.status', 'deleted')
+    .limit(50000);
+  if (error || !rows) return counts;
+
+  // 세션별 최고 도달 rank.
+  const maxRank = new Map<string, number>();
+  for (const row of rows as Array<{ session_id: string; to_status: string }>) {
+    const r = rank.get(row.to_status);
+    if (r === undefined) continue;
+    const prev = maxRank.get(row.session_id) ?? -1;
+    if (r > prev) maxRank.set(row.session_id, r);
+  }
+  // 각 단계 S: max_rank >= rank(S) 인 세션 수(누적).
+  for (const [, sessionMax] of maxRank) {
+    for (const [stage, stageRank] of rank) {
+      if (sessionMax >= stageRank) counts.set(stage, (counts.get(stage) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
 export async function getSessionFunnel(): Promise<FunnelEntry[]> {
   const supabase = createServiceRoleClient();
   const { data, error } = await supabase.rpc('admin_session_funnel');
@@ -165,11 +202,7 @@ export async function getSessionFunnel(): Promise<FunnelEntry[]> {
       ])
     );
   } else {
-    const { data: rows } = await supabase.from('sessions').select('status').limit(10000);
-    for (const row of rows ?? []) {
-      const status = row.status as string;
-      counts.set(status, (counts.get(status) ?? 0) + 1);
-    }
+    counts = await getSessionFunnelFallback(supabase);
   }
 
   return SESSION_FUNNEL_ORDER.map((status) => ({ status, count: counts.get(status) ?? 0 }));
