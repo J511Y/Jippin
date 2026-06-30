@@ -183,10 +183,12 @@ async def create_lead(
     lead_values["user_id"] = user_id
     lead_values["is_anonymous"] = is_anonymous
 
-    # 사전검토 세션 귀속 — 본인 세션이면 session_id 를 연결하고, 주소가 비어 있으면 세션
-    # 확정 주소(아파트명 포함)로 폴백해 상담 메뉴 주소 공란을 막는다(0019).
+    # 사전검토 세션 귀속 — **precheck_session 인입만** 본인 세션이면 session_id 를 연결하고,
+    # 주소가 비어 있으면 세션 확정 주소(아파트명 포함)로 폴백해 상담 메뉴 주소 공란을
+    # 막는다(0019). source_form 게이트가 없으면 일반 폼(main_page/lead_page)이 owned
+    # session_id 만 실어 보내도 precheck 귀속·handoff 퍼널을 오염시킨다(리뷰 지적).
     session_id = payload.get("session_id")
-    if session_id is not None:
+    if session_id is not None and payload.get("source_form") == "precheck_session":
         linked_session_id, address_fallback = await _resolve_precheck_session(
             session_id=session_id, user_id=user_id
         )

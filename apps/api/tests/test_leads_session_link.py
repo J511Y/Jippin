@@ -157,3 +157,30 @@ async def test_create_lead_ignores_foreign_session(monkeypatch) -> None:
     )
     assert captured.get("session_id") is None
     assert captured.get("road_addr_part1") is None
+
+
+async def test_create_lead_ignores_session_id_for_non_precheck_form(
+    monkeypatch,
+) -> None:
+    # precheck_session 이 아닌 폼(main_page/lead_page)은 owned session_id 를 실어 보내도
+    # 연결/주소폴백/handoff 전진하지 않는다 — 세션 해석조차 시도하지 않는다(리뷰 지적).
+    owner = uuid.uuid4()
+    session_id = uuid.uuid4()
+    captured = _patch_insert(monkeypatch)
+
+    async def boom(*_a, **_k):  # type: ignore[no-untyped-def]
+        raise AssertionError("non-precheck 폼은 세션 해석까지 가면 안 된다")
+
+    monkeypatch.setattr(main_flow, "_db_select_session", boom)
+
+    await leads.create_lead(
+        user_id=owner,
+        is_anonymous=False,
+        payload={
+            "source_form": "main_page",
+            "applicant_name": "홍길동",
+            "applicant_phone": "010-1234-5678",
+            "session_id": session_id,
+        },
+    )
+    assert captured.get("session_id") is None
