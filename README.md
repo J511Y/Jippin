@@ -106,8 +106,8 @@ curl http://localhost:8000/healthz       # api
 전체 규칙은 [`AGENTS.md`](AGENTS.md) 가 정본이며, 본 README 는 한 줄 요약만 둔다.
 
 - **브랜치 전략**: `main ← dev ← feature/*`. `main`/`dev` 직접 푸시 금지, 일반 작업 PR base 는 `dev`, `main` PR 은 `dev` 승격 또는 CTO/DevOps 승인 핫픽스만 허용.
-- **커밋 메시지**: gitmoji (`✨ feat:`, `🐛 fix:`, `📝 docs:`, `♻️ refactor:`, `✅ test:`, `🔧 chore:`, `🚀 perf:`, `🔒 security:`).
-- **PR 본문**: 관련 Paperclip 이슈 식별자(`CMP-###`)와 영향 모듈 명시. 체크리스트는 [`AGENTS.md §4.3`](AGENTS.md).
+- **커밋 메시지**: gitmoji (`✨ feat:`, `🐛 fix:`, `📝 docs:`, `♻️ refactor:`, `✅ test:`, `🔧 chore:`, `🚀 perf:`, `🔒 security:`, `🚧 wip:`, `🔖 release:`).
+- **PR 본문**: 영향 모듈 명시. 관련 이슈가 있으면 식별자를 적어도 좋으나 `CMP-###` 표기는 더 이상 필수가 아니다(Paperclip 보드 운용 중단, pr-title-lint 미강제). 체크리스트는 [`AGENTS.md §4.3`](AGENTS.md).
 - **에러·응답 포맷**: `{ "error": { "code", "message", "request_id", "timestamp" } }` 통일 (자세한 정의는 [`AGENTS.md §4.5`](AGENTS.md)).
 - **법적 고지**: 모든 결과 화면·다운로드 산출물에 위 ⚠️ 문구 필수 — 누락 시 머지 거부.
 - **디자인 SSOT 우선**: UI/문구/리포트 작업 전에 [`docs/design/DESIGN.md`](docs/design/DESIGN.md) 통독. 브랜드 색·상태 색·법적 고지 문구·폰트·문체를 코드에서 임의 변경 금지 (자세한 정책은 [`AGENTS.md §4.7`](AGENTS.md)).

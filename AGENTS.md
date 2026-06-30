@@ -342,7 +342,9 @@ node -e "const d=JSON.parse(require('fs').readFileSync('.tmp/resp.json','utf8'))
 - **`ci.yml` → `migrate-check`** (PR) — Supabase SQL migration drift 가드. `apps/api/src/models/**/*.py` 가 변경됐는데 `supabase/migrations/*.sql` 동행이 없으면 fail. Neon / Alembic 의존 없음, secret 불필요. 정본: [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) §6.3.2. `ci-status` 메타 게이트에 포함되어 브랜치 보호의 required check 1개 (`ci-status`) 로 자동 보장.
 - **`deploy.yml`** (push to `dev` / `main`) — 어플리케이션 빌드 smoke + 클라우드 배포 스텁. **DB migration 미실행** (Supabase GitHub Integration 단독 책임). 후속 클라우드 target (Vercel / Fly / Cloud Run / Lightsail) 은 별도 이슈에서 채운다.
 - **`supabase-status.yml`** (PR) — path-filter deadlock 회피 wrapper. `supabase/**` 변경 없는 PR 은 자체 succeed (skip 의미), 변경 있는 PR 은 `vars.SUPABASE_INTEGRATION_CHECK_NAME` 으로 지정된 Supabase 측 check context 결과를 polling 해 그대로 반영. 변수 미설정 시 fail (운영 사고를 초록색으로 숨기지 않음). 정본: [`docs/runbooks/supabase-branching.md`](docs/runbooks/supabase-branching.md) §6.3 / §6.3.1.
-- **`secret-scan.yml`** / **`main-promotion-guard.yml`** / **`pr-title-lint.yml`** — 변경 없음 (CMP-533 / branch-strategy 가드).
+- **`secret-scan.yml`** / **`main-promotion-guard.yml`** — 변경 없음 (CMP-533 / branch-strategy 가드).
+- **`pr-title-lint.yml`** (PR) — PR 제목이 gitmoji 형식(`<이모지> <prefix>(<scope>): <설명>`)인지만 검증한다. **`CMP-###` 이슈 태그 요구는 폐지** (Paperclip 보드 운용 중단). gitmoji prefix 는 §4.1 의 10종(`release` 🔖 포함)을 따른다.
+- **`ci.yml` → `test-web`** (PR/push) — `apps/web` 의 vitest **unit 테스트**만 실행한다. Storybook 운영 중단으로 컴포넌트 테스트·`build-storybook` 스텝은 제거됐다.
 - **`_archive/neon-pr-branch.yml.archived`** — 비활성. Neon GitHub integration 시절의 PR preview 잡을 이력 참조용으로 보존. GitHub Actions 는 `.yml` 확장자만 워크플로우로 인식하므로 본 파일은 실행되지 않는다.
 
 DB 마이그레이션 적용 책임 (cutover 후 봉인):
