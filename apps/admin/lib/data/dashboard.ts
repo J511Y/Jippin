@@ -153,17 +153,15 @@ export async function getLeadDailyCounts(daysBack = 30): Promise<DailyLeadCount[
 }
 
 /**
- * 누적 퍼널 폴백(RPC 미적용 환경) — `session_status_events`(0020) 이력에서 세션별 최고
- * 도달 단계를 구해 "이 단계 이상 도달" 누적으로 센다. 단순 group-by(현재 분포)와 달리
- * 단조 감소(좁아짐)가 보장된다. deleted 세션은 모수에서 제외. RPC 경로가 정본이며, 이
- * 폴백은 동일한 누적 의미를 재현한다.
+ * 퍼널 폴백(RPC 미적용 환경) — `session_status_events`(0020) 이력에서 각 단계를 그 단계의
+ * **실제 이벤트**를 가진 세션 수로 센다(단계별 distinct). rank 누적이 아니라 실제 도달
+ * 이벤트 기준이라, 건너뛴 단계(주소 없이 도면 먼저, 상담만 한 handoff)를 부풀리지 않는다.
+ * deleted 세션은 모수에서 제외. RPC 경로가 정본이며, 이 폴백은 동일 의미를 재현한다.
  */
 async function getSessionFunnelFallback(
   supabase: ReturnType<typeof createServiceRoleClient>
 ): Promise<Map<string, number>> {
-  const rank = new Map(
-    SESSION_FUNNEL_ORDER.map((name, i): [string, number] => [name, i])
-  );
+  const known = new Set<string>(SESSION_FUNNEL_ORDER);
   const counts = new Map<string, number>();
   const { data: rows, error } = await supabase
     .from('session_status_events')
@@ -172,28 +170,15 @@ async function getSessionFunnelFallback(
     .limit(50000);
   if (error || !rows) return counts;
 
-  const handoffRank = rank.get('handoff'); // 8
-  // 파이프라인(handoff 제외)의 세션별 최고 도달 rank + handoff 도달 세션 집합.
-  const maxRank = new Map<string, number>();
-  const handoffSessions = new Set<string>();
+  // 단계×세션 중복 제거 후, 단계별 distinct 세션 수.
+  const seen = new Set<string>();
   for (const row of rows as Array<{ session_id: string; to_status: string }>) {
-    const r = rank.get(row.to_status);
-    if (r === undefined) continue;
-    if (r === handoffRank) {
-      handoffSessions.add(row.session_id);
-      continue; // handoff 는 파이프라인 누적에 넣지 않는다.
-    }
-    const prev = maxRank.get(row.session_id) ?? -1;
-    if (r > prev) maxRank.set(row.session_id, r);
+    if (!known.has(row.to_status)) continue;
+    const key = `${row.to_status}|${row.session_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    counts.set(row.to_status, (counts.get(row.to_status) ?? 0) + 1);
   }
-  // 파이프라인 단계(0~7): max_rank >= rank(S) 누적. handoff(8): 실제 도달 세션 수.
-  for (const [, sessionMax] of maxRank) {
-    for (const [stage, stageRank] of rank) {
-      if (stageRank === handoffRank) continue;
-      if (sessionMax >= stageRank) counts.set(stage, (counts.get(stage) ?? 0) + 1);
-    }
-  }
-  counts.set('handoff', handoffSessions.size);
   return counts;
 }
 

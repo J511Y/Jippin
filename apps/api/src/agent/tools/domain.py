@@ -180,10 +180,13 @@ async def set_completion_decision_impl(
         return _safe_error(exc, "SET_DECISION_FAILED", tool="set_completion_decision")
 
     # FLOW_GUARD 결정에 따라 세션 status 를 전진(forward-only, best-effort).
+    # HOLD_OR_HANDOFF 는 여기서 handoff 로 올리지 않는다 — 상담 카드만 띄운 단계라
+    # 실제 전환이 아니다. handoff 전이는 사용자가 폼을 실제 제출해 리드가 생성될 때
+    # (create_lead, reason='consultation_submitted')에만 일어난다. 이로써 퍼널의 handoff
+    # 가 카드 노출이 아닌 실제 상담 신청만 집계한다(리뷰 지적).
     _decision_status = {
         "REQUEST_OVERLAY_REVIEW": "awaiting_overlay",
         "PROCEED_RULE": "ready_for_rule",
-        "HOLD_OR_HANDOFF": "handoff",
     }.get(completion_decision)
     if _decision_status is not None:
         await main_flow.advance_session_status(
