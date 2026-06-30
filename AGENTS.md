@@ -110,6 +110,7 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 | 🚀 | `perf:` | 성능 개선 |
 | 🔒 | `security:` | 보안 패치 |
 | 🚧 | `wip:` | 임시 (PR 머지 전 squash) |
+| 🔖 | `release:` | 릴리스 컷 / `dev`→`main` 승급·백머지 |
 
 예: `✨ feat(auth): kakao oauth callback`
 
@@ -120,13 +121,12 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - 작업 브랜치는 `dev` 에서 분기한다. 명명: `<type>/<scope>-<short>` (예: `feat/auth-kakao-callback`, `docs/cmp-557a-auth-policy`, `fix/auth-jwt-leak`, `refactor/api-audit-mixin`).
 - 흐름: `main` ← (release PR) ← `dev` ← (작업 PR) ← `feature/* | fix/* | docs/* | refactor/* | chore/* | perf/* | test/* | security/*`.
 - **PR base 기본값 = `dev`.** `main` 으로의 PR 은 운영 release 컷 또는 핫픽스에 한정하며 CTO/DevOps 승인 필요.
-- PR 본문·제목에는 관련 Paperclip 이슈 식별자(`CMP-###`)와 영향 모듈을 표기한다. **보드 이슈 없이 사람과의 직접 대화로 수행한 작업은 `CMP-DIRECT`** 를 식별자로 쓴다 (pr-title-lint 가 허용).
+- PR 본문·제목에는 영향 모듈을 표기한다. 관련 이슈가 있으면 식별자를 본문에 적어도 좋으나, Paperclip 보드 운용을 중단해 `CMP-###` 표기는 더 이상 필수가 아니다 (pr-title-lint 가 강제하지 않음).
 - 머지 방식: **Squash and merge** (gitmoji prefix 유지).
 - `dev` → `main` 승급 자동화는 `.github/workflows/` 의 release 워크플로우(CMP-539 가드 적용)에 따른다.
 
 ### 4.3 PR 체크리스트
 
-- [ ] 관련 이슈 식별자 명시 (보드 이슈 없는 직접 대화 작업은 `CMP-DIRECT`)
 - [ ] 영향 모듈 명시 (`AUTH` / `INPUT` / …)
 - [ ] 공통 컨트랙트(`packages/contracts/`) 변경 시 schema_version bump
 - [ ] 비밀번호·키·도면 등 민감 자료 미포함

@@ -316,12 +316,13 @@ jobs:
         run: uv run mypy .
 
   # -------------------------------------------------------------------
-  # 5) apps/web — unit + Storybook component tests.
+  # 5) apps/web — unit tests.
   # apps/web/package.json 에 `test` 스크립트가 추가되면 실제 실행되고,
-  # Storybook 설정이 존재하면 stories 기반 component tests 와 static build 도 검증한다.
+  # 그 전까지는 stub. (Storybook 컴포넌트 테스트/빌드 검증은 CMP-DIRECT 로 제거 —
+  # Storybook 운영을 중단했다.)
   # -------------------------------------------------------------------
   test-web:
-    name: web (unit + Storybook tests)
+    name: web (unit tests)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -373,18 +374,6 @@ jobs:
       - name: pnpm test
         if: steps.detect.outputs.exists == 'true'
         run: pnpm test
-
-      - name: Install Playwright Chromium
-        if: steps.detect.outputs.exists == 'true' && hashFiles('apps/web/.storybook/main.ts') != ''
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: Storybook component tests
-        if: steps.detect.outputs.exists == 'true' && hashFiles('apps/web/.storybook/main.ts') != ''
-        run: pnpm test:storybook
-
-      - name: Build Storybook
-        if: steps.detect.outputs.exists == 'true' && hashFiles('apps/web/.storybook/main.ts') != ''
-        run: pnpm build-storybook
 
   # -------------------------------------------------------------------
   # 6) apps/api — test 스켈레톤.
