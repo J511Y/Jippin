@@ -222,7 +222,7 @@ class Settings(BaseSettings):
     # filling each one per environment, set these two and let _derive_from_
     # primitives() fill the rest. Any explicit env value still wins (escape
     # hatch) — derivation only fills fields the operator did not provide.
-    #   - supabase_ref      -> supabase_jwks_url, supabase_jwt_issuer
+    #   - supabase_ref      -> supabase_jwks_url, supabase_jwt_issuer, supabase_url
     #   - public_web_origin -> frontend_auth_{success,failure,terms}_url, cors
     # NB: DATABASE_*_URL is intentionally NOT derived — it carries a secret
     # password and the pooler shard host is not a pure function of the ref.
@@ -379,7 +379,9 @@ class Settings(BaseSettings):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
 
-    @field_validator("supabase_jwks_url", "supabase_jwt_issuer", mode="before")
+    @field_validator(
+        "supabase_jwks_url", "supabase_jwt_issuer", "supabase_url", mode="before"
+    )
     @classmethod
     def _blank_supabase_url_is_none(cls, v: object) -> object:
         # A `.env` copied from `.env.example` carries `SUPABASE_JWKS_URL=` (empty
@@ -434,11 +436,19 @@ class Settings(BaseSettings):
         """
         provided = self.model_fields_set
         if self.supabase_ref:
-            base = f"https://{self.supabase_ref}.supabase.co/auth/v1"
+            project_url = f"https://{self.supabase_ref}.supabase.co"
+            base = f"{project_url}/auth/v1"
             if not self.supabase_jwks_url:
                 self.supabase_jwks_url = f"{base}/.well-known/jwks.json"
             if not self.supabase_jwt_issuer:
                 self.supabase_jwt_issuer = base
+            # Storage 서명/HEAD(storage.py, home_check.py)는 supabase_url 을 단독으로
+            # 요구한다 — auth 처럼 issuer 로 폴백하지 않으므로 ref 에서 함께 파생해야
+            # 시크릿 하나(SUPABASE_REF)로 Storage 까지 동작한다. project root 형태
+            # (suffix 없음)로 채운다 — storage 는 `/storage/v1`, admin 은 `/auth/v1`
+            # 를 각자 붙인다.
+            if not self.supabase_url:
+                self.supabase_url = project_url
         if self.public_web_origin:
             origin = self.public_web_origin
             if "frontend_auth_success_url" not in provided:
