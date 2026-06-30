@@ -644,3 +644,38 @@ sa.Index(
         ["pending", "running", "awaiting_input", "interrupted"]
     ),
 )
+
+
+class SessionStatusEvent(Base):
+    """sessions.status 의 forward-only 전이 이력 (append-only).
+
+    DDL 정본은 ``supabase/migrations/..._0020_session_status_state_machine.sql``. 백엔드가
+    도구/플로우 마일스톤마다 전이를 1행씩 기록하고, 누적 퍼널(admin_session_funnel)의
+    source 가 된다. 클라이언트 grant 없음(service_role 전용).
+    """
+
+    __tablename__ = "session_status_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        sa.ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    from_status: Mapped[str | None] = mapped_column(sa.Text)
+    to_status: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(sa.Text)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(postgresql.UUID(as_uuid=True))
+    occurred_at: Mapped[datetime] = mapped_column(
+        postgresql.TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=sa.func.now(),
+    )
+
+
+sa.Index(None, SessionStatusEvent.session_id)
+sa.Index(None, SessionStatusEvent.to_status)

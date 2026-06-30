@@ -36,6 +36,8 @@ export interface LeadPayload {
   message?: string | null;
   /** 우리집 체크 인입이면 원천 잡 id — 백엔드가 home_checks.consultation_lead_id 를 채운다. */
   home_check_id?: string | null;
+  /** 사전검토 인입이면 원천 세션 id — 백엔드가 consultation_leads.session_id 연결 + 주소 폴백. */
+  session_id?: string | null;
   attachments?: UploadedAttachment[];
 }
 

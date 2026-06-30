@@ -655,6 +655,13 @@ async def segment_session_floorplan(
             ),
         )
 
+    # 분석 성공(세그멘테이션 + VLM 평면도 검증 통과) 시에만 status 를 analyzing 으로 전진한다 —
+    # 서명/엔드포인트/도면판정/not-floorplan 실패로 early-return 하는 경로에서 배지가 analyzing
+    # 에 stuck 되지 않게(리뷰 지적). 직후 merge_judgment_schema 가 awaiting_overlay 로 전진한다.
+    await main_flow.advance_session_status(
+        session_id=session_id, target="analyzing", reason="segmentation_succeeded"
+    )
+
     # AI-003 정합성 검증·정규화 — VLM 교정(reclassifications)을 regions 에 머지한다.
     vlm_ids: set[str] = set()
     if supplement and supplement.get("reclassifications"):
