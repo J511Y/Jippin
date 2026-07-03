@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react';
 import { LegalNotice } from '@/components/LegalNotice';
 import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
 import { trackPrecheckReportView } from '@/lib/analytics/sessions-funnel';
-import { parseApiError } from '@/lib/api/error';
+import { friendlyApiMessage, parseApiError } from '@/lib/api/error';
 import {
   getSessionReport,
   issueSessionReportPdf,
@@ -65,7 +65,7 @@ export default function SessionReportPage() {
       }
     } catch (err) {
       pdfTab?.close();
-      setPdfError(parseApiError(err).message);
+      setPdfError(friendlyApiMessage(err, 'PDF 리포트를 발부하지 못했어요. 잠시 후 다시 시도해 주세요.'));
     } finally {
       setPdfLoading(false);
     }
@@ -89,7 +89,7 @@ export default function SessionReportPage() {
           setNotReady(true);
           // 퍼널: 리포트 진입(아직 판정 미준비).
           trackPrecheckReportView(false);
-        } else setError(parsed.message);
+        } else setError(friendlyApiMessage(err, '리포트를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.'));
       }
     })();
     return () => {

@@ -80,6 +80,12 @@ class ConsultationLead(TimestampMixin, Base):
         postgresql.UUID(as_uuid=True),
         sa.ForeignKey("auth.users.id", ondelete="SET NULL"),
     )
+    # 사전검토(precheck_session) 인입이면 원천 세션 id — 관리자 세션↔상담 교차 참조용.
+    # nullable + ON DELETE SET NULL(0019): 리드는 영업 자산이라 세션 정리 후에도 보존한다.
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        postgresql.UUID(as_uuid=True),
+        sa.ForeignKey("sessions.id", ondelete="SET NULL"),
+    )
     is_anonymous: Mapped[bool] = mapped_column(
         sa.Boolean,
         nullable=False,
@@ -140,6 +146,7 @@ class ConsultationLeadAttachment(CreatedAtMixin, Base):
 
 sa.Index(None, ConsultationLead.status, ConsultationLead.created_at.desc())
 sa.Index(None, ConsultationLead.user_id, ConsultationLead.created_at.desc())
+sa.Index("ix_consultation_leads_session_id", ConsultationLead.session_id)
 sa.Index(None, ConsultationLead.applicant_phone)
 sa.Index("ix_consultation_leads_created_at", ConsultationLead.created_at.desc())
 

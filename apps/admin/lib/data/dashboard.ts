@@ -152,6 +152,46 @@ export async function getLeadDailyCounts(daysBack = 30): Promise<DailyLeadCount[
   return out;
 }
 
+/**
+ * 퍼널 폴백(RPC 미적용 환경) — `session_status_events`(0020) 이력에서 각 단계를 그 단계의
+ * **실제 이벤트**를 가진 세션 수로 센다(단계별 distinct). rank 누적이 아니라 실제 도달
+ * 이벤트 기준이라, 건너뛴 단계(주소 없이 도면 먼저, 상담만 한 handoff)를 부풀리지 않는다.
+ * deleted 세션은 모수에서 제외. RPC 경로가 정본이며, 이 폴백은 동일 의미를 재현한다.
+ */
+async function getSessionFunnelFallback(
+  supabase: ReturnType<typeof createServiceRoleClient>
+): Promise<Map<string, number>> {
+  const known = new Set<string>(SESSION_FUNNEL_ORDER);
+  const counts = new Map<string, number>();
+  const { data: rows, error } = await supabase
+    .from('session_status_events')
+    .select('session_id, to_status, sessions!inner(status)')
+    .neq('sessions.status', 'deleted')
+    .limit(50000);
+
+  if (error) {
+    // 0020 미적용 환경(이벤트 테이블/RPC 부재) — events 가 없으면 빈 퍼널 대신 현재
+    // sessions.status 분포라도 보여 준다(배포 윈도우 폴백, 이전 동작과 동등).
+    const { data: srows } = await supabase.from('sessions').select('status').limit(10000);
+    for (const row of (srows ?? []) as Array<{ status: string }>) {
+      if (known.has(row.status)) counts.set(row.status, (counts.get(row.status) ?? 0) + 1);
+    }
+    return counts;
+  }
+  if (!rows) return counts;
+
+  // 단계×세션 중복 제거 후, 단계별 distinct 세션 수.
+  const seen = new Set<string>();
+  for (const row of rows as Array<{ session_id: string; to_status: string }>) {
+    if (!known.has(row.to_status)) continue;
+    const key = `${row.to_status}|${row.session_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    counts.set(row.to_status, (counts.get(row.to_status) ?? 0) + 1);
+  }
+  return counts;
+}
+
 export async function getSessionFunnel(): Promise<FunnelEntry[]> {
   const supabase = createServiceRoleClient();
   const { data, error } = await supabase.rpc('admin_session_funnel');
@@ -165,11 +205,7 @@ export async function getSessionFunnel(): Promise<FunnelEntry[]> {
       ])
     );
   } else {
-    const { data: rows } = await supabase.from('sessions').select('status').limit(10000);
-    for (const row of rows ?? []) {
-      const status = row.status as string;
-      counts.set(status, (counts.get(status) ?? 0) + 1);
-    }
+    counts = await getSessionFunnelFallback(supabase);
   }
 
   return SESSION_FUNNEL_ORDER.map((status) => ({ status, count: counts.get(status) ?? 0 }));

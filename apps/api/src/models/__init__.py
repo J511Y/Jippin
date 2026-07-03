@@ -43,6 +43,7 @@ from .main_feature import (  # noqa: E402
     FloorplanUpload,
     Session,
     SessionAddress,
+    SessionStatusEvent,
 )
 
 from .request_log import RequestLog  # noqa: E402
@@ -69,6 +70,7 @@ __all__ = [
     "RequestLog",
     "Session",
     "SessionAddress",
+    "SessionStatusEvent",
     "TermsConsent",
     "TimestampMixin",
     "User",

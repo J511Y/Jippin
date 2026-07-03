@@ -4,7 +4,14 @@
 #   `supabase/**` 변경이 없는 PR 에서 Supabase Automatic Branching 의 preview
 #   check 가 등록되지 않아 발생하는 required-check deadlock 을 회피한다. 동시에
 #   `supabase/**` 변경이 있는 PR 에서는 실제 Supabase integration check 의
-#   성공 / 실패를 그대로 본 잡의 결과로 반영해 운영 사고를 초록색으로 숨기지 않는다.
+#   성공 / 실패를 ::warning:: 어노테이션으로 그대로 노출한다.
+#
+# 정책 (운영자 결정 2026-06-30): 본 잡은 **informational(머지 비차단)** 이다.
+#   Supabase 측 preview/migration 은 브랜치 프로비저닝 실패(예: storage config 404)
+#   등 플랫폼 사정으로 red 가 될 수 있고, 그것이 코드 머지를 막아선 안 된다. 따라서
+#   타임아웃 / Supabase check 실패 / 설정 미비를 **hard-fail 하지 않고 ::warning:: 으로
+#   surface 한 뒤 통과**시킨다 — 실패 사실은 어노테이션으로 보이되 required-check 를
+#   초록으로 유지해 병합을 막지 않는다. (이전엔 hard-fail 로 머지를 차단했었다.)
 #
 # 동작:
 #   1. PR diff 에 `supabase/**` 가 포함됐는지 확인. diff 범위는 **PR merge-base 기준**
@@ -93,9 +100,10 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${NAME:-}" ]]; then
-            echo "::error::repository variable SUPABASE_INTEGRATION_CHECK_NAME 가 설정되지 않았습니다."
-            echo "::error::절차: Supabase Console → GitHub Integration 연결 후 첫 PR 에 나타나는 Supabase 측 check context 이름을 확인하고 Settings → Variables → Actions 에 등록한다 (예: 'Supabase Preview' 또는 'Supabase Migrations'). 봉인 절차: docs/runbooks/supabase-branching.md §6.3.1."
-            exit 1
+            echo "::warning::repository variable SUPABASE_INTEGRATION_CHECK_NAME 미설정 — Supabase 결과를 polling 하지 않고 통과(informational, 머지 비차단)."
+            echo "::warning::설정 절차(선택): Supabase Console → GitHub Integration 연결 후 첫 PR 에 나타나는 Supabase 측 check context 이름을 Settings → Variables → Actions 에 등록. 정본: docs/runbooks/supabase-branching.md §6.3.1."
+            echo "name=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           # check name 자체는 비밀이 아니므로 출력해도 안전.
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
@@ -119,8 +127,8 @@ jobs:
             attempt=$((attempt + 1))
             now=$(date +%s)
             if (( now > deadline )); then
-              echo "::error::Supabase integration check '${NAME}' 가 17분 내에 완료되지 않았습니다."
-              exit 1
+              echo "::warning::Supabase integration check '${NAME}' 가 17분 내에 완료되지 않았습니다 — informational, 머지 비차단으로 통과."
+              exit 0
             fi
             # check-runs API. check_name 으로 정확히 매칭 + 가장 최근 1건만.
             # output 의 summary/text 는 connection string 노출 가능성이 있어 일부러 보지 않는다 (§7.3).
@@ -144,8 +152,8 @@ jobs:
                   exit 0
                   ;;
                 *)
-                  echo "::error::Supabase integration check '${NAME}' 실패: ${conclusion}"
-                  exit 1
+                  echo "::warning::Supabase integration check '${NAME}' 결과: ${conclusion} — informational, 머지 비차단으로 통과(플랫폼/프로비저닝 실패가 코드 머지를 막지 않도록)."
+                  exit 0
                   ;;
               esac
             fi

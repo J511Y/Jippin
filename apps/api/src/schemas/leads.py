@@ -95,6 +95,9 @@ class LeadCreateRequest(BaseModel):
     # 우리집 체크(home-check) 인입이면 원천 잡 id — 생성 후 home_checks.consultation_lead_id
     # 를 채워 귀속을 연결한다(ADR-0008). 그 외 신청은 None.
     home_check_id: uuid.UUID | None = None
+    # 사전검토(precheck_session) 인입이면 원천 세션 id — 본인 세션이면 백엔드가
+    # consultation_leads.session_id 로 연결하고, 주소 미입력 시 세션 주소로 폴백한다(0019).
+    session_id: uuid.UUID | None = None
     attachments: list[LeadAttachmentInput] = Field(
         default_factory=list, max_length=_MAX_ATTACHMENTS
     )

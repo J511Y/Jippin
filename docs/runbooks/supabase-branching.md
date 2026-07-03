@@ -209,7 +209,17 @@ if: |
 **해결.** 단일 wrapper check (`supabase-status`) 를 항상 실행되는 workflow 로 두고, branch protection 은 wrapper 만 required 로 등록한다. wrapper 가 PR 안의 변경 파일을 보고 결정한다:
 
 - `supabase/**` 변경 없음 → wrapper 자체로 succeed (skip 의미).
-- `supabase/**` 변경 있음 → 실제 Supabase integration check 의 결과를 기다린 뒤 그 결과를 그대로 wrapper 결과로 반영. `gh api` 폴링 또는 `wait-on-check-action` 류 액션을 사용. timeout 발생 시 fail.
+- `supabase/**` 변경 있음 → 실제 Supabase integration check 의 결과를 `gh api` 로 폴링해 `::warning::` 어노테이션으로 노출.
+
+> **정책 변경 — 운영자 결정 2026-06-30 (informational / 머지 비차단).** 본 wrapper 는 더 이상
+> Supabase integration check 결과로 hard-fail 하지 않는다. Supabase preview/migration 은
+> 브랜치 프로비저닝 실패(예: `Failed to retrieve project's storage config` 404)처럼 **플랫폼
+> 사정**으로 red 가 될 수 있고, 그것이 코드 머지를 막아선 안 된다는 운영 판단이다. 따라서
+> 타임아웃 / check 실패 / 변수 미설정을 **`::warning::` 으로 surface 한 뒤 exit 0** 한다 — 실패
+> 사실은 어노테이션으로 보이되 required-check 는 초록으로 유지된다. (이전엔 "운영 사고를
+> 초록색으로 숨기지 않는다"는 원칙으로 fail 시켰으나, 플랫폼 실패가 머지를 deadlock 시키는
+> 부작용이 더 커 정책을 뒤집었다.) **DB schema 정합은 여기서 강제하지 않는다 — model↔SQL
+> drift 는 `ci-status::migrate-check`(§6.3.2)가 별도로 계속 막는다.**
 
 이는 본 PR 의 `ci-status` 메타 게이트와 동일한 패턴이다 (`ci-status` 가 하위 jobs 의 결과를 집계해 단일 required check 를 제공).
 

@@ -93,3 +93,23 @@ export function parseApiError(error: unknown): ApiError {
 
   return new ApiError({ code: 'UNKNOWN_ERROR', message: String(error) });
 }
+
+/**
+ * 사용자에게 노출해도 안전한 한국어 메시지로 정규화한다.
+ *
+ * 백엔드 원문(`error.message`)은 내부 구현(예: "Supabase bearer token is required.")을
+ * 드러내고 영어라 그대로 화면에 띄우면 안 된다(#no-raw-error-leak). 인증/권한/없음만
+ * 의미 단위로 안내하고, 나머지는 호출부가 준 `fallback` 으로 일반화한다.
+ *
+ * 소유권 가드상 403/404 는 "없음"과 "권한 없음"을 구분하지 않는다(백엔드가 열거 누수
+ * 방지로 둘 다 같은 코드로 합침) — 메시지도 합쳐 자원 존재 여부를 흘리지 않는다.
+ */
+export function friendlyApiMessage(
+  error: unknown,
+  fallback = '요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.'
+): string {
+  const status = parseApiError(error).status;
+  if (status === 401) return '로그인이 필요해요. 본인 계정으로 로그인 후 다시 시도해 주세요.';
+  if (status === 403 || status === 404) return '찾을 수 없거나 접근 권한이 없어요.';
+  return fallback;
+}
