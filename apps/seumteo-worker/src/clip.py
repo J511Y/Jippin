@@ -16,6 +16,7 @@ PII: 리포트에는 소유자 성명·주소·(마스킹된)주민번호가 포
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import re
 
@@ -25,6 +26,12 @@ from playwright.async_api import Page
 _log = structlog.get_logger(__name__)
 
 _VIOLATION = "위반건축물"
+
+# PDF 는 best-effort 다(위반여부·변동사항은 이미 판정됨). 남은 잡 예산이 이 값보다 적으면 아예
+# 시작하지 않고(생략) 결과를 반환한다 — 판정 끝난 잡을 PDF 로 취소시키면 재시도→중복발급.
+_PDF_MIN_BUDGET_MS = 3000
+# 준비 폴링 후, 실제 다운로드에 최소 이만큼은 남아 있어야 시도한다(그보다 적으면 생략).
+_PDF_MIN_DOWNLOAD_MS = 1500
 
 # 컨텍스트의 모든 페이지(팝업 포함)에 렌더 전 주입되는 스크립트.
 INIT_SCRIPT = r"""
@@ -126,8 +133,14 @@ _PAINT_JS = "() => (window.__clipText||[]).map(c => c.join(' ')).join('\\n')"
 _CLIPDATA_LEN_JS = "() => (window.__clipData||[]).reduce((a,b)=>a+(b?b.length:0),0)"
 
 
-async def extract_report(popup: Page, *, timeout_ms: int) -> dict:
-    """리포트 팝업에서 **전 쪽** 텍스트 + 위반여부 + PDF(base64)를 추출한다."""
+async def extract_report(
+    popup: Page, *, timeout_ms: int, pdf_deadline: float | None = None
+) -> dict:
+    """리포트 팝업에서 **전 쪽** 텍스트 + 위반여부 + PDF(base64)를 추출한다.
+
+    ``pdf_deadline``: PDF 캡처의 절대 마감시각(event-loop monotonic). 텍스트 추출까지 소요한
+    시간을 반영해 이 시점 기준 '남은 예산'으로 PDF 를 제한한다(느린 PDF→잡 취소→중복발급 방지).
+    """
 
     # 초기 렌더/데이터 도착 대기.
     try:
@@ -178,7 +191,13 @@ async def extract_report(popup: Page, *, timeout_ms: int) -> dict:
     violation = _VIOLATION in compact
     violation_source = "report_text" if full_text else None
 
-    pdf_b64, pdf_source = await _capture_pdf(popup, timeout_ms=timeout_ms)
+    # 텍스트 추출까지 소요한 시간을 뺀 '남은 잡 예산'으로 PDF 를 제한한다(#pdf-budget).
+    budget_ms = None
+    if pdf_deadline is not None:
+        budget_ms = int(max(0, (pdf_deadline - asyncio.get_event_loop().time()) * 1000))
+    pdf_b64, pdf_source = await _capture_pdf(
+        popup, timeout_ms=timeout_ms, budget_ms=budget_ms
+    )
 
     _log.info(
         "clip.extracted",
@@ -212,7 +231,9 @@ async def _clipdata_total(popup: Page) -> int:
     return total
 
 
-async def _load_all_pages(popup: Page, *, max_pages: int = 25, page_wait_ms: int = 1200) -> None:
+async def _load_all_pages(
+    popup: Page, *, max_pages: int = 25, page_wait_ms: int = 1200
+) -> None:
     """'다음 페이지'(``.report_menu_right_button``)를 눌러 모든 쪽을 로드한다.
 
     각 쪽 이동은 새 RPTCAA02R02 를 유발해 __clipData 가 늘어난다. 클릭 후에도 데이터가 늘지
@@ -267,24 +288,38 @@ _FIND_REPORT_JS = r"""
 """
 
 
-async def _capture_pdf(popup: Page, *, timeout_ms: int) -> tuple[str | None, str | None]:
+async def _capture_pdf(
+    popup: Page, *, timeout_ms: int, budget_ms: int | None = None
+) -> tuple[str | None, str | None]:
     """리포트를 PDF(base64)로 확보한다.
 
     툴바 'PDF 저장' 버튼은 서버 설정(m_disControl)으로 비활성이지만, 그 버튼이 부르는 Report
     인스턴스 메서드 ``m_reportHashMap[hash].pdfDownLoad()``(clipreport.js 실측)를 **렌더 완료
     (``m_isEndReport``) 후** 직접 호출하면 서버가 전 쪽 PDF 를 생성해 다운로드된다. 렌더 전
     호출은 무시되므로 완료를 폴링한다. (CReportPrintPDf 는 이 HTML5/iframe 뷰어엔 부적합 — 실측.)
+
+    ``budget_ms``: 남은 잡 예산. 준비 폴링 + 다운로드가 이를 넘지 않게 절대 마감시각으로 제한하고,
+    부족하면(생략 임계 미만) PDF 를 건너뛴다 — 판정 끝난 잡을 PDF 로 취소(→중복발급)시키지 않는다.
     """
 
-    # PDF 는 best-effort 다(위반여부·변동사항은 이미 판정됨). 잡 전체 데드라인(main.py wait_for)
-    # 을 잡아먹지 않도록 **타이트하게** 예산을 잡는다 — 느린 PDF 가 판정 끝난 잡을 취소시키면
-    # 이미 발급(과금)된 문서가 오류로 보여 재시도→중복발급된다. 이미 전 쪽 렌더 후라 보통 즉시.
+    loop = asyncio.get_event_loop()
+    cutoff: float | None = None
+    if budget_ms is not None:
+        if budget_ms < _PDF_MIN_BUDGET_MS:
+            # 남은 예산 부족 — PDF 생략(판정은 이미 끝났고, 잡 취소→중복발급을 막는 게 우선).
+            _log.info("clip.pdf_skipped_budget", budget_ms=budget_ms)
+            return None, None
+        cutoff = loop.time() + budget_ms / 1000
+
+    # PDF 는 best-effort 다(위반여부·변동사항은 이미 판정됨). 이미 전 쪽 렌더 후라 보통 즉시.
     pdf_wait = min(timeout_ms, 15_000)
 
-    # 렌더 완료된 리포트 인스턴스를 폴링(최대 ~10s; 이미 렌더돼 대개 즉시).
+    # 렌더 완료된 리포트 인스턴스를 폴링(최대 ~10s; 이미 렌더돼 대개 즉시). 예산이 있으면 그 안에서만.
     target_frame = None
     report_hash = None
     for _ in range(20):
+        if cutoff is not None and loop.time() >= cutoff:
+            break
         for fr in popup.frames:
             try:
                 info = await fr.evaluate(_FIND_REPORT_JS)
@@ -309,6 +344,14 @@ async def _capture_pdf(popup: Page, *, timeout_ms: int) -> tuple[str | None, str
     if target_frame is None or not report_hash:
         _log.warning("clip.pdf_no_report")
         return None, None
+
+    # 준비 폴링에 쓴 시간을 빼고 남은 예산으로 다운로드 대기를 제한(부족하면 생략).
+    if cutoff is not None:
+        remaining_ms = int((cutoff - loop.time()) * 1000)
+        if remaining_ms < _PDF_MIN_DOWNLOAD_MS:
+            _log.info("clip.pdf_skipped_budget_dl", remaining_ms=remaining_ms)
+            return None, None
+        pdf_wait = min(pdf_wait, remaining_ms)
 
     try:
         async with popup.expect_download(timeout=pdf_wait) as dl_info:

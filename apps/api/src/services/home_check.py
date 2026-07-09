@@ -562,10 +562,14 @@ async def _mark_completed(
     settings = get_settings()
     if settings.extension_judge_enabled:
         reported_extension, extended_areas = await _load_extension_input(home_check_id)
+        # 판정 입력은 **전유부(unit)** 변동사항만 쓴다. 신고 확장은 이 세대(전유부)에 대한 것이고,
+        # 표제부(건물/공용) 변동은 다른 세대·공용부 변동일 수 있어, 섞으면 무관한 표제부 변동을
+        # 이 세대 확장의 '등재'로 오인(→미등재를 legal 로 오판)할 수 있다(#ext-unit-scope).
+        unit_changes = [e for e in change_history if e.source == "exclusive"]
         judgment = await judge_extension(
             reported_extension=reported_extension,
             extended_areas=extended_areas,
-            change_history=change_history,
+            change_history=unit_changes,
             settings=settings,
         )
         if judgment is not None:

@@ -23,6 +23,7 @@ PoC 검증 필요(실주소로 확인 후 조정): (a) 7단계 신청(S01) 요�
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import re
@@ -55,6 +56,40 @@ _KST = datetime.timezone(datetime.timedelta(hours=9))
 
 def _kst_today() -> datetime.date:
     return datetime.datetime.now(_KST).date()
+
+
+# 신청(S01) 접수번호 매칭: 공용 단일계정엔 같은 세대의 '과거 접수'가 [어제,오늘] 창에 남아 있을 수
+# 있다. 방금 신청한 건(=S01 이 돌려준 접수번호)만 06R01 에서 수용해 과거 접수의 '구발급'을 막고
+# (#recp-fresh), 방금 건이 아직 신청내역에 안 뜬 경우 잠깐 폴링한다.
+_RECP_POLL_TRIES = 4
+_RECP_POLL_WAIT_MS = 1500
+
+# PDF(best-effort)는 잡 데드라인(main.py wait_for=job_deadline_ms)보다 이 여유만큼 일찍 끊어,
+# 판정이 끝난 잡이 느린 PDF 때문에 취소(→과금된 발급이 오류로 보여 재시도→중복발급)되지 않게
+# 한다(#pdf-budget). PDF 는 옵션이므로 예산 부족 시 생략하고 결과를 반환한다.
+_PDF_RETURN_RESERVE_MS = 4000
+
+
+def _extract_recp_no(obj: object) -> str:
+    """S01(신청) 응답에서 방금 생성된 접수번호(pbsvcRecpNo)를 방어적으로 찾는다(중첩 관용).
+
+    06R01 신청내역엔 공용 단일계정의 과거 접수가 섞일 수 있어, '방금 신청한 건'을 식별하는 정본은
+    S01 이 돌려준 접수번호다. 응답 구조가 버전마다 달라질 수 있어 dict/list 를 재귀로 훑어 첫 값을
+    집는다. 못 찾으면 "" — 그 경우 _find_recp_no 가 기존(최신 건물매칭) 동작으로 폴백한다.
+    """
+
+    stack: list[object] = [obj]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            v = cur.get("pbsvcRecpNo")
+            if isinstance(v, (str, int)) and str(v).strip():
+                return str(v).strip()
+            stack.extend(cur.values())
+        elif isinstance(cur, list):
+            stack.extend(cur)
+    return ""
+
 
 # 발급 뷰어 param 은 CryptoJS.AES(passphrase)로 암호화된다(뷰어 html2xmlDwg 가 같은 키로 복호,
 # 실측). 뷰어와 동일한 crypto-js 로 인페이지 암호화한다 — Python 크립토 의존성 회피 + 정확.
@@ -190,10 +225,18 @@ class SeumteoFlow:
 
     async def run(self, req: BuildingRegisterRequest) -> BuildingRegisterResult:
         await self._mgr.ensure_logged_in()
+        # 잡 전체 데드라인(main.py wait_for=job_deadline_ms)보다 _PDF_RETURN_RESERVE_MS 만큼 일찍
+        # PDF 를 끊기 위한 절대 마감시각(monotonic). 판정은 이미 끝났으니 PDF 지연이 잡을 취소
+        # (→중복발급)시키지 않게 한다(#pdf-budget).
+        loop = asyncio.get_event_loop()
+        pdf_deadline = (
+            loop.time()
+            + max(0, self._s.job_deadline_ms - _PDF_RETURN_RESERVE_MS) / 1000
+        )
         async with self._mgr.render_semaphore:
             page = await self._mgr.context.new_page()
             try:
-                return await self._run_on_page(page, req)
+                return await self._run_on_page(page, req, pdf_deadline=pdf_deadline)
             finally:
                 await page.close()
 
@@ -203,6 +246,7 @@ class SeumteoFlow:
         req: BuildingRegisterRequest,
         *,
         assume_ready: bool = False,
+        pdf_deadline: float | None = None,
     ) -> BuildingRegisterResult:
         # assume_ready: 이미 발급 서비스에 로그인·진입한 페이지(같은 탭)를 그대로 쓴다.
         # 세움터 발급 페이지는 '발급 진입' 세션 플래그를 요구하는데, 새 탭 + 직접 URL 이동은
@@ -214,15 +258,20 @@ class SeumteoFlow:
                 wait_until="domcontentloaded",
             )
         targets = await self._resolve(page, req)
-        await self._add_to_cart(page, req, targets)          # 담기(C01)
-        item = await self._isolate_cart(page, targets)       # R05: 내 항목 + 잔여 제거(D01)
-        appnt = await self._appnt_info(page)                 # 신청자 정보(세션+사업자)
-        await self._submit(page, item, appnt)                # 신청(S01 완전체 + D02)
-        recp = await self._find_recp_no(page, req, targets)  # 신청내역(06R01)→ 내 접수번호
+        await self._add_to_cart(page, req, targets)  # 담기(C01)
+        item = await self._isolate_cart(page, targets)  # R05: 내 항목 + 잔여 제거(D01)
+        appnt = await self._appnt_info(page)  # 신청자 정보(세션+사업자)
+        submitted_recp = await self._submit(
+            page, item, appnt
+        )  # 신청(S01+D02)→ 방금 건 접수번호
+        # 06R01 에서 '방금 신청한 접수번호' 행만 수용(공용계정의 과거 접수 구발급 방지, #recp-fresh).
+        recp = await self._find_recp_no(page, req, targets, submitted_recp)
         popup = await self._open_report(page, req, targets, recp)  # 그 건 발급→리포트
         try:
             extracted = await clip.extract_report(
-                popup, timeout_ms=self._s.report_render_timeout_ms
+                popup,
+                timeout_ms=self._s.report_render_timeout_ms,
+                pdf_deadline=pdf_deadline,
             )
         finally:
             await popup.close()
@@ -302,7 +351,11 @@ class SeumteoFlow:
         code = msg.get("resultCode")
         if code and code != "S00000":
             text = msg.get("resultMessage") or ""
-            cat = "not_found" if any(h in text for h in ("없", "조회", "일치")) else "upstream"
+            cat = (
+                "not_found"
+                if any(h in text for h in ("없", "조회", "일치"))
+                else "upstream"
+            )
             raise FlowError(cat, text or f"세움터 오류({code}).")
 
     # ------------------------------------------------------------------
@@ -346,16 +399,16 @@ class SeumteoFlow:
             f"{search}/bldrgsttitle/_search",
             {
                 "sort": [{"dongNm": "asc"}],
-                "query": {"bool": {"filter": [{"term": {"mgmUpperBldrgstPk": mgm_upper_pk}}]}},
+                "query": {
+                    "bool": {"filter": [{"term": {"mgmUpperBldrgstPk": mgm_upper_pk}}]}
+                },
                 "size": 1000,  # 대단지(동 다수) — 요청 동이 잘려 not_found 나지 않게 넉넉히.
             },
         )
         thits = (((title or {}).get("hits") or {}).get("hits")) or []
         title_pk = self._match_dong(thits, req.dong)
         if title_pk is None:
-            raise FlowError(
-                "not_found", "입력한 동을 찾지 못했습니다.", field="dong"
-            )
+            raise FlowError("not_found", "입력한 동을 찾지 못했습니다.", field="dong")
         # 담기(C01) loc* 는 사용자 입력(req)이 아니라 ES 원본값을 쓴다(앱 동작과 일치 —
         # 건물별로 "504호"/"901" 처럼 포맷이 달라짐).
         es_dong_nm = _es_field(thits, title_pk, "dongNm") or req.dong
@@ -370,7 +423,9 @@ class SeumteoFlow:
                 f"{search}/bldrgstexpos/_search",
                 {
                     "sort": [{"hoNm": "asc"}],
-                    "query": {"bool": {"filter": [{"term": {"mgmUpperBldrgstPk": title_pk}}]}},
+                    "query": {
+                        "bool": {"filter": [{"term": {"mgmUpperBldrgstPk": title_pk}}]}
+                    },
                     "size": 5000,  # 대형 동(수천 세대) — 요청 호가 잘려 not_found 나지 않게.
                 },
             )
@@ -494,7 +549,13 @@ class SeumteoFlow:
         es_dong = t.get("es_dong_nm") or req.dong or ""
         es_ho = t.get("es_ho_nm") or req.ho if req.register_kind == "exclusive" else ""
         detl = " ".join(
-            x for x in [t.get("jibun_addr") or req.jibun_addr or req.road_addr, es_dong, es_ho] if x
+            x
+            for x in [
+                t.get("jibun_addr") or req.jibun_addr or req.road_addr,
+                es_dong,
+                es_ho,
+            ]
+            if x
         ).strip()
         body = {
             "bldrgstSeqno": seqno,
@@ -644,7 +705,7 @@ class SeumteoFlow:
     # ------------------------------------------------------------------
     # 7) 신청 — S01(완전체) + D02. D02 가 빠지면 신청내역에 완료(progStateCd:91)로 안 올라온다.
     # ------------------------------------------------------------------
-    async def _submit(self, page: Page, item: dict, appnt: dict) -> None:
+    async def _submit(self, page: Page, item: dict, appnt: dict) -> str:
         base = self._s.eais_base_url
         s01 = {
             "pbsvcResveDtls": [item],
@@ -663,6 +724,9 @@ class SeumteoFlow:
         self._check_cais(data)
         d02 = await self._post(page, f"{base}/bci/BCIAAA02D02", [item])
         self._check_cais(d02)
+        # 방금 신청한 건의 접수번호 — 06R01 에서 이 건만 골라 과거 접수의 구발급을 막는다(#recp-fresh).
+        # S01 이 안 돌려주면 ""(→ _find_recp_no 가 기존 최신-건물매칭으로 폴백).
+        return _extract_recp_no(data) or _extract_recp_no(d02)
 
     # ------------------------------------------------------------------
     # 8) 신청내역(06R01) — 방금 신청한 건의 접수번호(pbsvcRecpNo)를 확보한다.
@@ -670,7 +734,11 @@ class SeumteoFlow:
     #    실패 시 fail-closed(다른 건 발급 방지).
     # ------------------------------------------------------------------
     async def _find_recp_no(
-        self, page: Page, req: BuildingRegisterRequest, t: dict
+        self,
+        page: Page,
+        req: BuildingRegisterRequest,
+        t: dict,
+        submitted_recp: str = "",
     ) -> dict:
         base = self._s.eais_base_url
         today = _kst_today()  # KST — UTC date.today()면 심야 구간에 하루 어긋남.
@@ -686,9 +754,6 @@ class SeumteoFlow:
             "recordSize": 50,
             "pageYn": "N",
         }
-        data = await self._post(page, f"{base}/bci/BCIAAA06R01", body)
-        rows = data.get("IssueReadHistList") or []
-        rows.sort(key=lambda r: str(r.get("firstCrtnDt") or ""), reverse=True)
         kind = _REGSTR_KIND[req.register_kind]
         dong = _norm_unit(t.get("es_dong_nm") or req.dong)
         ho = _norm_unit(t.get("es_ho_nm") or req.ho)
@@ -706,26 +771,46 @@ class SeumteoFlow:
             if mnnm and mnnm in jibun_norm
             else ""
         )
-        for r in rows:
-            if str(r.get("regstrKindCd")) != kind:
-                continue
-            addr = str(r.get("locDetlAddr") or "")
-            addr_norm = re.sub(r"[\s()]", "", addr)
-            if bld_nm:
-                if bld_nm not in addr_norm:
+        # 방금 신청(S01)한 건의 접수번호(숫자만). 있으면 **이 접수번호와 일치하는 행만** 수용해,
+        # 같은 세대의 과거 접수(구발급) 대신 '방금 신청한 건'을 연다(#recp-fresh).
+        want = re.sub(r"\D", "", submitted_recp or "")
+
+        def _pick(rows: list[dict]) -> dict | None:
+            # 최신순 정렬 — want 가 없을 때(폴백) 가장 최근 건물매칭을 고르기 위함.
+            rows.sort(key=lambda r: str(r.get("firstCrtnDt") or ""), reverse=True)
+            for r in rows:
+                if str(r.get("regstrKindCd")) != kind:
                     continue
-            elif len(jibun_key) >= 8:
-                if jibun_key not in addr_norm:
+                addr = str(r.get("locDetlAddr") or "")
+                addr_norm = re.sub(r"[\s()]", "", addr)
+                if bld_nm:
+                    if bld_nm not in addr_norm:
+                        continue
+                elif len(jibun_key) >= 8:
+                    if jibun_key not in addr_norm:
+                        continue
+                else:
+                    continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
+                if dong and (dong + "동") not in addr_norm:
                     continue
-            else:
-                continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
-            if dong and (dong + "동") not in addr_norm:
-                continue
-            if req.register_kind == "exclusive" and ho and not _addr_has_ho(addr, ho):
-                continue
-            recp = str(r.get("pbsvcRecpNo") or "")
-            if recp:
-                _log.info("flow.recp_no", recp_no=recp, prog=r.get("progStateCd"))
+                if (
+                    req.register_kind == "exclusive"
+                    and ho
+                    and not _addr_has_ho(addr, ho)
+                ):
+                    continue
+                recp = str(r.get("pbsvcRecpNo") or "")
+                if not recp:
+                    continue
+                # want 가 있는데 다른 접수번호면 = 같은 세대의 과거 발급 → 스킵(구발급 방지).
+                if want and re.sub(r"\D", "", recp) != want:
+                    continue
+                _log.info(
+                    "flow.recp_no",
+                    recp_no=recp,
+                    prog=r.get("progStateCd"),
+                    by_submit=bool(want),
+                )
                 # 발급 준비(06R03)는 이 접수의 처리일 기준이다. 검색창이 [어제,오늘]이라 어제 건이
                 # 매칭될 수 있으니, 오늘로 재계산하지 말고 이 행의 처리일을 그대로 넘긴다(#recp-date).
                 app_date = (
@@ -740,6 +825,20 @@ class SeumteoFlow:
                     "bldrgstGbCd": str(r.get("bldrgstGbCd") or "1"),
                     "appDate": app_date,
                 }
+            return None
+
+        # want(방금 신청 접수번호)가 있으면 그 건이 06R01 에 올라올 때까지 잠깐 폴링한다 — 과거
+        # 접수로 성급히 떨어지지 않게(구발급 방지). 안 뜨면 fail-closed(구발급보다 재시도가 안전).
+        # want 가 없으면(S01 미반환·이례) 단발 조회 후 최신 건물매칭으로 폴백(기존 동작).
+        tries = _RECP_POLL_TRIES if want else 1
+        for attempt in range(tries):
+            data = await self._post(page, f"{base}/bci/BCIAAA06R01", body)
+            rows = data.get("IssueReadHistList") or []
+            hit = _pick(rows)
+            if hit is not None:
+                return hit
+            if want and attempt < tries - 1:
+                await page.wait_for_timeout(_RECP_POLL_WAIT_MS)
         raise FlowError("upstream", "신청한 발급 건을 확인하지 못했습니다.")
 
     # ------------------------------------------------------------------
@@ -827,13 +926,17 @@ class SeumteoFlow:
                 owned.append({"resType": "0", "resArea": str(area)})
         else:
             if t.get("main_prpos"):
-                detail_list.append({"resType": "주용도", "resContents": t["main_prpos"]})
+                detail_list.append(
+                    {"resType": "주용도", "resContents": t["main_prpos"]}
+                )
 
         change_list = _parse_changes(ex.get("full_text") or "")
 
         return BuildingRegisterResult(
             register_kind=req.register_kind,
-            comm_unique_no=t.get("recap_pk") if req.register_kind == "exclusive" else t.get("title_pk"),
+            comm_unique_no=t.get("recap_pk")
+            if req.register_kind == "exclusive"
+            else t.get("title_pk"),
             addr_dong=req.dong or t.get("dong_nm"),
             addr_ho=req.ho or None,
             road_addr=t.get("road_addr") or req.road_addr,
@@ -856,8 +959,20 @@ class SeumteoFlow:
 _YEAR_DATE = re.compile(r"(?:19|20)\d{2}[.\-]\d{1,2}[.\-]\d{1,2}")
 # 건축 변동 사유 키워드(확장 등재 판정 신호). 소유권이전 등 소유자 변동은 제외(PII·무관).
 _CHANGE_KEYWORDS = (
-    "신규작성", "신축", "증축", "개축", "재축", "대수선", "용도변경",
-    "행위허가", "사용검사", "사용승인", "직권", "말소", "위반건축물", "표시변경",
+    "신규작성",
+    "신축",
+    "증축",
+    "개축",
+    "재축",
+    "대수선",
+    "용도변경",
+    "행위허가",
+    "사용검사",
+    "사용승인",
+    "직권",
+    "말소",
+    "위반건축물",
+    "표시변경",
 )
 
 
@@ -883,7 +998,9 @@ def _parse_changes(text: str) -> list[dict]:
     판정 LLM 이 신고 부위와 대조할 수 없다(#change-area). 인접에 실연도 날짜가 있으면 붙인다.
     """
 
-    compact = re.sub(r"[\s+]+", "", text)  # 게이트/위반검출과 동일 압축(CLIP '+' 공백 제거).
+    compact = re.sub(
+        r"[\s+]+", "", text
+    )  # 게이트/위반검출과 동일 압축(CLIP '+' 공백 제거).
     idx = compact.find("변동사항")
     seg = compact[idx:] if idx >= 0 else compact
     # 다음 섹션(공용부분/증명문/발급일자) 전까지로 한정 — 변동 원문만.

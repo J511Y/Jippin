@@ -314,6 +314,58 @@ def test_signal_folds_extension_violation_over_official_normal(monkeypatch) -> N
     assert ext["unrecorded_areas"] == ["거실"]
 
 
+def test_extension_judge_receives_only_unit_changes(monkeypatch) -> None:
+    """확장 판정 LLM 입력엔 **전유부(unit) 변동만** 넣는다.
+
+    표제부(건물/공용) 변동이 섞이면 무관한 건물 변동을 이 세대 확장의 '등재'로 오인해
+    미등재(위반)를 legal 로 오판할 수 있다(#ext-unit-scope). 판정 입력에서 source=heading 을
+    걸러내는지 검증한다.
+    """
+
+    from src.services.home_check_extension import ExtensionJudgment
+
+    _capture_updates(monkeypatch)
+    monkeypatch.setenv("EXTENSION_JUDGE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    seen: dict[str, object] = {}
+
+    async def fake_load(_hid):
+        return True, "거실"
+
+    async def fake_judge(**kwargs):
+        seen["change_history"] = kwargs.get("change_history")
+        return ExtensionJudgment(
+            verdict="legal",
+            reason="…",
+            reported_areas=["거실"],
+            matched_areas=["거실"],
+            unrecorded_areas=[],
+        )
+
+    monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+    monkeypatch.setattr(svc, "judge_extension", fake_judge)
+
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    changes = seen.get("change_history")
+    assert changes, "판정에 변동사항이 전달되어야 한다"
+    assert {c.source for c in changes} == {"exclusive"}
+    reasons = {c.reason for c in changes}
+    assert "신규작성" in reasons  # 전유부 변동은 포함
+    assert "사용승인" not in reasons  # 표제부 변동은 제외(건물/공용부 잡음)
+
+
 def test_official_violation_survives_extension_legal_or_uncertain(monkeypatch) -> None:
     """공식 위반(노란딱지)은 확장 verdict 가 legal/uncertain 이어도 종합 signal=violation 유지.
 
