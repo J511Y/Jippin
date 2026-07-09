@@ -693,11 +693,19 @@ class SeumteoFlow:
         dong = _norm_unit(t.get("es_dong_nm") or req.dong)
         ho = _norm_unit(t.get("es_ho_nm") or req.ho)
         # 건물 식별자 — 공용 계정에 다른 단지의 같은 동/호(예: 다른 단지 101동 1001호)가 섞여
-        # 있어, 동/호만으로 매칭하면 **엉뚱한 건물의 발급 문서**를 열 수 있다. 건물명(있으면) 또는
-        # 지번 본번을 접수 주소(locDetlAddr)에서 함께 확인한다(#recp-building). 둘 다 없으면
-        # 식별 불가로 보고 매칭에서 제외(fail-closed → 잘못된 건 발급 방지).
+        # 있어, 동/호만으로 매칭하면 **엉뚱한 건물의 발급 문서**를 열 수 있다. 건물명(있으면)을
+        # 우선 쓰고, 없으면 **'시군구·법정동+본번' 지번 프리픽스**(짧은 본번의 부분일치 오매칭
+        # 방지)를 접수 주소(locDetlAddr)에서 확인한다(#recp-building). 둘 다 불충분하면 식별 불가로
+        # 보고 매칭에서 제외한다(fail-closed → 잘못된 건 발급 방지).
         bld_nm = re.sub(r"[\s()]", "", str(t.get("bld_nm") or ""))
         mnnm = str((t.get("loc") or {}).get("mnnm") or "").lstrip("0")
+        jibun_norm = re.sub(r"[\s()]", "", str(t.get("jibun_addr") or ""))
+        # 본번을 지번주소 안에서 찾아 그 지점까지(=시군구+법정동+본번)를 강한 식별자로 삼는다.
+        jibun_key = (
+            jibun_norm[: jibun_norm.find(mnnm) + len(mnnm)]
+            if mnnm and mnnm in jibun_norm
+            else ""
+        )
         for r in rows:
             if str(r.get("regstrKindCd")) != kind:
                 continue
@@ -706,11 +714,11 @@ class SeumteoFlow:
             if bld_nm:
                 if bld_nm not in addr_norm:
                     continue
-            elif mnnm:
-                if mnnm not in addr_norm:
+            elif len(jibun_key) >= 8:
+                if jibun_key not in addr_norm:
                     continue
             else:
-                continue  # 건물 식별자 부재 → 안전하게 스킵.
+                continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
             if dong and (dong + "동") not in addr_norm:
                 continue
             if req.register_kind == "exclusive" and ho and not _addr_has_ho(addr, ho):

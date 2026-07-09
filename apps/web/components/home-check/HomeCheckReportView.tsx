@@ -131,13 +131,15 @@ export function HomeCheckReportView({
   const cautionReasons = report.caution_reasons ?? [];
   const unrecordedAreas = ext?.unrecorded_areas ?? [];
 
-  // '없어요'(확장 없음) 응답 → verdict=normal + ext.legal + 신고 부위 없음. 이때 "신고하신 확장도
-  // 대장에 등재돼 있어요"는 틀린 카피다(확장을 신고하지 않았으므로). 무확장 전용 카피로 교체한다.
-  const isNoExtensionLegal =
-    verdict === 'normal' && ext?.verdict === 'legal' && (ext.reported_areas?.length ?? 0) === 0;
-  const heroOneLiner = isNoExtensionLegal
-    ? '위반표시가 없고, 확장·개조한 곳도 없다고 확인해 주셨어요.'
-    : meta.oneLiner;
+  // verdict=normal 한 줄 요약: 확장 등재는 **실제 매칭된 부위가 있을 때만** 단정한다. matched 가
+  // 비면(무확장 응답 또는 부위 누락된 불완전 legal 응답) '확장도 등재됨'/'무확장'을 추정하지 않고
+  // 위반표시 없음만 알린다 — 빈 배열로 무확장을 추정하지 않는다(#no-ext-infer).
+  const heroOneLiner =
+    verdict === 'normal'
+      ? (ext?.matched_areas?.length ?? 0) > 0
+        ? '위반표시가 없고, 신고하신 확장도 대장에 등재돼 있어요.'
+        : '위반표시가 없어요.'
+      : meta.oneLiner;
 
   // 히어로 "확인이 필요한 점" = caution 사유 ∪ 미등재 확장 부위(중복 제거).
   const checkPoints = Array.from(
@@ -480,8 +482,11 @@ function ExtensionDiagnosisCard({ report }: { report: HomeCheckReport }) {
         {reported.length > 0 ? (
           <Stack gap={8}>
             {reported.map((area) => {
-              const isMatched = matched.includes(area);
               const isUnrecorded = unrecorded.includes(area);
+              // 동의어(베란다↔발코니)로 matched 라벨이 신고 라벨과 다를 수 있다. legal 판정이고
+              // 미등재가 아니면 등재로 본다(exact matched 포함에만 의존하지 않음, #row-synonym).
+              const isMatched =
+                !isUnrecorded && (matched.includes(area) || ext.verdict === 'legal');
               const tone = isMatched
                 ? { color: 'var(--mantine-color-success-7)', Icon: IconCircleCheck, note: '대장 등재 확인' }
                 : isUnrecorded
