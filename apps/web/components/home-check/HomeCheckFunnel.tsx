@@ -159,6 +159,16 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
         };
       });
     const picked = await resolver();
+    // 주소가 바뀌면 이후 단계(동/호/확장) 값을 초기화한다 — 뒤로 가서 다른 주소를 골라도 이전
+    // 동·호·확장 답이 남아 새 주소에 옛 호수로 조회되는 것을 막는다.
+    if (picked.roadAddrPart1 !== roadAddr) {
+      setDong('');
+      setHo('');
+      setHoTouched(false);
+      setExtension(null);
+      setAreaKeys([]);
+      setEtcText('');
+    }
     setRoadAddr(picked.roadAddrPart1);
     setDisplayAddr(picked.roadFullAddr);
   }

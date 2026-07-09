@@ -144,12 +144,19 @@ def _suffix(value: str | None, suf: str) -> str:
 
 
 def _addr_has_ho(addr: str, ho: str) -> bool:
-    """신청내역 locDetlAddr("…102동 901"/"…901호")에 정규화 호(ho)가 토큰으로 들어있나."""
+    """신청내역 locDetlAddr("…102동 901"/"…901호")에서 호(ho)를 **동 뒤 구간**에서만 찾는다.
+
+    호는 동 뒤에 온다. 동번호(예 '101동'의 101)를 호로 오인하면, 아직 내 접수건이 안 뜬 사이
+    공용 계정의 다른 호('101동 1001호') 접수를 잘못 매칭해 엉뚱한 문서를 연다. '동' 이후 구간
+    에서만 호 토큰을 확인해 이를 배제한다(#recp-ho-after-dong).
+    """
 
     norm = (addr or "").replace(" ", "")
     if not ho:
         return False
-    return bool(re.search(r"(?<!\d)" + re.escape(ho) + r"호?(?!\d)", norm))
+    di = norm.rfind("동")
+    seg = norm[di + 1 :] if di >= 0 else norm
+    return bool(re.search(r"(?<!\d)" + re.escape(ho) + r"호?(?!\d)", seg))
 
 
 def _es_field(hits: list[dict], pk: str, field: str) -> str | None:
@@ -508,10 +515,38 @@ class SeumteoFlow:
             "multiUseBildYn": "N",
             "bldrgstCurdiGbCd": "0",
         }
+        # 담기 전에 잔재 카트를 비운다 — 계정 카트가 maxIssueCnt(10)로 차 있으면 C01 자체가
+        # 실패해 이후 모든 발급이 막힌다(#cart-preclean).
+        await self._clear_cart(page)
         data = await self._post(page, f"{self._s.eais_base_url}/bci/BCIAAA02C01", body)
         self._check_cais(data)
         t["_cart_seqno"] = seqno
         t["_locDetlAddr"] = detl
+
+    async def _clear_cart(self, page: Page) -> None:
+        """담기 전 계정 장바구니를 비운다(잔재로 인한 카트 만석 → C01 실패 방지).
+
+        직렬화(concurrency==1)라 남은 항목은 모두 이전 잡 잔재다. concurrency>1 이면 다른 진행
+        잡 항목을 지울 수 있어 생략한다(단일 머신 배포가 전제 — README). R05/D01 실패는 무시.
+        """
+
+        if self._s.seumteo_max_concurrency > 1:
+            return
+        base = self._s.eais_base_url
+        try:
+            data = await self._post(page, f"{base}/bci/BCIAAA02R05", {})
+        except FlowError:
+            return
+        for it in data.get("findPbsvcResveDtls") or []:
+            s = str(it.get("pbsvcResveDtlsSeqno") or "")
+            if not s:
+                continue
+            try:
+                await self._post(
+                    page, f"{base}/bci/BCIAAA02D01", {"pbsvcResveDtlsSeqno": s}
+                )
+            except FlowError:
+                pass
 
     # ------------------------------------------------------------------
     # 6) 장바구니(R05) — 내 항목 확보 + 잔여 항목 제거(D01).

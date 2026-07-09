@@ -5,7 +5,7 @@ Playwright headless Chromium 으로 로그인·발급·CLIP 리포트 추출·PD
 CODEF 와 동형(同型)인 결과를 apps/api(jippin)에 돌려준다.
 
 - apps/api 는 이 워커를 Flycast 사설망(`http://jippin-seumteo-worker.flycast`)으로 호출한다.
-- 세움터 계정은 운영자 합의로 **분리하지 않고 단일 계정**(`shtech`)만 사용한다. 로그인은
+- 세움터 계정은 운영자 합의로 **분리하지 않고 단일 계정**(`<세움터-계정ID>`)만 사용한다. 로그인은
   아이디/비밀번호(인증서·간편인증·보안문자 없음 — 발급 정찰로 확인).
 - 발급된 PDF 는 결과의 `original_pdf_base64` 로 반환되며, apps/api 의 기존
   `home_check._store_pdfs` 가 Supabase Storage(`home-check-docs`)에 그대로 저장한다.
@@ -26,7 +26,7 @@ apps/api (app="jippin")                     apps/seumteo-worker (app="jippin-seu
 
 ## 발급 플로우 (실측 엔드포인트 계약)
 
-`shtech` 계정으로 「여의대방로43나길 25 104동 504호」를 끝까지 발급하며 네트워크를 캡처해 도출.
+`<세움터-계정ID>` 계정으로 「여의대방로43나길 25 104동 504호」를 끝까지 발급하며 네트워크를 캡처해 도출.
 1~8 은 로그인 세션 위 in-page fetch(JSON), 9 만 DOM 클릭(리포트 뷰어 param 이 클라이언트측 AES).
 
 | # | 단계 | 엔드포인트 | 요지 |
@@ -52,7 +52,7 @@ apps/api (app="jippin")                     apps/seumteo-worker (app="jippin-seu
 cd apps/seumteo-worker
 pip install -r requirements.txt
 python -m playwright install chromium
-$env:SEUMTER_ID="shtech"; $env:SEUMTER_PASSWORD="********"
+$env:SEUMTER_ID="<세움터-계정ID>"; $env:SEUMTER_PASSWORD="********"
 # headed(기본, 눈으로 확인) — 정상 아파트
 python poc.py "서울특별시 영등포구 여의대방로43나길 25" 104동 504호 exclusive
 python poc.py "서울특별시 영등포구 여의대방로43나길 25" 104동 "" heading
@@ -64,14 +64,14 @@ python poc.py "서울특별시 영등포구 여의대방로43나길 25" 104동 "
 
 ```bash
 fly apps create jippin-seumteo-worker                 # 최초 1회
-fly secrets set -a jippin-seumteo-worker SEUMTER_ID=shtech SEUMTER_PASSWORD=****** SEUMTEO_WORKER_TOKEN=$(openssl rand -hex 24)
+fly secrets set -a jippin-seumteo-worker SEUMTER_ID=<세움터-계정ID> SEUMTER_PASSWORD=****** SEUMTEO_WORKER_TOKEN=$(openssl rand -hex 24)
 fly deploy apps/seumteo-worker --flycast --remote-only --ha=false   # **반드시 단일 머신**
 fly scale count 1 -a jippin-seumteo-worker            # HA 로 2대 뜨지 않게 1대 고정
 fly ips list -a jippin-seumteo-worker                 # private IPv6 만 있어야 함(public 없음)
 ```
 
 > ⚠️ **단일 머신 필수(단일 세움터 계정)**: `fly deploy` 기본값은 HA 2머신인데, 두 머신이
-> 하나의 `shtech` 계정·서버측 장바구니를 공유하면 한 머신의 `_isolate_cart` D01 삭제가 다른
+> 하나의 `<세움터-계정ID>` 계정·서버측 장바구니를 공유하면 한 머신의 `_isolate_cart` D01 삭제가 다른
 > 머신 발급 항목을 지우고 발급이 레이스한다(프로세스 내 `render_semaphore`·concurrency 가드는
 > 머신 간 보호 못 함). **`--ha=false` + `fly scale count 1`** 로 정확히 1머신만 유지한다.
 그다음 apps/api(jippin)에:
