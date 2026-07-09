@@ -5,7 +5,12 @@
 # 빌드 컨텍스트는 이 디렉토리(apps/seumteo-worker)여야 한다:
 #   fly deploy apps/seumteo-worker    (첫 위치 인자가 곧 build context)
 
-FROM python:3.13-slim
+# **bookworm 고정 필수**: `python:3.13-slim` 은 이제 Debian 13(trixie)로 옮겨갔는데,
+# playwright 1.49.1 의 `install --with-deps` apt 목록엔 trixie 에서 사라진 폰트 패키지
+# (`ttf-unifont`/`ttf-ubuntu-font-family`)가 들어 있어 빌드가 깨진다("has no installation
+# candidate"). playwright 1.49 가 타깃하는 Debian 12(bookworm)로 고정한다. playwright 가
+# trixie 를 지원하면 그때 slim(=trixie)으로 되돌린다.
+FROM python:3.13-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
