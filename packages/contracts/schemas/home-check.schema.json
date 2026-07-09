@@ -10,8 +10,8 @@
     "schema_version": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "const": "1.1.0",
-      "description": "스키마 버전 (semver). 1.1.0: NeedsInput 에 field/options(주소·동·호 후보) 추가(하위호환 — 추가 선택 필드)."
+      "const": "1.2.0",
+      "description": "스키마 버전 (semver). 1.2.0: report 에 extension_check(신고확장↔변동사항 LLM 대조) 추가 + prices(공동주택가격) 제거 — 우리집 체크는 확장 등재 여부가 목적이라 가격/속성 노이즈 제외."
     },
     "id": {
       "type": "string",
@@ -127,10 +127,9 @@
           "items": { "$ref": "#/$defs/ChangeEntry" },
           "description": "전유부+표제부 변동사항(resChangeList) 통합 타임라인. 확장 등재 여부 대조의 핵심."
         },
-        "prices": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/PriceEntry" },
-          "description": "전유부 공동주택가격(resPriceList)."
+        "extension_check": {
+          "description": "사용자가 신고한 확장·개조 부위와 대장 변동사항을 대조한 LLM 판정. 사용자 입력이 있을 때만 채워진다. 노란딱지(violation)와 별개 축.",
+          "anyOf": [{ "$ref": "#/$defs/ExtensionCheck" }, { "type": "null" }]
         },
         "documents": {
           "type": "array",
@@ -150,6 +149,23 @@
           "type": "string",
           "description": "면책 고지(참고용·최종판단은 관할 행정청/전문가)."
         }
+      }
+    },
+    "ExtensionCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict"],
+      "description": "신고 확장 ↔ 대장 변동사항 대조(LLM). 노란딱지(violation.is_violation)와 별개 축. verdict=violation 이면 종합 signal 을 violation 으로 올리되 violation.is_violation(공식 표시)은 건드리지 않는다.",
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["violation", "legal", "uncertain"],
+          "description": "violation=신고했으나 미등재, legal=등재확인/확장없음, uncertain=대조모호."
+        },
+        "reason": { "type": ["string", "null"], "description": "한국어 판정 근거(대장 변동사항 기준)." },
+        "reported_areas": { "type": "array", "items": { "type": "string" }, "description": "사용자가 신고한 확장 부위." },
+        "matched_areas": { "type": "array", "items": { "type": "string" }, "description": "변동사항에서 등재 확인된 부위." },
+        "unrecorded_areas": { "type": "array", "items": { "type": "string" }, "description": "신고했으나 미등재된 부위(위반 소지)." }
       }
     },
     "Violation": {
@@ -207,14 +223,6 @@
           "enum": ["exclusive", "heading"],
           "description": "출처 대장(전유부/표제부)."
         }
-      }
-    },
-    "PriceEntry": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "reference_date": { "type": ["string", "null"], "description": "기준일자." },
-        "base_price": { "type": ["integer", "null"], "description": "공동주택가격(원, 정수)." }
       }
     },
     "DocumentRef": {

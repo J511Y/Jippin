@@ -19,6 +19,13 @@ export interface CreateHomeCheckPayload {
   jibun_addr?: string | null;
   dong: string;
   ho: string;
+  /**
+   * 확장·개조 신고 여부. true=있음(extended_areas 동반), false=없음, null/미지정=모름(대조 생략).
+   * 백엔드는 이 값이 채워졌을 때만 report.extension_check(신고확장↔변동사항 LLM 대조)를 만든다.
+   */
+  reported_extension?: boolean | null;
+  /** 사용자가 확장·개조했다고 적은 부위(자유 텍스트). reported_extension=true 일 때만 의미. */
+  extended_areas?: string | null;
 }
 
 export interface ContinueHomeCheckPayload {

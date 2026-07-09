@@ -165,6 +165,7 @@ def test_create_returns_202_querying_job(monkeypatch) -> None:
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "querying"
+    assert body["schema_version"] == "1.2.0"
     assert body["report"] is None
     # 정본 계약으로 재검증.
     ContractHomeCheckJob.model_validate(body)
@@ -251,12 +252,116 @@ def test_signal_normal_when_both_clean(monkeypatch) -> None:
     assert values["status"] == "completed"
     assert values["signal"] == "normal"
     assert values["violation"] is False
-    # 요약/변동/가격 매핑.
+    # 요약/변동 매핑 (price_list 는 1.2.0 에서 리포트 미노출 — 저장하지 않는다).
     assert float(values["exclusive_area_m2"]) == 84.99
     assert values["building_main_use"] == "공동주택"
     assert values["building_floors"] == "지하 1층 지상 12층"
     assert len(values["change_list"]) == 2  # 전유부 + 표제부
-    assert values["price_list"][0]["base_price"] == 500000000
+    assert "price_list" not in values
+    # 확장 판정은 게이트가 꺼져 있으므로(default) extension_check 는 없다.
+    assert values["result_fields"]["extension_check"] is None
+
+
+def test_signal_folds_extension_violation_over_official_normal(monkeypatch) -> None:
+    """공식 축은 normal 인데 확장 verdict=violation → 종합 signal 만 violation 으로 오른다.
+
+    공식 노란딱지 축(violation/exclusive_violation/heading_violation)은 확장 verdict 에
+    절대 영향받지 않아야 한다(별개 축).
+    """
+
+    from src.services.home_check_extension import ExtensionJudgment
+
+    captured = _capture_updates(monkeypatch)
+    monkeypatch.setenv("EXTENSION_JUDGE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    async def fake_load(_hid):
+        return True, "거실"
+
+    async def fake_judge(**_kwargs):
+        return ExtensionJudgment(
+            verdict="violation",
+            reason="신고한 거실 확장이 대장 변동사항에 없습니다.",
+            reported_areas=["거실"],
+            matched_areas=[],
+            unrecorded_areas=["거실"],
+        )
+
+    monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+    monkeypatch.setattr(svc, "judge_extension", fake_judge)
+
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+    values = captured[str(hid)]
+    assert values["status"] == "completed"
+    # 종합 신호는 확장 verdict 를 접어 violation.
+    assert values["signal"] == "violation"
+    # 공식 노란딱지 축은 확장 verdict 에 영향받지 않는다.
+    assert values["violation"] is False
+    assert values["exclusive_violation"] is False
+    assert values["heading_violation"] is False
+    ext = values["result_fields"]["extension_check"]
+    assert ext["verdict"] == "violation"
+    assert ext["unrecorded_areas"] == ["거실"]
+
+
+def test_official_violation_survives_extension_legal_or_uncertain(monkeypatch) -> None:
+    """공식 위반(노란딱지)은 확장 verdict 가 legal/uncertain 이어도 종합 signal=violation 유지.
+
+    확장 판정은 별개 축이라 공식 위반을 절대 강등(legal)하거나 은폐(uncertain)하지 못한다 —
+    silent-normal 방지의 핵심 불변식.
+    """
+
+    from src.services.home_check_extension import ExtensionJudgment
+
+    for ext_verdict in ("legal", "uncertain"):
+        captured = _capture_updates(monkeypatch)
+        monkeypatch.setenv("EXTENSION_JUDGE_ENABLED", "true")
+        get_settings.cache_clear()
+
+        async def fake_load(_hid):
+            return True, "거실"
+
+        async def fake_judge(_ev=ext_verdict, **_kwargs):
+            return ExtensionJudgment(
+                verdict=_ev,
+                reason="…",
+                reported_areas=["거실"],
+                matched_areas=["거실"] if _ev == "legal" else [],
+                unrecorded_areas=[],
+            )
+
+        monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+        monkeypatch.setattr(svc, "judge_extension", fake_judge)
+
+        hid = uuid.uuid4()
+        monkeypatch.setattr(
+            svc,
+            "_new_client",
+            lambda: _FakeClient(
+                exclusive=_exclusive("위반건축물"), heading=_heading(None)
+            ),
+        )
+        _run(
+            svc.run_home_check(
+                hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+            )
+        )
+        values = captured[str(hid)]
+        assert values["status"] == "completed", ext_verdict
+        # 공식 위반은 확장 verdict 와 무관하게 유지된다.
+        assert values["signal"] == "violation", ext_verdict
+        assert values["violation"] is True, ext_verdict
+        assert values["exclusive_violation"] is True, ext_verdict
 
 
 def test_signal_caution_when_heading_fails(monkeypatch) -> None:
@@ -419,14 +524,60 @@ def test_serialize_completed_report_validates_against_contract() -> None:
         "change_list": [
             {"date": "20200101", "reason": "신규작성", "source": "exclusive"}
         ],
-        "price_list": [{"reference_date": "20230101", "base_price": 500000000}],
         "result_fields": {"caution_reasons": None},
     }
     # documents 발급(외부 호출) 생략.
     job = _run(svc.serialize_job(row, with_documents=False))
     payload = job.model_dump(mode="json")
+    assert payload["schema_version"] == "1.2.0"
     assert payload["report"]["signal"] == "violation"
     assert payload["report"]["disclaimer"].startswith("본 결과는")
+    # 1.2.0: prices 제거, extension_check 미입력 시 null.
+    assert "prices" not in payload["report"]
+    assert payload["report"]["extension_check"] is None
+    ContractHomeCheckJob.model_validate(payload)
+
+
+def test_serialize_completed_report_with_extension_check_validates_against_contract() -> (
+    None
+):
+    """확장 판정이 채워진 completed 리포트를 정본 계약으로 재검증한다."""
+
+    row = {
+        "id": uuid.uuid4(),
+        "status": "completed",
+        "signal": "caution",
+        "created_at": datetime.now(UTC),
+        "updated_at": datetime.now(UTC),
+        "road_addr": "서울특별시 강남구 테헤란로 1",
+        "jibun_addr": None,
+        "addr_dong": "101",
+        "addr_ho": "1001",
+        "violation": False,
+        "exclusive_violation": False,
+        "heading_violation": False,
+        "change_list": [
+            {"date": "20200101", "reason": "신규작성", "source": "exclusive"}
+        ],
+        "result_fields": {
+            "caution_reasons": [
+                "신고하신 확장 내용을 대장 변동사항과 자동으로 대조하지 못했습니다."
+            ],
+            "extension_check": {
+                "verdict": "uncertain",
+                "reason": "대장 변동사항과의 대조 결과가 명확하지 않습니다.",
+                "reported_areas": ["거실"],
+                "matched_areas": [],
+                "unrecorded_areas": [],
+            },
+        },
+    }
+    job = _run(svc.serialize_job(row, with_documents=False))
+    payload = job.model_dump(mode="json")
+    ext = payload["report"]["extension_check"]
+    assert ext["verdict"] == "uncertain"
+    assert ext["reported_areas"] == ["거실"]
+    assert "prices" not in payload["report"]
     ContractHomeCheckJob.model_validate(payload)
 
 

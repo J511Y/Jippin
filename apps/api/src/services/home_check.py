@@ -34,12 +34,12 @@ from ..schemas.home_check import (
     DocumentRef,
     ErrorInfo,
     ExclusivePart,
+    ExtensionCheck,
     HomeCheckJob,
     HomeCheckReport,
     MyHomeChecksResponse,
     NeedsInput,
     NeedsInputOption,
-    PriceEntry,
     ReportMeta,
     Violation,
 )
@@ -51,6 +51,7 @@ from ..services.codef import (
     CodefNeedsUserInput,
     ExclusivePartResult,
 )
+from ..services.home_check_extension import judge_extension
 
 logger = get_logger("zippin.home_check")
 
@@ -60,7 +61,13 @@ DISCLAIMER = (
 )
 
 _VIOLATION_VALUE = "위반건축물"
-_SCHEMA_VERSION = "1.1.0"
+_SCHEMA_VERSION = "1.2.0"
+
+# 확장 verdict=uncertain 일 때 종합 신호에 덧붙이는 🟡 caution 사유(한국어).
+_EXTENSION_UNCERTAIN_CAUTION = (
+    "신고하신 확장 내용을 대장 변동사항과 자동으로 대조하지 못했습니다. "
+    "변동사항 타임라인을 직접 확인해 주세요."
+)
 
 # re-export 로 라우터가 services 경유로 응답 모델을 쓰게 한다(기존 컨벤션 유지).
 __all__ = ["MyHomeChecksResponse"]
@@ -93,6 +100,8 @@ async def create_home_check(
     jibun_addr: str | None,
     dong: str,
     ho: str,
+    reported_extension: bool | None = None,
+    extended_areas: str | None = None,
 ) -> dict[str, Any]:
     """우리집 체크 잡 한 건을 status='querying' 으로 생성한다."""
 
@@ -108,6 +117,8 @@ async def create_home_check(
                     jibun_addr=jibun_addr,
                     addr_dong=dong or None,
                     addr_ho=ho,
+                    reported_extension=reported_extension,
+                    extended_areas=extended_areas,
                 )
                 .returning(
                     HomeCheck.id,
@@ -229,12 +240,23 @@ def _get_codef_redis() -> aioredis.Redis:
 
 
 def _new_client() -> CodefBuildingRegisterClient:
-    """백그라운드 처리용 CODEF 클라이언트 — 공유 Redis(토큰/2-way/서킷)를 주입한다.
+    """백그라운드 처리용 건축물대장 클라이언트 — 공유 Redis(토큰/2-way/서킷)를 주입한다.
+
+    ``seumteo_enabled`` 면 세움터 직결 클라이언트(CODEF 대체, ADR-0009)를, 아니면 CODEF
+    클라이언트를 만든다. 둘은 동형 인터페이스(fetch_exclusive_part/resume_exclusive_part/
+    fetch_building_heading + codef.types 결과)라 호출부·판정·PDF 저장은 무변경이다.
 
     테스트는 ``src.services.home_check._new_client`` 를 monkeypatch 해 외부 호출을 막는다.
     """
 
-    return CodefBuildingRegisterClient(get_settings(), redis_client=_get_codef_redis())
+    settings = get_settings()
+    if getattr(settings, "seumteo_enabled", False):
+        from ..services.seumteo import SeumteoBuildingRegisterClient
+
+        return SeumteoBuildingRegisterClient(  # type: ignore[return-value]
+            settings, redis_client=_get_codef_redis()
+        )
+    return CodefBuildingRegisterClient(settings, redis_client=_get_codef_redis())
 
 
 async def run_home_check(
@@ -386,15 +408,6 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-def _to_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(float(str(value).replace(",", "").strip()))
-    except (TypeError, ValueError):
-        return None
-
-
 def _str_or_none(value: Any) -> str | None:
     if value is None:
         return None
@@ -487,18 +500,6 @@ def _merge_change_history(
     return entries
 
 
-def _extract_prices(exclusive: ExclusivePartResult) -> list[PriceEntry]:
-    prices: list[PriceEntry] = []
-    for item in exclusive.price_list:
-        prices.append(
-            PriceEntry(
-                reference_date=_str_or_none(item.get("resReferenceDate")),
-                base_price=_to_int(item.get("resBasePrice")),
-            )
-        )
-    return prices
-
-
 def _parse_date(value: Any) -> date | None:
     text = _str_or_none(value)
     if text is None:
@@ -515,6 +516,25 @@ def _parse_date(value: Any) -> date | None:
 # ---------------------------------------------------------------------------
 # 행 갱신 (백그라운드 — 새 연결).
 # ---------------------------------------------------------------------------
+async def _load_extension_input(
+    home_check_id: uuid.UUID,
+) -> tuple[bool | None, str | None]:
+    """확장 판정 입력(reported_extension/extended_areas)만 좁게 읽는다(PII 아님)."""
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(
+                    HomeCheck.reported_extension,
+                    HomeCheck.extended_areas,
+                ).where(HomeCheck.id == home_check_id)
+            )
+        ).first()
+    if row is None:
+        return None, None
+    return row.reported_extension, row.extended_areas
+
+
 async def _mark_completed(
     home_check_id: uuid.UUID,
     exclusive: ExclusivePartResult,
@@ -533,7 +553,38 @@ async def _mark_completed(
     exclusive_summary = _summarize_exclusive(exclusive)
     heading_summary = _summarize_heading(heading) if heading is not None else None
     change_history = _merge_change_history(exclusive, heading)
-    prices = _extract_prices(exclusive)
+
+    # 확장 신고 ↔ 변동사항 LLM 대조(별개 축). 기능 게이트가 꺼져 있으면(default) 판정을
+    # 건너뛰어 extension_check 는 없고 신호는 공식 축(_judge) 그대로다 — OpenAI 의존 없음.
+    # 공식 노란딱지 축(exclusive_violation/heading_violation/violation)은 절대 건드리지
+    # 않고, 종합 signal 과 caution_reasons 에만 확장 verdict 를 접는다.
+    extension_check: dict[str, Any] | None = None
+    settings = get_settings()
+    if settings.extension_judge_enabled:
+        reported_extension, extended_areas = await _load_extension_input(home_check_id)
+        judgment = await judge_extension(
+            reported_extension=reported_extension,
+            extended_areas=extended_areas,
+            change_history=change_history,
+            settings=settings,
+        )
+        if judgment is not None:
+            extension_check = {
+                "verdict": judgment.verdict,
+                "reason": judgment.reason,
+                "reported_areas": judgment.reported_areas,
+                "matched_areas": judgment.matched_areas,
+                "unrecorded_areas": judgment.unrecorded_areas,
+            }
+            if judgment.verdict == "uncertain":
+                caution_reasons = [*caution_reasons, _EXTENSION_UNCERTAIN_CAUTION]
+            # 공식 violation 은 불변. signal 만 재계산해 확장 verdict 를 접는다.
+            if violation or judgment.verdict == "violation":
+                signal = "violation"
+            elif caution_reasons or judgment.verdict == "uncertain":
+                signal = "caution"
+            else:
+                signal = "normal"
 
     # PDF 보관(best-effort) — 실패해도 잡은 completed 로 둔다(문서 링크만 생략).
     await _store_pdfs(home_check_id, exclusive, heading)
@@ -554,8 +605,10 @@ async def _mark_completed(
         "heading_res_doc_no": heading.res_doc_no if heading else None,
         "res_issue_date": _parse_date(exclusive.issue_date),
         "change_list": [e.model_dump(mode="json") for e in change_history],
-        "price_list": [p.model_dump(mode="json") for p in prices],
-        "result_fields": {"caution_reasons": caution_reasons},
+        "result_fields": {
+            "caution_reasons": caution_reasons,
+            "extension_check": extension_check,
+        },
         "error_code": None,
         "error_message": None,
         "queried_at": datetime.now(timezone.utc),
@@ -929,7 +982,9 @@ async def _build_report(
     change_history = [
         ChangeEntry(**entry) for entry in (row.get("change_list") or [])
     ] or None
-    prices = [PriceEntry(**entry) for entry in (row.get("price_list") or [])] or None
+
+    raw_extension = fields.get("extension_check")
+    extension_check = ExtensionCheck(**raw_extension) if raw_extension else None
 
     documents = None
     if with_documents:
@@ -949,7 +1004,7 @@ async def _build_report(
         exclusive_part=exclusive_part,
         building=building,
         change_history=change_history,
-        prices=prices,
+        extension_check=extension_check,
         documents=documents,
         caution_reasons=caution_reasons,
         meta=meta,

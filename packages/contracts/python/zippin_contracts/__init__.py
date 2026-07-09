@@ -9,7 +9,7 @@ from .common_judgment_schema import BuildingInfo, BuildingType, CommonJudgmentSc
 from .completion_decision import Channel, CompletionDecision, ConfidenceSummary, ConflictFlag, Decision, Kind, MissingField, NextAction
 from .error_response import ErrorBody, ErrorResponse
 from .estimate_result import Assumption, Currency, EstimateResult, MoneyRange
-from .home_check import AddressInfo, BuildingHeading, ChangeEntry, DocumentRef, ErrorInfo, ExclusivePart, FieldModel, HomeCheckJob, HomeCheckReport, Kind, Kind1, NeedsInput, NeedsInputOption, PriceEntry, ReportMeta, Signal, Signal1, Source, Status, Violation
+from .home_check import AddressInfo, BuildingHeading, ChangeEntry, DocumentRef, ErrorInfo, ExclusivePart, ExtensionCheck, FieldModel, HomeCheckJob, HomeCheckReport, Kind, Kind1, NeedsInput, NeedsInputOption, ReportMeta, Signal, Signal1, Source, Status, Verdict, Violation
 from .rule_eval_result import Code, LegalBasis, RequiredFacility, RuleEvalResult, Verdict
 from .segmentation_result import ErrorCode, Image, Instance, Label, Region, SegmentationResult
 
@@ -41,6 +41,7 @@ __all__ = [
     "ErrorResponse",
     "EstimateResult",
     "ExclusivePart",
+    "ExtensionCheck",
     "FieldModel",
     "HomeCheckJob",
     "HomeCheckReport",
@@ -58,7 +59,6 @@ __all__ = [
     "NeedsInput",
     "NeedsInputOption",
     "NextAction",
-    "PriceEntry",
     "Provider",
     "Reclassification",
     "Region",
