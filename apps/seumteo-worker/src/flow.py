@@ -669,11 +669,19 @@ class SeumteoFlow:
             recp = str(r.get("pbsvcRecpNo") or "")
             if recp:
                 _log.info("flow.recp_no", recp_no=recp, prog=r.get("progStateCd"))
+                # 발급 준비(06R03)는 이 접수의 처리일 기준이다. 검색창이 [어제,오늘]이라 어제 건이
+                # 매칭될 수 있으니, 오늘로 재계산하지 말고 이 행의 처리일을 그대로 넘긴다(#recp-date).
+                app_date = (
+                    str(r.get("realProcessDateStr") or "")
+                    or str(r.get("recpDate") or "").replace("-", "")
+                    or str(r.get("firstCrtnDt") or "")[:8]
+                )
                 return {
                     "pbsvcRecpNo": recp,
                     "mgmNo": str(r.get("mgmNo") or ""),
                     "issueReadGbCd": str(r.get("issueReadGbCd") or "0"),
                     "bldrgstGbCd": str(r.get("bldrgstGbCd") or "1"),
+                    "appDate": app_date,
                 }
         raise FlowError("upstream", "신청한 발급 건을 확인하지 못했습니다.")
 
@@ -690,21 +698,29 @@ class SeumteoFlow:
         self, page: Page, req: BuildingRegisterRequest, t: dict, recp: dict
     ) -> Page:
         base = self._s.eais_base_url
-        today = _kst_today().strftime("%Y%m%d")  # KST — recpDay/issueReadAppDate 정합.
+        # 발급 준비일은 오늘로 재계산하지 않고 매칭 접수 행의 처리일을 쓴다(어제 경계 대비, #recp-date).
         rept = _REPT_NM[req.register_kind]
+        app_date = recp.get("appDate") or _kst_today().strftime("%Y%m%d")
 
         # 리포트 준비 + FILE_ID/섹션수 확보(발급 버튼이 내부적으로 하던 호출).
         await self._post(
             page,
             f"{base}/cba/CBAAZD04R01",
-            {"sysLocGbCd": "3", "reptNm": rept, "recpDay": today, "jobGbCd": "BC"},
+            {"sysLocGbCd": "3", "reptNm": rept, "recpDay": app_date, "jobGbCd": "BC"},
         )
-        r03 = await self._post(
-            page,
-            f"{base}/report/BCIAAA06R03",
-            {"issueReadAppDate": today, "pbsvcRecpNo": recp["pbsvcRecpNo"]},
-        )
-        counts = r03.get("count") or {}
+        # 발급이 아직 준비 전이면 06R03 에 FILE_ID 가 없다 — 잠깐 대기 후 재조회한다(방금 신청건이
+        # 완료 상태에 이르기 전이면 곧 준비되므로 잡을 성급히 실패시키지 않는다, #recp-ready).
+        counts: dict = {}
+        for _ in range(6):
+            r03 = await self._post(
+                page,
+                f"{base}/report/BCIAAA06R03",
+                {"issueReadAppDate": app_date, "pbsvcRecpNo": recp["pbsvcRecpNo"]},
+            )
+            counts = r03.get("count") or {}
+            if counts.get("FILE_ID"):
+                break
+            await page.wait_for_timeout(1500)
         if not counts.get("FILE_ID"):
             raise FlowError("upstream", "발급 리포트를 준비하지 못했습니다.")
         # 완전성 검증용 섹션 수(위반표시가 실리는 '그 밖의 기재사항' 등)를 넘겨 둔다.
@@ -819,18 +835,21 @@ def _parse_changes(text: str) -> list[dict]:
         if p > 0:
             seg = seg[:p]
     out: list[dict] = []
-    seen: set[str] = set()
+    seen: set[tuple[str | None, str]] = set()
+    # 같은 키워드가 다른 부위로 여러 번 나올 수 있다(행위허가/사용검사 여러 건). 첫 등장만 잡으면
+    # 뒤 부위가 누락돼 판정 LLM 이 신고 부위를 오탐한다 → **모든 등장**을 훑고 (날짜,사유)로 중복만
+    # 제거한다(#change-multi).
     for kw in _CHANGE_KEYWORDS:
-        pos = seg.find(kw)
-        if pos < 0 or kw in seen:
-            continue
-        seen.add(kw)
-        # 키워드 + 뒤따르는 부위/면적(〈…〉)을 포함하도록 창을 잡고 메타를 정리한다.
-        reason = _clean_reason(seg[max(0, pos - 12) : pos + 72]) or kw
-        m = _YEAR_DATE.search(seg[max(0, pos - 40) : pos + 72])
-        out.append(
-            {"resChangeDate": m.group(0) if m else None, "resChangeReason": reason}
-        )
-        if len(out) >= 20:
-            break
+        for m0 in re.finditer(re.escape(kw), seg):
+            pos = m0.start()
+            # 키워드 + 뒤따르는 부위/면적(〈…〉)을 포함하도록 창을 잡고 메타를 정리한다.
+            reason = _clean_reason(seg[max(0, pos - 12) : pos + 72]) or kw
+            m = _YEAR_DATE.search(seg[max(0, pos - 40) : pos + 72])
+            date = m.group(0) if m else None
+            if (date, reason) in seen:
+                continue
+            seen.add((date, reason))
+            out.append({"resChangeDate": date, "resChangeReason": reason})
+            if len(out) >= 20:
+                return out
     return out

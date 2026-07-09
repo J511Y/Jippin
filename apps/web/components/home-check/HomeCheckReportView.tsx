@@ -131,6 +131,14 @@ export function HomeCheckReportView({
   const cautionReasons = report.caution_reasons ?? [];
   const unrecordedAreas = ext?.unrecorded_areas ?? [];
 
+  // '없어요'(확장 없음) 응답 → verdict=normal + ext.legal + 신고 부위 없음. 이때 "신고하신 확장도
+  // 대장에 등재돼 있어요"는 틀린 카피다(확장을 신고하지 않았으므로). 무확장 전용 카피로 교체한다.
+  const isNoExtensionLegal =
+    verdict === 'normal' && ext?.verdict === 'legal' && (ext.reported_areas?.length ?? 0) === 0;
+  const heroOneLiner = isNoExtensionLegal
+    ? '위반표시가 없고, 확장·개조한 곳도 없다고 확인해 주셨어요.'
+    : meta.oneLiner;
+
   // 히어로 "확인이 필요한 점" = caution 사유 ∪ 미등재 확장 부위(중복 제거).
   const checkPoints = Array.from(
     new Set([
@@ -198,7 +206,7 @@ export function HomeCheckReportView({
           mt="md"
           style={{ lineHeight: 1.7, wordBreak: 'keep-all' }}
         >
-          {meta.oneLiner}
+          {heroOneLiner}
         </Text>
 
         {checkPoints.length > 0 ? (
