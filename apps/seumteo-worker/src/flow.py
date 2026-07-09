@@ -657,11 +657,25 @@ class SeumteoFlow:
         kind = _REGSTR_KIND[req.register_kind]
         dong = _norm_unit(t.get("es_dong_nm") or req.dong)
         ho = _norm_unit(t.get("es_ho_nm") or req.ho)
+        # 건물 식별자 — 공용 계정에 다른 단지의 같은 동/호(예: 다른 단지 101동 1001호)가 섞여
+        # 있어, 동/호만으로 매칭하면 **엉뚱한 건물의 발급 문서**를 열 수 있다. 건물명(있으면) 또는
+        # 지번 본번을 접수 주소(locDetlAddr)에서 함께 확인한다(#recp-building). 둘 다 없으면
+        # 식별 불가로 보고 매칭에서 제외(fail-closed → 잘못된 건 발급 방지).
+        bld_nm = re.sub(r"[\s()]", "", str(t.get("bld_nm") or ""))
+        mnnm = str((t.get("loc") or {}).get("mnnm") or "").lstrip("0")
         for r in rows:
             if str(r.get("regstrKindCd")) != kind:
                 continue
             addr = str(r.get("locDetlAddr") or "")
-            addr_norm = addr.replace(" ", "")
+            addr_norm = re.sub(r"[\s()]", "", addr)
+            if bld_nm:
+                if bld_nm not in addr_norm:
+                    continue
+            elif mnnm:
+                if mnnm not in addr_norm:
+                    continue
+            else:
+                continue  # 건물 식별자 부재 → 안전하게 스킵.
             if dong and (dong + "동") not in addr_norm:
                 continue
             if req.register_kind == "exclusive" and ho and not _addr_has_ho(addr, ho):
@@ -731,7 +745,7 @@ class SeumteoFlow:
             "markAnyYn": "Y",
             "actionIdParam": "BCIAAA04L01",
             "bldrgstCurdiGbCd": "0",
-            "issueReadAppDate": today,
+            "issueReadAppDate": app_date,
             "pbsvcRecpNo": recp["pbsvcRecpNo"],
             "mgmNo": recp["mgmNo"],
             "ISSUE_READ_GB_CD": recp.get("issueReadGbCd", "0"),

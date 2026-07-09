@@ -234,7 +234,11 @@ def parse_judgment(text: Any) -> ExtensionJudgment | None:
     matched = _str_list(data.get("matched_areas"))
     unrecorded = _str_list(data.get("unrecorded_areas"))
     reason = str(data.get("reason") or "").strip()[:400]
-    # 방어적 정합: violation 인데 미기재 부위가 비었으면 사유만으로도 표시되게 둔다(강제 X).
+    # 방어적 정합: 미기재 부위(unrecorded_areas)가 있는데 verdict 가 violation 이 아니면(모델
+    # 자기모순) → **violation 으로 승격**한다. verdict 를 정본으로 쓰는 _mark_completed·web
+    # resolveVerdict 가 '미등재 확장'을 정상/주의로 오표시하고 CTA 를 건너뛰는 걸 막는다.
+    if unrecorded and verdict != "violation":
+        verdict = "violation"
     return ExtensionJudgment(
         verdict=verdict,
         reason=reason or _default_reason(verdict),

@@ -123,6 +123,16 @@ def test_parse_judgment_missing_reason_gets_default():
     assert j is not None and j.reason  # 기본 사유 채움
 
 
+def test_parse_judgment_reconciles_unrecorded_to_violation():
+    # 모델 자기모순(verdict=legal/uncertain 인데 미기재 부위 있음) → violation 으로 승격.
+    for v in ("legal", "uncertain"):
+        j = parse_judgment(
+            '{"verdict":"' + v + '","reason":"x","unrecorded_areas":["침실"]}'
+        )
+        assert j is not None and j.verdict == "violation", v
+        assert j.unrecorded_areas == ["침실"]
+
+
 # ---------------------------------------------------------------------------
 # judge_extension — 규칙3 단락, degrade, 정상 경로.
 # ---------------------------------------------------------------------------
