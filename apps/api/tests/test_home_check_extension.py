@@ -100,7 +100,7 @@ def test_parse_judgment_plain_json():
 
 
 def test_parse_judgment_codefence_and_prose():
-    text = "설명\n```json\n{\"verdict\":\"legal\",\"reason\":\"ok\"}\n```\n끝"
+    text = '설명\n```json\n{"verdict":"legal","reason":"ok"}\n```\n끝'
     j = parse_judgment(text)
     assert j is not None and j.verdict == "legal"
     assert j.reason == "ok"
@@ -164,7 +164,9 @@ async def test_reported_true_uses_llm_verdict():
     out = await judge_extension(
         reported_extension=True,
         extended_areas="거실, 침실",
-        change_history=[{"date": "2010.12.17", "reason": "행위허가 사용검사 〈발코니 확장/거실〉"}],
+        change_history=[
+            {"date": "2010.12.17", "reason": "행위허가 사용검사 〈발코니 확장/거실〉"}
+        ],
         settings=_Settings(),
         invoke=_fake_invoke(
             '{"verdict":"violation","reason":"침실 미등재","reported_areas":["거실","침실"],'

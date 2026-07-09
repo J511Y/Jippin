@@ -141,7 +141,11 @@ def test_summary_rich_when_report_parsed():
         }
     )
     es = _summarize_exclusive(excl)
-    assert (es.use_type, es.structure, es.floor) == ("공동주택", "철근콘크리트구조", "9층")
+    assert (es.use_type, es.structure, es.floor) == (
+        "공동주택",
+        "철근콘크리트구조",
+        "9층",
+    )
     hs = _summarize_heading(head)
     assert hs.main_use == "공동주택(아파트)"
     assert hs.floors == "지하2층/지상20층"

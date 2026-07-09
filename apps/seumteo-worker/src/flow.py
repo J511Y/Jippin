@@ -340,7 +340,7 @@ class SeumteoFlow:
             {
                 "sort": [{"dongNm": "asc"}],
                 "query": {"bool": {"filter": [{"term": {"mgmUpperBldrgstPk": mgm_upper_pk}}]}},
-                "size": 100,
+                "size": 1000,  # 대단지(동 다수) — 요청 동이 잘려 not_found 나지 않게 넉넉히.
             },
         )
         thits = (((title or {}).get("hits") or {}).get("hits")) or []
@@ -364,7 +364,7 @@ class SeumteoFlow:
                 {
                     "sort": [{"hoNm": "asc"}],
                     "query": {"bool": {"filter": [{"term": {"mgmUpperBldrgstPk": title_pk}}]}},
-                    "size": 200,
+                    "size": 5000,  # 대형 동(수천 세대) — 요청 호가 잘려 not_found 나지 않게.
                 },
             )
             ehits = (((expos or {}).get("hits") or {}).get("hits")) or []
@@ -788,18 +788,36 @@ _CHANGE_KEYWORDS = (
 )
 
 
-def _parse_changes(text: str) -> list[dict]:
-    """변동사항 사유(+가능 시 날짜)를 보수적으로 추출한다(PII·잡음 배제, 판정 LLM 입력용).
+def _clean_reason(s: str) -> str:
+    """CLIP 메타(좌표·플래그 숫자런, true/false/blank)를 걷어내고 한글 부위·〈면적〉·구분자만 남긴다.
 
-    CLIP viewData 는 글자단위 분절 + 위치숫자 잡음이 심해 정확한 날짜·문장 재구성이 어렵다.
-    소유자현황(성명·주소·주민번호)을 피하려 '변동사항' 헤더 이후 구간만 본다. 건축 변동 키워드를
-    사유로 뽑고, 인접(±40자)에 실연도 날짜가 있으면 붙인다(없으면 date=None). 고유번호 등
-    잡음은 실연도 조건으로 배제한다. (정밀 구조화는 후속 — PDF/무료API 하이브리드 검토.)
+    좌표/문서번호/면적 숫자런은 부위명 판정에 불필요하므로 제거하되, 한글 부위명(거실/발코니 등)과
+    구조 구분자(〈 〉 / ㎡)는 보존한다 — 판정 LLM 이 신고 부위와 대조할 근거다.
+    """
+
+    s = re.sub(r"(?:true|false|blank|null)", " ", s)
+    s = re.sub(r"-?\d[\d.,\-]{2,}", " ", s)
+    s = re.sub(r"[|]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()[:80]
+
+
+def _parse_changes(text: str) -> list[dict]:
+    """변동사항 사유(**부위 포함**)+가능 시 날짜를 추출한다(PII·잡음 배제, 판정 LLM 입력용).
+
+    CLIP viewData 는 글자단위 분절 + 위치숫자 잡음이 심하다. 소유자현황(성명·주소·주민번호)을
+    피하려 '변동사항' 헤더 이후, 다음 섹션 전까지만 본다(→ PII 안전). 건축 변동 키워드 주변 창을
+    잡아 CLIP 메타를 정리해 사유로 넣는다 — **키워드만 넣으면 부위(거실/발코니 등)가 사라져**
+    판정 LLM 이 신고 부위와 대조할 수 없다(#change-area). 인접에 실연도 날짜가 있으면 붙인다.
     """
 
     compact = re.sub(r"[\s+]+", "", text)  # 게이트/위반검출과 동일 압축(CLIP '+' 공백 제거).
     idx = compact.find("변동사항")
     seg = compact[idx:] if idx >= 0 else compact
+    # 다음 섹션(공용부분/증명문/발급일자) 전까지로 한정 — 변동 원문만.
+    for marker in ("공용부분", "이등(초)본은", "발급일자"):
+        p = seg.find(marker, 5)
+        if p > 0:
+            seg = seg[:p]
     out: list[dict] = []
     seen: set[str] = set()
     for kw in _CHANGE_KEYWORDS:
@@ -807,10 +825,11 @@ def _parse_changes(text: str) -> list[dict]:
         if pos < 0 or kw in seen:
             continue
         seen.add(kw)
-        around = seg[max(0, pos - 40) : pos + len(kw) + 40]
-        m = _YEAR_DATE.search(around)
+        # 키워드 + 뒤따르는 부위/면적(〈…〉)을 포함하도록 창을 잡고 메타를 정리한다.
+        reason = _clean_reason(seg[max(0, pos - 12) : pos + 72]) or kw
+        m = _YEAR_DATE.search(seg[max(0, pos - 40) : pos + 72])
         out.append(
-            {"resChangeDate": m.group(0) if m else None, "resChangeReason": kw}
+            {"resChangeDate": m.group(0) if m else None, "resChangeReason": reason}
         )
         if len(out) >= 20:
             break

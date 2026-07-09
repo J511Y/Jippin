@@ -95,7 +95,9 @@ class Settings(BaseSettings):
     # 로그인·발급·CLIP 리포트 추출·PDF 를 수행하고 CODEF 동형 결과를 돌려준다.
     # 세움터 자격증명(seumter_id/password)은 이 프로세스가 아니라 워커(Fly secrets)에 있다.
     seumteo_enabled: bool = Field(default=False)
-    seumteo_worker_url: str | None = Field(default="http://jippin-seumteo-worker.flycast")
+    seumteo_worker_url: str | None = Field(
+        default="http://jippin-seumteo-worker.flycast"
+    )
     seumteo_worker_token: str | None = Field(default=None)
     # 워커 잡 상한(콜드스타트+발급). 워커 job_deadline_ms 보다 넉넉히.
     seumteo_worker_timeout_seconds: int = Field(default=180)

@@ -90,7 +90,9 @@ _HEADING_OK = {
 
 async def test_fetch_exclusive_maps_result():
     client, http = _client([_FakeResponse(200, _EXCLUSIVE_OK)])
-    q = BuildingRegisterQuery(road_addr="서울특별시 영등포구 여의대방로43나길 25", dong="104동", ho="504호")
+    q = BuildingRegisterQuery(
+        road_addr="서울특별시 영등포구 여의대방로43나길 25", dong="104동", ho="504호"
+    )
     result = await client.fetch_exclusive_part(q)
 
     assert isinstance(result, ExclusivePartResult)
@@ -112,7 +114,9 @@ async def test_fetch_exclusive_maps_result():
 
 async def test_fetch_heading_maps_result():
     client, _ = _client([_FakeResponse(200, _HEADING_OK)])
-    q = BuildingRegisterQuery(road_addr="서울특별시 영등포구 여의대방로43나길 25", dong="104동", ho="")
+    q = BuildingRegisterQuery(
+        road_addr="서울특별시 영등포구 여의대방로43나길 25", dong="104동", ho=""
+    )
     result = await client.fetch_building_heading(q)
 
     assert result.violation_status is None

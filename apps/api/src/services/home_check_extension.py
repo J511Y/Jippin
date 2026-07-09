@@ -68,11 +68,11 @@ _SYSTEM_PROMPT = (
     "'행위허가'/'사용검사'/'사용승인'/'신규작성' 등과 확장 부위·면적(예: '발코니 확장/거실/"
     "5.344㎡')이 포함될 수 있습니다.\n\n"
     "판정(verdict):\n"
-    "- \"violation\": 신고한 확장 부위 중, 변동사항에 대응 기재가 전혀 없는 부위가 하나라도 "
+    '- "violation": 신고한 확장 부위 중, 변동사항에 대응 기재가 전혀 없는 부위가 하나라도 '
     "있으면.\n"
     "- \"legal\": 신고한 모든 확장 부위가 변동사항에 대응 기재가 있으면. (사용자가 '확장 없음'"
     "이라고 신고한 경우도 legal.)\n"
-    "- \"uncertain\": 신고 부위가 특정되지 않거나 변동내용이 불명확해 대조를 단정할 수 없을 때.\n\n"
+    '- "uncertain": 신고 부위가 특정되지 않거나 변동내용이 불명확해 대조를 단정할 수 없을 때.\n\n'
     "대조 원칙:\n"
     "- 부위 명칭은 동의어·유사어를 사람처럼 대응시킨다: 거실=거실, 안방≈침실, 베란다=발코니, "
     "다용도실≈보조주방 등. 확신이 서지 않으면 매칭하지 않는다.\n"
@@ -134,7 +134,7 @@ _FEWSHOT: list[tuple[str, str]] = [
         "[건축물대장 변동사항]\n"
         "1. 2004.11.18 · 신규작성(신축)",
         '{"verdict":"uncertain","reason":"확장을 신고했으나 부위가 특정되지 않아 대장 변동사항과 '
-        "정밀 대조가 어렵습니다. 변동사항에 확장 관련 기재가 없어 추가 확인이 필요합니다.\","
+        '정밀 대조가 어렵습니다. 변동사항에 확장 관련 기재가 없어 추가 확인이 필요합니다.",'
         '"reported_areas":[],"matched_areas":[],"unrecorded_areas":[]}',
     ),
 ]
@@ -158,7 +158,7 @@ def _change_lines(change_history: list[Any]) -> str:
             reason = getattr(item, "reason", None)
             if reason is None and isinstance(item, str):
                 reason = item
-        reason = (str(reason).strip() if reason is not None else "")
+        reason = str(reason).strip() if reason is not None else ""
         if not reason:
             continue
         prefix = f"{idx}. "
@@ -173,14 +173,18 @@ def _format_user(reported_areas: str, change_history: list[Any]) -> str:
     )
 
 
-def build_messages(reported_areas: str, change_history: list[Any]) -> list[dict[str, str]]:
+def build_messages(
+    reported_areas: str, change_history: list[Any]
+) -> list[dict[str, str]]:
     """system + few-shot + 실제 입력으로 LLM 메시지 배열을 만든다(순수)."""
 
     messages: list[dict[str, str]] = [{"role": "system", "content": _SYSTEM_PROMPT}]
     for user_ex, assistant_ex in _FEWSHOT:
         messages.append({"role": "user", "content": user_ex})
         messages.append({"role": "assistant", "content": assistant_ex})
-    messages.append({"role": "user", "content": _format_user(reported_areas, change_history)})
+    messages.append(
+        {"role": "user", "content": _format_user(reported_areas, change_history)}
+    )
     return messages
 
 
@@ -324,7 +328,11 @@ def _build_invoke(settings: "Settings") -> InvokeFn:
 
     model_str = getattr(settings, "agent_model", None)
     api_key = getattr(settings, "openai_api_key", None)
-    if not isinstance(model_str, str) or not model_str.startswith("openai:") or not api_key:
+    if (
+        not isinstance(model_str, str)
+        or not model_str.startswith("openai:")
+        or not api_key
+    ):
         raise RuntimeError("extension_judge: OpenAI 모델/키 미설정")
 
     from langchain_openai import ChatOpenAI

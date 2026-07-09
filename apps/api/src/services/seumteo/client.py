@@ -54,7 +54,9 @@ class SeumteoBuildingRegisterClient:
         self._settings = settings
         self._redis = redis_client
         self._http = http_client
-        self._base_url = str(getattr(settings, "seumteo_worker_url", "") or "").rstrip("/")
+        self._base_url = str(getattr(settings, "seumteo_worker_url", "") or "").rstrip(
+            "/"
+        )
         self._token = getattr(settings, "seumteo_worker_token", None)
         self._timeout = float(getattr(settings, "seumteo_worker_timeout_seconds", 180))
         self._breaker = CodefCircuitBreaker(
@@ -188,7 +190,9 @@ class SeumteoBuildingRegisterClient:
         if resp.status_code >= 500:
             raise CodefUpstreamError("세움터 워커 오류.", code=str(resp.status_code))
         if resp.status_code >= 400:
-            raise CodefUpstreamError("세움터 워커 요청 거부.", code=str(resp.status_code))
+            raise CodefUpstreamError(
+                "세움터 워커 요청 거부.", code=str(resp.status_code)
+            )
         try:
             return resp.json()
         except ValueError as exc:
