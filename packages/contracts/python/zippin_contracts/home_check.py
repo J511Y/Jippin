@@ -101,9 +101,9 @@ class Signal1(Enum):
     normal = "normal"
 
 
-class Verdict(Enum):
+class ExtensionVerdict(Enum):
     """
-    violation=신고했으나 미등재, legal=등재확인/확장없음, uncertain=대조모호.
+    신고 확장 ↔ 변동사항 대조 판정값. (패키지 루트 export 충돌 방지를 위해 rule-eval 의 Verdict 와 다른 이름을 쓴다.)
     """
 
     violation = "violation"
@@ -119,7 +119,7 @@ class ExtensionCheck(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    verdict: Verdict
+    verdict: ExtensionVerdict
     """
     violation=신고했으나 미등재, legal=등재확인/확장없음, uncertain=대조모호.
     """

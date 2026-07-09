@@ -151,6 +151,11 @@
         }
       }
     },
+    "ExtensionVerdict": {
+      "type": "string",
+      "enum": ["violation", "legal", "uncertain"],
+      "description": "신고 확장 ↔ 변동사항 대조 판정값. (패키지 루트 export 충돌 방지를 위해 rule-eval 의 Verdict 와 다른 이름을 쓴다.)"
+    },
     "ExtensionCheck": {
       "type": "object",
       "additionalProperties": false,
@@ -158,8 +163,7 @@
       "description": "신고 확장 ↔ 대장 변동사항 대조(LLM). 노란딱지(violation.is_violation)와 별개 축. verdict=violation 이면 종합 signal 을 violation 으로 올리되 violation.is_violation(공식 표시)은 건드리지 않는다.",
       "properties": {
         "verdict": {
-          "type": "string",
-          "enum": ["violation", "legal", "uncertain"],
+          "$ref": "#/$defs/ExtensionVerdict",
           "description": "violation=신고했으나 미등재, legal=등재확인/확장없음, uncertain=대조모호."
         },
         "reason": { "type": ["string", "null"], "description": "한국어 판정 근거(대장 변동사항 기준)." },
