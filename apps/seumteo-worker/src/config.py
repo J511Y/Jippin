@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # 실패). 더 긴 렌더가 필요하면 fly.toml 을 .internal 직결 + auto_stop=off 로 바꾼다(README).
     job_deadline_ms: int = Field(default=55_000)
 
+    # 로그인 폼(#membId) hydrate 대기 상한. eais 로그인 페이지는 Nuxt CSR 이라 domcontentloaded
+    # 직후엔 폼이 아직 없다 → wait_for_selector 로 렌더를 기다린다(폼 부재를 '이미 로그인'으로
+    # 오판하던 버그의 핵심 수정).
+    login_form_timeout_ms: int = Field(default=8_000)
+    # 세션 keep-alive 주기(초). 세움터 세션은 ~60분 유지되므로 그보다 짧게 능동 검증해 워밍
+    # 상태에서 만료를 예방한다(검증 요청 자체가 TTL 을 갱신). 0 이면 비활성(잡마다 능동 검증이
+    # 이미 갱신하므로 유휴+상시가동일 때만 의미).
+    seumteo_session_keepalive_seconds: int = Field(default=1_500)
+
 
 @lru_cache
 def get_settings() -> Settings:
