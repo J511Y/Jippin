@@ -782,3 +782,209 @@ a[data-faq-row]:focus-visible {
   line-height: 1.5;
   color: var(--jippin-brand-copy);
 }
+
+/* ============================================================================
+   우리집 체크 입력 퍼널 (Home Check funnel) — 토스/삼쩜삼식 one-question-per-screen.
+   한 화면에 한 질문 + 큰 선택 카드 + 하단 고정 코랄 CTA. 색은 브랜드/상태 토큰만 쓰고,
+   코랄(포인트색)은 CTA 버튼에만 등장한다(BRAND). 모바일 우선·넉넉한 여백.
+   ============================================================================ */
+
+/* 퍼널 루트 — 세로 플렉스. 질문 영역(.hc-body)은 위, CTA 도크(.hc-dock)는 아래로 밀착.
+   좁은 단일 컬럼으로 시선을 한 질문에 모은다. */
+.hc-funnel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 460px;
+  margin-inline: auto;
+  /* 헤더(60) + 컨테이너 세로 패딩(xl≈64) 만큼을 뺀 높이를 확보해 CTA 가 화면 하단에
+     자연히 앉게 한다. 정확할 필요는 없다 — .hc-dock 의 sticky 가 넘침을 흡수한다. */
+  min-height: min(660px, calc(100dvh - 172px));
+}
+
+/* 상단 바 — 뒤로 가기 + 진행바. 모든 질문 스텝에 노출(인트로/제출/완료 제외). */
+.hc-funnel__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+/* 질문 본문 — 남는 세로 공간을 차지해 CTA 를 아래로 민다. */
+.hc-body {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 스텝 진입 모션 — key 변경(re-mount)마다 페이드+슬라이드. reduce 시 생략. */
+@media (prefers-reduced-motion: no-preference) {
+  .hc-step {
+    animation: hc-step-in 320ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  }
+}
+@keyframes hc-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 대화형 헤딩 — 크고 친근하게. 프로그램적 포커스(스크린리더 맥락)라 포커스 링은 숨긴다. */
+.hc-heading {
+  margin: 0;
+  font-size: 1.5rem;
+  line-height: 1.4;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--jippin-brand-ink);
+  word-break: keep-all;
+}
+.hc-heading:focus {
+  outline: none;
+}
+.hc-sub {
+  margin-top: 10px;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: var(--jippin-brand-copy);
+  word-break: keep-all;
+}
+
+/* 큰 선택 카드(있어요/없어요/잘 모르겠어요) — 작은 라디오 대신 탭 가능한 큰 카드.
+   탭하면 자동으로 다음 스텝으로 넘어간다(호출부). 선택색은 브랜드 틸(코랄 아님). */
+.hc-choice {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 18px;
+  min-height: 68px;
+  border: 1.5px solid var(--jippin-brand-border);
+  border-radius: 16px;
+  background: var(--jippin-brand-surface-alt, #ffffff);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 120ms ease;
+}
+.hc-choice:hover {
+  border-color: var(--jippin-brand-primary);
+  background: var(--mantine-color-jippin-0);
+  box-shadow: 0 4px 16px -8px rgba(20, 122, 115, 0.4);
+}
+.hc-choice:active {
+  transform: translateY(1px);
+}
+.hc-choice:focus-visible {
+  outline: 2px solid var(--jippin-brand-primary);
+  outline-offset: 2px;
+}
+.hc-choice[data-selected='true'] {
+  border-color: var(--jippin-brand-primary);
+  background: var(--mantine-color-jippin-0);
+  box-shadow: inset 0 0 0 1px var(--jippin-brand-primary);
+}
+.hc-choice__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  border-radius: 13px;
+  color: var(--jippin-brand-primary);
+  background: var(--mantine-color-jippin-0);
+}
+.hc-choice__body {
+  flex: 1;
+  min-width: 0;
+}
+.hc-choice__label {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--jippin-brand-ink);
+  word-break: keep-all;
+}
+.hc-choice__desc {
+  margin-top: 2px;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--jippin-brand-copy);
+  word-break: keep-all;
+}
+.hc-choice__chev {
+  flex-shrink: 0;
+  color: var(--jippin-brand-copy);
+}
+
+/* 다중 선택 칩(확장 부위) — 큰 터치 타깃(≥44px). 선택 시 브랜드 틸 채움. */
+.hc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 46px;
+  padding: 11px 18px;
+  border: 1.5px solid var(--jippin-brand-border);
+  border-radius: 999px;
+  background: var(--jippin-brand-surface-alt, #ffffff);
+  color: var(--jippin-brand-ink);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color 130ms ease,
+    background-color 130ms ease,
+    color 130ms ease;
+}
+.hc-chip:hover {
+  border-color: var(--jippin-brand-primary);
+}
+.hc-chip:focus-visible {
+  outline: 2px solid var(--jippin-brand-primary);
+  outline-offset: 2px;
+}
+.hc-chip[data-selected='true'] {
+  border-color: var(--jippin-brand-primary);
+  background: var(--jippin-brand-primary);
+  color: var(--jippin-brand-primary-fg);
+}
+
+/* 주소 선택 후 확인 카드 — 고른 주소를 또렷이 보여 주고 다시 검색을 허용. */
+.hc-address-picked {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--jippin-brand-border);
+  background: var(--jippin-brand-surface);
+}
+.hc-address-picked__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--jippin-brand-primary);
+}
+
+/* 하단 CTA 도크 — sticky 로 화면 하단에 밀착. 내용이 길어져도 버튼이 항상 보인다.
+   위쪽으로 옅은 그라디언트를 깔아 스크롤되는 본문과 자연스럽게 이어지게 한다. */
+.hc-dock {
+  position: sticky;
+  bottom: 0;
+  margin-top: 24px;
+  padding: 14px 0 8px;
+  background: linear-gradient(
+    to top,
+    var(--mantine-color-body) 72%,
+    transparent
+  );
+}

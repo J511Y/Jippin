@@ -90,6 +90,18 @@ class Settings(BaseSettings):
     # 발급 PDF 보관 Supabase Storage 버킷명 (migration 0014 와 정합).
     home_check_doc_bucket: str = Field(default="home-check-docs")
 
+    # 세움터 직결 내재화 (CODEF 대체, ADR-0009). seumteo_enabled=true 면 home-check 가
+    # CODEF 대신 세움터 워커(apps/seumteo-worker, Flycast 사설망)를 호출한다. 워커가
+    # 로그인·발급·CLIP 리포트 추출·PDF 를 수행하고 CODEF 동형 결과를 돌려준다.
+    # 세움터 자격증명(seumter_id/password)은 이 프로세스가 아니라 워커(Fly secrets)에 있다.
+    seumteo_enabled: bool = Field(default=False)
+    seumteo_worker_url: str | None = Field(
+        default="http://jippin-seumteo-worker.flycast"
+    )
+    seumteo_worker_token: str | None = Field(default=None)
+    # 워커 잡 상한(콜드스타트+발급). 워커 job_deadline_ms 보다 넉넉히.
+    seumteo_worker_timeout_seconds: int = Field(default=180)
+
     # 사전검토 PDF 리포트 보관 Supabase Storage 버킷명. 운영자가 버킷 생성 필요
     # (인프라 선행). 발부된 PDF 는 이 버킷에 service-role 로 업로드되고 단기 서명
     # URL 로만 다운로드된다(브라우저에 직접 노출 안 됨).
@@ -116,6 +128,12 @@ class Settings(BaseSettings):
     # 단독으로 degrade(VLM_TIMEOUT). 0.6 미만 신뢰도는 ANALYSIS_LOW_CONFIDENCE 로 재업로드 권장.
     vlm_floorplan_enabled: bool = Field(default=True)
     vlm_floorplan_timeout_seconds: int = Field(default=60)
+
+    # 우리집 체크 — 신고 확장 ↔ 대장 변동사항 LLM 대조 판정(home_check_extension). 운영 default
+    # 는 False — 켜지 않으면 판정을 건너뛰어 리포트에 extension_check 가 없고 OpenAI 의존이
+    # 생기지 않는다. 모델/키는 agent 와 공유(agent_model/openai_api_key). 실패는 uncertain degrade.
+    extension_judge_enabled: bool = Field(default=False)
+    extension_judge_timeout_seconds: int = Field(default=20)
 
     openai_api_key: str | None = Field(default=None)
 

@@ -50,6 +50,8 @@ async def create_home_check(
         jibun_addr=payload.jibun_addr,
         dong=payload.dong,
         ho=payload.ho,
+        reported_extension=payload.reported_extension,
+        extended_areas=payload.extended_areas,
     )
     # 주소·동·호는 PII 가 될 수 있어 로깅하지 않는다 — 잡 id/익명여부만 남긴다.
     logger.info(

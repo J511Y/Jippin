@@ -10,9 +10,9 @@
  */
 export interface HomeCheckJob {
   /**
-   * 스키마 버전 (semver). 1.1.0: NeedsInput 에 field/options(주소·동·호 후보) 추가(하위호환 — 추가 선택 필드).
+   * 스키마 버전 (semver). 1.2.0: report 에 extension_check(신고확장↔변동사항 LLM 대조) 추가 + prices(공동주택가격) 제거 — 우리집 체크는 확장 등재 여부가 목적이라 가격/속성 노이즈 제외.
    */
-  schema_version: "1.1.0";
+  schema_version: "1.2.0";
   /**
    * 조회 잡 UUID.
    */
@@ -114,9 +114,9 @@ export interface HomeCheckReport {
    */
   change_history?: ChangeEntry[];
   /**
-   * 전유부 공동주택가격(resPriceList).
+   * 사용자가 신고한 확장·개조 부위와 대장 변동사항을 대조한 LLM 판정. 사용자 입력이 있을 때만 채워진다. 노란딱지(violation)와 별개 축.
    */
-  prices?: PriceEntry[];
+  extension_check?: ExtensionCheck | null;
   /**
    * 발급 PDF 다운로드 링크(전유부/표제부).
    */
@@ -227,15 +227,30 @@ export interface ChangeEntry {
    */
   source: "exclusive" | "heading";
 }
-export interface PriceEntry {
+/**
+ * 신고 확장 ↔ 대장 변동사항 대조(LLM). 노란딱지(violation.is_violation)와 별개 축. verdict=violation 이면 종합 signal 을 violation 으로 올리되 violation.is_violation(공식 표시)은 건드리지 않는다.
+ */
+export interface ExtensionCheck {
   /**
-   * 기준일자.
+   * violation=신고했으나 미등재, legal=등재확인/확장없음, uncertain=대조모호.
    */
-  reference_date?: string | null;
+  verdict: "violation" | "legal" | "uncertain";
   /**
-   * 공동주택가격(원, 정수).
+   * 한국어 판정 근거(대장 변동사항 기준).
    */
-  base_price?: number | null;
+  reason?: string | null;
+  /**
+   * 사용자가 신고한 확장 부위.
+   */
+  reported_areas?: string[];
+  /**
+   * 변동사항에서 등재 확인된 부위.
+   */
+  matched_areas?: string[];
+  /**
+   * 신고했으나 미등재된 부위(위반 소지).
+   */
+  unrecorded_areas?: string[];
 }
 export interface DocumentRef {
   /**

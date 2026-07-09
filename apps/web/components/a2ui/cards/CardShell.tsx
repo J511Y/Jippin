@@ -13,8 +13,14 @@
 
 import type { CSSProperties, ReactNode } from 'react';
 
-/** 카드 강조색 축 — 브랜드 보조(전문)와 상태색을 의미대로만 쓴다. */
-export type CardAccent = 'blueprint' | 'primary' | 'success' | 'warning' | 'danger';
+/** 카드 강조색 축 — 브랜드 보조(전문)와 상태색을 의미대로만 쓴다. neutral=미판정/보조. */
+export type CardAccent =
+  | 'blueprint'
+  | 'primary'
+  | 'success'
+  | 'warning'
+  | 'danger'
+  | 'neutral';
 
 const ACCENT_VARS: Record<CardAccent, { accent: string; soft: string }> = {
   blueprint: {
@@ -36,6 +42,10 @@ const ACCENT_VARS: Record<CardAccent, { accent: string; soft: string }> = {
   danger: {
     accent: 'var(--mantine-color-danger-6)',
     soft: 'var(--mantine-color-danger-0)'
+  },
+  neutral: {
+    accent: 'var(--mantine-color-gray-5)',
+    soft: 'var(--mantine-color-gray-1)'
   }
 };
 

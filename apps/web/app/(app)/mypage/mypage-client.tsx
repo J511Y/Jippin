@@ -39,7 +39,14 @@ import {
 } from '@/lib/auth/account-api';
 import { changePasswordSchema, type ChangePasswordValues } from '@/lib/auth/validation';
 import { type HomeCheckJob } from '@/lib/home-check/api';
-import { jobAddressLabel, SIGNAL_META, STATUS_META } from '@/lib/home-check/display';
+import {
+  jobAddressLabel,
+  resolveVerdict,
+  SIGNAL_META,
+  STATUS_META,
+  VERDICT_META,
+  VERDICT_TONE_COLOR
+} from '@/lib/home-check/display';
 import { parseApiError } from '@/lib/api/error';
 import { createClient } from '@/lib/supabase/client';
 
@@ -365,7 +372,19 @@ function HomeChecksSection() {
         <Stack gap="sm">
           {jobs.map((job) => {
             const status = STATUS_META[job.status] ?? { label: job.status, color: 'gray' };
-            const signal = job.signal ? SIGNAL_META[job.signal] : null;
+            // 확장 축(미등재 확장)이 signal=violation 을 만들 수 있으므로, 리포트가 있으면
+            // 4-상태 Verdict 로 표시한다 — 공식 노란딱지만 있는 게 아닌데 "위반표시 있음"으로
+            // 오표기되는 것을 막는다(상세 뷰와 동일 판정, api 리뷰 P1).
+            const verdictMeta = job.report ? VERDICT_META[resolveVerdict(job.report)] : null;
+            const signal = verdictMeta
+              ? {
+                  emoji: verdictMeta.emoji,
+                  label: verdictMeta.label,
+                  color: VERDICT_TONE_COLOR[verdictMeta.tone]
+                }
+              : job.signal
+                ? SIGNAL_META[job.signal]
+                : null;
             const address = jobAddressLabel(job) ?? '우리집 체크';
             return (
               <Card

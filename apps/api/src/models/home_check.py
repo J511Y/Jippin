@@ -77,6 +77,10 @@ class HomeCheck(TimestampMixin, Base):
     addr_dong: Mapped[str | None] = mapped_column(sa.Text)
     addr_ho: Mapped[str | None] = mapped_column(sa.Text)
 
+    # 사용자 신고 확장 (LLM 확장 대조 입력 — PII 아님). reported_extension null=미응답.
+    reported_extension: Mapped[bool | None] = mapped_column(sa.Boolean)
+    extended_areas: Mapped[str | None] = mapped_column(sa.Text)
+
     # 건축물 식별자 (전유부 / 표제부)
     comm_unique_no: Mapped[str | None] = mapped_column(sa.Text)
     heading_comm_unique_no: Mapped[str | None] = mapped_column(sa.Text)
