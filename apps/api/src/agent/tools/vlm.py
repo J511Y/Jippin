@@ -149,7 +149,11 @@ def _normalize_supplement(
         "notes": notes,
         "reclassifications": reclass[:20],
         "confidence": confidence,
-        "is_floorplan": bool(data.get("is_floorplan", True)),
+        # **명시적 boolean False 만** '평면도 아님'으로 본다. null/누락/형식오류(불확실)는
+        # True 로 둔다 — `bool(None)` 이 False 로 강등되면 세그멘테이션이 이미 영역을 찾은
+        # 유효 도면이 NOT_FLOORPLAN 으로 막혀 다른 이미지를 다시 요구하게 된다(#explicit-
+        # false-only, segment_session_floorplan 의 not-floorplan 게이트가 이 값을 본다).
+        "is_floorplan": data.get("is_floorplan") is not False,
         "judgment_hints": _normalize_hints(data.get("judgment_hints")),
     }
 
