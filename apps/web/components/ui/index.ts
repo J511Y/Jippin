@@ -18,3 +18,6 @@ export {
 export { DateInput, DatePickerInput } from '@mantine/dates';
 export { modals } from '@mantine/modals';
 export { notifications } from '@mantine/notifications';
+export { CtaButton } from './CtaButton';
+export { PageColumn, type PageColumnWidth } from './PageColumn';
+export { PageHeader } from './PageHeader';

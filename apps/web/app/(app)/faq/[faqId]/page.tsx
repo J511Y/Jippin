@@ -163,9 +163,11 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
           </Stack>
         </Box>
 
-        {/* 상담 유도 — 카드 없이 본문 흐름에 둔다. 강조(primary)는 버튼 하나에만. */}
+        {/* 상담 유도 — 카드 없이 본문 흐름에 둔다. 버튼 위계: 사전검토 진입은
+            1차 액션(jippin filled), 전문가 상담은 이 화면 유일한 전환 CTA(coral).
+            서버 컴포넌트라 component={Link} 는 SSG 프리렌더가 깨져 component="a" 유지. */}
         <Stack gap="sm" component="section">
-          <Title order={2} fz="h3" c="var(--jippin-brand-ink)">
+          <Title order={2} size="h3" c="var(--jippin-brand-ink)">
             더 궁금한 점이 있으신가요?
           </Title>
           <Text
@@ -177,19 +179,20 @@ export default async function FaqDetailPage({ params }: FaqDetailPageProps) {
             자세한 내용은 전문가 상담으로 이어가세요.
           </Text>
           <Group gap="sm">
-            <Button component="a" href="/sessions" radius="md">
+            <Button component="a" href="/sessions" color="jippin" size="md">
               무료로 사전검토 시작
             </Button>
-            <LeadCtaButton cta="faq_detail" variant="default" radius="md">
+            <LeadCtaButton cta="faq_detail" color="coral" fw={700} size="md">
               전문가 상담
             </LeadCtaButton>
           </Group>
         </Stack>
 
-        {/* 관련 질문 — 같은 카테고리 내부 링크, 표처럼 행 구분선으로 나눈다. */}
+        {/* 관련 질문 — 같은 카테고리 내부 링크, 표처럼 행 구분선으로 나눈다.
+            서버 컴포넌트라 component={Link} 는 SSG 프리렌더가 깨져 component="a" 유지. */}
         {related.length > 0 ? (
           <Stack gap="sm" component="section">
-            <Title order={2} fz="h3" c="var(--jippin-brand-ink)">
+            <Title order={2} size="h3" c="var(--jippin-brand-ink)">
               관련 질문
             </Title>
             <Stack

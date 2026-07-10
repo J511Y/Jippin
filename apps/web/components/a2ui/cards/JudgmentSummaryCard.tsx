@@ -16,7 +16,7 @@
  * risks 는 string 배열일 때만 채택. 형태가 어긋나면 null 반환 → JSON fallback.
  */
 
-import { Button, Stack, Text } from '@mantine/core';
+import { Stack, Text } from '@mantine/core';
 import {
   IconCircleCheck,
   IconCircleX,
@@ -29,6 +29,7 @@ import { useId, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { LEGAL_NOTICE_TEXT } from '@/components/LegalNotice';
 import { QuickPrecheckConsultForm } from '@/components/leads/QuickPrecheckConsultForm';
+import { CtaButton } from '@/components/ui';
 
 import { type CardAccent, CardHeader, CardRule, CardShell } from './CardShell';
 
@@ -240,16 +241,15 @@ export function JudgmentSummaryCard({
           />
         </Stack>
       ) : (
-        <Button
-          color="coral"
-          radius="md"
+        // 전환 CTA(상담) 표준 — CtaButton(coral). 이 카드 화면에서 코랄은 이 1회뿐.
+        <CtaButton
           fullWidth
           mb="sm"
           leftSection={<IconHeadset size={18} aria-hidden />}
           onClick={() => setShowConsult(true)}
         >
           전문가 상담 신청하기
-        </Button>
+        </CtaButton>
       )}
 
       {/* 결과 화면 법적 고지 — 봉인된 SSOT 문구 그대로(TYPOGRAPHY §4.5/BRAND §6, 단축 금지). */}

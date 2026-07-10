@@ -53,18 +53,44 @@ export function Reveal({
     if (!targets.length) return;
 
     const ctx = gsap.context(() => {
-      // 레이아웃 이펙트(페인트 전)에서 숨겨 깜빡임을 막는다.
-      gsap.set(targets, { opacity: 0, y });
-      gsap.to(targets, {
+      if (immediate) {
+        // 어보브 더 폴드(히어로): 레이아웃 이펙트(페인트 전)에서 숨긴 뒤 즉시 재생.
+        gsap.set(targets, { opacity: 0, y });
+        gsap.to(targets, {
+          opacity: 1,
+          y: 0,
+          duration: 0.55,
+          ease: 'power2.out',
+          stagger,
+          delay
+        });
+        return;
+      }
+
+      // 새로고침·중간 진입으로 이미 뷰포트에 들어와 있는 요소는 숨기지 않고 즉시
+      // 보여준다 — 스크롤 중 콘텐츠가 반투명으로 걸려 보이는 FOUC(실화면 확인) 방지.
+      // (globals.css 가 paint 전에 [data-reveal] 을 opacity 0 으로 숨겨 두므로,
+      //  인라인 opacity 1 로 되돌려야 한다.)
+      const viewportBottom = window.innerHeight * 0.92;
+      const inView = targets.filter(
+        (el) => el.getBoundingClientRect().top < viewportBottom
+      );
+      const pending = targets.filter((el) => !inView.includes(el));
+
+      if (inView.length) gsap.set(inView, { opacity: 1, y: 0 });
+      if (!pending.length) return;
+
+      gsap.set(pending, { opacity: 0, y });
+      gsap.to(pending, {
         opacity: 1,
         y: 0,
-        duration: 0.7,
+        duration: 0.55,
         ease: 'power2.out',
         stagger,
         delay,
-        ...(immediate
-          ? {}
-          : { scrollTrigger: { trigger: root, start: 'top 82%', once: true } })
+        // 첫 미노출 요소 기준으로 시작점을 이르게(top 88%) 잡아, 보이는 위치에서
+        // 뒤늦게 올라오는 느낌을 줄인다.
+        scrollTrigger: { trigger: pending[0] as Element, start: 'top 88%', once: true }
       });
     }, scope);
 

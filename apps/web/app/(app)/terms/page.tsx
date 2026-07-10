@@ -13,6 +13,8 @@ import { IconChevronRight } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
+import { PageColumn, PageHeader } from '@/components/ui';
+
 export const metadata: Metadata = {
   title: '이용약관',
   alternates: { canonical: '/terms' }
@@ -554,100 +556,105 @@ const CHAPTERS: Chapter[] = [
 
 export default function TermsPage() {
   return (
-    <Stack gap="xl">
-      <Stack gap="xs">
-        <Title order={1}>이용약관</Title>
-        <Text c="dimmed" size="sm">
-          시행일 {EFFECTIVE_DATE}
-        </Text>
-        <Text c="dimmed" size="sm" style={KEEP_ALL}>
-          본 약관은 신한이너텍 주식회사가 집핀(Jippin) 브랜드로 제공하는
-          비내력벽 철거 사전검토 AI 서비스 및 전문가 상담 연결 서비스의 이용에
-          관한 조건과 절차를 정합니다. 약관은
-          서비스 개선 및 관계 법령의 변경에 따라 개정될 수 있으며, 개정 시
-          시행일과 변경 내용을 사전에 공지합니다.
-        </Text>
-      </Stack>
-
-      <Card withBorder radius="md" padding="md" component="nav" aria-label="목차">
-        <Stack gap="sm">
-          <Text fw={600}>목차</Text>
-          {CHAPTERS.map((chapter) => (
-            <Stack key={chapter.id} gap={4}>
-              <Anchor href={`#${chapter.id}`} fw={600} size="sm">
-                {chapter.title}
-              </Anchor>
-              <Stack gap={2} pl="sm">
-                {chapter.articles.map((article) => (
-                  <Group key={article.id} gap={6} align="center" wrap="nowrap">
-                    <ThemeIcon
-                      variant="transparent"
-                      color="gray"
-                      size={16}
-                      aria-hidden
-                    >
-                      <IconChevronRight size={12} stroke={2} />
-                    </ThemeIcon>
-                    <Anchor href={`#${article.id}`} c="dimmed" size="sm">
-                      {article.title}
-                    </Anchor>
-                  </Group>
-                ))}
-              </Stack>
-            </Stack>
-          ))}
-          <Anchor href="#addendum" c="dimmed" size="sm" fw={600}>
-            부칙
-          </Anchor>
-        </Stack>
-      </Card>
+    // 긴 문서 페이지 — 읽기 줄 길이를 위해 prose(720px) 컬럼으로 좁힌다.
+    <PageColumn width="prose">
+      <PageHeader
+        title="이용약관"
+        subtitle={
+          <>
+            시행일 {EFFECTIVE_DATE}
+            <br />
+            본 약관은 신한이너텍 주식회사가 집핀(Jippin) 브랜드로 제공하는
+            비내력벽 철거 사전검토 AI 서비스 및 전문가 상담 연결 서비스의 이용에
+            관한 조건과 절차를 정합니다. 약관은 서비스 개선 및 관계 법령의 변경에
+            따라 개정될 수 있으며, 개정 시 시행일과 변경 내용을 사전에
+            공지합니다.
+          </>
+        }
+      />
 
       <Stack gap="xl">
-        {CHAPTERS.map((chapter) => (
-          <Box key={chapter.id} id={chapter.id} component="section">
+        <Card withBorder radius="md" padding="md" component="nav" aria-label="목차">
+          <Stack gap="sm">
+            <Text fw={600}>목차</Text>
+            {CHAPTERS.map((chapter) => (
+              <Stack key={chapter.id} gap={4}>
+                <Anchor href={`#${chapter.id}`} fw={600} size="sm">
+                  {chapter.title}
+                </Anchor>
+                <Stack gap={2} pl="sm">
+                  {chapter.articles.map((article) => (
+                    <Group key={article.id} gap={6} align="center" wrap="nowrap">
+                      <ThemeIcon
+                        variant="transparent"
+                        color="gray"
+                        size={16}
+                        aria-hidden
+                      >
+                        <IconChevronRight size={12} stroke={2} />
+                      </ThemeIcon>
+                      <Anchor href={`#${article.id}`} c="dimmed" size="sm">
+                        {article.title}
+                      </Anchor>
+                    </Group>
+                  ))}
+                </Stack>
+              </Stack>
+            ))}
+            <Anchor href="#addendum" c="dimmed" size="sm" fw={600}>
+              부칙
+            </Anchor>
+          </Stack>
+        </Card>
+
+        <Stack gap="xl">
+          {CHAPTERS.map((chapter) => (
+            <Box key={chapter.id} id={chapter.id} component="section">
+              <Stack gap="md">
+                <Title order={2} size="h4" style={{ scrollMarginTop: 80 }}>
+                  {chapter.title}
+                </Title>
+                <Card withBorder radius="md" padding="md">
+                  <Stack gap="md">
+                    {chapter.articles.map((article, index) => (
+                      <Box key={article.id} id={article.id} component="article">
+                        {index > 0 && <Divider mb="md" />}
+                        <Stack gap="xs">
+                          <Text fw={600} style={{ scrollMarginTop: 80 }}>
+                            {article.title}
+                          </Text>
+                          {article.body}
+                        </Stack>
+                      </Box>
+                    ))}
+                  </Stack>
+                </Card>
+              </Stack>
+            </Box>
+          ))}
+
+          <Box id="addendum" component="section">
             <Stack gap="md">
               <Title order={2} size="h4" style={{ scrollMarginTop: 80 }}>
-                {chapter.title}
+                부칙
               </Title>
               <Card withBorder radius="md" padding="md">
-                <Stack gap="md">
-                  {chapter.articles.map((article, index) => (
-                    <Box key={article.id} id={article.id} component="article">
-                      {index > 0 && <Divider mb="md" />}
-                      <Stack gap="xs">
-                        <Text fw={600} style={{ scrollMarginTop: 80 }}>
-                          {article.title}
-                        </Text>
-                        {article.body}
-                      </Stack>
-                    </Box>
-                  ))}
+                <Stack gap="xs">
+                  <Para>본 약관은 {EFFECTIVE_DATE}부터 시행합니다.</Para>
                 </Stack>
               </Card>
             </Stack>
           </Box>
-        ))}
+        </Stack>
 
-        <Box id="addendum" component="section">
-          <Stack gap="md">
-            <Title order={2} size="h4" style={{ scrollMarginTop: 80 }}>
-              부칙
-            </Title>
-            <Card withBorder radius="md" padding="md">
-              <Stack gap="xs">
-                <Para>본 약관은 {EFFECTIVE_DATE}부터 시행합니다.</Para>
-              </Stack>
-            </Card>
-          </Stack>
-        </Box>
+        {/* 문서 말미 구분자 — 제도 모티프 치수선으로 통일한다. */}
+        <div className="jp-dimline" aria-hidden="true" />
+
+        <Text size="sm" c="dimmed" style={KEEP_ALL}>
+          개인정보의 수집 및 이용에 관한 자세한 사항은{' '}
+          <Anchor href="/privacy">개인정보처리방침</Anchor>을 참고하시기 바랍니다.
+        </Text>
       </Stack>
-
-      <Divider />
-
-      <Text size="sm" c="dimmed" style={KEEP_ALL}>
-        개인정보의 수집 및 이용에 관한 자세한 사항은{' '}
-        <Anchor href="/privacy">개인정보처리방침</Anchor>을 참고하시기 바랍니다.
-      </Text>
-    </Stack>
+    </PageColumn>
   );
 }

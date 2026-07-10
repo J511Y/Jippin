@@ -105,6 +105,13 @@ body {
   height: 100%;
 }
 
+/* 캔버스 백드롭은 html 이 칠한다 — body::before(격자 레이어, z-index:-1)가
+   html 배경 위·본문 아래에 끼도록. body 자체가 배경색을 가지면 음수 z-index
+   레이어가 그 뒤로 숨는다. */
+html {
+  background-color: var(--mantine-color-body);
+}
+
 body {
   margin: 0;
   /* sticky-footer: body 를 세로 플렉스로 두고 main 이 남는 공간을 채운다.
@@ -112,10 +119,88 @@ body {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: var(--mantine-color-body);
+  background-color: transparent;
   color: var(--mantine-color-text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* 흰 캔버스 + 약한 제도(製圖) 격자 — "도면을 다루는 서비스"의 상시 배경 신호.
+   32px 마이너 + 160px 메이저 2중 그리드, 라인은 Blueprint Navy 알파 토큰.
+
+   가독성 마스크(DESIGN.md §4.9): 카드 없이 텍스트가 캔버스에 바로 앉는 구간에서
+   격자선이 취소선처럼 글자와 겹쳐 보이므로, 콘텐츠 컬럼(중앙)에서는 격자를
+   지우고 좌우 여백(거터)에서만 드러낸다. 뷰포트 고정(fixed)이라 제도판 위에
+   종이가 미끄러지는 느낌을 준다. 좁은 화면(모바일)은 전체가 콘텐츠 영역이라
+   격자가 자연히 사라진다 — 읽기 우선. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--jippin-grid-major) 1px, transparent 1px),
+    linear-gradient(90deg, var(--jippin-grid-major) 1px, transparent 1px),
+    linear-gradient(var(--jippin-grid-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--jippin-grid-minor) 1px, transparent 1px);
+  background-size:
+    160px 160px,
+    160px 160px,
+    32px 32px,
+    32px 32px;
+  /* 패럴랙스(GridParallax) — 콘텐츠 1× 대비 격자 전체가 0.22× 로 느리게
+     따라온다(2.5D). 마이너/메이저는 한 평면(같은 속도)이어야 한다 — 속도를
+     달리하면 32px 격자가 160px 격자 위를 미끄러져 어긋나 보인다.
+     세로선(90deg 레이어)은 y 이동이 무의미하므로 0. */
+  background-position:
+    0 var(--jippin-grid-scroll, 0px),
+    0 0,
+    0 var(--jippin-grid-scroll, 0px),
+    0 0;
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 1) 2%,
+    rgba(0, 0, 0, 0) 15%,
+    rgba(0, 0, 0, 0) 85%,
+    rgba(0, 0, 0, 1) 98%,
+    rgba(0, 0, 0, 1) 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 1) 2%,
+    rgba(0, 0, 0, 0) 15%,
+    rgba(0, 0, 0, 0) 85%,
+    rgba(0, 0, 0, 1) 98%,
+    rgba(0, 0, 0, 1) 100%
+  );
+}
+
+/* ── 치수선(dimension line) 구분자 — 제도 모티프 공용 유틸리티 ──────────────
+   섹션 사이 Divider 대체. 양끝 틱이 있는 가는 네이비 선으로, 도면의 치수선을
+   차용한다. 사용: <div class="jp-dimline" aria-hidden="true" /> */
+.jp-dimline {
+  position: relative;
+  height: 1px;
+  background: var(--jippin-brand-professional);
+  opacity: 0.3;
+}
+.jp-dimline::before,
+.jp-dimline::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  width: 1px;
+  height: 9px;
+  background: var(--jippin-brand-professional);
+}
+.jp-dimline::before {
+  left: 0;
+}
+.jp-dimline::after {
+  right: 0;
 }
 
 a {
@@ -165,10 +250,15 @@ a[data-faq-row]:focus-visible {
   padding-left: 1.25em;
 }
 
+/* 모바일에서 표가 카드 밖으로 넘치지 않게 자체 가로 스크롤 컨테이너로 만든다
+   (TYPOGRAPHY.md §3 '표는 모바일 2열 제한' — 콘텐츠는 DB 마크다운이라 스크롤 폴백). */
 .faq-answer table {
+  display: block;
   border-collapse: collapse;
   width: 100%;
+  max-width: 100%;
   margin-block: 1em;
+  overflow-x: auto;
 }
 
 .faq-answer th,
@@ -246,16 +336,16 @@ a[data-faq-row]:focus-visible {
 }
 
 /* 하단 도크 — sticky 입력창. position:sticky 는 자식 absolute 의 컨테이닝 블록이 되어
-   "맨 아래로" 플로팅 버튼을 도크 바로 위에 띄울 수 있다. */
+   "맨 아래로" 플로팅 버튼을 도크 바로 위에 띄울 수 있다.
+   배경은 격자 캔버스 위에서 "격자가 지워지는 띠"가 되지 않도록 반투명 + blur.
+   iOS 홈 인디케이터와 겹치지 않게 safe-area 하단 여백을 더한다. */
 .chat-dock {
   position: sticky;
   bottom: 0;
-  padding: 10px 0 14px;
-  background: linear-gradient(
-    to top,
-    var(--mantine-color-body) 70%,
-    transparent
-  );
+  padding: 10px 0 calc(14px + env(safe-area-inset-bottom, 0px));
+  background: color-mix(in srgb, var(--mantine-color-body) 86%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 
 /* 스크롤이 바닥이 아닐 때만 노출되는 "맨 아래로" 플로팅 버튼 — 입력창 바로 위 중앙. */
@@ -474,15 +564,17 @@ a[data-faq-row]:focus-visible {
   color: var(--jippin-brand-ink);
 }
 
+/* 채팅 내 임베디드 헤딩 — 본문 대비 단계 차이를 또렷하게(위계 식별, TYPOGRAPHY.md
+   '임베디드 마크다운' 스케일). */
 .chat-markdown h1 {
-  font-size: 1.15em;
+  font-size: 1.25em;
 }
 .chat-markdown h2 {
-  font-size: 1.1em;
+  font-size: 1.15em;
 }
 .chat-markdown h3,
 .chat-markdown h4 {
-  font-size: 1.02em;
+  font-size: 1.05em;
 }
 
 .chat-markdown code {
@@ -769,9 +861,9 @@ a[data-faq-row]:focus-visible {
   background: var(--mantine-color-warning-6);
 }
 
-/* 법적 고지 — 위계 최하단. 색·굵기 강조 금지(BRAND §6). */
+/* 법적 고지 — 위계 최하단. 색·굵기 강조 금지(BRAND §6). 크기는 legal 토큰(12px) 단일. */
 .a2ui-legal {
-  font-size: 0.75rem;
+  font-size: var(--jippin-fz-legal, 0.75rem);
   line-height: 1.55;
   color: var(--jippin-notice-legal);
 }
@@ -797,9 +889,10 @@ a[data-faq-row]:focus-visible {
   width: 100%;
   max-width: 460px;
   margin-inline: auto;
-  /* 헤더(60) + 컨테이너 세로 패딩(xl≈64) 만큼을 뺀 높이를 확보해 CTA 가 화면 하단에
-     자연히 앉게 한다. 정확할 필요는 없다 — .hc-dock 의 sticky 가 넘침을 흡수한다. */
-  min-height: min(660px, calc(100dvh - 172px));
+  /* 헤더(60) + SiteShell 컨테이너 py xl(32×2=64) = 124px 를 뺀 높이를 확보해 CTA 가
+     화면 하단에 자연히 앉게 한다. 정확할 필요는 없다 — .hc-dock 의 sticky 가 넘침을
+     흡수한다. (이전 값 172px 는 근거 불명의 매직 넘버였다.) */
+  min-height: min(660px, calc(100dvh - 124px));
 }
 
 /* 상단 바 — 뒤로 가기 + 진행바. 모든 질문 스텝에 노출(인트로/제출/완료 제외). */
@@ -833,10 +926,11 @@ a[data-faq-row]:focus-visible {
   }
 }
 
-/* 대화형 헤딩 — 크고 친근하게. 프로그램적 포커스(스크린리더 맥락)라 포커스 링은 숨긴다. */
+/* 대화형 헤딩 — 크고 친근하게. 크기는 display 토큰(판정/원-퀘스천 헤딩 전용 단계).
+   프로그램적 포커스(스크린리더 맥락)라 포커스 링은 숨긴다. */
 .hc-heading {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: var(--jippin-fz-display, 1.5rem);
   line-height: 1.4;
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -976,15 +1070,13 @@ a[data-faq-row]:focus-visible {
 }
 
 /* 하단 CTA 도크 — sticky 로 화면 하단에 밀착. 내용이 길어져도 버튼이 항상 보인다.
-   위쪽으로 옅은 그라디언트를 깔아 스크롤되는 본문과 자연스럽게 이어지게 한다. */
+   격자 캔버스 위에서 자연스럽도록 반투명 + blur, iOS safe-area 하단 여백 포함. */
 .hc-dock {
   position: sticky;
   bottom: 0;
   margin-top: 24px;
-  padding: 14px 0 8px;
-  background: linear-gradient(
-    to top,
-    var(--mantine-color-body) 72%,
-    transparent
-  );
+  padding: 14px 0 calc(8px + env(safe-area-inset-bottom, 0px));
+  background: color-mix(in srgb, var(--mantine-color-body) 86%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }

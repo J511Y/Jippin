@@ -1,7 +1,6 @@
 import {
   Badge,
   Box,
-  Button,
   Card,
   Container,
   Divider,
@@ -28,6 +27,7 @@ import {
 import type { Metadata } from 'next';
 
 import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+import { HeroStartCta } from '@/components/landing/HeroStartCta';
 import { Reveal } from '@/components/landing/Reveal';
 import { StatBand } from '@/components/landing/StatBand';
 import { QuickConsultSection } from '@/components/QuickConsultSection';
@@ -117,18 +117,21 @@ export default function HomePage() {
         dangerouslySetInnerHTML={{ __html: safeJsonLd(buildHomeJsonLd()) }}
       />
       {/* ── HERO ─────────────────────────────────────────────── */}
+      {/* 흰 캔버스 기준 재보정 — 틸 틴트만 남기고 투명으로 페이드해 제도 격자가
+          여백에서 은은히 비치게 한다(옛 회색 #F8F9FA 기반 그라데이션은 격자와
+          어긋난 회색 섬이 됨). */}
       <Box
         style={{
           background:
-            'radial-gradient(120% 120% at 80% 0%, #E2F1EF 0%, rgba(248,249,250,0) 55%), linear-gradient(180deg, #FBFDFC 0%, #F8F9FA 100%)',
+            'radial-gradient(120% 120% at 80% 0%, var(--mantine-color-jippin-0) 0%, rgba(255,255,255,0) 55%)',
           borderBottom: '1px solid var(--jippin-brand-border)'
         }}
       >
         <Container
           size="lg"
           style={{
-            paddingTop: 'clamp(3rem, 7vw, 6rem)',
-            paddingBottom: 'clamp(3rem, 7vw, 6rem)'
+            paddingTop: 'var(--jippin-section-py)',
+            paddingBottom: 'var(--jippin-section-py)'
           }}
         >
           <Reveal immediate stagger={0.14} style={{ display: 'contents' }}>
@@ -138,7 +141,7 @@ export default function HomePage() {
                 order={1}
                 data-reveal
                 style={{
-                  fontSize: 'clamp(2rem, 4.5vw, 3.25rem)',
+                  fontSize: 'var(--jippin-fz-hero)',
                   lineHeight: 1.12,
                   letterSpacing: '-0.02em',
                   wordBreak: 'keep-all'
@@ -166,17 +169,18 @@ export default function HomePage() {
                 도면과 주소만으로 미리 확인해 드려요.
               </Text>
               <Group gap="sm" mt="xs" data-reveal>
-                <Button
-                  component="a"
+                {/* 1차 액션(제품 진입) = jippin filled. 이 화면의 코랄 1회는
+                    QuickConsult 폼 제출이므로 상담 버튼은 outline 2차로 둔다. */}
+                <HeroStartCta
                   href="/sessions"
                   size="lg"
                   color="jippin"
-                  radius="md"
+                  variant="filled"
                   rightSection={<IconArrowRight size={18} />}
                 >
                   무료로 사전검토 시작
-                </Button>
-                <LeadCtaButton cta="home_hero" size="lg" variant="default" radius="md">
+                </HeroStartCta>
+                <LeadCtaButton cta="home_hero" size="lg" variant="outline" color="jippin">
                   전문가 상담
                 </LeadCtaButton>
               </Group>
@@ -186,7 +190,6 @@ export default function HomePage() {
             <Box visibleFrom="md" data-reveal style={{ position: 'relative' }}>
               <Card
                 shadow="xl"
-                radius="lg"
                 padding="xl"
                 withBorder
                 style={{ transform: 'rotate(1deg)' }}
@@ -203,6 +206,65 @@ export default function HomePage() {
                       철거 가능성 높음
                     </Badge>
                   </Group>
+                  {/* 미니 도면 — '도면을 읽는 AI' 시각 신호. 내력벽=danger 실선,
+                      비내력벽=success 점선 (globals.css OVERLAY 토큰 재사용). */}
+                  <Box
+                    aria-hidden="true"
+                    style={{
+                      border: '1px solid var(--jippin-brand-border)',
+                      borderRadius: 'var(--mantine-radius-sm)',
+                      background: 'var(--jippin-brand-surface)',
+                      padding: '8px 10px'
+                    }}
+                  >
+                    <svg
+                      viewBox="0 0 260 84"
+                      width="100%"
+                      role="presentation"
+                      focusable="false"
+                      style={{ display: 'block' }}
+                    >
+                      {/* 외곽 벽 */}
+                      <rect
+                        x="4"
+                        y="4"
+                        width="252"
+                        height="76"
+                        fill="none"
+                        stroke="var(--jippin-brand-professional)"
+                        strokeOpacity="0.4"
+                        strokeWidth="2"
+                      />
+                      {/* 내력벽(철거 불가) — 실선 */}
+                      <line
+                        x1="96"
+                        y1="4"
+                        x2="96"
+                        y2="80"
+                        stroke="var(--floorplan-wall-load)"
+                        strokeWidth="3"
+                      />
+                      {/* 비내력벽(철거 후보) — 점선 */}
+                      <line
+                        x1="96"
+                        y1="44"
+                        x2="256"
+                        y2="44"
+                        stroke="var(--floorplan-wall-nonload)"
+                        strokeWidth="3"
+                        strokeDasharray="7 5"
+                      />
+                      <line
+                        x1="178"
+                        y1="44"
+                        x2="178"
+                        y2="80"
+                        stroke="var(--floorplan-wall-nonload)"
+                        strokeWidth="3"
+                        strokeDasharray="7 5"
+                      />
+                    </svg>
+                  </Box>
                   <Divider />
                   <Stack gap="sm">
                     {[
@@ -225,15 +287,23 @@ export default function HomePage() {
                       </Group>
                     ))}
                   </Stack>
-                  <Button
-                    color="coral"
-                    variant="light"
-                    radius="md"
-                    fullWidth
+                  {/* 목업 장식 — 동작 없는 리포트 화면 예시라 실제 버튼 대신
+                      비인터랙티브 표현을 쓴다(죽은 버튼 오탭 방지). */}
+                  <Box
+                    aria-hidden="true"
                     mt="xs"
+                    style={{
+                      textAlign: 'center',
+                      padding: '10px 16px',
+                      borderRadius: 'var(--mantine-radius-md)',
+                      background: 'var(--mantine-color-coral-0)',
+                      color: 'var(--mantine-color-coral-8)',
+                      fontSize: 'var(--mantine-font-size-sm)',
+                      fontWeight: 600
+                    }}
                   >
                     전문가 상담으로 전환
-                  </Button>
+                  </Box>
                 </Stack>
               </Card>
             </Box>
@@ -246,8 +316,8 @@ export default function HomePage() {
       <Container
         size="lg"
         style={{
-          paddingTop: 'clamp(3rem, 6vw, 5rem)',
-          paddingBottom: 'clamp(3rem, 6vw, 5rem)'
+          paddingTop: 'var(--jippin-section-py)',
+          paddingBottom: 'var(--jippin-section-py)'
         }}
       >
         <Stack gap={8} mb="xl" maw={620}>
@@ -257,7 +327,7 @@ export default function HomePage() {
           <Title
             order={2}
             style={{
-              fontSize: 'clamp(1.5rem, 3vw, 2rem)',
+              fontSize: 'var(--jippin-fz-display)',
               lineHeight: 1.25,
               wordBreak: 'keep-all'
             }}
@@ -295,9 +365,9 @@ export default function HomePage() {
                   radius="xl"
                   variant="filled"
                   color="jippin"
-                  style={{ boxShadow: '0 0 0 6px #F8F9FA' }}
+                  style={{ boxShadow: '0 0 0 6px var(--mantine-color-body)' }}
                 >
-                  <Text fw={800} fz="lg" c="#FFFFFF">
+                  <Text fw={700} fz="lg" c="var(--jippin-brand-primary-fg)">
                     {i + 1}
                   </Text>
                 </ThemeIcon>
@@ -334,13 +404,11 @@ export default function HomePage() {
               key={step.title}
               data-reveal
               withBorder
-              radius="lg"
-              padding="lg"
               style={{ flex: '0 0 80%', scrollSnapAlign: 'start' }}
             >
               <Stack gap="sm">
                 <ThemeIcon size={46} radius="xl" variant="filled" color="jippin">
-                  <Text fw={800} c="#FFFFFF">
+                  <Text fw={700} c="var(--jippin-brand-primary-fg)">
                     {i + 1}
                   </Text>
                 </ThemeIcon>
@@ -358,12 +426,19 @@ export default function HomePage() {
       </Container>
 
       {/* ── FEATURES ─────────────────────────────────────────── */}
-      <Box style={{ background: '#FFFFFF', borderTop: '1px solid var(--jippin-brand-border)', borderBottom: '1px solid var(--jippin-brand-border)' }}>
+      {/* 흰 캔버스에서는 흰 밴드 구획이 사라지므로 브랜드 surface 틴트로 밴드를 만든다. */}
+      <Box
+        style={{
+          background: 'var(--jippin-brand-surface)',
+          borderTop: '1px solid var(--jippin-brand-border)',
+          borderBottom: '1px solid var(--jippin-brand-border)'
+        }}
+      >
         <Container
           size="lg"
           style={{
-            paddingTop: 'clamp(3rem, 6vw, 5rem)',
-            paddingBottom: 'clamp(3rem, 6vw, 5rem)'
+            paddingTop: 'var(--jippin-section-py)',
+            paddingBottom: 'var(--jippin-section-py)'
           }}
         >
           <Stack gap={8} mb="xl" maw={620}>
@@ -373,7 +448,7 @@ export default function HomePage() {
             <Title
               order={2}
               style={{
-                fontSize: 'clamp(1.5rem, 3vw, 2rem)',
+                fontSize: 'var(--jippin-fz-display)',
                 lineHeight: 1.25,
                 wordBreak: 'keep-all'
               }}
@@ -391,7 +466,7 @@ export default function HomePage() {
           <Reveal stagger={0.08}>
           <SimpleGrid visibleFrom="sm" cols={{ sm: 2, md: 3 }} spacing="lg">
             {FEATURES.map((f) => (
-              <Card key={f.title} data-reveal withBorder radius="lg" padding="lg">
+              <Card key={f.title} data-reveal withBorder>
                 <Stack gap="sm">
                   <ThemeIcon size={48} radius="md" variant="light" color="jippin">
                     <f.icon size={26} />
@@ -424,8 +499,6 @@ export default function HomePage() {
                 key={f.title}
                 data-reveal
                 withBorder
-                radius="lg"
-                padding="lg"
                 style={{ flex: '0 0 80%', scrollSnapAlign: 'start' }}
               >
                 <Stack gap="sm">

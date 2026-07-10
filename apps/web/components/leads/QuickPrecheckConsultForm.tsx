@@ -12,13 +12,14 @@
  * (ConsultationHandoff)에서 인라인으로 재사용한다.
  */
 
-import { Alert, Button, Card, Stack, Text, TextInput, Textarea } from '@mantine/core';
+import { Alert, Card, Stack, Text, TextInput, Textarea } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import { IconMapPin } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 
 import { PhoneInput } from '@/components/inputs/PhoneInput';
+import { CtaButton } from '@/components/ui';
 import { trackLeadSubmit, type LeadCtaId } from '@/lib/analytics/lead-cta';
 import { parseApiError } from '@/lib/api/error';
 import { createLead } from '@/lib/leads/api';
@@ -104,14 +105,14 @@ export function QuickPrecheckConsultForm({
       });
       trackLeadSubmit('precheck_session', ctaId);
       notifications.show({
-        color: 'teal',
+        color: 'success',
         title: '상담 신청이 접수되었어요',
         message: '담당자가 영업일 기준 1일 이내에 연락드릴게요.'
       });
       onSubmitted?.();
     } catch (error) {
       notifications.show({
-        color: 'red',
+        color: 'danger',
         title: '상담 신청에 실패했어요',
         message: parseApiError(error).message
       });
@@ -157,9 +158,10 @@ export function QuickPrecheckConsultForm({
         <Alert color="jippin" variant="light" radius="md" p="xs">
           <Text size="xs">사전검토 내용과 함께 전달돼요. 정보는 상담 진행에만 사용돼요.</Text>
         </Alert>
-        <Button type="submit" color="coral" radius="md" fullWidth loading={submitting}>
+        {/* 상담 신청 제출 = 전환 CTA — 공용 CtaButton(coral 정본)으로 통일한다. */}
+        <CtaButton type="submit" fullWidth loading={submitting}>
           상담 신청하기
-        </Button>
+        </CtaButton>
       </Stack>
     </Card>
   );

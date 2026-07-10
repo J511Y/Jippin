@@ -60,6 +60,7 @@ const INTENTS = [
 ];
 
 // 1분 뒤 받는 답(신호등) — 색만으로 의미를 전하지 않도록 라벨+아이콘 동반(DESIGN.md §2.4).
+// 상태색은 warning/danger 토큰만 쓴다 — 코랄은 전환 CTA 전용이라 상태에 금지(BRAND).
 const VERDICTS = [
   {
     icon: IconCheck,
@@ -69,13 +70,13 @@ const VERDICTS = [
   },
   {
     icon: IconFileCheck,
-    color: 'yellow' as const,
+    color: 'warning' as const,
     tag: '확인 필요',
     desc: '행위허가·입주민 동의가 필요한 경우를 미리 알려 줍니다.'
   },
   {
     icon: IconAlertTriangle,
-    color: 'coral' as const,
+    color: 'danger' as const,
     tag: '주의',
     desc: '함부로 손대면 안 되는 내력벽·구조 위험 구간을 표시합니다.'
   }
@@ -88,19 +89,22 @@ const FLOW = [
   { icon: IconReportAnalytics, label: '신호등 리포트' }
 ];
 
+// 타입 스케일은 테마 토큰이 SSOT — 페이지별 임의 clamp 발명 금지(TYPOGRAPHY.md §2).
+// 히어로 h1 = hero 토큰(32→44px), 섹션 h2 = display 토큰(24→28px).
 const DISPLAY = {
-  fontSize: 'clamp(2.25rem, 5.2vw, 3.6rem)',
+  fontSize: 'var(--jippin-fz-hero)',
   lineHeight: 1.1,
   letterSpacing: '-0.03em',
   wordBreak: 'keep-all' as const
 };
 const H2 = {
-  fontSize: 'clamp(1.55rem, 3.2vw, 2.15rem)',
+  fontSize: 'var(--jippin-fz-display)',
   lineHeight: 1.2,
   letterSpacing: '-0.02em',
   wordBreak: 'keep-all' as const
 };
-const SECTION_PY = 'clamp(3.5rem, 7vw, 6rem)';
+// 랜딩 섹션 세로 패딩 공용 토큰 — 3개 랜딩(홈·가격·사전검토)이 공유.
+const SECTION_PY = 'var(--jippin-section-py)';
 
 function Eyebrow({ children }: { children: React.ReactNode }) {
   return (
@@ -125,13 +129,9 @@ export default function SessionsLandingPage() {
       />
 
       {/* ── HERO (채팅형 — 실제 제품을 보여 준다) ───────────────── */}
-      <Box
-        style={{
-          background:
-            'radial-gradient(115% 130% at 90% 0%, #E2F1EF 0%, rgba(247,251,250,0) 58%), linear-gradient(180deg, #FBFDFC 0%, #F5F9F8 100%)',
-          borderBottom: '1px solid var(--jippin-brand-border)'
-        }}
-      >
+      {/* 배경은 투명 — 흰 캔버스의 제도 격자 위에 흰 채팅 카드가 떠 보인다(옛 회색
+          그라데이션 밴드 제거, COLOR_SYSTEM 그라데이션 금지). */}
+      <Box style={{ borderBottom: '1px solid var(--jippin-brand-border)' }}>
         <Container size="lg" style={{ paddingTop: SECTION_PY, paddingBottom: SECTION_PY }}>
           <SimpleGrid cols={{ base: 1, md: 2 }} spacing={56} verticalSpacing={44}>
             <Stack gap="xl" justify="center">
@@ -152,12 +152,14 @@ export default function SessionsLandingPage() {
 
               <Stack gap="sm">
                 <Group gap="sm">
+                  {/* 제품 진입 1차 액션 — 이 페이지의 /sessions CTA 는 전부 jippin filled
+                      한 가지 모양만 쓴다(버튼 위계 §2). 서버 컴포넌트라 component={Link} 는
+                      SSG prerender 를 깨뜨려 네이티브 앵커를 유지한다(not-found.tsx 와 동일). */}
                   <Button
                     component="a"
                     href="/sessions"
                     size="lg"
                     color="jippin"
-                    radius="md"
                     rightSection={<IconArrowRight size={18} />}
                   >
                     무료로 확인하기
@@ -233,10 +235,11 @@ export default function SessionsLandingPage() {
                         다만 <b>구청 행위허가</b>가 필요하고, 발코니 쪽 1곳은 주의가
                         필요합니다.
                       </Text>
+                      {/* 판정 배지도 상태 토큰(warning/danger)만 — 코랄은 전환 CTA 전용. */}
                       <Group gap={6} mt={10}>
                         <Badge color="jippin" variant="light" radius="sm" size="sm">철거 가능</Badge>
-                        <Badge color="yellow" variant="light" radius="sm" size="sm">허가 필요</Badge>
-                        <Badge color="coral" variant="light" radius="sm" size="sm">주의 1곳</Badge>
+                        <Badge color="warning" variant="light" radius="sm" size="sm">허가 필요</Badge>
+                        <Badge color="danger" variant="light" radius="sm" size="sm">주의 1곳</Badge>
                       </Group>
                     </Box>
                   </Box>
@@ -253,13 +256,15 @@ export default function SessionsLandingPage() {
 
       {/* ── 의도 칩 (각 칩이 곧 CTA) ─────────────────────────── */}
       <Box style={{ borderBottom: '1px solid var(--jippin-brand-border)' }}>
-        <Container size="lg" style={{ paddingTop: 'clamp(2.5rem,5vw,4rem)', paddingBottom: 'clamp(2.5rem,5vw,4rem)' }}>
+        <Container size="lg" style={{ paddingTop: SECTION_PY, paddingBottom: SECTION_PY }}>
           <Stack gap="lg">
             <Text fw={700} fz="lg" style={{ wordBreak: 'keep-all' }}>
               이런 질문, 그대로 물어보세요
             </Text>
             <Group gap="sm">
               {INTENTS.map((q) => (
+                // 질문 칩 — 칩 형태라 pill radius 허용(칩만 999). 라벨이 줄바꿈돼도
+                // 잘리지 않도록 높이를 auto 로 풀고, 터치 타깃 최소 44px 를 보장한다.
                 <Button
                   key={q}
                   component="a"
@@ -267,7 +272,10 @@ export default function SessionsLandingPage() {
                   variant="default"
                   radius="xl"
                   size="md"
-                  styles={{ root: { fontWeight: 500 }, label: { whiteSpace: 'normal' } }}
+                  styles={{
+                    root: { fontWeight: 500, height: 'auto', minHeight: 44, paddingBlock: 10 },
+                    label: { whiteSpace: 'normal' }
+                  }}
                 >
                   {q}
                 </Button>
@@ -278,25 +286,32 @@ export default function SessionsLandingPage() {
       </Box>
 
       {/* ── 리스크 리버설 (비용 불안 해소) ───────────────────── */}
-      <Box style={{ background: 'linear-gradient(135deg, #0F5F59 0%, #147A73 60%, #2D8F87 100%)' }}>
+      {/* 다색 그라데이션 금지(COLOR_SYSTEM) — 어두운 틸 밴드 대신 흰 캔버스 기준의
+          brand.surface 틴트 밴드로 재보정. 텍스트·CTA 도 표준 토큰/위계로 복귀한다
+          (variant="white" 는 어두운 배경 전용이라 함께 제거). */}
+      <Box
+        style={{
+          background: 'var(--jippin-brand-surface)',
+          borderTop: '1px solid var(--jippin-brand-border)',
+          borderBottom: '1px solid var(--jippin-brand-border)'
+        }}
+      >
         <Container size="lg" style={{ paddingTop: SECTION_PY, paddingBottom: SECTION_PY }}>
           <SimpleGrid cols={{ base: 1, md: 2 }} spacing={48} verticalSpacing="lg">
             <Stack gap="sm" justify="center">
-              <Text fw={700} fz="sm" style={{ color: 'rgba(255,255,255,0.8)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-                비용 걱정은 나중에
-              </Text>
-              <Title order={2} style={{ ...H2, color: '#FFFFFF' }}>
+              <Eyebrow>비용 걱정은 나중에</Eyebrow>
+              <Title order={2} style={H2}>
                 되는지부터, 공짜로 확인하세요
               </Title>
             </Stack>
             <Stack justify="center">
-              <Text style={{ color: 'rgba(255,255,255,0.92)', wordBreak: 'keep-all', lineHeight: 1.7 }}>
-                가능 여부 확인까지는 <b style={{ color: '#fff' }}>100% 무료</b>입니다. 견적·시공
+              <Text c="dimmed" style={{ wordBreak: 'keep-all', lineHeight: 1.7 }}>
+                가능 여부 확인까지는 <b>100% 무료</b>입니다. 견적·시공
                 이야기는 “가능하다”가 확인된 다음에 시작해요. 안 되는 공사에 상담비부터 쓰는
                 일은 없습니다.
               </Text>
               <Group gap="sm" mt="xs">
-                <Button component="a" href="/sessions" variant="white" color="jippin" radius="md" size="md" rightSection={<IconArrowRight size={18} />}>
+                <Button component="a" href="/sessions" color="jippin" size="md" rightSection={<IconArrowRight size={18} />}>
                   무료 사전검토 시작
                 </Button>
               </Group>
@@ -395,7 +410,9 @@ export default function SessionsLandingPage() {
       </Box>
 
       {/* ── 마무리 CTA ───────────────────────────────────────── */}
-      <Box style={{ background: 'linear-gradient(180deg, #FFF6F3 0%, #FFF0EC 100%)' }}>
+      {/* 코랄 틴트 그라데이션 제거 — 격자 캔버스가 페이지를 닫는다. 제품 진입 CTA 는
+          히어로와 같은 jippin filled 1종(코랄은 상담 전환 전용, 이 페이지엔 없음). */}
+      <Box>
         <Container size="md" style={{ paddingTop: SECTION_PY, paddingBottom: SECTION_PY }}>
           <Stack gap="lg" align="center" ta="center">
             <Title order={2} style={{ ...H2, maxWidth: 560 }}>
@@ -405,7 +422,7 @@ export default function SessionsLandingPage() {
               로그인도, 비용도 없습니다. 평면도 한 장이면 베란다 확장·벽 철거가 우리
               집에서 되는지 지금 바로 확인할 수 있어요.
             </Text>
-            <Button component="a" href="/sessions" size="lg" color="coral" radius="md" rightSection={<IconArrowRight size={18} />}>
+            <Button component="a" href="/sessions" size="lg" color="jippin" rightSection={<IconArrowRight size={18} />}>
               무료 사전검토 시작
             </Button>
             <Text size="xs" c="dimmed" maw={560} style={{ wordBreak: 'keep-all' }}>

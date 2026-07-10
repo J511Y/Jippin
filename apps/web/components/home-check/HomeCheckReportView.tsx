@@ -13,11 +13,13 @@ import {
   IconHelpCircle,
   IconRulerMeasure
 } from '@tabler/icons-react';
+import Link from 'next/link';
 import type { CSSProperties, ReactNode } from 'react';
 import { useId } from 'react';
 import type { HomeCheckReport } from '@contracts/home-check';
 
 import { CardHeader, CardRule, CardShell, type CardAccent } from '@/components/a2ui/cards/CardShell';
+import { CtaButton } from '@/components/ui';
 import { homeCheckLeadHref } from '@/lib/home-check/lead-prefill';
 import {
   formatArea,
@@ -190,6 +192,22 @@ export function HomeCheckReportView({
           </span>
         </div>
 
+        {/* 판정 한 줄 — 리포트 최상단 결론. 크기는 판정 전용 display 토큰만 쓴다
+            (TYPOGRAPHY.md §2 — 페이지별 임의 크기 발명 금지). */}
+        <Text
+          fw={700}
+          mt="md"
+          style={{
+            fontSize: 'var(--jippin-fz-display)',
+            lineHeight: 1.4,
+            letterSpacing: '-0.01em',
+            color: 'var(--jippin-brand-ink)',
+            wordBreak: 'keep-all'
+          }}
+        >
+          {heroOneLiner}
+        </Text>
+
         {/* 결론 배너 — 색 + 아이콘 + 라벨 셋으로 동시 전달(WCAG·색 단독 금지). */}
         <div
           className="a2ui-verdict"
@@ -201,15 +219,6 @@ export function HomeCheckReportView({
           </span>
           <span className="a2ui-verdict__label">{meta.label}</span>
         </div>
-
-        <Text
-          size="sm"
-          c="var(--jippin-brand-copy)"
-          mt="md"
-          style={{ lineHeight: 1.7, wordBreak: 'keep-all' }}
-        >
-          {heroOneLiner}
-        </Text>
 
         {checkPoints.length > 0 ? (
           <Stack gap={6} mt="md">
@@ -357,17 +366,16 @@ export function HomeCheckReportView({
           <Text size="sm" c="var(--jippin-brand-copy)" style={{ wordBreak: 'keep-all' }}>
             {cta.desc}
           </Text>
-          <Button
-            component="a"
+          {/* 전환 CTA 표준(CtaButton, 화면당 1회) — 이 리포트에서 coral 은 여기뿐. */}
+          <CtaButton
+            component={Link}
             href={homeCheckLeadHref(checkId, addressLabel)}
-            color="coral"
-            radius="md"
             mt="sm"
             w="fit-content"
             rightSection={<IconArrowRight size={16} />}
           >
             {cta.label}
-          </Button>
+          </CtaButton>
         </SectionCard>
       ) : null}
 
@@ -381,9 +389,14 @@ export function HomeCheckReportView({
         </Text>
       </Stack>
 
-      {/* 8. 다른 집 체크하기 */}
+      {/* 8. 다른 집 체크하기 — 내부 내비게이션은 next/link 로(전체 리로드 방지). */}
       <Group justify="center">
-        <Anchor href="/home-check/new" size="sm" c="var(--jippin-brand-primary)">
+        <Anchor
+          component={Link}
+          href="/home-check/new"
+          size="sm"
+          c="var(--jippin-brand-primary)"
+        >
           다른 집 체크하기 →
         </Anchor>
       </Group>
@@ -436,6 +449,7 @@ function ExtensionDiagnosisCard({ report }: { report: HomeCheckReport }) {
           드려요.
         </Text>
         <Anchor
+          component={Link}
           href="/home-check/new"
           size="sm"
           mt="sm"

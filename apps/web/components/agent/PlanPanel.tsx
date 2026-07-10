@@ -186,7 +186,8 @@ export function PlanPanel({ plan, busy }: PlanPanelProps) {
           onClick={toggle}
           aria-expanded={opened}
           aria-label="진행 계획 펼치기"
-          style={{ width: '100%', display: 'block' }}
+          // 접이식 바 터치 타깃 ≥44px — 간격은 그대로 두고 최소 높이만 보장한다.
+          style={{ width: '100%', display: 'flex', alignItems: 'center', minHeight: 44 }}
         >
           <Group gap={8} wrap="nowrap" align="center" style={{ width: '100%' }}>
             <Box style={{ flex: '0 0 auto', width: 16, display: 'grid', placeItems: 'center' }}>

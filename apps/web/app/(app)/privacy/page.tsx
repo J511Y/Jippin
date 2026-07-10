@@ -2,7 +2,6 @@ import {
   Anchor,
   Box,
   Card,
-  Divider,
   Group,
   Stack,
   Text,
@@ -12,6 +11,8 @@ import {
 import { IconChevronRight } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
+
+import { PageColumn, PageHeader } from '@/components/ui';
 
 export const metadata: Metadata = {
   title: '개인정보처리방침',
@@ -494,65 +495,70 @@ const SECTIONS: Section[] = [
 
 export default function PrivacyPage() {
   return (
-    <Stack gap="xl">
-      <Stack gap="xs">
-        <Title order={1}>개인정보처리방침</Title>
-        <Text c="dimmed" size="sm">
-          시행일 {EFFECTIVE_DATE}
-        </Text>
-        <Text c="dimmed" size="sm" style={KEEP_ALL}>
-          집핀(Jippin) 서비스를 운영하는 신한이너텍 주식회사(이하
-          &lsquo;회사&rsquo;)는 이용자의 개인정보를 중요하게 생각하며, 「개인정보
-          보호법」 등 관계 법령을 준수합니다. 본 개인정보처리방침은 회사가
-          제공하는 비내력벽 철거 AI 사전검토 및 전문가
-          상담 연결 서비스 이용 과정에서 개인정보가 어떻게 수집·이용·보관·파기되는지를
-          안내합니다. 본 방침은 관계 법령의 개정이나 서비스 정책의 변경에 따라
-          개정될 수 있으며, 개정 시 시행일과 변경 내용을 사전에 공지합니다.
-        </Text>
-      </Stack>
-
-      <Card withBorder radius="md" padding="md" component="nav" aria-label="목차">
-        <Stack gap="sm">
-          <Text fw={600}>목차</Text>
-          {SECTIONS.map((section) => (
-            <Group key={section.id} gap={6} align="center" wrap="nowrap">
-              <ThemeIcon
-                variant="transparent"
-                color="gray"
-                size={16}
-                aria-hidden
-              >
-                <IconChevronRight size={12} stroke={2} />
-              </ThemeIcon>
-              <Anchor href={`#${section.id}`} c="dimmed" size="sm">
-                {section.title}
-              </Anchor>
-            </Group>
-          ))}
-        </Stack>
-      </Card>
+    // 긴 문서 페이지 — 읽기 줄 길이를 위해 prose(720px) 컬럼으로 좁힌다.
+    <PageColumn width="prose">
+      <PageHeader
+        title="개인정보처리방침"
+        subtitle={
+          <>
+            시행일 {EFFECTIVE_DATE}
+            <br />
+            집핀(Jippin) 서비스를 운영하는 신한이너텍 주식회사(이하
+            &lsquo;회사&rsquo;)는 이용자의 개인정보를 중요하게 생각하며,
+            「개인정보 보호법」 등 관계 법령을 준수합니다. 본 개인정보처리방침은
+            회사가 제공하는 비내력벽 철거 AI 사전검토 및 전문가 상담 연결 서비스
+            이용 과정에서 개인정보가 어떻게 수집·이용·보관·파기되는지를
+            안내합니다. 본 방침은 관계 법령의 개정이나 서비스 정책의 변경에 따라
+            개정될 수 있으며, 개정 시 시행일과 변경 내용을 사전에 공지합니다.
+          </>
+        }
+      />
 
       <Stack gap="xl">
-        {SECTIONS.map((section) => (
-          <Box key={section.id} id={section.id} component="section">
-            <Stack gap="md">
-              <Title order={2} size="h4" style={{ scrollMarginTop: 80 }}>
-                {section.title}
-              </Title>
-              <Card withBorder radius="md" padding="md">
-                {section.body}
-              </Card>
-            </Stack>
-          </Box>
-        ))}
+        <Card withBorder radius="md" padding="md" component="nav" aria-label="목차">
+          <Stack gap="sm">
+            <Text fw={600}>목차</Text>
+            {SECTIONS.map((section) => (
+              <Group key={section.id} gap={6} align="center" wrap="nowrap">
+                <ThemeIcon
+                  variant="transparent"
+                  color="gray"
+                  size={16}
+                  aria-hidden
+                >
+                  <IconChevronRight size={12} stroke={2} />
+                </ThemeIcon>
+                <Anchor href={`#${section.id}`} c="dimmed" size="sm">
+                  {section.title}
+                </Anchor>
+              </Group>
+            ))}
+          </Stack>
+        </Card>
+
+        <Stack gap="xl">
+          {SECTIONS.map((section) => (
+            <Box key={section.id} id={section.id} component="section">
+              <Stack gap="md">
+                <Title order={2} size="h4" style={{ scrollMarginTop: 80 }}>
+                  {section.title}
+                </Title>
+                <Card withBorder radius="md" padding="md">
+                  {section.body}
+                </Card>
+              </Stack>
+            </Box>
+          ))}
+        </Stack>
+
+        {/* 문서 말미 구분자 — 제도 모티프 치수선으로 통일한다. */}
+        <div className="jp-dimline" aria-hidden="true" />
+
+        <Text size="sm" c="dimmed" style={KEEP_ALL}>
+          서비스 이용 조건에 관한 자세한 사항은{' '}
+          <Anchor href="/terms">이용약관</Anchor>을 참고하시기 바랍니다.
+        </Text>
       </Stack>
-
-      <Divider />
-
-      <Text size="sm" c="dimmed" style={KEEP_ALL}>
-        서비스 이용 조건에 관한 자세한 사항은{' '}
-        <Anchor href="/terms">이용약관</Anchor>을 참고하시기 바랍니다.
-      </Text>
-    </Stack>
+    </PageColumn>
   );
 }

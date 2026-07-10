@@ -2,10 +2,15 @@
 
 import { Box, Card, Stack, Text, ThemeIcon } from '@mantine/core';
 import { IconArrowRight, IconSparkles } from '@tabler/icons-react';
+import Link from 'next/link';
 import type { ReactNode } from 'react';
 
-import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
-import type { LeadCtaId } from '@/lib/analytics/lead-cta';
+import { CtaButton } from '@/components/ui';
+import {
+  leadsNewHref,
+  trackLeadCtaClick,
+  type LeadCtaId
+} from '@/lib/analytics/lead-cta';
 
 /**
  * 개발 중인 메인 기능(검토/에이전트 세션)을 blur 로 가리고 상담으로 인입시키는 게이트.
@@ -47,8 +52,10 @@ export function ComingSoonGate({
           alignItems: 'center',
           justifyContent: 'center',
           padding: 'var(--mantine-spacing-md)',
+          // 흰 캔버스(격자) 위 오버레이 — 옛 회색(248,249,250) 대신 흰 기반 알파로
+          // 배경 격자와 톤을 맞춘다.
           background:
-            'linear-gradient(180deg, rgba(248,249,250,0.35) 0%, rgba(248,249,250,0.78) 100%)'
+            'linear-gradient(180deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.78) 100%)'
         }}
       >
         <Card
@@ -76,16 +83,18 @@ export function ComingSoonGate({
               </Text>
             </Stack>
             <Stack gap="xs" w="100%" mt="xs">
-              <LeadCtaButton
-                cta={ctaId}
-                color="coral"
-                size="md"
-                radius="md"
+              {/* 전환 CTA 표준(CtaButton, 화면당 1회). LeadCtaButton 과 동일한
+                  추적 계약을 유지한다 — href 의 cta 파라미터(leadsNewHref) +
+                  클릭 시 dataLayer push(trackLeadCtaClick). */}
+              <CtaButton
+                component={Link}
+                href={leadsNewHref(ctaId)}
+                onClick={() => trackLeadCtaClick(ctaId)}
                 fullWidth
                 rightSection={<IconArrowRight size={18} />}
               >
                 전문가 상담 신청하기
-              </LeadCtaButton>
+              </CtaButton>
               {/* <Button
                 component={Link}
                 href="/mypage"

@@ -3,13 +3,13 @@
 import {
   Badge,
   Box,
+  Button,
   Group,
   Highlight,
   Pagination,
   Stack,
   Text,
-  TextInput,
-  UnstyledButton
+  TextInput
 } from '@mantine/core';
 import { IconChevronRight } from '@tabler/icons-react';
 import Link from 'next/link';
@@ -120,29 +120,27 @@ export function FaqBrowser({ items }: { items: FaqItem[] }) {
         radius="md"
       />
 
-      {/* 카테고리 필터 칩 — 강조(primary)는 선택된 칩 하나에만 쓴다. */}
+      {/* 카테고리 필터 칩 — 강조(primary)는 선택된 칩 하나에만 쓴다.
+          Button 기반이라 hover·focus-visible(브랜드 primary 링)이 기본 제공되고,
+          h=44 로 모바일 터치 타깃 최소치를 확보한다. 칩만 radius 999 허용. */}
       <Group gap="xs" wrap="wrap">
         {(['all', ...FAQ_CATEGORY_ORDER] as CategoryFilter[]).map((value) => {
           const active = category === value;
           return (
-            <UnstyledButton
+            <Button
               key={value}
               onClick={() => handleCategory(value)}
               aria-pressed={active}
-              fz="sm"
+              variant={active ? 'filled' : 'default'}
+              color="jippin"
+              size="sm"
+              radius={999}
+              h={44}
+              px="md"
               fw={active ? 700 : 500}
-              c={active ? 'var(--jippin-brand-primary-fg)' : 'var(--jippin-brand-copy)'}
-              bg={active ? 'var(--jippin-brand-primary)' : 'var(--jippin-brand-surface-alt)'}
-              style={{
-                padding: '6px 14px',
-                borderRadius: 'var(--mantine-radius-xl)',
-                border: `1px solid ${
-                  active ? 'var(--jippin-brand-primary)' : 'var(--jippin-brand-border)'
-                }`
-              }}
             >
               {value === 'all' ? '전체' : FAQ_CATEGORY_LABELS[value]}
-            </UnstyledButton>
+            </Button>
           );
         })}
       </Group>

@@ -10,7 +10,13 @@ import { useEffect } from 'react';
  * 일반 페이지/데이터 에러는 `app/error.tsx` 가 먼저 잡으므로, 여기까지 오는 경우는 드물다.
  */
 
-const BRAND_PRIMARY = '#147A73';
+/* MantineProvider 밖이라 CSS 변수를 못 쓴다 — 브랜드 hex 를 상수로 자립시키고
+   토큰명을 병기한다(정본: lib/mantine-theme.ts jippinTokens). */
+const BRAND_PRIMARY = '#147A73'; // 토큰 brand.primary
+const BRAND_CANVAS = '#FFFFFF'; // 토큰 brand.canvas — 흰 캔버스(격자는 globals.css 밖이라 생략)
+const BRAND_INK = '#0D1B2A'; // 토큰 brand.ink
+const BRAND_COPY = '#48606A'; // 토큰 brand.copy
+const BRAND_BORDER = '#D9E3E1'; // 토큰 brand.border
 
 export default function GlobalError({
   error,
@@ -33,10 +39,10 @@ export default function GlobalError({
           alignItems: 'center',
           justifyContent: 'center',
           padding: '24px',
-          background: '#F8F9FA',
+          background: BRAND_CANVAS,
           fontFamily:
             "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif",
-          color: '#1A1B1E'
+          color: BRAND_INK
         }}
       >
         <div
@@ -45,7 +51,7 @@ export default function GlobalError({
             width: '100%',
             textAlign: 'center',
             background: '#FFFFFF',
-            border: '1px solid #E9ECEF',
+            border: `1px solid ${BRAND_BORDER}`,
             borderRadius: 16,
             padding: '40px 28px',
             boxShadow: '0 16px 40px -24px rgba(0,0,0,0.3)'
@@ -54,7 +60,7 @@ export default function GlobalError({
           <h1 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 8px', wordBreak: 'keep-all' }}>
             일시적인 오류가 발생했어요
           </h1>
-          <p style={{ fontSize: 14, color: '#868E96', margin: '0 0 24px', wordBreak: 'keep-all' }}>
+          <p style={{ fontSize: 14, color: BRAND_COPY, margin: '0 0 24px', wordBreak: 'keep-all' }}>
             페이지를 불러오는 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.
           </p>
           <button

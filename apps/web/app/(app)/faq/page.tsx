@@ -1,7 +1,7 @@
-import { Stack, Text, Title } from '@mantine/core';
 import type { Metadata } from 'next';
 
 import { FaqBrowser } from '@/components/faq/FaqBrowser';
+import { PageHeader } from '@/components/ui';
 import { fetchFaqs, stripMarkdown } from '@/lib/faq';
 import { absoluteUrl, safeJsonLd, SITE_URL } from '@/lib/site';
 
@@ -42,23 +42,18 @@ export default async function FaqPage() {
   const jsonLd = buildFaqJsonLd(items);
 
   return (
-    <Stack gap="lg">
+    <>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }}
       />
-      <Stack gap={4}>
-        <Title order={1} style={{ wordBreak: 'keep-all' }}>
-          자주묻는질문
-        </Title>
-        <Text c="dimmed" style={{ wordBreak: 'keep-all' }}>
-          집핀 이용 전 가장 많이 묻는 질문을 모았습니다. 더 궁금한 점은 전문가
-          상담으로 문의해 주세요.
-        </Text>
-      </Stack>
+      <PageHeader
+        title="자주묻는질문"
+        subtitle="집핀 이용 전 가장 많이 묻는 질문을 모았습니다. 더 궁금한 점은 전문가 상담으로 문의해 주세요."
+      />
       {/* SSR 은 기본 상태(전체/1페이지)로 렌더해 질문 링크가 HTML 에 포함된다.
           URL 쿼리 상태는 FaqBrowser 가 마운트 후 적용한다(SEO — useSearchParams 회피). */}
       <FaqBrowser items={items} />
-    </Stack>
+    </>
   );
 }

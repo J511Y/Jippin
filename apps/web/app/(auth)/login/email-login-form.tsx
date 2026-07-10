@@ -50,11 +50,13 @@ export function EmailLoginForm({ nextPath }: { nextPath: string }) {
   return (
     <form onSubmit={handleSubmit(onSubmit)} noValidate>
       <Stack gap="sm">
+        {/* 입력·버튼 모두 md(42px) — 인증 플로우 공통 크기(모바일 터치 타깃). */}
         <TextInput
           label="이메일"
           placeholder="you@example.com"
           inputMode="email"
           autoComplete="email"
+          size="md"
           error={errors.email?.message}
           {...register('email')}
         />
@@ -62,15 +64,16 @@ export function EmailLoginForm({ nextPath }: { nextPath: string }) {
           label="비밀번호"
           placeholder="비밀번호"
           autoComplete="current-password"
+          size="md"
           error={errors.password?.message}
           {...register('password')}
         />
         {serverError ? (
-          <Alert color="red" variant="light" py="xs">
+          <Alert color="danger" variant="light" py="xs">
             {serverError}
           </Alert>
         ) : null}
-        <Button type="submit" color="jippin" size="md" radius="md" loading={isSubmitting} fullWidth>
+        <Button type="submit" color="jippin" size="md" loading={isSubmitting} fullWidth>
           로그인
         </Button>
       </Stack>
