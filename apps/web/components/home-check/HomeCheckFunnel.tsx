@@ -52,8 +52,9 @@ export interface HomeCheckFunnelProps {
   onSubmitOverride?: (payload: CreateHomeCheckPayload) => Promise<void>;
 }
 
+// 인트로 스텝은 없다 — 랜딩(`/home-check`)이 유일한 인트로이고, 여기 진입 시 곧장
+// 첫 질문(address)부터 시작한다(시작 버튼 두 번 누르던 중복 제거).
 type StepKey =
-  | 'intro'
   | 'address'
   | 'dong'
   | 'ho'
@@ -94,7 +95,8 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
   const router = useRouter();
 
   // 스텝 상태 + 뒤로가기 스택. 확장 분기(있어요→부위) 때문에 index 대신 명시 스택을 쓴다.
-  const [step, setStep] = useState<StepKey>('intro');
+  // 첫 질문(address)부터 시작한다 — 인트로는 랜딩(`/home-check`)이 담당한다.
+  const [step, setStep] = useState<StepKey>('address');
   const [history, setHistory] = useState<StepKey[]>([]);
 
   // 입력값.
@@ -126,13 +128,11 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
   const progressCurrent = orderIndex >= 0 ? orderIndex + 1 : 0;
   const progressTotal = questionOrder.length;
   const progressPct =
-    step === 'intro'
-      ? 0
-      : step === 'submitting' || step === 'done'
-        ? 100
-        : (progressCurrent / progressTotal) * 100;
+    step === 'submitting' || step === 'done'
+      ? 100
+      : (progressCurrent / progressTotal) * 100;
 
-  const showTopBar = step !== 'intro' && step !== 'submitting' && step !== 'done';
+  const showTopBar = step !== 'submitting' && step !== 'done';
 
   function go(next: StepKey) {
     setHistory((h) => [...h, step]);
@@ -141,7 +141,11 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
 
   function back() {
     const prev = history[history.length - 1];
-    if (!prev) return;
+    // 첫 질문(address)에서 뒤로 = 랜딩으로 (인트로 스텝이 없으므로).
+    if (!prev) {
+      router.push('/home-check');
+      return;
+    }
     setHistory((h) => h.slice(0, -1));
     setStep(prev);
   }
@@ -266,9 +270,7 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
 
       <div className="hc-body" ref={bodyRef}>
         <div className="hc-step" key={step}>
-          {step === 'intro' ? (
-            <IntroStep onStart={() => go('address')} />
-          ) : step === 'address' ? (
+          {step === 'address' ? (
             <AddressStep
               displayAddr={displayAddr}
               onPick={() => void pickAddress()}
@@ -361,46 +363,6 @@ function DockButton({
         {label}
       </Button>
     </div>
-  );
-}
-
-function IntroStep({ onStart }: { onStart: () => void }) {
-  return (
-    <>
-      <div style={{ paddingTop: 24 }}>
-        <span
-          aria-hidden
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 56,
-            height: 56,
-            borderRadius: 18,
-            color: 'var(--jippin-brand-primary)',
-            background: 'var(--mantine-color-jippin-0)',
-            marginBottom: 20
-          }}
-        >
-          <IconShieldCheck size={30} />
-        </span>
-        <StepHeading>
-          우리 집, 위반건축물은
-          <br />
-          아닌지 확인해 볼까요?
-        </StepHeading>
-        <StepSub>
-          주소와 동·호만 알려주시면 건축물대장(전유부·표제부)을 조회해 위반표시와 확장
-          등재 여부를 확인해 드려요. 로그인 없이, 무료로 시작할 수 있어요.
-        </StepSub>
-      </div>
-      <div className="hc-dock">
-        {/* 제품 기능 진입 = 1차 액션(jippin filled) — coral 은 전환 CTA 전용. */}
-        <Button color="jippin" size="lg" fullWidth onClick={onStart}>
-          우리 집 확인 시작하기
-        </Button>
-      </div>
-    </>
   );
 }
 
