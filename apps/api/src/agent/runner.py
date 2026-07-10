@@ -185,7 +185,9 @@ async def translate_stream(
             # 발원이거나 내부 태그가 붙은 청크는 버린다(내용은 tool_step/카드로 전달됨).
             meta = (
                 data[1]
-                if isinstance(data, tuple) and len(data) > 1 and isinstance(data[1], dict)
+                if isinstance(data, tuple)
+                and len(data) > 1
+                and isinstance(data[1], dict)
                 else {}
             )
             meta_tags = meta.get("tags")

@@ -254,8 +254,6 @@ async def update_selected_walls(
     return SelectedWallsResponse(
         selected_walls=walls if isinstance(walls, list) else clean_walls,
         selected_windows=(
-            windows
-            if isinstance(windows, list)
-            else patch.get("selected_windows", [])
+            windows if isinstance(windows, list) else patch.get("selected_windows", [])
         ),
     )

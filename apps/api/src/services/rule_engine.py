@@ -572,10 +572,7 @@ def _evaluate_window(evaluation: _Evaluation, rule_input: RuleInput) -> bool:
     if rule_input.window_demolition_target is not True:
         return False
     boundary = rule_input.window_demolition_boundary
-    if (
-        boundary is None
-        or "window_demolition_boundary" in rule_input.invalid_fields
-    ):
+    if boundary is None or "window_demolition_boundary" in rule_input.invalid_fields:
         evaluation.hold_reasons.append(HoldReason.INSUFFICIENT_DATA)
         evaluation.reasons.append(
             "철거를 검토하신 창호가 바깥 공기와 직접 닿는 창인지, 발코니와 실내 "

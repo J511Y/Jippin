@@ -177,9 +177,7 @@ def build_overlay(
     windows = judgment_schema.get("window_objects")
     windows = windows if isinstance(windows, list) else []
     # 그리기 대상 통합 — 창호는 wall_type='WINDOW' 로 톤을 정한다(entries 와 동일 규칙).
-    drawables: list[dict[str, Any]] = [
-        w for w in walls if isinstance(w, dict)
-    ] + [
+    drawables: list[dict[str, Any]] = [w for w in walls if isinstance(w, dict)] + [
         {**w, "wall_type": "WINDOW"} for w in windows if isinstance(w, dict)
     ]
     selected_ids = {e["id"] for e in entries}

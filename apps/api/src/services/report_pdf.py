@@ -117,9 +117,7 @@ def _estimate_view(
             total_text = f"{base}{suffix}"
 
     assumptions = [
-        a
-        for a in (estimate_dict.get("assumptions") or [])
-        if isinstance(a, str) and a
+        a for a in (estimate_dict.get("assumptions") or []) if isinstance(a, str) and a
     ]
 
     # 견적의 source_url 은 상대경로("/faq?category=cost")일 수 있어 절대화한다.

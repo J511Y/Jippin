@@ -158,7 +158,9 @@ async def test_translate_stream_messages_skips_internal_llm_chunks() -> None:
     vlm_json = '{"is_floorplan": true, "confidence": 0.7, "notes": ["관찰"]}'
     tagged = SimpleNamespace(content=vlm_json, tool_calls=None, type="ai")
     from_tools_node = SimpleNamespace(content=vlm_json, tool_calls=None, type="ai")
-    agent_chunk = SimpleNamespace(content="분석을 마쳤어요.", tool_calls=None, type="ai")
+    agent_chunk = SimpleNamespace(
+        content="분석을 마쳤어요.", tool_calls=None, type="ai"
+    )
     chunks = [
         ("messages", (tagged, {"tags": [INTERNAL_LLM_TAG]})),
         ("messages", (from_tools_node, {"langgraph_node": "tools"})),
