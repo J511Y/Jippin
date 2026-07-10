@@ -463,17 +463,25 @@ async def evaluate_rules_impl(
     # judgment_values 로 wall_type 을 넘겨도 선택에서 유도한 값으로 덮어쓴다(모델이 선택과
     # 다른 wall_type 을 우겨 내력벽을 비내력벽으로 잘못 판정/영속하는 걸 막는다,
     # #wall-type-from-selection). 선택이 없을 때만 모델 제공값을 그대로 둔다.
+    wall_selected = _nonempty_list(js, "selected_walls")
+    window_selected = _nonempty_list(js, "selected_windows")
     derived = _derive_wall_type(js)
     if derived:
         clean_values["wall_type"] = derived
+    elif window_selected and not wall_selected:
+        # 창호-only 세션(#window-only-target): 벽 선택이 없어 wall_type 유도 근거가 없다.
+        # 모델이 (검토와 무관한 벽의) wall_type=LOAD_BEARING 을 넘겼다면 rule_engine 의
+        # _evaluate_wall 이 창호 경로보다 먼저 돌아 내력벽 철거로 오판·DENY 한다 — 창호
+        # 경로를 window_demolition_boundary 로만 격리하도록 모델 제공 wall_type 을 버린다.
+        clean_values.pop("wall_type", None)
     # 철거 검토 대상(벽/창호)은 **오버레이 선택이 정본**이다 — 모델 제공값과 무관하게
     # selected_walls/selected_windows 존재 여부로 덮어쓴다(#window-only-target). 창호만
     # 고른 세션은 룰엔진이 벽 종류 미상 HOLD 를 건너뛰고 창호 경계(R-WINDOW-01)를 본다.
-    for target_key, selection_key in (
-        ("wall_demolition_target", "selected_walls"),
-        ("window_demolition_target", "selected_windows"),
+    for target_key, selected in (
+        ("wall_demolition_target", wall_selected),
+        ("window_demolition_target", window_selected),
     ):
-        if _nonempty_list(js, selection_key):
+        if selected:
             clean_values[target_key] = True
         else:
             clean_values.pop(target_key, None)

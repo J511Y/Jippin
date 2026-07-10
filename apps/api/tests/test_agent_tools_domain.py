@@ -375,6 +375,32 @@ async def test_evaluate_rules_window_only_boundary_flow(monkeypatch) -> None:
     assert fake.sessions[session_id]["rule_eval_result"] is not None
 
 
+async def test_evaluate_rules_window_only_discards_model_wall_type(monkeypatch) -> None:
+    # 창호-only 세션에서 모델이 (검토와 무관한 벽의) wall_type=LOAD_BEARING 을 넘겨도
+    # 내력벽 철거로 오판·DENY 되지 않아야 한다 — 벽 선택이 없으면 모델 wall_type 을 버리고
+    # 창호 경계로만 판단한다(#window-only-target, Codex P2).
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_windows": ["pred:7"],
+        "window_objects": [{"id": "pred:7"}],
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={
+            "wall_type": "LOAD_BEARING",  # 무관한 벽 — 창호 경로가 격리해야 함
+            "window_demolition_boundary": "BALCONY_BOUNDARY",
+            "floor_count": 3,
+            "has_sprinkler": False,
+            "has_evacuation_space": True,
+            "stairwell_count": 1,
+            "window_form": "OPENABLE",
+            "fire_zone": False,
+        },
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] != "DENY"
+
+
 async def test_evaluate_rules_window_exterior_denies(monkeypatch) -> None:
     # 외기 직접 접촉 최외곽 창호 → DENY (LLM 이 EXTERIOR 로 판단해 넘긴 경우).
     session_id, fake = await _session_for_rules(monkeypatch)

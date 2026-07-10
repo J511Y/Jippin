@@ -202,12 +202,13 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
   const interactive = actions !== null;
   const streaming = actions?.busy ?? false;
 
-  // 노출 분석 이벤트 — 카드가 처음 렌더될 때 1회.
+  // 노출 분석 이벤트 — 카드가 처음 렌더될 때 1회. wall_other_count 는 비내력벽 지표
+  // 정본이라 창호를 섞지 않고 window_count 로 따로 집계한다(#wall-metric-purity).
   const viewedRef = useRef(false);
   useEffect(() => {
     if (viewedRef.current) return;
     viewedRef.current = true;
-    trackPrecheckOverlayView(wallRegions.length + windowRegions.length);
+    trackPrecheckOverlayView(wallRegions.length, windowRegions.length);
   }, [wallRegions.length, windowRegions.length]);
 
   // 표시용 서명 URL 발급 + 기존 선택 복원(judgment_schema.selected_walls/windows).
