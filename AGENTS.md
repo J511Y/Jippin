@@ -217,7 +217,18 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - 색·폰트의 **의미가 바뀌는 변경**(역할 변경, 새 토큰 도입, 톤 재정의) 은 SSOT 문서를 먼저 갱신하고 PR 본문에 영향 범위(`BRAND` / `DESIGN` / `DOCS` / 필요 시 `WEB`) 를 명시한다. 필요 시 ADR 또는 `docs/design/decisions/` 결정 기록을 함께 남긴다.
 - 리포트·다운로드·공유링크 OG 의 시각/문구 변경은 `§4.6` 법적 고지 누락 금지와 교차 검증한다 (`COLOR_SYSTEM.md §5`, `TYPOGRAPHY.md §4.5` 참조).
 - 디자인 SSOT 의 §1 브랜드 약속·금지 톤·법적 고지는 **CEO 봉인 영역**이며, 변경하려면 새 CEO 브리프 리비전이 필요하다.
-- **레이아웃 컨테이너 폭은 기본 `lg`** 다. 기능/리포트/사용자 대면 페이지는 헤더와 같은 `lg`(= `SiteShell.WIDE_ROUTE_PREFIXES`)를 쓰고, `sm` 은 "단일 입력 폼" 한정 명시적 예외(`NARROW_FORM_PREFIXES`)다 — "폼이니까 sm" 을 기본값으로 적용하지 않는다. 정본: [`docs/design/DESIGN.md §4.5`](docs/design/DESIGN.md).
+
+#### 4.8.1 UI 화면 작업 필수 체크 (2026-07 디자인 시스템 정비 이후)
+
+새 화면을 만들거나 기존 화면을 고칠 때 아래를 지킨다. 상세 정본: [`DESIGN.md §4.5~§4.9`](docs/design/DESIGN.md).
+
+- **레이아웃**: 바깥 `Container` 는 `SiteShell` 이 전 페이지 `lg` 로 일괄 적용한다(라우트 등록 불필요·불가). 좁은 콘텐츠는 `PageColumn`(`prose` 720 / `form` 560 / `funnel` 460)으로 좁힌다. 페이지 타이틀+부제는 `PageHeader`. (구 `WIDE_ROUTE_PREFIXES`/`NARROW_FORM_PREFIXES` 분기는 폐지됨)
+- **타이포**: 크기는 theme headings(`Title order=N`)와 토큰(`--jippin-fz-hero|display|legal`)만 — `fz` 오버라이드로 새 크기를 발명하지 않는다. weight 800 금지. 정본: `TYPOGRAPHY.md §2`.
+- **버튼 위계**: 전환(상담·견적·다운로드) = `CtaButton`(coral, **화면당 1회**) · 기능 진입/제출 = `jippin filled md` · 2차 = `light|outline` · 3차 = `subtle`. coral 을 상태·배지·마커에 쓰지 않는다(상태는 `status.*` 팔레트: `success|warning|danger|info`).
+- **간격·radius**: Mantine spacing 토큰 우선, 랜딩 섹션은 `--jippin-section-py`. radius 는 기본값(컨트롤 md/표면 lg/칩 999)만.
+- **모바일**: 터치 타깃 ≥44px. 하단 고정 요소(채팅·퍼널 도크)는 `env(safe-area-inset-bottom)`. 3열 이상 그리드는 base 1열. 내비게이션은 우상단 햄버거+`Drawer` 단일 패턴(하단 탭바 없음).
+- **격자 캔버스(도면 모티프)**: body 배경은 흰 캔버스+제도 격자(`globals.css body::before`, 가독성 마스크·0.22× 패럴랙스 포함)다. 페이지·컴포넌트에 `#F8F9FA` 류 회색 배경을 하드코딩하면 "격자와 어긋난 회색 섬"이 된다 — 표면은 카드(불투명 흰색)나 `brand.surface` 틴트 토큰으로.
+- **RSC 제약(중요)**: Server Component 에서 Mantine 의 `component={Link}` 는 SSG prerender 를 깨뜨린다. 서버 컴포넌트는 `component="a"` + 왜-주석, 클라이언트 컴포넌트('use client')에서만 `component={Link}`. 기존 사용처(`LeadCtaButton`, `HeroStartCta`) 패턴을 따른다.
 
 ---
 
