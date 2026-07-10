@@ -343,6 +343,53 @@ async def test_evaluate_rules_derives_wall_type_from_selection(monkeypatch) -> N
     assert res["result"]["verdict"] in ("ALLOW", "WARN")
 
 
+async def test_evaluate_rules_window_only_boundary_flow(monkeypatch) -> None:
+    # 창호만 고른 세션(#window-only-target) — 벽 종류 미상 HOLD 를 건너뛰고 창호
+    # 경계(R-WINDOW-01)를 본다. 경계 미상이면 HOLD(재확인), LLM 이 경계를 판단해
+    # BALCONY_BOUNDARY 로 넘기면 발코니 확장 경로로 평가된다.
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_windows": ["pred:7"],
+        "window_objects": [{"id": "pred:7"}],
+    }
+    res = await domain.evaluate_rules_impl(session_id=session_id, judgment_values={})
+    assert res["ok"] is True
+    assert res["result"]["verdict"] == "HOLD"
+    assert all("내력벽" not in c for c in res["result"].get("additional_checks", []))
+
+    res2 = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={
+            "window_demolition_boundary": "BALCONY_BOUNDARY",
+            "floor_count": 3,
+            "has_sprinkler": False,
+            "has_evacuation_space": True,
+            "stairwell_count": 1,
+            "window_form": "OPENABLE",
+            "fire_zone": False,
+        },
+    )
+    assert res2["ok"] is True
+    assert res2["result"]["verdict"] in ("ALLOW", "WARN")
+    # 창호-only 선택도 분석+선택 요건을 충족해 판정이 영속된다(#require-analyzed-selection).
+    assert fake.sessions[session_id]["rule_eval_result"] is not None
+
+
+async def test_evaluate_rules_window_exterior_denies(monkeypatch) -> None:
+    # 외기 직접 접촉 최외곽 창호 → DENY (LLM 이 EXTERIOR 로 판단해 넘긴 경우).
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_windows": ["pred:7"],
+        "window_objects": [{"id": "pred:7"}],
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={"window_demolition_boundary": "EXTERIOR"},
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] == "DENY"
+
+
 async def test_evaluate_rules_uses_analysis_fingerprint(monkeypatch) -> None:
     # #analysis-input-fingerprint: 분석 시작 지문(run_context)이 현재 세션 입력과 다르면
     # (분석 도중 도면 교체) verdict 를 영속하지 않는다.

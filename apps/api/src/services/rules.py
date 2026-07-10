@@ -23,9 +23,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 #: 기본(베이스라인) 룰셋 버전. 룰 분기 변경 시 반드시 함께 올린다 (FR-RULE-007).
+#: v3 (2026-07-10): 창호 철거 검토(R-WINDOW-01) 추가 — 외기 직접 접촉 창호는 DENY,
+#: 발코니-실 경계 창호는 발코니 확장 경로로 강제, 경계 미상은 HOLD(재확인).
 #: v2 (2026-06-26): 실내 비내력벽 철거(발코니 확장 아님)는 화재안전 룰 미적용,
 #: 계단실 2개소 이상은 대피공간 면제로 매핑, 미확인 안전변수는 보수적 가정 + caveat.
-BASELINE_RULESET_VERSION = "2018-775.v2"
+BASELINE_RULESET_VERSION = "2018-775.v3"
 
 #: 적용 법령 표기 (RULE-001).
 BASELINE_LAW_REFERENCE = (
@@ -197,6 +199,19 @@ LEGAL_WALL_NON_LOAD_BEARING = LegalBasis(
     link="https://www.law.go.kr/법령/공동주택관리법시행령",
 )
 
+LEGAL_WINDOW_EXTERIOR_PROHIBITED = LegalBasis(
+    rule_id="R-WINDOW-01",
+    source="공동주택관리법",
+    section="제35조 (외벽·외부 창호 등 외부 부위 변경)",
+    summary=(
+        "외기(건물 바깥)와 직접 접하는 발코니 최외곽 창호는 건물 외벽 구실을 하는 "
+        "부위로, 철거·개방은 단열·안전·외관 기준 검토가 필요한 행위허가 사항이라 "
+        "사전검토 단계에서는 진행이 어렵다고 안내합니다. 발코니와 실내 사이의 경계 "
+        "창호 철거(발코니 확장)와는 구분됩니다."
+    ),
+    link="https://www.law.go.kr/법령/공동주택관리법",
+)
+
 LEGAL_FIRE_DETECTOR = LegalBasis(
     rule_id="R-FIRE-01",
     source=BASELINE_LAW_REFERENCE,
@@ -295,6 +310,7 @@ LEGAL_PERMIT_PROCEDURE = LegalBasis(
 LEGAL_BASIS_CATALOG: tuple[LegalBasis, ...] = (
     LEGAL_WALL_LOAD_BEARING_PROHIBITED,
     LEGAL_WALL_NON_LOAD_BEARING,
+    LEGAL_WINDOW_EXTERIOR_PROHIBITED,
     LEGAL_FIRE_DETECTOR,
     LEGAL_FIRE_SPREAD_GUARD,
     LEGAL_FIRE_SPRINKLER_EXCEPTION,

@@ -57,11 +57,12 @@
           "quantity_unit": "개소"
         }
       ],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     },
     "rule_eval_result": {
+      "additional_checks": [],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [
         {
@@ -97,8 +98,8 @@
           "measurement_basis": "확장되는 발코니 부분 — 개소"
         }
       ],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     }
@@ -147,11 +148,12 @@
         "1층 세대 예외가 적용되어 방화판·방화문 설치 의무가 제외될 가능성이 있습니다."
       ],
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     },
     "rule_eval_result": {
+      "additional_checks": [],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [
         {
@@ -181,8 +183,8 @@
       ],
       "permit_required": true,
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     }
@@ -287,11 +289,12 @@
           "quantity_unit": "개소"
         }
       ],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     },
     "rule_eval_result": {
+      "additional_checks": [],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [
         {
@@ -349,8 +352,8 @@
           "measurement_basis": "대피공간 출입구 — 개소"
         }
       ],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     }
@@ -426,11 +429,12 @@
           "quantity_unit": "m (가로 길이)"
         }
       ],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     },
     "rule_eval_result": {
+      "additional_checks": [],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [
         {
@@ -471,8 +475,8 @@
           "measurement_basis": "아래층 세대와 접하는 발코니 창호 하부 외벽 — m (가로 길이)"
         }
       ],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     }
@@ -543,11 +547,12 @@
           "quantity_unit": "개소"
         }
       ],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     },
     "rule_eval_result": {
+      "additional_checks": [],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [
         {
@@ -589,8 +594,8 @@
           "measurement_basis": "대피공간 출입구 — 개소"
         }
       ],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     }
@@ -674,11 +679,12 @@
           "quantity_unit": "m (가로 길이)"
         }
       ],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     },
     "rule_eval_result": {
+      "additional_checks": [],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [
         {
@@ -725,8 +731,242 @@
           "measurement_basis": "아래층 세대와 접하는 발코니 창호 하부 외벽 — m (가로 길이)"
         }
       ],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    }
+  },
+  "allow_wall_and_window_boundary": {
+    "internal": {
+      "additional_checks": [],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-26",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법시행령",
+          "rule_id": "R-WALL-02",
+          "section": "제35조 별표 3 (비내력벽 철거)",
+          "source": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-01",
+          "section": "제6조 (화재감지기 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-02",
+          "section": "제5조 (방화판 또는 방화유리창의 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "가능성 있음",
+      "reasons": [
+        "철거 대상 벽이 비내력벽으로 확인되어, 행위허가 절차를 전제로 검토를 진행할 수 있습니다.",
+        "철거 대상에 발코니와 실내를 구분하는 경계 창호가 포함되어 있어, 발코니 확장 기준(대피공간·방화시설 요건)으로 검토했습니다."
+      ],
+      "required_facilities": [
+        {
+          "facility": "fire_detector",
+          "label": "화재감지기",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-01",
+            "section": "제6조 (화재감지기 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+          },
+          "location": "확장되는 발코니 부분",
+          "note": null,
+          "quantity_unit": "개소"
+        },
+        {
+          "facility": "fire_panel",
+          "label": "방화판",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-02",
+            "section": "제5조 (방화판 또는 방화유리창의 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+          },
+          "location": "아래층 세대와 접하는 발코니 창호 하부 외벽",
+          "note": "비고정형(여닫이·접이·미닫이 등) 창호 기준 산출",
+          "quantity_unit": "m (가로 길이)"
+        }
+      ],
+      "ruleset_version": "2018-775.v3",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    },
+    "rule_eval_result": {
+      "additional_checks": [],
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 별표 3 (비내력벽 철거)",
+          "statute": "공동주택관리법 시행령",
+          "summary": "세대 내부 비내력벽 철거는 관할 행정기관의 행위허가(또는 신고) 절차를 거쳐 진행할 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법시행령"
+        },
+        {
+          "article": "제6조 (화재감지기 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제5조 (방화판 또는 방화유리창의 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [
+        {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        },
+        {
+          "code": "FIRE_PANEL",
+          "label": "방화판",
+          "measurement_basis": "아래층 세대와 접하는 발코니 창호 하부 외벽 — m (가로 길이)"
+        }
+      ],
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    }
+  },
+  "allow_window_balcony_boundary": {
+    "internal": {
+      "additional_checks": [],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-26",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-01",
+          "section": "제6조 (화재감지기 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+          "rule_id": "R-FIRE-02",
+          "section": "제5조 (방화판 또는 방화유리창의 설치)",
+          "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "가능성 있음",
+      "reasons": [
+        "철거 대상에 발코니와 실내를 구분하는 경계 창호가 포함되어 있어, 발코니 확장 기준(대피공간·방화시설 요건)으로 검토했습니다."
+      ],
+      "required_facilities": [
+        {
+          "facility": "fire_detector",
+          "label": "화재감지기",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-01",
+            "section": "제6조 (화재감지기 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다."
+          },
+          "location": "확장되는 발코니 부분",
+          "note": null,
+          "quantity_unit": "개소"
+        },
+        {
+          "facility": "fire_panel",
+          "label": "방화판",
+          "legal_basis": {
+            "link": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준",
+            "rule_id": "R-FIRE-02",
+            "section": "제5조 (방화판 또는 방화유리창의 설치)",
+            "source": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+            "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다."
+          },
+          "location": "아래층 세대와 접하는 발코니 창호 하부 외벽",
+          "note": "비고정형(여닫이·접이·미닫이 등) 창호 기준 산출",
+          "quantity_unit": "m (가로 길이)"
+        }
+      ],
+      "ruleset_version": "2018-775.v3",
+      "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
+      "verdict": "ALLOW"
+    },
+    "rule_eval_result": {
+      "additional_checks": [],
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제6조 (화재감지기 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "확장되는 발코니 부분에는 화재감지기를 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제5조 (방화판 또는 방화유리창의 설치)",
+          "statute": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+          "summary": "아래층 세대에서 발생한 화재의 확산을 막기 위해 발코니 창호 부위에 방화판 또는 방화유리창을 설치해야 합니다.",
+          "url": "https://www.law.go.kr/행정규칙/발코니등의구조변경절차및설치기준"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [
+        {
+          "code": "FIRE_DETECTOR",
+          "label": "화재감지기",
+          "measurement_basis": "확장되는 발코니 부분 — 개소"
+        },
+        {
+          "code": "FIRE_PANEL",
+          "label": "방화판",
+          "measurement_basis": "아래층 세대와 접하는 발코니 창호 하부 외벽 — m (가로 길이)"
+        }
+      ],
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보 기준으로는 가능성이 있습니다. 아래 근거와 필요 시설을 확인해 주세요.",
       "verdict": "ALLOW"
     }
@@ -761,11 +1001,14 @@
         "철거를 검토하신 벽이 내력벽으로 확인되었습니다. 내력벽의 철거·변경은 구조 안전과 직결되어 사전검토 단계에서는 진행이 어렵습니다."
       ],
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "제출하신 정보로는 어렵습니다. 사유는 다음과 같습니다.",
       "verdict": "DENY"
     },
     "rule_eval_result": {
+      "additional_checks": [
+        "구조 도면과 함께 관할 행정기관·구조 전문가 상담을 진행해 주세요."
+      ],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [
         {
@@ -783,8 +1026,8 @@
       ],
       "permit_required": true,
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "제출하신 정보로는 어렵습니다. 사유는 다음과 같습니다.",
       "verdict": "DENY"
     }
@@ -819,11 +1062,14 @@
         "철거를 검토하신 벽이 내력벽으로 확인되었습니다. 내력벽의 철거·변경은 구조 안전과 직결되어 사전검토 단계에서는 진행이 어렵습니다."
       ],
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "제출하신 정보로는 어렵습니다. 사유는 다음과 같습니다.",
       "verdict": "DENY"
     },
     "rule_eval_result": {
+      "additional_checks": [
+        "구조 도면과 함께 관할 행정기관·구조 전문가 상담을 진행해 주세요."
+      ],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [
         {
@@ -841,8 +1087,69 @@
       ],
       "permit_required": true,
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
+      "user_message": "제출하신 정보로는 어렵습니다. 사유는 다음과 같습니다.",
+      "verdict": "DENY"
+    }
+  },
+  "deny_window_exterior": {
+    "internal": {
+      "additional_checks": [
+        "외부 창호의 교체·변경 가능 여부는 관할 행정기관 또는 전문가 상담으로 확인해 주세요."
+      ],
+      "hold_reasons": [],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-26",
+      "legal_basis": [
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-WINDOW-01",
+          "section": "제35조 (외벽·외부 창호 등 외부 부위 변경)",
+          "source": "공동주택관리법",
+          "summary": "외기(건물 바깥)와 직접 접하는 발코니 최외곽 창호는 건물 외벽 구실을 하는 부위로, 철거·개방은 단열·안전·외관 기준 검토가 필요한 행위허가 사항이라 사전검토 단계에서는 진행이 어렵다고 안내합니다. 발코니와 실내 사이의 경계 창호 철거(발코니 확장)와는 구분됩니다."
+        },
+        {
+          "link": "https://www.law.go.kr/법령/공동주택관리법",
+          "rule_id": "R-PERMIT-01",
+          "section": "제35조 (행위허가 등)",
+          "source": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다."
+        }
+      ],
+      "permit_requirement": "PERMIT_REQUIRED",
+      "possibility_label": "어려움",
+      "reasons": [
+        "철거를 검토하신 창호가 외기(건물 바깥)와 직접 접하는 최외곽 창호로 확인되었습니다. 이 창호는 건물 외벽 구실을 하는 부위라 철거·개방이 어렵습니다."
+      ],
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v3",
+      "user_message": "제출하신 정보로는 어렵습니다. 사유는 다음과 같습니다.",
+      "verdict": "DENY"
+    },
+    "rule_eval_result": {
+      "additional_checks": [
+        "외부 창호의 교체·변경 가능 여부는 관할 행정기관 또는 전문가 상담으로 확인해 주세요."
+      ],
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [
+        {
+          "article": "제35조 (외벽·외부 창호 등 외부 부위 변경)",
+          "statute": "공동주택관리법",
+          "summary": "외기(건물 바깥)와 직접 접하는 발코니 최외곽 창호는 건물 외벽 구실을 하는 부위로, 철거·개방은 단열·안전·외관 기준 검토가 필요한 행위허가 사항이라 사전검토 단계에서는 진행이 어렵다고 안내합니다. 발코니와 실내 사이의 경계 창호 철거(발코니 확장)와는 구분됩니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        },
+        {
+          "article": "제35조 (행위허가 등)",
+          "statute": "공동주택관리법",
+          "summary": "공동주택의 비내력벽 철거·발코니 구조변경은 관할 시·군·구의 행위허가 대상입니다. 신고 대상 여부는 지자체 기준에 따라 달라질 수 있습니다.",
+          "url": "https://www.law.go.kr/법령/공동주택관리법"
+        }
+      ],
+      "permit_required": true,
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "제출하신 정보로는 어렵습니다. 사유는 다음과 같습니다.",
       "verdict": "DENY"
     }
@@ -864,17 +1171,20 @@
         "철거하려는 벽이 내력벽인지 비내력벽인지부터 확인이 필요합니다."
       ],
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
       "verdict": "HOLD"
     },
     "rule_eval_result": {
+      "additional_checks": [
+        "철거하려는 벽이 내력벽인지 비내력벽인지 확인이 필요합니다."
+      ],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [],
       "permit_required": true,
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
       "verdict": "HOLD"
     }
@@ -912,11 +1222,14 @@
         "철거 부위가 방화구획에 포함되어 있어 자동 검토 범위를 벗어납니다. 방화구획 성능 유지 여부는 별도 확인이 필요합니다."
       ],
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
       "verdict": "HOLD"
     },
     "rule_eval_result": {
+      "additional_checks": [
+        "방화구획 변경 가능 여부를 관할 행정기관 또는 건축 전문가와 확인해 주세요."
+      ],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [
         {
@@ -934,8 +1247,8 @@
       ],
       "permit_required": true,
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
       "verdict": "HOLD"
     }
@@ -957,17 +1270,20 @@
         "철거하려는 벽이 내력벽인지 비내력벽인지부터 확인이 필요합니다."
       ],
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
       "verdict": "HOLD"
     },
     "rule_eval_result": {
+      "additional_checks": [
+        "철거하려는 벽이 내력벽인지 비내력벽인지 확인이 필요합니다."
+      ],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [],
       "permit_required": true,
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
       "verdict": "HOLD"
     }
@@ -989,17 +1305,55 @@
         "철거하려는 벽이 내력벽인지 비내력벽인지부터 확인이 필요합니다."
       ],
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
       "verdict": "HOLD"
     },
     "rule_eval_result": {
+      "additional_checks": [
+        "철거하려는 벽이 내력벽인지 비내력벽인지 확인이 필요합니다."
+      ],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [],
       "permit_required": true,
       "required_facilities": [],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
+      "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
+      "verdict": "HOLD"
+    }
+  },
+  "hold_window_boundary_unknown": {
+    "internal": {
+      "additional_checks": [
+        "철거를 검토하는 창호가 바깥 공기와 직접 닿는 최외곽 창인지, 발코니와 실내 사이의 경계 창인지 확인이 필요합니다."
+      ],
+      "hold_reasons": [
+        "INSUFFICIENT_DATA"
+      ],
+      "law_reference": "국토교통부 고시 제2018-775호 발코니 등의 구조변경절차 및 설치기준",
+      "law_verified_on": "2026-06-26",
+      "legal_basis": [],
+      "permit_requirement": "UNDETERMINED",
+      "possibility_label": "추가 확인 필요",
+      "reasons": [
+        "철거를 검토하신 창호가 바깥 공기와 직접 닿는 창인지, 발코니와 실내 사이 창인지부터 확인이 필요합니다."
+      ],
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v3",
+      "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
+      "verdict": "HOLD"
+    },
+    "rule_eval_result": {
+      "additional_checks": [
+        "철거를 검토하는 창호가 바깥 공기와 직접 닿는 최외곽 창인지, 발코니와 실내 사이의 경계 창인지 확인이 필요합니다."
+      ],
+      "evaluated_at": "2026-06-11T00:00:00+00:00",
+      "legal_basis": [],
+      "permit_required": true,
+      "required_facilities": [],
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보만으로는 판단이 어렵습니다. 다음 항목을 추가로 확인해 주세요.",
       "verdict": "HOLD"
     }
@@ -1085,11 +1439,14 @@
           "quantity_unit": "m (가로 길이)"
         }
       ],
-      "ruleset_version": "2018-775.v2",
+      "ruleset_version": "2018-775.v3",
       "user_message": "지금 정보 기준으로는 가능성이 있지만, 아래 항목을 추가로 확인해 주셔야 합니다.",
       "verdict": "WARN"
     },
     "rule_eval_result": {
+      "additional_checks": [
+        "대피공간·경량칸막이 등 대체 대피 경로 확보 방안을 확인해 주세요. 직통계단이 2개소 이상이면 별도 대피공간 없이도 가능할 수 있습니다."
+      ],
       "evaluated_at": "2026-06-11T00:00:00+00:00",
       "legal_basis": [
         {
@@ -1136,8 +1493,8 @@
           "measurement_basis": "아래층 세대와 접하는 발코니 창호 하부 외벽 — m (가로 길이)"
         }
       ],
-      "ruleset_version": "2018-775.v2",
-      "schema_version": "1.0.0",
+      "ruleset_version": "2018-775.v3",
+      "schema_version": "1.1.0",
       "user_message": "지금 정보 기준으로는 가능성이 있지만, 아래 항목을 추가로 확인해 주셔야 합니다.",
       "verdict": "WARN"
     }

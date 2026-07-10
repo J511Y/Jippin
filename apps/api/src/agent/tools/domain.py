@@ -386,21 +386,26 @@ def _derive_wall_type(judgment_schema: dict[str, Any]) -> str | None:
     return None
 
 
+def _nonempty_list(judgment_schema: dict[str, Any], key: str) -> bool:
+    value = judgment_schema.get(key)
+    return isinstance(value, list) and len(value) > 0
+
+
 def _has_analyzed_selection(judgment_schema: dict[str, Any]) -> bool:
-    """분석된 벽 객체(wall_objects)와 사용자 선택(selected_walls)이 **둘 다** 있으면 True.
+    """분석 객체와 사용자 선택이 **둘 다** 있으면 True (벽 또는 창호 축 중 하나라도).
 
     cross-turn 영속(리포트 발행)의 전제다 — 이게 있어야 '실제 도면 분석 + 사용자 선택'에
     근거한 판정이다. 없으면(segment 안 돈 턴에서 모델이 wall_type 만 들고 온 경우 등)
-    분석 없는 판정이 리포트로 발행되지 않게 막는다(#require-analyzed-selection)."""
+    분석 없는 판정이 리포트로 발행되지 않게 막는다(#require-analyzed-selection).
+    창호-only 세션(경계 창호 철거 검토)도 window_objects+selected_windows 로 인정한다."""
 
-    walls = judgment_schema.get("wall_objects")
-    selected = judgment_schema.get("selected_walls")
-    return (
-        isinstance(walls, list)
-        and len(walls) > 0
-        and isinstance(selected, list)
-        and len(selected) > 0
+    walls_ok = _nonempty_list(judgment_schema, "wall_objects") and _nonempty_list(
+        judgment_schema, "selected_walls"
     )
+    windows_ok = _nonempty_list(judgment_schema, "window_objects") and _nonempty_list(
+        judgment_schema, "selected_windows"
+    )
+    return walls_ok or windows_ok
 
 
 def _apply_vlm_hints(
@@ -461,6 +466,17 @@ async def evaluate_rules_impl(
     derived = _derive_wall_type(js)
     if derived:
         clean_values["wall_type"] = derived
+    # 철거 검토 대상(벽/창호)은 **오버레이 선택이 정본**이다 — 모델 제공값과 무관하게
+    # selected_walls/selected_windows 존재 여부로 덮어쓴다(#window-only-target). 창호만
+    # 고른 세션은 룰엔진이 벽 종류 미상 HOLD 를 건너뛰고 창호 경계(R-WINDOW-01)를 본다.
+    for target_key, selection_key in (
+        ("wall_demolition_target", "selected_walls"),
+        ("window_demolition_target", "selected_windows"),
+    ):
+        if _nonempty_list(js, selection_key):
+            clean_values[target_key] = True
+        else:
+            clean_values.pop(target_key, None)
     hinted = _apply_vlm_hints(clean_values, js, accepted)
     if hinted:
         log.info(

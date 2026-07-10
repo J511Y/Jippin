@@ -1,12 +1,14 @@
-"""도면 + 선택 벽체 오버레이 SVG 빌더 (CMP-DIRECT, REPORT PDF §1).
+"""도면 + 선택 벽체·창호 오버레이 SVG 빌더 (CMP-DIRECT, REPORT PDF §1).
 
-리포트 PDF 의 첫 필수 요소 — 업로드된 도면 이미지 위에 사용자가 고른 철거 대상
-벽체(selected_walls)를 강조해 그린 **인라인 SVG** 를 만든다. 프론트의
-``FloorplanOverlayCard`` 가 화면에서 하던 일을 서버에서 정적으로 재현한다.
+리포트 PDF 의 첫 필수 요소 — 업로드된 도면 이미지 위에 사용자가 고른 철거 검토
+대상(selected_walls 벽체 + selected_windows 창호)을 강조해 그린 **인라인 SVG** 를
+만든다. 프론트의 ``FloorplanOverlayCard`` 가 화면에서 하던 일을 서버에서 정적으로
+재현한다 — 색 의미(초록=비내력벽, 파랑=창호)도 웹 카드와 동일하게 유지한다.
 
-좌표 정본 — ``judgment_schema.wall_objects[].coords`` (도면 좌표계의 폴리라인).
-``selected_walls`` 는 ``wall_objects[].id`` 와 같은 id 공간이다(domain._derive_wall_type
-참고). 이미지 크기는 asset 행에 없어 Pillow 로 직접 측정한다.
+좌표 정본 — ``judgment_schema.wall_objects[].coords`` / ``window_objects[].coords``
+(도면 좌표계의 폴리라인). ``selected_walls``/``selected_windows`` 는 각 객체의 id 와
+같은 id 공간이다(domain._derive_wall_type 참고). 이미지 크기는 asset 행에 없어
+Pillow 로 직접 측정한다.
 
 순수 모듈(네트워크 없음) — 이미지 바이트를 인자로 받는다. Pillow 로 못 열거나
 좌표가 없으면 ``available=False`` 로 degrade 한다(리포트는 계속 발행).
@@ -29,16 +31,14 @@ def circled(n: int) -> str:
 
 
 def selected_wall_entries(judgment_schema: dict[str, Any]) -> list[dict[str, Any]]:
-    """selected_walls 순서를 보존한 [{index, id, wall_type}] 목록.
+    """선택 순서를 보존한 [{index, id, kind, wall_type}] 목록 — 벽체 다음 창호.
 
-    SVG 의 강조 번호와 리포트 본문의 '벽체별 판단' 목록이 같은 순번을 쓰도록
-    단일 정본으로 둔다. selected_walls 가 비면 빈 목록.
+    SVG 의 강조 번호와 리포트 본문의 '대상별 판단' 목록이 같은 순번을 쓰도록
+    단일 정본으로 둔다. 창호(kind='window')는 wall_type 을 'WINDOW' 로 둬 톤
+    결정(_tone_stroke)과 정합시킨다. 선택이 없으면 빈 목록.
     """
 
-    selected = judgment_schema.get("selected_walls")
     walls = judgment_schema.get("wall_objects")
-    if not isinstance(selected, list):
-        return []
     by_id: dict[str, str] = {}
     if isinstance(walls, list):
         for w in walls:
@@ -46,14 +46,28 @@ def selected_wall_entries(judgment_schema: dict[str, Any]) -> list[dict[str, Any
                 wt = w.get("wall_type")
                 by_id[w["id"]] = wt if isinstance(wt, str) else "UNKNOWN"
     out: list[dict[str, Any]] = []
-    for sid in selected:
+    selected = judgment_schema.get("selected_walls")
+    for sid in selected if isinstance(selected, list) else []:
         if not isinstance(sid, str):
             continue
         out.append(
             {
                 "index": len(out) + 1,
                 "id": sid,
+                "kind": "wall",
                 "wall_type": by_id.get(sid, "UNKNOWN"),
+            }
+        )
+    selected_windows = judgment_schema.get("selected_windows")
+    for sid in selected_windows if isinstance(selected_windows, list) else []:
+        if not isinstance(sid, str):
+            continue
+        out.append(
+            {
+                "index": len(out) + 1,
+                "id": sid,
+                "kind": "window",
+                "wall_type": "WINDOW",
             }
         )
     return out
@@ -74,7 +88,9 @@ def _tone_stroke(wall_type: str) -> str:
         return "#1B7F46"  # success
     if wall_type == "LOAD_BEARING":
         return "#C0392B"  # danger
-    return "#1F6F8B"  # info / unknown
+    if wall_type == "WINDOW":
+        return "#3C8896"  # 창호 — 웹 카드 --floorplan-window 와 동일 톤(파랑)
+    return "#8A929B"  # 종류 미상 — 웹 --floorplan-wall-unknown 과 동일(회색)
 
 
 def _points_attr(pts: list[tuple[float, float]]) -> str:
@@ -99,9 +115,10 @@ def build_overlay(
     ``available=False`` + 사유. ``entries`` 는 ``selected_wall_entries`` 결과(번호 정합).
     """
 
+    # 색 의미는 웹 오버레이 카드와 동일하게 유지한다(파랑=창호, #color-semantics).
     caption = (
-        "주황 강조 = 선택한 철거 대상 벽체 · 초록 = 비내력벽 후보 · "
-        "빨강 = 내력벽 후보(선택 불가) · 파랑 = 확인 필요"
+        "주황 강조 = 선택한 철거 검토 대상 · 초록 = 비내력벽 후보 · "
+        "빨강 = 내력벽 후보(선택 불가) · 파랑 = 창호 · 회색 = 종류 미상"
     )
 
     if not image_bytes:
@@ -157,12 +174,20 @@ def build_overlay(
 
     walls = judgment_schema.get("wall_objects")
     walls = walls if isinstance(walls, list) else []
+    windows = judgment_schema.get("window_objects")
+    windows = windows if isinstance(windows, list) else []
+    # 그리기 대상 통합 — 창호는 wall_type='WINDOW' 로 톤을 정한다(entries 와 동일 규칙).
+    drawables: list[dict[str, Any]] = [
+        w for w in walls if isinstance(w, dict)
+    ] + [
+        {**w, "wall_type": "WINDOW"} for w in windows if isinstance(w, dict)
+    ]
     selected_ids = {e["id"] for e in entries}
     index_by_id = {e["id"]: e["index"] for e in entries}
 
     # 좌표가 0~1 정규화로 들어오면 픽셀로 환산(폴리라인 최대값으로 추정).
     max_v = 0.0
-    for w in walls:
+    for w in drawables:
         for x, y in _coords_of(w):
             max_v = max(max_v, x, y)
     scale_x, scale_y = (width, height) if 0 < max_v <= 1.5 else (1.0, 1.0)
@@ -180,9 +205,7 @@ def build_overlay(
     ]
     line_w = max(width, height) / 220.0  # 이미지 크기에 비례한 선 두께.
 
-    for w in walls:
-        if not isinstance(w, dict):
-            continue
+    for w in drawables:
         pts = [(x * scale_x, y * scale_y) for x, y in _coords_of(w)]
         if len(pts) < 2:
             continue
@@ -210,11 +233,9 @@ def build_overlay(
                 f'stroke-linecap="round" stroke-linejoin="round"/>'
             )
 
-    # 선택 벽 위에 번호 배지(본문 '벽체별 판단' 목록과 동일 순번).
+    # 선택 대상(벽·창호) 위에 번호 배지(본문 목록과 동일 순번).
     badge_r = max(width, height) / 36.0
-    for w in walls:
-        if not isinstance(w, dict):
-            continue
+    for w in drawables:
         wid = w.get("id")
         if not (isinstance(wid, str) and wid in index_by_id):
             continue

@@ -10,9 +10,9 @@
  */
 export interface RuleEvalResult {
   /**
-   * 스키마 버전 (semver). 본 ADR-0001 / CMP-527 시점 고정값.
+   * 스키마 버전 (semver). 1.1.0: additional_checks 추가(추가형, 하위호환 — REPORT-001 보류/조건부 시 추가 확인 체크리스트).
    */
-  schema_version: "1.0.0";
+  schema_version: "1.1.0";
   /**
    * 최종 판정. 집계 우선순위 DENY > WARN > ALLOW > HOLD 는 RULE 모듈 내부에서 강제 (SDD §4.8 데이터 계약).
    */
@@ -43,6 +43,10 @@ export interface RuleEvalResult {
    * 사용자에게 표시할 한 줄 요약. RULE 의 메시지 빌더 결과.
    */
   user_message?: string | null;
+  /**
+   * 추가 확인 항목 체크리스트 (1.1.0 추가). 보류(HOLD)·보수적 가정(WARN) 시 사용자가 현장에서 확인할 항목을 생활어로 담는다 — REPORT-001 '판단 상태' 섹션의 데이터 소스.
+   */
+  additional_checks?: string[];
 }
 export interface RequiredFacility {
   /**

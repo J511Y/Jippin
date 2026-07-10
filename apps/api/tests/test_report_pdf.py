@@ -129,7 +129,25 @@ def test_selected_wall_entries_unknown_when_missing() -> None:
     entries = report_overlay.selected_wall_entries(
         {"selected_walls": ["ghost"], "wall_objects": []}
     )
-    assert entries == [{"index": 1, "id": "ghost", "wall_type": "UNKNOWN"}]
+    assert entries == [
+        {"index": 1, "id": "ghost", "kind": "wall", "wall_type": "UNKNOWN"}
+    ]
+
+
+def test_selected_entries_include_windows_after_walls() -> None:
+    # 창호 선택은 벽 다음 연속 순번으로 붙는다(kind='window', 톤 키 WINDOW).
+    judgment = {
+        "selected_walls": ["w1"],
+        "wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}],
+        "selected_windows": ["win1"],
+        "window_objects": [{"id": "win1"}],
+    }
+    entries = report_overlay.selected_wall_entries(judgment)
+    assert [(e["index"], e["id"], e["kind"]) for e in entries] == [
+        (1, "w1", "wall"),
+        (2, "win1", "window"),
+    ]
+    assert entries[1]["wall_type"] == "WINDOW"
 
 
 def test_build_overlay_degrades_without_image() -> None:
@@ -180,6 +198,33 @@ def test_build_overlay_renders_svg_with_image_and_badges() -> None:
     assert ">1</text>" in svg
 
 
+def test_build_overlay_draws_selected_windows() -> None:
+    # 창호-only 선택 세션 — PDF 오버레이에도 선택 창호가 강조(배지)되고, 캡션의 파랑이
+    # 창호를 뜻한다(웹 카드와 색 의미 일치, #color-semantics).
+    judgment = {
+        "selected_windows": ["win1"],
+        "window_objects": [
+            {"id": "win1", "coords": [{"x": 20, "y": 20}, {"x": 150, "y": 20}]},
+            {"id": "win2", "coords": [{"x": 20, "y": 120}, {"x": 150, "y": 120}]},
+        ],
+        "wall_objects": [],
+        "selected_walls": [],
+    }
+    entries = report_overlay.selected_wall_entries(judgment)
+    assert [e["kind"] for e in entries] == ["window"]
+    ov = report_overlay.build_overlay(
+        image_bytes=_png(),
+        content_type="image/png",
+        judgment_schema=judgment,
+        entries=entries,
+    )
+    assert ov["available"] is True
+    svg = ov["svg"]
+    assert "#3C8896" in svg  # 창호 톤(웹 --floorplan-window 와 동일)
+    assert ">1</text>" in svg  # 선택 창호 번호 배지
+    assert "파랑 = 창호" in ov["caption"]
+
+
 def test_build_overlay_downsamples_large_image() -> None:
     # 큰 도면은 임베드용 래스터만 축소(viewBox·좌표는 원본 px 유지).
     ov = report_overlay.build_overlay(
@@ -215,7 +260,12 @@ def test_build_overlay_handles_corrupt_image() -> None:
 
 
 def test_amount_text_variants() -> None:
-    assert report_pdf._amount_text({"amount_min": 330_000}) == "330,000원~"
+    # 정액(min==max 또는 max 없음)은 단일 금액, 전제 기반은 min~max 범위 표기.
+    assert report_pdf._amount_text({"amount_min": 330_000}) == "330,000원"
+    assert (
+        report_pdf._amount_text({"amount_min": 120_000, "amount_max": 240_000})
+        == "120,000원~240,000원"
+    )
     assert (
         report_pdf._amount_text({"unit_amount": 50_000, "unit": "원/m"})
         == "50,000원 / m~"
@@ -224,20 +274,31 @@ def test_amount_text_variants() -> None:
 
 
 def test_estimate_view_absolutizes_source_and_builds_total() -> None:
+    # 계약 EstimateResult(1.1.0) shape — total_range 가 합계 표기의 정본.
     est = {
         "items": [
-            {"label": "행위허가 대행", "amount_min": 330_000, "note": "n"},
-            {"label": "방화판 시공", "unit_amount": 50_000, "unit": "원/m"},
+            {"label": "행위허가 대행", "amount_min": 330_000, "amount_max": 330_000},
+            {
+                "label": "방화판 시공",
+                "amount_min": 120_000,
+                "amount_max": 240_000,
+                "unit_amount": 50_000,
+                "unit": "원/m",
+            },
+            {"label": "화재감지기 설치", "note": "현장 견적"},
         ],
-        "fixed_total_min": 495_000,
-        "has_variable_items": True,
+        "total_range": {"currency": "KRW", "min": 450_000, "max": 570_000},
+        "assumptions": ["가로 길이 2.4~4.8m 가정"],
+        "consultation_required": True,
         "source_url": "/faq?category=cost",
         "disclaimer": "예상 범위예요.",
     }
     view = report_pdf._estimate_view(est, origin="https://jippin.ai")
     assert view is not None
-    assert view["items"][0]["amount_text"] == "330,000원~"
-    assert view["fixed_total_text"] == "495,000원~ + 현장 항목"
+    assert view["items"][0]["amount_text"] == "330,000원"
+    assert view["items"][1]["amount_text"] == "120,000원~240,000원"
+    assert view["total_text"] == "450,000원~570,000원 + 현장 견적 항목"
+    assert view["assumptions"] == ["가로 길이 2.4~4.8m 가정"]
     assert view["source_url"] == "https://jippin.ai/faq?category=cost"
 
 

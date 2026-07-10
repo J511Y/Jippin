@@ -199,10 +199,27 @@ class SelectedWallsRequest(BaseModel):
     # OVERLAY-002: 사용자가 클릭한 철거 희망 비내력벽 후보 region_id 목록. 빈 목록은
     # 선택 해제(전체)로 허용한다. 폭주 방지를 위해 상한을 둔다.
     region_ids: list[str] = Field(default_factory=list, max_length=500)
+    # 창호(발코니-실 경계 창호 철거 검토) 선택 — None 이면 기존 선택을 건드리지 않는다
+    # (하위호환: 구 클라이언트는 이 필드를 보내지 않는다). 빈 목록은 선택 해제.
+    window_region_ids: list[str] | None = Field(default=None, max_length=500)
 
 
 class SelectedWallsResponse(BaseModel):
     selected_walls: list[str]
+    selected_windows: list[str] = Field(default_factory=list)
+
+
+def _dedupe_region_ids(region_ids: list[str]) -> list[str]:
+    """빈 문자열 제거 + 순서 보존 dedupe."""
+
+    seen: set[str] = set()
+    clean: list[str] = []
+    for rid in region_ids:
+        rid = rid.strip()
+        if rid and rid not in seen:
+            seen.add(rid)
+            clean.append(rid)
+    return clean
 
 
 @router.patch(
@@ -214,26 +231,31 @@ async def update_selected_walls(
     session_id: uuid.UUID = Path(...),
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> SelectedWallsResponse:
-    """OVERLAY 가 수집한 철거 대상 벽 선택을 공통 판단 스키마에 기록한다(HITL).
+    """OVERLAY 가 수집한 철거 대상 벽·창호 선택을 공통 판단 스키마에 기록한다(HITL).
 
-    빈 문자열 제거 + 순서 보존 dedupe 후 ``judgment_schema.selected_walls`` 로 병합한다.
-    LLM 을 거치지 않는 직접 UI 액션이라 REST 로 둔다(클릭마다 모델을 깨우지 않음).
+    빈 문자열 제거 + 순서 보존 dedupe 후 ``judgment_schema.selected_walls``(벽) /
+    ``selected_windows``(창호) 로 병합한다. LLM 을 거치지 않는 직접 UI 액션이라 REST 로
+    둔다(클릭마다 모델을 깨우지 않음). 창호의 철거 가부(외기 접촉 vs 발코니-실 경계)는
+    여기서 판정하지 않는다 — 에이전트(CHAT)가 window_demolition_boundary 로 판단한다.
     """
 
-    seen: set[str] = set()
-    clean: list[str] = []
-    for rid in payload.region_ids:
-        rid = rid.strip()
-        if rid and rid not in seen:
-            seen.add(rid)
-            clean.append(rid)
+    clean_walls = _dedupe_region_ids(payload.region_ids)
+    patch: dict[str, list[str]] = {"selected_walls": clean_walls}
+    if payload.window_region_ids is not None:
+        patch["selected_windows"] = _dedupe_region_ids(payload.window_region_ids)
     merged = await main_flow.merge_judgment_schema(
         session_id=session_id,
         owner_user_id=requester.user_id,
         owner_is_anonymous=requester.is_anonymous,
-        patch={"selected_walls": clean},
+        patch=patch,
     )
     walls = merged.get("selected_walls")
+    windows = merged.get("selected_windows")
     return SelectedWallsResponse(
-        selected_walls=walls if isinstance(walls, list) else clean
+        selected_walls=walls if isinstance(walls, list) else clean_walls,
+        selected_windows=(
+            windows
+            if isinstance(windows, list)
+            else patch.get("selected_windows", [])
+        ),
     )

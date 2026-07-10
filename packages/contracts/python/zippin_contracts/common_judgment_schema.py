@@ -18,6 +18,10 @@ class SelectedWall(RootModel[str]):
     root: str = Field(..., min_length=1)
 
 
+class SelectedWindow(RootModel[str]):
+    root: str = Field(..., min_length=1)
+
+
 class BuildingType(Enum):
     """
     건물 유형.
@@ -164,6 +168,23 @@ class WallObject(BaseModel):
     source_engine: SourceEngine1
 
 
+class WindowObject(BaseModel):
+    """
+    창호 객체 1건 (1.1.0 추가). 외창/내창 구분은 세그멘테이션이 못 하므로 객체에는 두지 않고, 판단은 CHAT(LLM)+사용자 확인으로 위임한다.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    id: str = Field(..., min_length=1)
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    coords: list[MaskCoord] = Field(..., min_length=2)
+    """
+    창호 선분/폴리라인 좌표.
+    """
+    source_engine: SourceEngine1
+
+
 class Provider(Enum):
     """
     VLM 프로바이더 (ADR-0001 §7 의 VLMClient 인터페이스 호환).
@@ -219,6 +240,16 @@ class WindowForm(Enum):
     NoneType_None = None
 
 
+class WindowDemolitionBoundary(Enum):
+    """
+    철거 검토 대상 창호가 접한 경계 (1.1.0 추가). EXTERIOR=외기와 직접 접한 최외곽 창호(철거 불가), BALCONY_BOUNDARY=발코니와 실내(거실 등) 사이 경계 창호(철거 시 발코니 확장으로 검토). 도면 촬영 품질이 흔들려 기하 판정이 어려우므로 CHAT(LLM)이 VLM 관찰·대화로 판단해 채우고, 모르면 null(룰엔진이 HOLD 로 재확인).
+    """
+
+    EXTERIOR = "EXTERIOR"
+    BALCONY_BOUNDARY = "BALCONY_BOUNDARY"
+    NoneType_None = None
+
+
 class JudgmentValues(BaseModel):
     """
     CHAT 이 사용자로부터 수집한 RULE 입력 변수 모음. SDD §5.2.
@@ -255,6 +286,10 @@ class JudgmentValues(BaseModel):
     """
     기존 행위허가 이력 존재 여부.
     """
+    window_demolition_boundary: WindowDemolitionBoundary | None = None
+    """
+    철거 검토 대상 창호가 접한 경계 (1.1.0 추가). EXTERIOR=외기와 직접 접한 최외곽 창호(철거 불가), BALCONY_BOUNDARY=발코니와 실내(거실 등) 사이 경계 창호(철거 시 발코니 확장으로 검토). 도면 촬영 품질이 흔들려 기하 판정이 어려우므로 CHAT(LLM)이 VLM 관찰·대화로 판단해 채우고, 모르면 null(룰엔진이 HOLD 로 재확인).
+    """
 
 
 class CommonJudgmentSchema(BaseModel):
@@ -273,9 +308,9 @@ class CommonJudgmentSchema(BaseModel):
     """
     AI 분석 시점 (ISO-8601).
     """
-    schema_version: Literal["1.0.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.1.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 본 ADR-0001 / CMP-527 시점 고정값.
+    스키마 버전 (semver). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원).
     """
     building_info: BuildingInfo
     space_objects: list[SpaceObject]
@@ -286,6 +321,10 @@ class CommonJudgmentSchema(BaseModel):
     """
     벽체 객체 목록.
     """
+    window_objects: list[WindowObject] | None = None
+    """
+    창호 객체 목록 (1.1.0 추가). 오버레이의 창호 선택(발코니-실 경계 창호 철거 검토)을 지원한다.
+    """
     vlm_supplement: VlmSupplement | None = None
     """
     VLM 재분류·주석 결과. 분석이 보류된 경우 null 또는 부재.
@@ -293,6 +332,10 @@ class CommonJudgmentSchema(BaseModel):
     selected_walls: list[SelectedWall]
     """
     OVERLAY 가 수집한 사용자 선택 철거 대상 벽체 region_id 목록. 기능명세서 §2.5 의 target_wall(단수)를 대체한다 — 복수 벽 동시 선택을 지원하는 정본.
+    """
+    selected_windows: list[SelectedWindow] | None = None
+    """
+    OVERLAY 가 수집한 사용자 선택 철거 검토 대상 창호 region_id 목록 (1.1.0 추가). 외기 직접 접촉 여부 판단은 JudgmentValues.window_demolition_boundary 로 위임한다.
     """
     target_space: str | None = None
     """

@@ -54,11 +54,18 @@ def _won(amount: int) -> str:
 
 
 def _amount_text(item: dict[str, Any]) -> str:
-    """견적 항목 1줄의 금액 문구 — page.tsx 의 amountText 와 동일 규칙."""
+    """견적 항목 1줄의 금액 문구 — page.tsx 의 amountText 와 동일 규칙.
+
+    계약 EstimateItem(1.1.0): 정액(min==max)은 단일 금액, 전제 기반은 min~max 범위,
+    금액 미산정은 '별도 견적'.
+    """
 
     amount_min = item.get("amount_min")
+    amount_max = item.get("amount_max")
     if isinstance(amount_min, int):
-        return f"{_won(amount_min)}~"
+        if isinstance(amount_max, int) and amount_max > amount_min:
+            return f"{_won(amount_min)}~{_won(amount_max)}"
+        return _won(amount_min)
     unit_amount = item.get("unit_amount")
     if isinstance(unit_amount, int):
         unit = item.get("unit")
@@ -74,7 +81,7 @@ def _amount_text(item: dict[str, Any]) -> str:
 def _estimate_view(
     estimate_dict: dict[str, Any] | None, *, origin: str
 ) -> dict[str, Any] | None:
-    """compute_estimate 결과 → 템플릿용 견적 뷰(금액 문구·합계·절대 출처 링크)."""
+    """compute_estimate 결과(계약 1.1.0) → 템플릿용 견적 뷰(금액 문구·합계 범위·전제)."""
 
     if not isinstance(estimate_dict, dict):
         return None
@@ -93,11 +100,27 @@ def _estimate_view(
     if not items:
         return None
 
-    fixed_total_min = estimate_dict.get("fixed_total_min")
-    fixed_total_text: str | None = None
-    if isinstance(fixed_total_min, int) and fixed_total_min > 0:
-        suffix = " + 현장 항목" if estimate_dict.get("has_variable_items") else ""
-        fixed_total_text = f"{_won(fixed_total_min)}~{suffix}"
+    # 합계는 계약 total_range(전제 기반 min~max)를 그대로 표기한다. 산정 항목이 없어
+    # 0~0 이면 표기하지 않는다(현장 견적 항목만 있는 케이스).
+    total = estimate_dict.get("total_range")
+    total_text: str | None = None
+    if isinstance(total, dict):
+        tmin = total.get("min")
+        tmax = total.get("max")
+        if isinstance(tmin, int) and isinstance(tmax, int) and tmax > 0:
+            base = f"{_won(tmin)}~{_won(tmax)}" if tmax > tmin else _won(tmin)
+            suffix = (
+                " + 현장 견적 항목"
+                if estimate_dict.get("consultation_required")
+                else ""
+            )
+            total_text = f"{base}{suffix}"
+
+    assumptions = [
+        a
+        for a in (estimate_dict.get("assumptions") or [])
+        if isinstance(a, str) and a
+    ]
 
     # 견적의 source_url 은 상대경로("/faq?category=cost")일 수 있어 절대화한다.
     source_url = estimate_dict.get("source_url")
@@ -106,7 +129,8 @@ def _estimate_view(
 
     return {
         "items": items,
-        "fixed_total_text": fixed_total_text,
+        "total_text": total_text,
+        "assumptions": assumptions,
         "disclaimer": estimate_dict.get("disclaimer"),
         "source_url": source_url,
     }
@@ -161,12 +185,26 @@ def _build_context(
     """템플릿 ``report`` 컨텍스트 조립 — 모든 섹션 데이터를 한 객체로."""
 
     facilities = report_content.facility_views(rule_eval_result)
+    # 법령 근거(FR-REPORT-009 — 모든 화면 노출) + 추가 확인 체크리스트(1.1.0) + 룰셋
+    # 버전(RULE-003 추적 키). 과거 영속 판정(1.0.0)엔 additional_checks 가 없다 — 빈 목록.
+    legal_basis = [
+        b
+        for b in (rule_eval_result.get("legal_basis") or [])
+        if isinstance(b, dict) and (b.get("statute") or b.get("summary"))
+    ]
+    additional_checks = [
+        c
+        for c in (rule_eval_result.get("additional_checks") or [])
+        if isinstance(c, str) and c
+    ]
+    ruleset_version = rule_eval_result.get("ruleset_version")
     return {
         "report": {
             "generated_at_kr": _generated_at_kr(now),
             "report_id": _report_id(session_id),
             "address_line": _address_line(address),
             "verdict": report_content.verdict_view(rule_eval_result),
+            "additional_checks": additional_checks,
             "overlay": overlay,
             "wall_edu": report_content.WALL_EDU,
             "wall_caveat": report_content.WALL_CAVEAT,
@@ -175,6 +213,10 @@ def _build_context(
                 None if facilities else report_content.FACILITIES_EMPTY_NOTE
             ),
             "estimate": _estimate_view(estimate_dict, origin=origin),
+            "legal_basis": legal_basis,
+            "ruleset_version": (
+                ruleset_version if isinstance(ruleset_version, str) else None
+            ),
             "schedule": report_content.SCHEDULE,
             "consultation": report_content.consultation_view(origin),
             "legal_notice": report_content.LEGAL_NOTICE,

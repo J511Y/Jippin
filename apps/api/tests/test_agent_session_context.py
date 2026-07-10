@@ -67,6 +67,26 @@ def test_selected_walls_surface_to_agent() -> None:
     assert "선택을 모른다고 하지 말 것" in ctx
 
 
+def test_selected_windows_surface_with_boundary_delegation() -> None:
+    # 창호 선택은 개수·region_id 와 함께 경계 판단(window_demolition_boundary) 위임
+    # 지침을 싣는다 — 에이전트가 외기/발코니-실 경계를 판단해 룰 평가로 넘기게.
+    session = {
+        "selected_floorplan_asset_id": "asset-1",
+        "judgment_schema": {
+            "wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}],
+            "window_objects": [{"id": "pred:7"}, {"id": "pred:8"}],
+            "selected_windows": ["pred:7"],
+        },
+    }
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "창호 2곳" in ctx  # 분석된 창호 수가 평면도 라인에 실린다
+    assert "직접 선택한 창호: 1곳" in ctx
+    assert "pred:7" in ctx
+    assert "window_demolition_boundary" in ctx
+    assert "EXTERIOR|BALCONY_BOUNDARY" in ctx
+
+
 def test_known_judgment_values_listed() -> None:
     session = {
         "judgment_schema": {

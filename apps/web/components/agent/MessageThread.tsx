@@ -20,6 +20,7 @@ import {
   type ChatActivityStep,
   type ChatMessage
 } from '@/components/a2ui';
+import { maskStreamingJson } from '@/lib/agent/streaming-text';
 import type { ToolActivityStep } from '@/lib/agent/useAgentStream';
 
 import { ChatMarkdown } from './ChatMarkdown';
@@ -166,11 +167,14 @@ export function MessageThread({ messages, streamingText, activity, streaming, er
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, streamingText, activity, streaming, error]);
 
+  // 스트리밍 프리뷰는 JSON 덤프(내부 LLM 누수/모델 오동작)를 가린 표시용 텍스트를 쓴다 —
+  // 카드는 완료 message 의 ui_components 채널로만 렌더한다(#raw-json-mask).
+  const displayText = maskStreamingJson(streamingText);
   // 진행 중(스트리밍) 턴을 보여 줄지: 임시 활동이 있거나 스트리밍 텍스트가 있거나,
   // 아직 둘 다 없지만 응답 대기 중일 때. 메시지가 커밋되면 활동은 메시지로 귀속되고
   // 임시 활동/스트리밍 텍스트가 비워져 이 블록은 사라진다(아바타 중복 방지).
-  const showTyping = streaming && !streamingText && activity.length === 0;
-  const showInProgress = streamingText.length > 0 || activity.length > 0 || showTyping;
+  const showTyping = streaming && !displayText && activity.length === 0;
+  const showInProgress = displayText.length > 0 || activity.length > 0 || showTyping;
 
   return (
     <Stack gap="md" style={{ width: '100%' }}>
@@ -192,7 +196,7 @@ export function MessageThread({ messages, streamingText, activity, streaming, er
         <AssistantTurn
           bubbleKey="__streaming__"
           activity={activity}
-          content={streamingText || undefined}
+          content={displayText || undefined}
           typing={showTyping}
         />
       ) : null}

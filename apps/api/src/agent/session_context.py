@@ -91,11 +91,14 @@ def build_session_state_context(
                 for w in walls
                 if isinstance(w, dict) and w.get("wall_type") == "LOAD_BEARING"
             )
+            windows = judgment.get("window_objects")
+            window_count = len(windows) if isinstance(windows, list) else 0
+            window_txt = f", 창호 {window_count}곳" if window_count else ""
             lines.append(
                 f"- 평면도: 첨부 + 분석 완료 (비내력벽 후보 {nonload}곳, 내력벽 후보 "
-                f"{load}곳). 도면이 이미 있으니 **도면 기준으로 진행**하고 도면을 다시 "
-                f"요청하지 말 것. 주소는 도면 후보 탐색용일 뿐이라, 도면이 있으면 주소가 "
-                f"없어도 분석/검토를 이어갈 수 있다."
+                f"{load}곳{window_txt}). 도면이 이미 있으니 **도면 기준으로 진행**하고 "
+                f"도면을 다시 요청하지 말 것. 주소는 도면 후보 탐색용일 뿐이라, 도면이 "
+                f"있으면 주소가 없어도 분석/검토를 이어갈 수 있다."
             )
         else:
             lines.append(
@@ -114,6 +117,19 @@ def build_session_state_context(
             f"- 사용자가 도면에서 철거 대상으로 직접 선택한 벽: {len(ids)}곳{note}. "
             f"region_id: {shown}. 이 선택을 '이미 아는 것'으로 다루고, 사용자가 '내가 "
             f"고른/선택한 벽'을 물으면 이 선택을 근거로 답할 것(선택을 모른다고 하지 말 것)."
+        )
+
+    # 창호 선택 — 발코니-실 경계 창호 철거(거실 통합) 검토 대상.
+    selected_windows = judgment.get("selected_windows")
+    if isinstance(selected_windows, list) and selected_windows:
+        win_ids = [s for s in selected_windows if isinstance(s, str)]
+        shown_windows = ", ".join(win_ids[:10])
+        lines.append(
+            f"- 사용자가 도면에서 철거 검토 대상으로 직접 선택한 창호: {len(win_ids)}곳. "
+            f"region_id: {shown_windows}. 이 창호가 외기(건물 바깥)와 직접 닿는 최외곽 "
+            f"창인지, 발코니와 실내 사이의 경계 창인지 판단해 규칙 평가에 "
+            f"window_demolition_boundary(EXTERIOR|BALCONY_BOUNDARY)로 넘길 것 — 도면 "
+            f"관찰로 확신이 없으면 사용자에게 생활어로 확인할 것."
         )
 
     # AI-002 VLM 문맥 검토 결과 — 도면 이미지를 본 관찰/보정을 에이전트가 활용하게 한다.
