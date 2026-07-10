@@ -86,6 +86,27 @@ def test_normalize_drops_out_of_range_confidence() -> None:
     assert s["confidence"] is None
 
 
+def test_is_floorplan_only_explicit_false_rejects() -> None:
+    # #explicit-false-only: 명시적 boolean False 만 '평면도 아님'. null/누락/형식오류
+    # (불확실)는 True 로 둬, 세그멘테이션이 이미 찾은 유효 도면을 NOT_FLOORPLAN 으로
+    # 막지 않는다(bool(None)→False 강등 회귀 방지).
+    base = {"notes": [], "reclassifications": []}
+
+    def flag(value: object) -> bool:
+        data = dict(base)
+        if value is not ...:
+            data["is_floorplan"] = value
+        return vlm._normalize_supplement(data, model="m", valid_ids=set())[
+            "is_floorplan"
+        ]
+
+    assert flag(False) is False  # 명시적 거부만 False
+    assert flag(True) is True
+    assert flag(None) is True  # 불확실 → 통과(과거엔 bool(None)=False 로 오차단)
+    assert flag(...) is True  # 키 누락 → 통과
+    assert flag("maybe") is True  # 형식오류 → 통과
+
+
 async def test_interpret_disabled_returns_none() -> None:
     settings = SimpleNamespace(
         vlm_floorplan_enabled=False,

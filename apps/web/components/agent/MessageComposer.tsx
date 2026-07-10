@@ -130,10 +130,12 @@ export function MessageComposer({
         styles={{
           root: { flex: 1 },
           input: {
+            // 단일행 자연 높이(22 + 11×2 = 44px)를 전송 버튼(44px)과 맞춰, flex-end
+            // 정렬에서도 placeholder 가 세로 중앙에 오게 한다.
             padding: 0,
-            paddingTop: 6,
-            paddingBottom: 6,
-            lineHeight: 1.5,
+            paddingTop: 11,
+            paddingBottom: 11,
+            lineHeight: '22px',
             resize: 'none',
             maxHeight: 200,
             color: 'var(--jippin-brand-ink)'

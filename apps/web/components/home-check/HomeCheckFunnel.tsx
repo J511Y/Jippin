@@ -66,9 +66,9 @@ type StepKey =
 type ExtensionChoice = 'yes' | 'no' | 'unsure';
 
 /** 확장 부위 다중 선택지. key 는 내부 식별용, label 은 표시·extended_areas 조립용. */
+// '발코니/베란다' 단독 항목은 두지 않는다 — 통용상 "거실"이 곧 거실 발코니 확장을 뜻한다.
 const AREA_OPTIONS: ReadonlyArray<{ key: string; label: string }> = [
   { key: 'living', label: '거실' },
-  { key: 'balcony', label: '발코니/베란다' },
   { key: 'bedroom', label: '침실' },
   { key: 'kitchen', label: '주방' },
   { key: 'bathroom', label: '화장실' },

@@ -900,17 +900,25 @@ async def merge_judgment_schema(
     merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
     merged.update(patch)
     values: dict[str, Any] = {"judgment_schema": merged}
-    # 분석(wall_objects)·선택(selected_walls)이 바뀌면 그 입력으로 계산된 기존 판정은
-    # stale 이다 — rule_eval_result 를 비워, 입력이 바뀐 새 맥락에서 옛 판정이 리포트/
-    # 판정 카드에 rule-backed 로 보이는 걸 막는다. 다음 evaluate_rules 가 새로 채운다
-    # (#stale-verdict-on-input-change). 주소 변경은 DB 트리거가 별도로 무효화한다.
-    if "selected_walls" in patch or "wall_objects" in patch:
+    # 분석(wall/window_objects)·선택(selected_walls/windows)이 바뀌면 그 입력으로 계산된
+    # 기존 판정은 stale 이다 — rule_eval_result 를 비워, 입력이 바뀐 새 맥락에서 옛 판정이
+    # 리포트/판정 카드에 rule-backed 로 보이는 걸 막는다. 다음 evaluate_rules 가 새로
+    # 채운다(#stale-verdict-on-input-change). 주소 변경은 DB 트리거가 별도로 무효화한다.
+    if any(
+        key in patch
+        for key in (
+            "selected_walls",
+            "wall_objects",
+            "selected_windows",
+            "window_objects",
+        )
+    ):
         values["rule_eval_result"] = None
         values["rule_evaluated_at"] = None
     await _db_update_session_fields(session_id, values)
-    # 분석/선택 마일스톤에 따라 status 전진. selected_walls(사용자 선택)는 wall_objects
+    # 분석/선택 마일스톤에 따라 status 전진. selected_*(사용자 선택)는 wall_objects
     # (분석 산출)보다 뒤 단계라 우선 처리한다(둘 다 오면 collecting_info).
-    if "selected_walls" in patch:
+    if "selected_walls" in patch or "selected_windows" in patch:
         await advance_session_status(
             session_id=session_id, target="collecting_info", reason="walls_selected"
         )

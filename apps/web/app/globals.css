@@ -997,6 +997,10 @@ a[data-faq-row]:focus-visible {
   background: var(--mantine-color-jippin-0);
 }
 .hc-choice__body {
+  /* label/desc 는 인라인 span — 세로로 쌓이도록 column 방향을 명시한다. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   flex: 1;
   min-width: 0;
 }

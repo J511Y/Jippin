@@ -62,13 +62,15 @@ from .rules import (
     LEGAL_PERMIT_PROCEDURE,
     LEGAL_WALL_LOAD_BEARING_PROHIBITED,
     LEGAL_WALL_NON_LOAD_BEARING,
+    LEGAL_WINDOW_EXTERIOR_PROHIBITED,
     LegalBasis,
     Ruleset,
     sort_legal_basis,
 )
 
-#: rule-eval-result.schema.json 의 ``schema_version`` const (ADR-0001/CMP-527).
-RULE_EVAL_RESULT_SCHEMA_VERSION = "1.0.0"
+#: rule-eval-result.schema.json 의 ``schema_version`` const.
+#: 1.1.0: additional_checks(추가 확인 체크리스트) 직렬화 추가 (REPORT-001).
+RULE_EVAL_RESULT_SCHEMA_VERSION = "1.1.0"
 
 
 class WallType(enum.StrEnum):
@@ -90,6 +92,18 @@ class WindowForm(enum.StrEnum):
     FOLDING = "FOLDING"
     SLIDING = "SLIDING"
     OTHER = "OTHER"
+
+
+class WindowBoundary(enum.StrEnum):
+    """계약 ``JudgmentValues.window_demolition_boundary`` 어휘 (1.1.0).
+
+    철거 검토 대상 창호가 접한 경계 — CHAT(LLM)이 도면 관찰·대화로 판단해 채운다.
+    EXTERIOR(외기 직접 접촉)는 철거 불가, BALCONY_BOUNDARY(발코니-실 경계)는 발코니
+    확장 경로로 검토한다. 미수집(None)은 HOLD 로 재확인한다(추측 금지 원칙).
+    """
+
+    EXTERIOR = "EXTERIOR"
+    BALCONY_BOUNDARY = "BALCONY_BOUNDARY"
 
 
 class Verdict(enum.StrEnum):
@@ -147,10 +161,19 @@ JUDGMENT_VALUE_FIELDS: tuple[str, ...] = (
     "window_form",
     "balcony_attached",
     "permit_history_known",
+    "window_demolition_boundary",
 )
 
 #: judgment_values 밖에서 유도되는 엔진 컨텍스트 키 (모듈 docstring 참고).
-CONTEXT_FIELDS: tuple[str, ...] = ("wall_type", "fire_zone")
+#: - ``wall_demolition_target``/``window_demolition_target``: 사용자의 오버레이 선택
+#:   (selected_walls/selected_windows)에서 서버가 유도 — 무엇을 철거 검토 중인지.
+#:   창호만 고른 세션에서 벽 종류 미상 HOLD 로 막히지 않게 한다(#window-only-target).
+CONTEXT_FIELDS: tuple[str, ...] = (
+    "wall_type",
+    "fire_zone",
+    "wall_demolition_target",
+    "window_demolition_target",
+)
 
 #: RULE-002 핵심 판단 변수 — 실제 규칙(R-WALL/R-ZONE/R-EVAC/R-FIRE)이
 #: 소비하는 필드만 충분성 검사 대상이다. 전부 채워져야 시설·가능성 평가가
@@ -198,6 +221,10 @@ _FIELD_CHECK_LABELS: dict[str, str] = {
         "이 건물에 기존 행위허가(또는 신고) 이력이 있는지 확인이 필요합니다."
     ),
     "fire_zone": "철거 부위가 방화구획에 포함되는지 확인이 필요합니다.",
+    "window_demolition_boundary": (
+        "철거를 검토하는 창호가 바깥 공기와 직접 닿는 최외곽 창인지, 발코니와 실내 "
+        "사이의 경계 창인지 확인이 필요합니다."
+    ),
 }
 
 
@@ -259,6 +286,11 @@ class RuleInput:
     balcony_attached: bool | None = None
     permit_history_known: bool | None = None
     fire_zone: bool | None = None
+    #: 철거 검토 대상 창호의 경계 (1.1.0) — CHAT(LLM)이 판단해 전달.
+    window_demolition_boundary: WindowBoundary | None = None
+    #: 오버레이 선택에서 유도된 철거 검토 대상 (컨텍스트 키 — 서버 유도).
+    wall_demolition_target: bool | None = None
+    window_demolition_target: bool | None = None
     #: 파싱 단계에서 허용 어휘를 벗어나 무시된 필드 — 추가 확인 항목으로 노출.
     invalid_fields: tuple[str, ...] = ()
 
@@ -326,6 +358,7 @@ class RuleInput:
 
         wall_type = _enum("wall_type", WallType)
         window_form = _enum("window_form", WindowForm)
+        window_boundary = _enum("window_demolition_boundary", WindowBoundary)
         return cls(
             wall_type=wall_type,  # type: ignore[arg-type]
             floor_count=_int("floor_count", minimum=1),
@@ -336,6 +369,9 @@ class RuleInput:
             balcony_attached=_bool("balcony_attached"),
             permit_history_known=_bool("permit_history_known"),
             fire_zone=_bool("fire_zone"),
+            window_demolition_boundary=window_boundary,  # type: ignore[arg-type]
+            wall_demolition_target=_bool("wall_demolition_target"),
+            window_demolition_target=_bool("window_demolition_target"),
             invalid_fields=tuple(sorted(invalid)),
         )
 
@@ -462,6 +498,8 @@ class RuleVerdict:
             "ruleset_version": self.ruleset_version,
             "evaluated_at": evaluated_at.isoformat(),
             "user_message": self.user_message,
+            # 1.1.0 — 보류/보수 가정 시 현장 확인 체크리스트 (REPORT-001 '판단 상태').
+            "additional_checks": list(self.additional_checks),
         }
 
     def to_canonical_json(self) -> str:
@@ -489,23 +527,80 @@ class _Evaluation:
 
 
 def _hold_for_unknown_wall(evaluation: _Evaluation, rule_input: RuleInput) -> bool:
-    """벽 종류 미상/비정상이면 보류 — **유일하게 HOLD 로 막는 전제 조건**.
+    """벽 종류 미상/비정상이면 보류 — HOLD 로 막는 전제 조건.
 
     나머지 안전 변수(층수·스프링클러·대피공간·계단실·창호·방화구획)는 발코니 확장
     경로에서 보수적 기본값으로 채워 평가하므로 HOLD 사유가 아니다(운영 스코핑). 단,
     벽 종류는 철거 가능성 판단의 전제라 모르면 판단 자체가 불가능하다.
+
+    예외(#window-only-target): **창호만** 철거 검토 대상인 세션(window_demolition_target
+    True + wall_demolition_target 미설정)은 벽 판단이 필요 없으므로 이 보류를 건너뛴다.
+    벽을 함께 골랐다면(wall_demolition_target True) 벽 종류 미상은 여전히 보류다.
     """
 
+    window_only = (
+        rule_input.window_demolition_target is True
+        and rule_input.wall_demolition_target is not True
+    )
     wall_unknown = (
         rule_input.wall_type is None or "wall_type" in rule_input.invalid_fields
     )
-    if not wall_unknown:
+    if not wall_unknown or window_only:
         return False
     evaluation.hold_reasons.append(HoldReason.INSUFFICIENT_DATA)
     evaluation.reasons.append(
         "철거하려는 벽이 내력벽인지 비내력벽인지부터 확인이 필요합니다."
     )
     evaluation.additional_checks.append(_FIELD_CHECK_LABELS["wall_type"])
+    return True
+
+
+def _evaluate_window(evaluation: _Evaluation, rule_input: RuleInput) -> bool:
+    """R-WINDOW-01 — 창호 철거 검토. 반환값: 발코니 확장 경로 강제 여부.
+
+    사용자가 오버레이에서 창호를 철거 검토 대상으로 고른 경우에만 적용한다
+    (window_demolition_target True — 서버가 selected_windows 에서 유도). 경계 판단
+    (window_demolition_boundary)은 CHAT(LLM)이 도면 관찰·대화로 내려 전달한다:
+
+    - EXTERIOR(외기 직접 접촉 최외곽 창호) → DENY. 외벽 구실 부위라 철거 불가.
+    - BALCONY_BOUNDARY(발코니-실 경계 창호) → 철거 = 발코니 확장. 확장 경로
+      (대피공간·방화시설 룰)로 강제한다(True 반환).
+    - 미수집/비정상 → HOLD + 재확인(추측 금지 원칙 — 가부를 가르는 전제 조건이라
+      보수적 기본값으로 채우지 않는다. wall_type 미상과 같은 취급).
+    """
+
+    if rule_input.window_demolition_target is not True:
+        return False
+    boundary = rule_input.window_demolition_boundary
+    if boundary is None or "window_demolition_boundary" in rule_input.invalid_fields:
+        evaluation.hold_reasons.append(HoldReason.INSUFFICIENT_DATA)
+        evaluation.reasons.append(
+            "철거를 검토하신 창호가 바깥 공기와 직접 닿는 창인지, 발코니와 실내 "
+            "사이 창인지부터 확인이 필요합니다."
+        )
+        evaluation.additional_checks.append(
+            _FIELD_CHECK_LABELS["window_demolition_boundary"]
+        )
+        return False
+    if boundary is WindowBoundary.EXTERIOR:
+        evaluation.deny = True
+        evaluation.legal_basis.add(LEGAL_WINDOW_EXTERIOR_PROHIBITED)
+        evaluation.reasons.append(
+            "철거를 검토하신 창호가 외기(건물 바깥)와 직접 접하는 최외곽 창호로 "
+            "확인되었습니다. 이 창호는 건물 외벽 구실을 하는 부위라 철거·개방이 "
+            "어렵습니다."
+        )
+        evaluation.additional_checks.append(
+            "외부 창호의 교체·변경 가능 여부는 관할 행정기관 또는 전문가 상담으로 "
+            "확인해 주세요."
+        )
+        return False
+    # BALCONY_BOUNDARY — 발코니-실 경계 창호 철거 = 발코니 확장으로 검토. 법적 근거는
+    # 확장 경로 규칙(§46④·고시 제5/6조)과 행위허가(R-PERMIT-01)가 채운다.
+    evaluation.reasons.append(
+        "철거 대상에 발코니와 실내를 구분하는 경계 창호가 포함되어 있어, 발코니 "
+        "확장 기준(대피공간·방화시설 요건)으로 검토했습니다."
+    )
     return True
 
 
@@ -808,10 +903,20 @@ def evaluate(rule_input: RuleInput, ruleset: Ruleset = BASELINE_RULESET) -> Rule
     # 1단계 — 벽체 판정. 내력벽이 확인되면 다른 변수와 무관하게 DENY (R-WALL-01).
     _evaluate_wall(evaluation, rule_input)
 
+    # 1.5단계 — 창호 철거 검토 (R-WINDOW-01, v3). 외기 직접 창호는 DENY, 경계 미상은
+    # HOLD, 발코니-실 경계 창호는 발코니 확장 경로로 강제한다.
+    force_balcony = _evaluate_window(evaluation, rule_input)
+    if force_balcony and rule_input.balcony_attached is not True:
+        # 경계 창호 철거는 정의상 발코니에 접한 확장이다 — LLM 이 balcony_attached 를
+        # 다르게 넘겼어도 경계 판단이 우선한다(#window-boundary-implies-balcony).
+        rule_input = replace(rule_input, balcony_attached=True)
+
     if evaluation.deny:
-        pass  # 내력벽 → DENY 확정.
+        pass  # 내력벽/외기 창호 → DENY 확정.
+    elif evaluation.hold_reasons:
+        pass  # 창호 경계 미상 → HOLD (재확인).
     elif _hold_for_unknown_wall(evaluation, rule_input):
-        pass  # 벽 종류 미상 → HOLD (유일한 HOLD 전제).
+        pass  # 벽 종류 미상 → HOLD (창호-only 세션은 예외적으로 건너뜀).
     else:
         # 방화구획(fire_zone)은 발코니 확장/실내 철거와 **무관하게** 철거 부위가 방화구획에
         # 포함되면 자동 판단 불가(RULE_EXCEPTION)다 — 실내 철거 분기보다 먼저 본다(#fire-zone-

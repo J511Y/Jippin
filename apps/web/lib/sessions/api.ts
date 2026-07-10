@@ -85,24 +85,40 @@ export interface FloorplanAssetResponse {
   scan_status: string;
 }
 
+/** 계약 estimate-result.schema.json $defs/MoneyRange. */
+export interface MoneyRange {
+  currency: 'KRW';
+  min: number;
+  max: number;
+  basis?: string | null;
+}
+
+/** 계약 estimate-result.schema.json $defs/EstimateItem (1.1.0). */
 export interface EstimateItem {
   code: string;
   label: string;
-  amount_min: number | null;
-  unit_amount: number | null;
-  unit: string | null;
-  note: string | null;
+  amount_min?: number | null;
+  amount_max?: number | null;
+  unit_amount?: number | null;
+  unit?: string | null;
+  note?: string | null;
 }
 
+/** 계약 estimate-result.schema.json (1.1.0) — REPORT-003 예상 견적 정본 shape. */
 export interface EstimateResult {
+  schema_version: string;
+  permit_agency_fee_estimate?: MoneyRange;
+  fire_panel_estimate?: MoneyRange;
+  fire_glass_estimate?: MoneyRange;
+  total_range: MoneyRange;
+  assumptions: string[];
   policy_version: string;
-  currency: string;
-  vat_included: boolean;
-  source_url: string;
-  items: EstimateItem[];
-  fixed_total_min: number | null;
-  has_variable_items: boolean;
-  disclaimer: string;
+  variance_notes?: string[];
+  consultation_required: boolean;
+  items?: EstimateItem[];
+  vat_included?: boolean;
+  source_url?: string;
+  disclaimer?: string;
 }
 
 export interface SessionReportResponse {
@@ -186,16 +202,26 @@ export async function getFloorplanAssetSignedUrl(
   return res.data.url;
 }
 
-/** OVERLAY-002: 사용자가 선택한 철거 희망 비내력벽 region_id 목록을 판단스키마에 기록. */
+/**
+ * OVERLAY-002: 사용자가 선택한 철거 희망 비내력벽·창호 region_id 목록을 판단스키마에 기록.
+ * `windowRegionIds` 를 생략하면 창호 선택은 건드리지 않는다(하위호환).
+ */
 export async function updateSelectedWalls(
   sessionId: string,
-  regionIds: string[]
-): Promise<string[]> {
-  const res = await apiClient.patch<{ selected_walls: string[] }>(
-    `/sessions/${sessionId}/selected-walls`,
-    { region_ids: regionIds }
-  );
-  return res.data.selected_walls;
+  regionIds: string[],
+  windowRegionIds?: string[]
+): Promise<{ selected_walls: string[]; selected_windows: string[] }> {
+  const res = await apiClient.patch<{
+    selected_walls: string[];
+    selected_windows?: string[];
+  }>(`/sessions/${sessionId}/selected-walls`, {
+    region_ids: regionIds,
+    ...(windowRegionIds !== undefined ? { window_region_ids: windowRegionIds } : {})
+  });
+  return {
+    selected_walls: res.data.selected_walls,
+    selected_windows: res.data.selected_windows ?? []
+  };
 }
 
 /**

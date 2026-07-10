@@ -149,6 +149,29 @@ async def test_translate_stream_messages_skips_non_ai_chunks() -> None:
     assert [s for s in signals if isinstance(s, TokenSignal)] == []
 
 
+async def test_translate_stream_messages_skips_internal_llm_chunks() -> None:
+    # #vlm-token-leak: 도구 실행(tools 노드) 안의 내부 LLM(VLM AI-002) 출력은 config
+    # 전파로 messages 모드에 잡힌다 — 내부 태그 또는 tools 노드 발원 청크는 토큰으로
+    # 흘리지 않는다(구조화 JSON 이 채팅 본문에 raw 노출되던 문제).
+    from src.agent.tools.vlm import INTERNAL_LLM_TAG
+
+    vlm_json = '{"is_floorplan": true, "confidence": 0.7, "notes": ["관찰"]}'
+    tagged = SimpleNamespace(content=vlm_json, tool_calls=None, type="ai")
+    from_tools_node = SimpleNamespace(content=vlm_json, tool_calls=None, type="ai")
+    agent_chunk = SimpleNamespace(
+        content="분석을 마쳤어요.", tool_calls=None, type="ai"
+    )
+    chunks = [
+        ("messages", (tagged, {"tags": [INTERNAL_LLM_TAG]})),
+        ("messages", (from_tools_node, {"langgraph_node": "tools"})),
+        ("messages", (agent_chunk, {"langgraph_node": "agent", "tags": []})),
+    ]
+    signals = [s async for s in translate_stream(_aiter(chunks), tool_kinds={})]
+    tokens = [s for s in signals if isinstance(s, TokenSignal)]
+    assert len(tokens) == 1
+    assert tokens[0].delta == "분석을 마쳤어요."
+
+
 async def test_translate_stream_uses_stable_id_when_message_id_absent() -> None:
     # #stable-projection-id: id 없는 메시지는 내용 기반 결정적 id → replay 시 동일.
     def chunks() -> list[Any]:

@@ -16,6 +16,38 @@ class Assumption(RootModel[str]):
     root: str = Field(..., min_length=1)
 
 
+class EstimateItem(BaseModel):
+    """
+    견적 항목 1건 (1.1.0 추가). amount 필드가 모두 null 이면 현장/별도 견적 안내 항목.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    code: str = Field(..., min_length=1)
+    label: str = Field(..., min_length=1)
+    amount_min: int | None = Field(None, ge=0)
+    """
+    합산되는 고정 최소액(원).
+    """
+    amount_max: int | None = Field(None, ge=0)
+    """
+    전제(assumptions) 기반 상한(원). 없으면 상한 미산정.
+    """
+    unit_amount: int | None = Field(None, ge=0)
+    """
+    단가(원/unit). 치수 미확정 항목의 표기용.
+    """
+    unit: str | None = None
+    """
+    단가 단위 (예: '원/m').
+    """
+    note: str | None = None
+    """
+    항목 부가 설명 (생활어).
+    """
+
+
 class Currency(Enum):
     """
     통화. MVP 는 KRW 만 지원.
@@ -54,9 +86,9 @@ class EstimateResult(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.0.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.1.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver).
+    스키마 버전 (semver). 1.1.0: 화면 표시용 items/vat_included/source_url/disclaimer 추가(추가형, 하위호환).
     """
     permit_agency_fee_estimate: MoneyRange | None = None
     """
@@ -89,4 +121,20 @@ class EstimateResult(BaseModel):
     consultation_required: bool
     """
     상담 권장 여부. PRICING_POLICY_MISSING 또는 ESTIMATE_OUT_OF_RANGE 발생 시 true (SDD §4.9 오류·예외).
+    """
+    items: list[EstimateItem] | None = None
+    """
+    화면 표시용 항목 상세 (1.1.0 추가). total_range 산정의 근거 항목을 사람이 읽는 행으로 나열한다 — 미산정 항목(현장 견적)도 포함.
+    """
+    vat_included: bool | None = None
+    """
+    부가세 포함 여부 (1.1.0 추가).
+    """
+    source_url: str | None = None
+    """
+    단가표 정본 링크 (1.1.0 추가, 예: '/faq?category=cost').
+    """
+    disclaimer: str | None = None
+    """
+    변동 가능 안내 문구 (1.1.0 추가). 모든 견적에 첨부한다.
     """

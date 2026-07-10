@@ -26,6 +26,12 @@ if TYPE_CHECKING:
 
 log = get_logger("zippin.agent.tools.vlm")
 
+#: 내부(도구 안) LLM 호출 식별 태그. LangGraph ``stream_mode="messages"`` 는 그래프
+#: 안에서 도는 **모든** chat model 콜백을 스트림에 싣는데, 도구 실행 중의 VLM 호출도
+#: config 전파(contextvars)로 같은 스트림에 잡혀 구조화 JSON 출력이 채팅 토큰으로
+#: 노출된다(#vlm-token-leak). 런너의 translate_stream 이 이 태그로 걸러낸다.
+INTERNAL_LLM_TAG = "jippin-internal-llm"
+
 _SYSTEM_PROMPT = (
     "당신은 한국 아파트 평면도를 검토하는 분석가입니다. 자동 세그멘테이션 모델"
     "(Mask2Former)이 벽과 공간을 분류했는데, 특히 벽 종류(내력벽/비내력벽) 분류 정확도가"
@@ -34,7 +40,10 @@ _SYSTEM_PROMPT = (
     "1) is_floorplan: 이미지가 실제 평면도면 true.\n"
     "2) confidence: 전체 분석 신뢰도 0~1.\n"
     "3) notes: 철거 검토에 도움되는 관찰/주의점(공간 명칭 확인, 애매한 경계, 구조 의심 등)"
-    " 한국어 문장 배열. 확정 단정은 금지하고 '후보/추정/확인 필요' 어휘만 씁니다.\n"
+    " 한국어 문장 배열. 확정 단정은 금지하고 '후보/추정/확인 필요' 어휘만 씁니다."
+    " 창호(window) 영역이 있으면 각 창호가 외기(건물 바깥)와 직접 접하는 바깥쪽 창인지,"
+    " 발코니와 실내(거실 등) 사이의 경계 창인지 관찰을 region_id 와 함께 남기세요"
+    " (예: 'pred:7 은 거실-발코니 경계 창호로 추정').\n"
     "4) reclassifications: 명백히 잘못 분류된 벽이 있으면 교정 목록. 각 항목은 "
     "{object_id, new_label, reason}. object_id 는 아래 제공된 region_id 만, new_label 은 "
     "제공된 클래스 어휘만 사용. 확신이 없으면 비웁니다(빈 배열).\n"
@@ -140,7 +149,11 @@ def _normalize_supplement(
         "notes": notes,
         "reclassifications": reclass[:20],
         "confidence": confidence,
-        "is_floorplan": bool(data.get("is_floorplan", True)),
+        # **명시적 boolean False 만** '평면도 아님'으로 본다. null/누락/형식오류(불확실)는
+        # True 로 둔다 — `bool(None)` 이 False 로 강등되면 세그멘테이션이 이미 영역을 찾은
+        # 유효 도면이 NOT_FLOORPLAN 으로 막혀 다른 이미지를 다시 요구하게 된다(#explicit-
+        # false-only, segment_session_floorplan 의 not-floorplan 게이트가 이 값을 본다).
+        "is_floorplan": data.get("is_floorplan") is not False,
         "judgment_hints": _normalize_hints(data.get("judgment_hints")),
     }
 
@@ -238,6 +251,9 @@ async def interpret_floorplan_impl(
             api_key=api_key,
             max_retries=1,
             store=getattr(settings, "openai_store_logs", False),
+            # 내부 호출 태그 — 에이전트 런 안에서 실행될 때 이 호출의 콜백 이벤트가
+            # SSE 토큰으로 새지 않게 translate_stream 이 필터한다(#vlm-token-leak).
+            tags=[INTERNAL_LLM_TAG],
             model_kwargs={
                 "metadata": {"app": "jippin-vlm", "env": str(settings.app_env)}
             },
