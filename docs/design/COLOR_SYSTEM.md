@@ -28,7 +28,7 @@
 | `brand.surfaceAlt` | `#FFFFFF` | 대비가 필요한 카드·시트 표면 | 카드 강조, 시트, 입력 필드 배경 |
 | `brand.border` | `#D9E3E1` | 일반 경계선·구분선 | 카드 테두리, 구분선, 입력 필드 외곽 |
 | `brand.cta` | `#F26B4F` | 전환 액션(상담·견적·다운로드) 전용 강조 | 상담 신청 버튼, 견적 요청 CTA |
-| `brand.ctaFg` | `#1A0F0B` | `brand.cta` 위 텍스트 | CTA 버튼의 라벨 텍스트 (흰 글자보다 진한 갈색이 AA 통과) |
+| `brand.ctaFg` | `#FFFFFF` | `brand.cta` 위 텍스트 | CTA 버튼의 라벨 텍스트 (운영자 결정으로 흰 라벨 — `§6.1` 대비 예외 참조) |
 | `brand.professional` | `#153B5C` | Blueprint Navy 보조 축 — 리포트·도면·관리자·전문 영역 | 리포트 헤더, 도면 분석 UI 의 강조, 관리자 메뉴 활성 |
 | `brand.professionalFg` | `#FFFFFF` | `brand.professional` 위 텍스트 | 리포트 헤더 텍스트 |
 | `brand.canvas` | `#FFFFFF` | **페이지 캔버스**(body 배경) — 흰 바탕 + 제도 격자 | `--mantine-color-body`, `globals.css` body 격자 배경 |
@@ -37,7 +37,9 @@
 
 > **body 배경 정정(2026-07)**: 이전 구현은 미문서화 회색 `#F8F9FA` 를 body 에 썼다. 정본은 `brand.canvas` 흰 캔버스 + 격자(도면 모티프, [`DESIGN.md §4.9`](DESIGN.md))다. `brand.surface`(#F7FBFA)는 카드·틴트 밴드 등 **표면** 색으로 쓴다.
 >
-> **코랄 렌더 정정(2026-07)**: coral 팔레트의 `primaryShade`(6) 칸이 `#D85338` 이어서 `color="coral"` filled 가 정본 `brand.cta` 와 다른 색으로 렌더되던 것을 교정했다(6번 칸 = `#F26B4F`). `brand.ctaFg`(진갈색 라벨)는 테마 `autoContrast` 로 실현된다 — 코랄 위 흰 라벨은 AA 미달이므로 금지. 전환 CTA 는 `CtaButton` 컴포넌트만 쓴다.
+> **코랄 렌더 정정(2026-07)**: coral 팔레트의 `primaryShade`(6) 칸이 `#D85338` 이어서 `color="coral"` filled 가 정본 `brand.cta` 와 다른 색으로 렌더되던 것을 교정했다(6번 칸 = `#F26B4F`). 전환 CTA 는 `CtaButton` 컴포넌트만 쓴다.
+>
+> **CTA 라벨 색 결정(2026-07, 운영자)**: `brand.ctaFg` 를 흰색(`#FFFFFF`)으로 확정했다. 코랄 위 어두운 라벨(`#1A0F0B`)이 채도 높은 배경에 묻혀 가독성이 떨어진다는 운영자 판단. 흰 on `coral6` 대비는 **3.0:1 로 WCAG AA(4.5:1) 미달**임을 인지한 예외 결정이다(`§6.1`). 대비까지 만족시키려면 코랄 배경을 `coral8`(#B8422B) 수준으로 낮춰야 하는데 이는 브랜드 코랄 톤 변경이라 별도 결정 사항. 구현은 테마의 `autoContrast` 를 끄고 Mantine 기본(흰 라벨)을 따른다.
 
 > 토큰 명명 규칙: `brand.<역할>` 은 의미(역할)를 가리키고, `brand.<역할>Fg` 는 해당 면 위의 텍스트 색을 가리킨다. HEX 가 아니라 토큰 이름으로 참조한다.
 
@@ -184,7 +186,7 @@ colors: {
     surfaceAlt: '#FFFFFF',
     border: '#D9E3E1',
     cta: '#F26B4F',
-    ctaFg: '#1A0F0B',
+    ctaFg: '#FFFFFF',
     professional: '#153B5C',
     professionalFg: '#FFFFFF'
   },
