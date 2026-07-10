@@ -12,6 +12,7 @@ import {
   Text,
   Title
 } from '@mantine/core';
+import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
@@ -27,11 +28,14 @@ import {
   type SessionReportResponse
 } from '@/lib/sessions/api';
 
+// 판정 색은 전부 상태 토큰 팔레트(success/warning/danger/info) — Mantine 기본색
+// (yellow/red/gray)은 브랜드 팔레트 밖이라 쓰지 않는다. HOLD(데이터 부족)는 경고도
+// 실패도 아니어서 info(중립 안내)로 둔다.
 const VERDICT: Record<string, { label: string; color: string }> = {
   ALLOW: { label: '가능성 있음', color: 'success' },
-  WARN: { label: '조건부 가능', color: 'yellow' },
-  HOLD: { label: '추가 확인 필요', color: 'gray' },
-  DENY: { label: '어려움', color: 'red' }
+  WARN: { label: '조건부 가능', color: 'warning' },
+  HOLD: { label: '추가 확인 필요', color: 'info' },
+  DENY: { label: '어려움', color: 'danger' }
 };
 
 type Facility = { label?: string; measurement_basis?: string };
@@ -110,8 +114,32 @@ export default function SessionReportPage() {
 
   return (
     <Stack gap="lg">
-      <Stack gap="xs">
-        <Title order={1}>AI 사전검토 리포트</Title>
+      {/* 리포트 헤더 — Blueprint Navy 전문 축(가벼운 표현: 상단 보더 + 네이비 헤딩).
+          판정이 준비되면 '한 줄 판정'을 display 토큰으로 최상단에 크게 보여 준다. */}
+      <Stack
+        gap="xs"
+        style={{
+          borderTop: '3px solid var(--jippin-brand-professional)',
+          paddingTop: 'var(--mantine-spacing-md)'
+        }}
+      >
+        <Title order={1} c="var(--jippin-brand-professional)">
+          AI 사전검토 리포트
+        </Title>
+        {report !== null && result && (
+          <Text
+            component="p"
+            fw={700}
+            style={{
+              margin: 0,
+              fontSize: 'var(--jippin-fz-display)',
+              lineHeight: 1.35,
+              wordBreak: 'keep-all'
+            }}
+          >
+            {verdict?.label ?? result.verdict ?? '판정'}
+          </Text>
+        )}
         <Text c="dimmed" size="sm" style={{ wordBreak: 'keep-all' }}>
           도면과 주소 분석을 바탕으로 정리한 사전 판단 결과입니다. 최종 행위허가는
           관할 기관 판단에 따라 달라질 수 있어요.
@@ -119,7 +147,7 @@ export default function SessionReportPage() {
       </Stack>
 
       {error && (
-        <Alert color="red" variant="light" radius="md">
+        <Alert color="danger" variant="light" radius="md">
           {error}
         </Alert>
       )}
@@ -132,7 +160,7 @@ export default function SessionReportPage() {
               AI 도우미와의 대화를 완료하면 판정 결과가 여기에 표시됩니다.
             </Text>
             <Button
-              component="a"
+              component={Link}
               href={`/sessions/${sessionId}`}
               color="jippin"
               radius="md"
@@ -235,7 +263,7 @@ export default function SessionReportPage() {
                 </Button>
               </Group>
               {pdfError && (
-                <Alert color="red" variant="light" radius="md" py="xs">
+                <Alert color="danger" variant="light" radius="md" py="xs">
                   {pdfError}
                 </Alert>
               )}
@@ -259,7 +287,7 @@ export default function SessionReportPage() {
           전문가 상담 신청하기
         </LeadCtaButton>
         <Button
-          component="a"
+          component={Link}
           href="/sessions"
           variant="subtle"
           color="jippin"
@@ -326,7 +354,8 @@ function EstimateCard({ estimate }: { estimate: EstimateResult }) {
             <Text size="sm" fw={600}>
               기본 합계 (최소)
             </Text>
-            <Text size="sm" fw={700} c="coral">
+            {/* 금액 강조는 굵기만 — coral 은 전환 CTA 전용이라 금액에 쓰지 않는다. */}
+            <Text size="sm" fw={700}>
               {won(estimate.fixed_total_min)}~
               {estimate.has_variable_items ? ' + 현장 항목' : ''}
             </Text>
@@ -337,7 +366,7 @@ function EstimateCard({ estimate }: { estimate: EstimateResult }) {
           {estimate.disclaimer}
         </Text>
         <Button
-          component="a"
+          component={Link}
           href={estimate.source_url}
           variant="subtle"
           color="jippin"

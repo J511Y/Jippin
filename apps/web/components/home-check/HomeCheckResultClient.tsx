@@ -2,6 +2,7 @@
 
 import { Alert, Button, Card, Group, Loader, Stack, Text } from '@mantine/core';
 import { IconAlertCircle } from '@tabler/icons-react';
+import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { parseApiError } from '@/lib/api/error';
@@ -84,12 +85,13 @@ export function HomeCheckResultClient({ checkId }: { checkId: string }) {
 
   if (fatalError) {
     return (
-      <Alert color="red" variant="light" radius="md" icon={<IconAlertCircle size={18} />} title="조회에 실패했어요">
+      // 실패 알림은 Mantine 기본 red 가 아니라 정본 status 토큰(danger 팔레트)을 쓴다.
+      <Alert color="danger" variant="light" radius="md" icon={<IconAlertCircle size={18} />} title="조회에 실패했어요">
         <Stack gap="sm">
           <Text size="sm" style={{ wordBreak: 'keep-all' }}>
             {fatalError}
           </Text>
-          <Button component="a" href="/home-check/new" variant="light" color="jippin" radius="md" w="fit-content">
+          <Button component={Link} href="/home-check/new" variant="light" color="jippin" radius="md" w="fit-content">
             다시 시도하기
           </Button>
         </Stack>
@@ -105,12 +107,12 @@ export function HomeCheckResultClient({ checkId }: { checkId: string }) {
   // failed
   if (job?.status === 'failed') {
     return (
-      <Alert color="red" variant="light" radius="md" icon={<IconAlertCircle size={18} />} title="조회에 실패했어요">
+      <Alert color="danger" variant="light" radius="md" icon={<IconAlertCircle size={18} />} title="조회에 실패했어요">
         <Stack gap="sm">
           <Text size="sm" style={{ wordBreak: 'keep-all' }}>
             {job.error?.message ?? '건축물대장을 조회하지 못했습니다. 주소·동·호를 확인하고 다시 시도해 주세요.'}
           </Text>
-          <Button component="a" href="/home-check/new" variant="light" color="jippin" radius="md" w="fit-content">
+          <Button component={Link} href="/home-check/new" variant="light" color="jippin" radius="md" w="fit-content">
             다시 시도하기
           </Button>
         </Stack>

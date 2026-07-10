@@ -123,10 +123,17 @@ env 추가 변수는 `apps/web/.env.example` 의 `NEXT_PUBLIC_SUPABASE_*` 두 �
 
 ## 컴포넌트 / 디자인 규칙
 
+새 화면 체크리스트 정본은 [`AGENTS.md §4.8.1`](../../AGENTS.md) 과 [`docs/design/DESIGN.md §4.5~§4.9`](../../docs/design/DESIGN.md) 입니다. 요약:
+
 - 기본 UI 베이스는 Mantine입니다. 새 화면은 `@mantine/core`, `@mantine/form`, `@mantine/modals`, `@mantine/notifications`, `@mantine/dates` 를 우선 사용합니다.
-- `components/ui/index.ts` 는 에이전트 편의를 위한 Mantine re-export 표면입니다. 별도 래퍼 컴포넌트는 실제 중복·정책 캡슐화가 필요할 때만 추가합니다.
-- 집핀 토큰은 `lib/mantine-theme.ts` 에서 Mantine theme/CSS variables로 노출합니다. 색·폰트·법적 고지 문구 변경은 `docs/design/DESIGN.md` 하위 정본과 함께 갱신합니다.
-- 모바일 first 화면에서 Drawer 는 하단 bottom sheet 를 기본으로 검토하고, 짧은 확인·다운로드만 full-screen Modal 을 사용합니다.
+- `components/ui/index.ts` 는 Mantine re-export + **디자인 시스템 표준 컴포넌트**의 단일 표면입니다:
+  - `PageColumn` — 페이지 내부 콘텐츠 폭(`prose` 720 / `form` 560 / `funnel` 460). 바깥 Container 는 `SiteShell` 이 전 페이지 `lg` 로 고정하므로, 좁힘은 항상 이 컴포넌트로.
+  - `PageHeader` — 페이지 타이틀(h1)+부제 표준 블록. 페이지별 `fz` 오버라이드 금지.
+  - `CtaButton` — 전환(상담·견적·다운로드) CTA 표준(coral, 화면당 1회). 기능 진입·폼 제출은 `Button color="jippin" variant="filled"`.
+- 집핀 토큰은 `lib/mantine-theme.ts` 에서 Mantine theme/CSS variables로 노출합니다(타입스케일·coral 램프·`--jippin-fz-*`·격자 토큰 포함). 색·폰트·법적 고지 문구 변경은 `docs/design/DESIGN.md` 하위 정본과 함께 갱신합니다.
+- 페이지 배경은 **흰 캔버스 + 제도 격자**(`app/globals.css body::before` — 가독성 마스크·`GridParallax` 0.22× 패럴랙스)입니다. 회색 배경(`#F8F9FA` 류) 하드코딩 금지 — 표면은 카드 또는 `--jippin-brand-surface` 틴트로.
+- Server Component 에서 Mantine `component={Link}` 금지(SSG prerender 파괴) — `component="a"` + 왜-주석 또는 'use client' 분리(`LeadCtaButton`·`HeroStartCta` 패턴).
+- 모바일: 터치 타깃 ≥44px, 하단 고정 요소(채팅·퍼널 도크)는 safe-area 여백. 내비게이션은 우상단 햄버거+`Drawer` 단일 패턴입니다(하단 탭바 없음). Drawer 는 하단 bottom sheet 를 기본으로 검토하고, 짧은 확인·다운로드만 full-screen Modal 을 사용합니다.
 
 ## 컨테이너
 

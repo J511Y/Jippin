@@ -230,16 +230,18 @@ export function FloorplanRequestCard({
               {/* 진행 표시 — 버튼 라벨이 사라지는 대신, 업로드 중임을 한 줄로 알린다. */}
               {busy ? (
                 <Group gap={8} align="center" wrap="nowrap">
-                  <Loader size={14} color="coral" />
+                  {/* 진행 표시는 상태 신호 — coral(전환 CTA 전용)이 아니라 브랜드색. */}
+                  <Loader size={14} color="jippin" />
                   <Text size="xs" c="var(--jippin-brand-copy)">
                     도면을 올리고 있어요… 잠시만 기다려 주세요.
                   </Text>
                 </Group>
               ) : null}
-              {/* 로딩 중에도 라벨이 보이도록 Mantine loading(라벨 가림) 대신 직접 분기. */}
+              {/* 로딩 중에도 라벨이 보이도록 Mantine loading(라벨 가림) 대신 직접 분기.
+                  1차 액션(제품 기능: 도면 제출) — jippin filled. coral 은 전환 CTA 전용. */}
               <Button
-                color="coral"
-                size="sm"
+                color="jippin"
+                size="md"
                 radius="md"
                 leftSection={
                   busy ? (

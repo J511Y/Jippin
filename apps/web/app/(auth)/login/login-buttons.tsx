@@ -1,7 +1,7 @@
 'use client';
 
 import { Button, Stack, Text } from '@mantine/core';
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 
 import { stashAnonAccessToken } from '@/lib/leads/claim-anonymous-after-login';
 import { DEFAULT_NEXT, resolveSafeNext } from '@/lib/safe-redirect';
@@ -102,17 +102,26 @@ export function LoginButtons({ nextPath }: LoginButtonsProps) {
           onClick={() => void startOAuth(provider.id)}
           loading={pendingProvider === provider.id}
           disabled={pendingProvider !== null && pendingProvider !== provider.id}
-          size="lg"
-          radius="md"
+          size="md"
           fullWidth
           leftSection={<KakaoIcon size={18} />}
-          style={{ backgroundColor: '#FEE500', color: '#191919' }}
+          // 카카오 브랜드색은 Mantine 버튼 CSS 변수로 주입한다 — 이전의 backgroundColor
+          // 인라인 고정은 hover/active 명도 피드백을 지워 버렸다. --button-hover 로
+          // hover 시 한 단계 어두운 노랑(#FADA0A)이 살아나고, :active 눌림(mantine-active)
+          // 과 focus-visible 링은 Mantine 기본 동작이 그대로 적용된다.
+          style={
+            {
+              '--button-bg': '#FEE500',
+              '--button-hover': '#FADA0A',
+              '--button-color': '#191919'
+            } as CSSProperties
+          }
         >
           {provider.label}
         </Button>
       ))}
       {errorMessage ? (
-        <Text size="sm" c="red" ta="center">
+        <Text size="sm" c="danger.6" ta="center">
           {errorMessage}
         </Text>
       ) : null}

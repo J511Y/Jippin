@@ -18,6 +18,7 @@ import { notifications } from '@mantine/notifications';
 import { IconPaperclip, IconSearch } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { PhoneInput } from '@/components/inputs/PhoneInput';
+import { CtaButton } from '@/components/ui';
 import { trackLeadSubmit, type LeadCtaId } from '@/lib/analytics/lead-cta';
 import { parseApiError } from '@/lib/api/error';
 import {
@@ -219,7 +220,7 @@ export function ConsultationLeadForm({
       // 제출 핸들러 안에서만 location 을 읽으므로 useSearchParams/Suspense 가 필요 없다.
       trackLeadSubmit('lead_page', ctaId);
       notifications.show({
-        color: 'teal',
+        color: 'success',
         title: '상담 신청이 접수되었어요',
         message: '담당자가 영업일 기준 1일 이내에 연락드릴게요.'
       });
@@ -235,7 +236,7 @@ export function ConsultationLeadForm({
         await deleteFloorplan(uploaded.object_path);
       }
       notifications.show({
-        color: 'red',
+        color: 'danger',
         title: '상담 신청에 실패했어요',
         message: parseApiError(error).message
       });
@@ -280,13 +281,16 @@ export function ConsultationLeadForm({
         <Stack gap="xs">
           <Group justify="space-between" align="center" wrap="nowrap">
             <Text size="sm" fw={600}>
-              현장 주소 <Text component="span" c="red">*</Text>
+              현장 주소{' '}
+              <Text component="span" c="danger.6">
+                *
+              </Text>
             </Text>
             <Button
               type="button"
               variant="light"
               color="jippin"
-              size="xs"
+              size="sm"
               leftSection={<IconSearch size={16} aria-hidden />}
               onClick={() => void openAddressPopup()}
             >
@@ -373,9 +377,10 @@ export function ConsultationLeadForm({
           입력하신 정보는 상담 진행을 위해서만 사용돼요.
         </Alert>
 
-        <Button type="submit" size="md" color="coral" radius="md" fullWidth loading={submitting}>
+        {/* 상담 신청 제출 = 전환 CTA — 공용 CtaButton(coral 정본)으로 통일한다. */}
+        <CtaButton type="submit" fullWidth loading={submitting}>
           상담 신청하기
-        </Button>
+        </CtaButton>
       </Stack>
     </Card>
   );

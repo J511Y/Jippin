@@ -209,7 +209,7 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
       router.push(`/home-check/${job.id}`);
     } catch (error) {
       notifications.show({
-        color: 'red',
+        color: 'danger',
         title: '조회 요청에 실패했어요',
         message: parseApiError(error).message
       });
@@ -234,21 +234,25 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
     <div className="hc-funnel">
       {showTopBar ? (
         <div className="hc-funnel__top">
+          {/* 모바일 터치 타깃 ≥44px — ActionIcon lg 는 34px 라 xl(44px)을 쓴다. */}
           <ActionIcon
             variant="subtle"
             color="gray"
-            size="lg"
+            size="xl"
             radius="md"
             aria-label="이전 단계로"
             onClick={back}
           >
             <IconArrowLeft size={20} />
           </ActionIcon>
+          {/* 진행바 — 치수선 모티프로 가볍게: 채움은 브랜드 틸, 트랙은 Mantine 기본
+              gray 대신 브랜드 보더 토큰. */}
           <Progress
             value={progressPct}
             color="jippin"
             size="sm"
             radius="xl"
+            bg="var(--jippin-brand-border)"
             style={{ flex: 1 }}
             aria-hidden
           />
@@ -316,7 +320,7 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
 }
 
 /* --------------------------------------------------------------------------
-   스텝 컴포넌트 — 각자 하나의 질문/입력. CTA(코랄)는 .hc-dock 안에 sticky 로 둔다.
+   스텝 컴포넌트 — 각자 하나의 질문/입력. 1차 액션 버튼은 .hc-dock 안에 sticky 로 둔다.
    -------------------------------------------------------------------------- */
 
 function StepHeading({ id, children }: { id?: string; children: React.ReactNode }) {
@@ -331,7 +335,8 @@ function StepSub({ children }: { children: React.ReactNode }) {
   return <p className="hc-sub">{children}</p>;
 }
 
-/** 하단 고정 코랄 CTA. 텍스트 스텝의 "다음/확인" 버튼. */
+/** 하단 고정 "다음/확인" 버튼 — 제품 기능 진행 = 1차 액션(버튼 위계 §2: jippin
+ *  filled). coral 은 상담·견적 등 전환 CTA 전용이라 퍼널 진행 버튼엔 쓰지 않는다. */
 function DockButton({
   label,
   disabled,
@@ -346,9 +351,8 @@ function DockButton({
   return (
     <div className="hc-dock">
       <Button
-        color="coral"
+        color="jippin"
         size="lg"
-        radius="lg"
         fullWidth
         disabled={disabled}
         loading={loading}
@@ -391,7 +395,8 @@ function IntroStep({ onStart }: { onStart: () => void }) {
         </StepSub>
       </div>
       <div className="hc-dock">
-        <Button color="coral" size="lg" radius="lg" fullWidth onClick={onStart}>
+        {/* 제품 기능 진입 = 1차 액션(jippin filled) — coral 은 전환 CTA 전용. */}
+        <Button color="jippin" size="lg" fullWidth onClick={onStart}>
           우리 집 확인 시작하기
         </Button>
       </div>
@@ -447,7 +452,6 @@ function AddressStep({
             variant="light"
             color="jippin"
             size="lg"
-            radius="lg"
             fullWidth
             justify="center"
             leftSection={<IconSearch size={18} aria-hidden />}
@@ -686,13 +690,8 @@ function SubmittingStep() {
     >
       <Loader color="jippin" size="lg" />
       <div>
-        <p
-          className="hc-heading"
-          data-step-focus
-          tabIndex={-1}
-          aria-live="polite"
-          style={{ fontSize: '1.25rem' }}
-        >
+        {/* 크기는 .hc-heading 의 display 토큰을 그대로 쓴다 — 인라인 축소 금지. */}
+        <p className="hc-heading" data-step-focus tabIndex={-1} aria-live="polite">
           {MESSAGES[idx]}
         </p>
         <StepSub>
@@ -733,7 +732,8 @@ function DoneStep() {
         <IconShieldCheck size={30} />
       </span>
       <div>
-        <p className="hc-heading" data-step-focus tabIndex={-1} style={{ fontSize: '1.25rem' }}>
+        {/* 크기는 .hc-heading 의 display 토큰을 그대로 쓴다 — 인라인 축소 금지. */}
+        <p className="hc-heading" data-step-focus tabIndex={-1}>
           미리보기: 제출이 완료됐어요
         </p>
         <StepSub>
@@ -743,7 +743,6 @@ function DoneStep() {
       <Button
         variant="light"
         color="jippin"
-        radius="lg"
         leftSection={<IconPencil size={16} aria-hidden />}
         onClick={() => window.location.reload()}
       >

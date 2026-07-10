@@ -31,36 +31,47 @@ font-family: ui-monospace, SFMono-Regular, 'Cascadia Code',
   'Source Code Pro', Menlo, Consolas, monospace;
 ```
 
-### 1.3 폰트 로딩 정책
+### 1.3 폰트 로딩 정책 — 구현됨 (2026-07)
 
-- `font-display: swap` 으로 즉시 폴백 → Pretendard 도착 시 교체.
-- 모바일 LTE 환경의 first paint 회귀를 막기 위해 **본문 굵기(400/600) 두 weight 만 우선 로드**, 나머지는 lazy.
-- 외부 CDN 의존 대신 self-host 를 권장 (개인정보·자율성). 구체 호스팅 결정은 후속 이슈.
+- **`pretendard` npm 패키지의 Variable dynamic subset 을 self-host** 한다 — `apps/web/app/layout.tsx` 가 `pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css` 를 임포트하고 Next 가 번들·서빙한다. 외부 CDN 의존 없음(개인정보·자율성).
+- dynamic subset 은 화면에 실제로 쓰인 글리프 범위만 분할 로드해 모바일 first paint 회귀를 막는다. Variable 단일 파일이라 weight 400~700 을 한 번에 운반한다.
+- `font-display: swap` (패키지 기본) 으로 즉시 폴백 → Pretendard 도착 시 교체.
+- 폰트 로딩을 제거·교체하면 **전 사용자가 폴백(맑은 고딕 등)을 보게 된다** — 2026-07 이전의 회귀가 그 사례다. 로딩 경로 변경은 본 절을 먼저 갱신한다.
 
 ---
 
-## 2. 타입스케일 (Type scale) — 모바일 우선
+## 2. 타입스케일 (Type scale) — 반응형 단일 스케일
 
-본 스케일은 모바일 360-414px 폭을 기준으로 한다. 데스크톱은 동일 단계의 라인 높이를 1.05배 늘리는 것으로 충분하다.
+본 스케일은 모바일→데스크톱을 clamp 로 잇는 **단일 정본**이다(2026-07 개정 — 문서/테마/코드 3벌로 갈라져 있던 스케일을 통합). 코드 SSOT 는 `apps/web/lib/mantine-theme.ts`(headings·fontSizes)와 CSS 변수(`--jippin-fz-*`)다. **페이지에서 Title/Text 의 fz 오버라이드로 새 크기를 발명하지 않는다.**
 
-| 토큰 | 용도 | 모바일 size / line-height | weight |
-|---|---|---|---|
-| `display` | 1순위 결과 헤더 (가능/불가/보류) | 24 / 32 | 600 |
-| `h1` | 페이지 헤더 | 22 / 30 | 600 |
-| `h2` | 섹션 헤더 (리포트 소제목) | 18 / 26 | 600 |
-| `h3` | 카드 헤더, 모달 타이틀 | 16 / 24 | 600 |
-| `body` | 본문 기본 | 15 / 24 | 400 |
-| `bodyEmph` | 본문 강조 (이름·근거 강조) | 15 / 24 | 600 |
-| `caption` | 메타·도움말·캡션 | 13 / 20 | 400 |
-| `legal` | 법적 고지 문구 | 12 / 20 | 400 |
-| `mono.body` | 견적 금액·도면 좌표·조항 번호 | 14 / 22 | 500 (등폭) |
+| 토큰 | 용도 | size (모바일→데스크톱) / lh | weight | 코드 |
+|---|---|---|---|---|
+| `hero` | 마케팅 랜딩(홈·가격·사전검토 랜딩) 히어로 **전용** | 32→44px / 1.15 | 700 | `var(--jippin-fz-hero)` |
+| `display` | 1순위 결과 헤더(가능/불가/보류)·원-퀘스천 헤딩 | 24→28px / 1.4 | 600~700 | `var(--jippin-fz-display)` |
+| `h1` | 페이지 헤더 | 22→26px / 1.4 | 600 | `Title order={1}` |
+| `h2` | 섹션 헤더 (리포트 소제목) | 18→20px / 1.45 | 600 | `Title order={2}` |
+| `h3` | 카드 헤더, 모달 타이틀 | 17px / 1.5 | 600 | `Title order={3}` |
+| `body` | 본문 기본 | 15 / 24 | 400 | `fontSizes.md` |
+| `bodyEmph` | 본문 강조 (이름·근거 강조) | 15 / 24 | 600 | `fw={600}` |
+| `caption` | 메타·도움말·캡션 | 13 / 20 | 400 | `fontSizes.xs` |
+| `legal` | 법적 고지 문구 | 12 / 20 | 400 | `var(--jippin-fz-legal)` |
+| `mono.body` | 견적 금액·도면 좌표·조항 번호 | 14 / 22 | 500 (등폭) | `fontFamilyMonospace` + `tabular-nums` |
 
 ### 2.1 스케일 사용 규칙
 
-- **히어로 타이포 금지** — 메인 페이지에서도 `display` 보다 큰 단계를 만들지 않는다. 사용자는 마케팅 카피를 읽으러 오지 않는다.
+- **`hero` 는 마케팅 랜딩 3페이지 전용 1토큰이다.** 그 밖의 어떤 화면에서도 `display` 보다 큰 단계를 만들지 않는다. 페이지별 clamp 발명 금지.
+- weight 는 400/600/700 만 쓴다. 800 금지.
 - **결과 화면의 최상단은 `display` 한 줄** — 가능/불가/보류 결론을 한 줄 안에 보여준다. 줄바꿈은 허용하되, 두 줄을 넘기지 않는다.
 - **버튼·칩·라벨** 은 한국어 줄바꿈을 고려해 좌우 padding 을 충분히, 폭은 자동에 맡긴다. 1줄 강제 후 ellipsis 금지 (의미 손실 위험).
 - **숫자 단독 표기** (금액·면적·조항 번호) 는 `mono.body` 로 정렬한다. 본문 안에서는 일반 본문 weight 를 유지하되 천 단위 구분자(`,`) 를 반드시 표시한다.
+
+### 2.2 임베디드 마크다운 (채팅·FAQ 답변)
+
+에이전트 응답·FAQ 답변처럼 콘텐츠가 마크다운으로 흘러드는 표면은 본문 크기가 한 단계 작으므로(채팅 14px) 헤딩도 em 기반 축소 스케일을 쓴다: h1=1.25em / h2=1.15em / h3·h4=1.05em + weight 600 (`globals.css .chat-markdown`). 이 축소 스케일 밖의 값을 추가하지 않는다.
+
+### 2.3 프레임워크 밖 표면 (fallback)
+
+Mantine Provider 가 로드되지 않는 표면(global-error, 메일 템플릿, OG 이미지)은 최소 세트만 쓴다: 크기 20/15/13px + 시스템 산세리프 스택, 색은 `brand.ink`/`brand.copy` HEX 를 상수로 복사하고 주석에 토큰명을 병기한다.
 
 ---
 

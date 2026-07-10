@@ -1,5 +1,6 @@
-import { Anchor, Center, Divider, Group, Stack, Text, Title } from '@mantine/core';
+import { Anchor, Divider, Group, Stack, Text } from '@mantine/core';
 
+import { PageColumn, PageHeader } from '@/components/ui';
 import { DEFAULT_NEXT, isSafeNext, resolveSafeNext } from '@/lib/safe-redirect';
 
 import { EmailLoginForm } from './email-login-form';
@@ -43,18 +44,13 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const registered = resolved.registered !== undefined;
 
   return (
-    <Center mih="68vh" py="xl">
-      <Stack gap="lg" w="100%" maw={400}>
-        {/* 회원가입 페이지와 같은 타이틀 블록 — 필드부터 시작하지 않도록 한다. */}
-        <Stack gap={4}>
-          <Title order={1} fz="h2">
-            로그인
-          </Title>
-          <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-            집핀 계정으로 상담 진행 상황을 확인하세요.
-          </Text>
-        </Stack>
+    // 수직 센터링 대신 상단 고정(pt 48) — 인증 4페이지 공통 패턴. 센터링은 페이지마다
+    // 기준 높이가 달라 폼 위치가 튀었고, 모바일 키보드가 올라오면 리센터링으로 흔들렸다.
+    <PageColumn width="form" pt={48}>
+      {/* 회원가입 페이지와 같은 타이틀 블록 — 필드부터 시작하지 않도록 한다. */}
+      <PageHeader title="로그인" subtitle="집핀 계정으로 상담 진행 상황을 확인하세요." />
 
+      <Stack gap="lg">
         {registered ? (
           <Text size="sm" c="success.6" ta="center" style={{ wordBreak: 'keep-all' }}>
             가입이 완료되었습니다. 가입한 이메일과 비밀번호로 로그인해 주세요.
@@ -85,18 +81,23 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
         <LoginButtons nextPath={nextPath} />
 
-        <Text size="xs" c="dimmed" ta="center" style={{ wordBreak: 'keep-all' }}>
+        {/* 법적 고지 성격의 안내 — legal 토큰(12px)·notice 색으로 위계 최하단에 둔다. */}
+        <Text
+          ta="center"
+          c="var(--jippin-notice-legal)"
+          style={{ fontSize: 'var(--jippin-fz-legal)', wordBreak: 'keep-all' }}
+        >
           계속 진행하면{' '}
-          <Anchor href="/terms" size="xs" c="var(--jippin-brand-primary)">
+          <Anchor href="/terms" inherit c="var(--jippin-brand-primary)">
             이용약관
           </Anchor>
           과{' '}
-          <Anchor href="/privacy" size="xs" c="var(--jippin-brand-primary)">
+          <Anchor href="/privacy" inherit c="var(--jippin-brand-primary)">
             개인정보처리방침
           </Anchor>
           에 동의하는 것으로 간주됩니다.
         </Text>
       </Stack>
-    </Center>
+    </PageColumn>
   );
 }

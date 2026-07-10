@@ -30,19 +30,19 @@ export const SIGNAL_META: Record<Signal, SignalMeta> = {
   violation: {
     emoji: '🔴',
     label: '위반표시 있음',
-    color: 'red',
+    color: 'danger',
     description: '건축물대장에 위반건축물 표시가 확인됩니다.'
   },
   caution: {
     emoji: '🟡',
     label: '확인 필요',
-    color: 'yellow',
+    color: 'warning',
     description: '추가 확인이 필요한 항목이 있습니다.'
   },
   normal: {
     emoji: '🟢',
     label: '위반표시 없음',
-    color: 'teal',
+    color: 'success',
     description: '조회 시점 기준 위반건축물 표시가 확인되지 않았습니다.'
   }
 };
@@ -144,9 +144,9 @@ export const VERDICT_META: Record<Verdict, VerdictMeta> = {
 
 /** VerdictTone → Mantine color 토큰(목록/배지용). */
 export const VERDICT_TONE_COLOR: Record<VerdictTone, string> = {
-  danger: 'red',
-  warning: 'yellow',
-  success: 'teal',
+  danger: 'danger',
+  warning: 'warning',
+  success: 'success',
   gray: 'gray'
 };
 
@@ -159,9 +159,9 @@ export interface StatusMeta {
 export const STATUS_META: Record<JobStatus, StatusMeta> = {
   pending: { label: '대기 중', color: 'gray' },
   querying: { label: '조회 중', color: 'jippin' },
-  needs_input: { label: '추가 입력 필요', color: 'yellow' },
-  completed: { label: '조회 완료', color: 'teal' },
-  failed: { label: '조회 실패', color: 'red' }
+  needs_input: { label: '추가 입력 필요', color: 'warning' },
+  completed: { label: '조회 완료', color: 'success' },
+  failed: { label: '조회 실패', color: 'danger' }
 };
 
 /** 잡/리포트에서 대표 주소 문자열을 뽑는다(목록·상단 헤더용). */

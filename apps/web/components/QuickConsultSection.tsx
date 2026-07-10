@@ -4,7 +4,6 @@ import {
   Anchor,
   Badge,
   Box,
-  Button,
   Card,
   Container,
   Group,
@@ -27,6 +26,7 @@ import {
 } from '@tabler/icons-react';
 import { Controller, useForm } from 'react-hook-form';
 import { PhoneInput } from '@/components/inputs/PhoneInput';
+import { CtaButton } from '@/components/ui';
 import { trackLeadSubmit } from '@/lib/analytics/lead-cta';
 import { parseApiError } from '@/lib/api/error';
 import { createLead } from '@/lib/leads/api';
@@ -98,15 +98,17 @@ export function QuickConsultSection() {
       id="quick-consult"
       style={{
         borderTop: '1px solid var(--jippin-brand-border)',
+        // 흰 캔버스 기준 재보정 — 틸 틴트만 투명으로 페이드시켜 제도 격자가
+        // 여백에서 비치게 한다(옛 회색 #F8F9FA 바탕은 격자와 어긋난 회색 섬이 됨).
         background:
-          'radial-gradient(120% 120% at 15% 0%, #E2F1EF 0%, rgba(248,249,250,0) 55%), #F8F9FA'
+          'radial-gradient(120% 120% at 15% 0%, var(--mantine-color-jippin-0) 0%, rgba(255,255,255,0) 55%)'
       }}
     >
       <Container
         size="lg"
         style={{
-          paddingTop: 'clamp(3rem, 6vw, 5rem)',
-          paddingBottom: 'clamp(3rem, 6vw, 5rem)'
+          paddingTop: 'var(--jippin-section-py)',
+          paddingBottom: 'var(--jippin-section-py)'
         }}
       >
         <SimpleGrid cols={{ base: 1, md: 2 }} spacing={48} verticalSpacing="xl">
@@ -117,8 +119,8 @@ export function QuickConsultSection() {
             <Title
               order={2}
               style={{
-                fontSize: 'clamp(1.6rem, 3.2vw, 2.25rem)',
-                lineHeight: 1.2,
+                fontSize: 'var(--jippin-fz-display)',
+                lineHeight: 1.25,
                 letterSpacing: '-0.02em',
                 wordBreak: 'keep-all'
               }}
@@ -143,7 +145,6 @@ export function QuickConsultSection() {
 
           <Card
             withBorder
-            radius="lg"
             padding="xl"
             shadow="sm"
             component="form"
@@ -157,7 +158,6 @@ export function QuickConsultSection() {
                 render={({ field }) => (
                   <SegmentedControl
                     fullWidth
-                    radius="md"
                     size="md"
                     value={field.value}
                     onChange={field.onChange}
@@ -172,7 +172,6 @@ export function QuickConsultSection() {
               <TextInput
                 label="이름"
                 placeholder="예: 홍길동"
-                radius="md"
                 size="md"
                 withAsterisk
                 error={errors.applicant_name?.message}
@@ -184,7 +183,6 @@ export function QuickConsultSection() {
                 render={({ field }) => (
                   <PhoneInput
                     label="연락처"
-                    radius="md"
                     size="md"
                     withAsterisk
                     value={field.value}
@@ -197,24 +195,21 @@ export function QuickConsultSection() {
               <Textarea
                 label="간단 메모 (선택)"
                 placeholder="어떤 점이 궁금하신가요?"
-                radius="md"
                 size="md"
                 minRows={2}
                 autosize
                 error={errors.message?.message}
                 {...register('message')}
               />
-              <Button
+              {/* 전환 CTA(코랄) — 이 화면(홈 랜딩)의 코랄 1회는 이 제출 버튼이다. */}
+              <CtaButton
                 type="submit"
-                size="md"
-                color="coral"
-                radius="md"
                 fullWidth
                 loading={isSubmitting}
                 rightSection={<IconArrowRight size={18} />}
               >
                 상담 신청하기
-              </Button>
+              </CtaButton>
               <Text
                 size="xs"
                 c="dimmed"

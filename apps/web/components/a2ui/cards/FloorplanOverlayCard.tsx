@@ -322,10 +322,12 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
               : '선택 가능한 비내력벽 후보가 없어요. 다른 도면이 필요할 수 있어요.'}
           </Text>
           {selected.size > 0 ? (
+            // 터치 타깃 ≥44px (DESIGN.md §4.7) — 시각은 작게, 히트 영역만 확보.
             <Button
               variant="subtle"
               color="gray"
-              size="compact-xs"
+              size="xs"
+              mih={44}
               onClick={clearSelection}
               disabled={submitting}
             >
@@ -335,8 +337,10 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
         </Group>
 
         {hasWalls ? (
+          // 1차 액션(제품 기능 진입: 선택 제출) — jippin filled. coral 은 전환 CTA 전용.
           <Button
-            color="coral"
+            color="jippin"
+            size="md"
             radius="md"
             fullWidth
             disabled={submitDisabled}
@@ -535,7 +539,8 @@ function OverlayCanvas({
           aspectRatio: `${full.w} / ${full.h}`,
           touchAction: 'none',
           cursor: zoom > 1 ? 'grab' : 'default',
-          background: '#f8f9fa'
+          // 캔버스 배경은 흰 표면 — 옛 회색(#f8f9fa)은 격자 캔버스 위에서 회색 섬이 된다.
+          background: '#ffffff'
         }}
       >
         {imageUrl && !imageFailed ? (
@@ -604,9 +609,10 @@ function OverlayCanvas({
                 pointerEvents="none"
                 aria-hidden
               >
+                {/* 선택 마커는 Blueprint Navy — coral 은 전환 CTA 전용(마커 사용 금지). */}
                 <path
                   d={`M 0 0 C ${-r0} ${-r0 * 1.3}, ${-r0} ${-r0 * 2.7}, 0 ${-r0 * 2.7} C ${r0} ${-r0 * 2.7}, ${r0} ${-r0 * 1.3}, 0 0 Z`}
-                  fill="var(--mantine-color-coral-6)"
+                  fill="var(--jippin-brand-professional)"
                   stroke="#ffffff"
                   strokeWidth={r0 * 0.2}
                 />
@@ -616,34 +622,34 @@ function OverlayCanvas({
           })}
       </svg>
 
-      {/* 줌 컨트롤 — 모바일 터치 타깃 확보(size lg ≈ 44px). */}
+      {/* 줌 컨트롤 — 터치 타깃 ≥44px(DESIGN.md §4.7). lg 는 34px 라 미달, xl(44px) 사용. */}
       <Group gap={6} style={{ position: 'absolute', right: 8, bottom: 8 }} wrap="nowrap">
         <ActionIcon
           variant="default"
-          size="lg"
+          size="xl"
           radius="md"
           aria-label="축소"
           onClick={() => zoomCenter(1 / 1.4)}
         >
-          <IconMinus size={16} />
+          <IconMinus size={18} />
         </ActionIcon>
         <ActionIcon
           variant="default"
-          size="lg"
+          size="xl"
           radius="md"
           aria-label="확대"
           onClick={() => zoomCenter(1.4)}
         >
-          <IconPlus size={16} />
+          <IconPlus size={18} />
         </ActionIcon>
         <ActionIcon
           variant="default"
-          size="lg"
+          size="xl"
           radius="md"
           aria-label="원래 크기로"
           onClick={() => setView(full)}
         >
-          <IconZoomReset size={16} />
+          <IconZoomReset size={18} />
         </ActionIcon>
       </Group>
 

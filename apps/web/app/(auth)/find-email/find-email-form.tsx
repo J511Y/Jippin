@@ -1,13 +1,15 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Alert, Anchor, Button, Card, Stack, Text, Title } from '@mantine/core';
+import { Alert, Anchor, Button, Card, Stack, Text } from '@mantine/core';
+import Link from 'next/link';
 import { useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 
 import { AccountApiError, findEmail, type FoundEmail } from '@/lib/auth/account-api';
 import { findEmailSchema, type FindEmailValues } from '@/lib/auth/validation';
 import { PhoneVerification } from '@/components/auth/PhoneVerification';
+import { PageHeader } from '@/components/ui';
 
 /**
  * 아이디(이메일) 찾기 폼 (CMP-DIRECT).
@@ -47,47 +49,44 @@ export function FindEmailForm() {
 
   if (results !== null) {
     return (
-      <Stack gap="md">
-        <Title order={1} fz="h2">
-          아이디 찾기 결과
-        </Title>
-        {results.length === 0 ? (
-          <Alert color="gray" variant="light">
-            해당 휴대폰 번호로 가입된 이메일 계정이 없습니다. 카카오로 가입하셨을 수 있어요.
-          </Alert>
-        ) : (
-          <Card withBorder radius="lg" padding="lg">
-            <Stack gap="sm">
-              {results.map((item) => (
-                <Stack key={item.email_masked} gap={2}>
-                  <Text fw={600}>{item.email_masked}</Text>
-                  <Text size="xs" c="dimmed">
-                    {item.created_at.slice(0, 10)} 가입
-                  </Text>
-                </Stack>
-              ))}
-            </Stack>
-          </Card>
-        )}
-        <Button component="a" href="/login" color="jippin" radius="md" fullWidth>
-          로그인하러 가기
-        </Button>
-      </Stack>
+      <>
+        {/* 타이틀은 PageHeader 표준 블록(h1 은 theme headings SSOT — fz 오버라이드 금지). */}
+        <PageHeader title="아이디 찾기 결과" />
+        <Stack gap="md">
+          {results.length === 0 ? (
+            <Alert color="gray" variant="light">
+              해당 휴대폰 번호로 가입된 이메일 계정이 없습니다. 카카오로 가입하셨을 수 있어요.
+            </Alert>
+          ) : (
+            <Card withBorder>
+              <Stack gap="sm">
+                {results.map((item) => (
+                  <Stack key={item.email_masked} gap={2}>
+                    <Text fw={600}>{item.email_masked}</Text>
+                    <Text size="xs" c="dimmed">
+                      {item.created_at.slice(0, 10)} 가입
+                    </Text>
+                  </Stack>
+                ))}
+              </Stack>
+            </Card>
+          )}
+          <Button component={Link} href="/login" color="jippin" size="md" fullWidth>
+            로그인하러 가기
+          </Button>
+        </Stack>
+      </>
     );
   }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} noValidate>
+      {/* 타이틀은 PageHeader 표준 블록(h1 은 theme headings SSOT — fz 오버라이드 금지). */}
+      <PageHeader
+        title="아이디 찾기"
+        subtitle="가입 시 등록한 휴대폰 번호로 인증하면 이메일(아이디)을 알려드려요."
+      />
       <Stack gap="md">
-        <Stack gap={4}>
-          <Title order={1} fz="h2">
-            아이디 찾기
-          </Title>
-          <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-            가입 시 등록한 휴대폰 번호로 인증하면 이메일(아이디)을 알려드려요.
-          </Text>
-        </Stack>
-
         <PhoneVerification
           phone={phone}
           onPhoneChange={(v) => setValue('phone', v, { shouldDirty: true })}
@@ -99,18 +98,18 @@ export function FindEmailForm() {
         />
 
         {serverError ? (
-          <Alert color="red" variant="light">
+          <Alert color="danger" variant="light">
             {serverError}
           </Alert>
         ) : null}
 
-        <Button type="submit" color="jippin" radius="md" fullWidth loading={isSubmitting}>
+        <Button type="submit" color="jippin" size="md" fullWidth loading={isSubmitting}>
           아이디 찾기
         </Button>
 
         <Text size="sm" c="dimmed" ta="center">
           비밀번호가 기억나지 않으세요?{' '}
-          <Anchor href="/find-password" c="var(--jippin-brand-primary)">
+          <Anchor component={Link} href="/find-password" c="var(--jippin-brand-primary)">
             비밀번호 찾기
           </Anchor>
         </Text>
