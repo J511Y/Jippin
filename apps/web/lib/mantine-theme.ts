@@ -111,7 +111,7 @@ export const jippinTokens = {
     surfaceAlt: '#FFFFFF',
     border: '#D9E3E1',
     cta: '#F26B4F',
-    ctaFg: '#1A0F0B',
+    ctaFg: '#FFFFFF',
     professional: '#153B5C',
     professionalFg: '#FFFFFF',
     // 페이지 캔버스 — 흰 바탕 + 약한 제도(製圖) 격자 2중 그리드(도면 정체성).
@@ -144,14 +144,11 @@ export const jippinTokens = {
 
 export const jippinTheme = createTheme({
   activeClassName: 'mantine-active',
-  // filled 계열에서 배경 밝기에 따라 라벨을 자동으로 어둡게 — 정본 brand.ctaFg
-  // (어두운 라벨 on coral)가 이것으로 실현된다(흰 라벨 AA 미달 교정, 감사 HIGH).
-  // 임계값은 coral6(#F26B4F) 휘도(0.2996) '아래'여야 coral 이 밝은 색으로 판정돼
-  // 어두운 라벨(ink #0D1B2A, 대비 5.79:1 AA통과)을 얻는다. 0.3 이면 0.2996<0.3 이라
-  // coral 이 어두운 색으로 오판정돼 흰 라벨(3.0:1 AA미달)이 붙던 회귀를 0.28 로 교정.
-  // jippin·status(휘도 0.135~0.159)는 0.28 아래라 그대로 흰 라벨을 유지한다.
-  autoContrast: true,
-  luminanceThreshold: 0.28,
+  // filled 버튼 라벨은 흰색(Mantine 기본). 코랄 CTA 도 흰 라벨을 쓴다 — 운영자
+  // 결정(2026-07): 코랄 위 어두운 라벨이 채도 높은 배경에 묻혀 가독성이 떨어진다는
+  // 판단으로 흰 라벨을 채택. 흰 on coral6 대비는 3.0:1(WCAG AA 4.5:1 미달)이라
+  // autoContrast 를 끄고 흰 라벨을 명시적으로 유지한다. 대비를 함께 만족시키려면
+  // 코랄 배경을 coral8 수준으로 낮춰야 하는데(브랜드 코랄 톤 변경) 별도 결정 사항.
   black: jippinTokens.brand.ink,
   colors: {
     blueprint,
