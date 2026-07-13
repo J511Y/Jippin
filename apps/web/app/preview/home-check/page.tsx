@@ -25,12 +25,10 @@ import {
 import { useState } from 'react';
 import type { HomeCheckReport } from '@contracts/home-check';
 
-import {
-  HomeCheckFunnel,
-  type PickedAddress
-} from '@/components/home-check/HomeCheckFunnel';
+import { HomeCheckFunnel } from '@/components/home-check/HomeCheckFunnel';
 import { HomeCheckReportView } from '@/components/home-check/HomeCheckReportView';
 import { VERDICT_META, type Verdict } from '@/lib/home-check/display';
+import type { AddressSearchResult } from '@/lib/leads/api';
 
 const DISCLAIMER =
   '본 결과는 건축물대장(전유부·표제부) 조회 시점 기준의 참고 정보예요. 최종 판단은 관할 행정청이나 전문가 확인이 필요해요.';
@@ -177,15 +175,35 @@ const VERDICT_ORDER: Verdict[] = [
   'not_checked'
 ];
 
-/** 미리보기용 mock 주소 — 실제 juso 팝업 없이 살짝 지연 후 고정 주소를 돌려준다. */
-function mockResolveAddress(): Promise<PickedAddress> {
+/** 미리보기용 mock 주소 검색 — 실제 검색 API 없이 살짝 지연 후 고정 결과를 돌려준다. */
+function mockSearchAddress(): Promise<AddressSearchResult> {
+  const items: AddressSearchResult['items'] = [
+    {
+      road_addr: '서울특별시 강남구 테헤란로 123 (역삼동, 집핀타워)',
+      road_addr_part1: '서울특별시 강남구 테헤란로 123',
+      road_addr_part2: '(역삼동, 집핀타워)',
+      jibun_addr: '서울특별시 강남구 역삼동 678-9',
+      zip_no: '06133',
+      bd_nm: '집핀타워',
+      si_nm: '서울특별시',
+      sgg_nm: '강남구',
+      emd_nm: '역삼동'
+    },
+    {
+      road_addr: '서울특별시 영등포구 여의대방로43나길 25 (신길동, 삼환아파트)',
+      road_addr_part1: '서울특별시 영등포구 여의대방로43나길 25',
+      road_addr_part2: '(신길동, 삼환아파트)',
+      jibun_addr: '서울특별시 영등포구 신길동 897-2',
+      zip_no: '07360',
+      bd_nm: '삼환아파트',
+      si_nm: '서울특별시',
+      sgg_nm: '영등포구',
+      emd_nm: '신길동'
+    }
+  ];
   return new Promise((resolve) => {
     setTimeout(
-      () =>
-        resolve({
-          roadAddrPart1: '서울특별시 강남구 테헤란로 123',
-          roadFullAddr: '서울특별시 강남구 테헤란로 123 (역삼동, 집핀타워)'
-        }),
+      () => resolve({ total_count: items.length, page: 1, per_page: 10, items }),
       450
     );
   });
@@ -285,7 +303,7 @@ export default function HomeCheckPreviewPage() {
         >
           {mode === 'funnel' ? (
             <HomeCheckFunnel
-              resolveAddress={mockResolveAddress}
+              searchAddressOverride={mockSearchAddress}
               onSubmitOverride={mockSubmit}
             />
           ) : (
