@@ -132,6 +132,33 @@ class ReceiptMatchingTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(FlowError, "신청한 발급 건"):
             await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
 
+    async def test_rejects_when_main_lot_number_appears_in_legal_dong_name(
+        self,
+    ) -> None:
+        """종로1가의 '1'이 아니라 공백 뒤 실제 지번 1을 기준으로 비교한다."""
+
+        self.targets.update(
+            {
+                "bld_nm": "검색단지명",
+                "jibun_addr": "서울특별시 종로구 종로1가 1 검색단지명",
+                "loc": {"mnnm": "0001", "slno": ""},
+            }
+        )
+        other_parcel = _row(
+            "20261100000G209110",
+            "20260713105408",
+            address="서울특별시 종로구 종로1가 2 다른단지 105동 2001",
+        )
+        self.flow._post = AsyncMock(
+            return_value={
+                "IssueReadHistList": [other_parcel],
+                "caisMessage": {"resultCode": "S00000"},
+            }
+        )
+
+        with self.assertRaisesRegex(FlowError, "신청한 발급 건"):
+            await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
     async def test_never_reuses_receipt_present_before_submission(self) -> None:
         old = _row("20263470000G209084", "20260713103941")
         self.flow._post = AsyncMock(

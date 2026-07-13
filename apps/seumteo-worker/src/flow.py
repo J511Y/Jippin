@@ -218,6 +218,27 @@ def _addr_has_ho(addr: str, ho: str) -> bool:
     return bool(re.search(r"(?<!\d)" + re.escape(ho) + r"호?(?!\d)", seg))
 
 
+def _parcel_address_key(jibun_addr: str, mnnm: str, slno: str) -> str:
+    """지번 주소에서 실제 필지 번호까지의 정규화된 접두어를 반환한다.
+
+    ``mnnm``이 법정동명(예: ``종로1가``)에 포함될 수 있으므로 첫 숫자 등장 위치를 쓰면 안
+    된다. 공식 지번 주소에서 번지는 공백 뒤 독립 토큰이므로, 그 경계를 가진 본번/부번을 찾아
+    시군구·법정동+필지 번호까지만 식별자로 사용한다.
+    """
+
+    main = str(mnnm or "").lstrip("0")
+    sub = str(slno or "").lstrip("0")
+    if not main:
+        return ""
+    parcel = f"{main}-{sub}" if sub else main
+    match = re.search(
+        r"(?<!\S)" + re.escape(parcel) + r"(?=\s|번지|$)", str(jibun_addr or "")
+    )
+    if match is None:
+        return ""
+    return re.sub(r"[\s()]", "", str(jibun_addr)[: match.end()])
+
+
 def _es_field(hits: list[dict], pk: str, field: str) -> str | None:
     """_id 가 pk 인 ES hit 의 _source[field] 를 돌려준다(없으면 None)."""
 
@@ -797,22 +818,18 @@ class SeumteoFlow:
         # 넣거나 빼는 식으로 표기가 달라질 수 있으므로, 건물명 불일치만으로 같은 강한 지번
         # 식별자를 버리면 안 된다(#recp-building-name-variant).
         bld_nm = re.sub(r"[\s()]", "", str(t.get("bld_nm") or ""))
-        mnnm = str((t.get("loc") or {}).get("mnnm") or "").lstrip("0")
-        slno = str((t.get("loc") or {}).get("slno") or "").lstrip("0")
-        jibun_norm = re.sub(r"[\s()]", "", str(t.get("jibun_addr") or ""))
-        # 본번을 지번주소 안에서 찾아 그 지점까지(=시군구+법정동+본번)를 강한 식별자로 삼는다.
-        jibun_key = (
-            jibun_norm[: jibun_norm.find(mnnm) + len(mnnm)]
-            if mnnm and mnnm in jibun_norm
-            else ""
+        loc = t.get("loc") or {}
+        # 시군구·법정동+실제 필지 번호를 강한 식별자로 삼는다. 법정동명에 숫자가 들어가도
+        # 첫 숫자 위치를 잘못 집지 않도록, 지번 토큰 경계에서만 본번/부번을 파싱한다.
+        jibun_key = _parcel_address_key(
+            str(t.get("jibun_addr") or ""),
+            str(loc.get("mnnm") or ""),
+            str(loc.get("slno") or ""),
         )
-        # 본번 488은 4880과 달라야 한다. 부번이 있으면 함께 비교하고, 부번이 없으면 '488-1'도
-        # 다른 필지로 취급한다. 세움터 이력 주소는 번지 뒤 공백이 제거되므로 숫자·하이픈 경계를
-        # 정규식 lookahead로 보존한다(#recp-parcel-boundary).
-        parcel_key = f"{jibun_key}-{slno}" if jibun_key and slno else jibun_key
-        parcel_suffix = r"(?!\d)" if slno else r"(?![\d-])"
+        # 본번 488은 4880과 달라야 한다. 위에서 필지 토큰을 포함한 key를 만들었으므로,
+        # 이력 주소에서는 숫자·하이픈 경계를 보존해 부분 문자열 오매칭을 막는다.
         parcel_pattern = (
-            re.compile(re.escape(parcel_key) + parcel_suffix)
+            re.compile(re.escape(jibun_key) + r"(?![\d-])")
             if len(jibun_key) >= 8
             else None
         )

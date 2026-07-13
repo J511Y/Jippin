@@ -48,10 +48,17 @@ def _require_token(authorization: str | None) -> None:
 
 @app.get("/healthz")
 async def healthz():
-    # 브라우저가 죽었으면 503 — Fly 헬스체크가 실패해 wedged 머신을 재활용하도록 한다.
+    # 브라우저만 죽고 FastAPI 프로세스가 남은 경우에는 먼저 자체 재기동을 시도한다. 실제 잡은
+    # healthz ready 뒤에만 .internal로 전달되므로, 여기서 복구하지 않으면 Fly 재활용 전까지
+    # warm-up 폴링만 하다 모든 요청이 실패한다.
     mgr: BrowserManager = app.state.mgr
-    healthy = mgr.is_healthy()
-    if not healthy:
+    if not mgr.is_healthy():
+        try:
+            await mgr.ensure_logged_in()
+            _log.info("healthz.browser_restarted")
+        except Exception:  # noqa: BLE001 — 외부 헬스체크에는 503만 노출한다.
+            _log.warning("healthz.browser_restart_failed", exc_info=True)
+    if not mgr.is_healthy():
         return JSONResponse(status_code=503, content={"ok": False, "browser": False})
     return {"ok": True, "browser": True}
 
