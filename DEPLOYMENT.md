@@ -1,8 +1,12 @@
 # Jippin Deployment
 
-이 문서는 집핀의 클라우드 배포 방식, Neon 브랜치 전략, 마이그레이션 검증 절차를 누적 기록하는 운영 문서다. 실제 배포 대상(Vercel, Fly.io, Cloud Run, Lightsail 등)이 확정되면 이 파일에 runbook 을 추가한다.
+이 문서는 집핀의 클라우드 배포 방식, DB 브랜치 전략, 마이그레이션 검증 절차를 누적 기록하는 운영 문서다.
 
-> **배포 토폴로지 (제안 중, 2026-06-05)**: [`docs/adr/0006-deployment-split-topology.md`](docs/adr/0006-deployment-split-topology.md) (Proposed) 가 **분리형 토폴로지** — web=Vercel · api=Fly.io 도쿄(`nrt`) · redis=managed(도쿄) · postgres=Supabase · 도면 추론=Hugging Face Endpoint — 를 제안하며 [`ADR-0002`](docs/adr/0002-deployment-cloud.md) (단일 VM Lightsail Seoul) 를 supersede 한다. 실행 체크리스트: [`docs/runbooks/fly-api-deploy.md`](docs/runbooks/fly-api-deploy.md).
+> **배포 토폴로지 (라이브, 2026-06 배포 완료)**: [`docs/adr/0006-deployment-split-topology.md`](docs/adr/0006-deployment-split-topology.md) 의 **분리형 토폴로지**가 실제 운영 중이다 — web=**Vercel** (`jippin.ai` + `www`, git integration 자동 배포) · api=**Fly.io 도쿄(`nrt`)** 앱명 `jippin` (`api.jippin.ai`, `apps/api/fly.toml`) · redis=**managed Redis 도쿄** · postgres=**Supabase 서울** (session pooler) · 도면 추론=**Hugging Face Inference Endpoint** (private, scale-to-zero). 추가로 세움터 발급 워커 [`apps/seumteo-worker`](apps/seumteo-worker/README.md) 가 **별개 Fly 앱 `jippin-seumteo-worker`** (Flycast 사설망 전용, public IP 없음)로 배포된다 (ADR-0009). 실행 런북: [`docs/runbooks/fly-api-deploy.md`](docs/runbooks/fly-api-deploy.md).
+>
+> 배포 실행 주체: **Vercel 은 git integration 이 자동**, **Fly 두 앱(`fly deploy`, `fly deploy apps/seumteo-worker`)은 운영자가 수동 실행**한다. `.github/workflows/deploy.yml` 의 deploy job 은 여전히 스텁이며 실 배포를 수행하지 않는다.
+>
+> ⚠ ADR-0006 문서 상태는 아직 **Proposed** 이고 redis 를 **Upstash** 로 표기하고 있으나, 실제 운영은 배포 완료 + managed Redis(도쿄) 다. ADR 상태 갱신(Accepted + redis 벤더 표기 정정)은 오너 결정 사항으로 보류 중.
 >
 > ⚠ **DB 마이그레이션 SSOT 는 Supabase** (`supabase/migrations/*.sql` + Supabase GitHub Integration — `AGENTS.md` 최상단 / `docs/runbooks/supabase-*`). 아래 **§1~§4 의 Neon · `neon-pr-branch.yml` · Alembic · `NEON_*` 서술은 Supabase cutover (CMP-603) 이전의 역사적 기록**이며 forward 정본이 아니다 — 새 토폴로지 배포에 Neon 흐름을 적용하지 말 것. (Git branch ↔ APP_ENV ↔ DB 브랜치 매핑 개념만 Supabase 로 치환해 유효.)
 
@@ -101,4 +105,5 @@ select to_regclass('public.deployment_probe_temp') as table_name;
 - DB migration 은 forward-only 로 작성한다. 자동 downgrade 는 운영 사고 가능성이 있어 사용하지 않는다.
 - schema 변경 PR 은 모델, migration, 검증 로그를 함께 남긴다.
 - connection string, API key, 도면 원본, 개인정보는 commit/PR/issue/comment 에 남기지 않는다.
-- 배포 대상 클라우드가 확정되기 전까지 `deploy.yml` 의 deploy job 은 스텁으로 둔다. (현재 제안 토폴로지는 ADR-0006 / `docs/runbooks/fly-api-deploy.md` 참조 — api=Fly `fly deploy`, web=Vercel git integration. ADR-0006 Accepted 시 deploy job 을 실 runbook 으로 전환.)
+- `deploy.yml` 의 deploy job 은 스텁이다. 실 배포는 **web=Vercel git integration(자동)** / **api·seumteo-worker=Fly `fly deploy`(운영자 수동)** 로 수행한다 (ADR-0006 / ADR-0009 / `docs/runbooks/fly-api-deploy.md`). deploy job 을 실 배포로 전환하려면 별도 이슈 + 운영자 승인이 필요하다.
+- `apps/seumteo-worker` 코드를 수정하면 api 와 **별개로** `fly deploy apps/seumteo-worker` 를 실행해야 반영된다 (별개 Fly 앱 — 릴리즈 히스토리·시크릿 독립).

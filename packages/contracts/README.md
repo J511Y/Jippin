@@ -2,9 +2,10 @@
 
 집핀(Jippin) **공통 컨트랙트** 패키지.
 
-- 정본은 `schemas/` 의 JSON Schema (Draft 2020-12) 5종이다. **언어 중립.**
+- 정본은 `schemas/` 의 JSON Schema (Draft 2020-12) **10종**이다. **언어 중립.**
 - `ts/` 의 TypeScript 타입과 `python/zippin_contracts/` 의 Pydantic v2 모델은 **자동 생성물**이다. 직접 수정 금지.
 - 본 패키지는 ADR-0001 §9.2 가 봉인한 모노레포 트리의 일부다. 스키마 변경은 SDD §5.1·§5.2 와 ADR을 동시에 갱신해야 한다.
+- **RULE/FLOW_GUARD/CHAT/REPORT/에이전트/우리집 체크 작업을 위임받으면 코드 작성 전에 `schemas/` 를 선독한다** — 여기가 인터페이스 정본이다.
 
 ## 1. 정본 컨트랙트 (정본 = `schemas/`)
 
@@ -15,12 +16,17 @@
 | `rule-eval-result.schema.json` | `RuleEvalResult` | SDD §4.8 (RULE) |
 | `estimate-result.schema.json` | `EstimateResult` | SDD §4.9 REPORT.estimate / §6.3 |
 | `error-response.schema.json` | 표준 에러 응답 | AGENTS.md §4.5 |
+| `agent-run-request.schema.json` | 에이전트 런 시작 요청 | `POST /sessions/{id}/agent/runs` |
+| `agent-run-status.schema.json` | `AgentRunStatusValue` (런 상태 enum) | 에이전트 런 수명주기 |
+| `agent-sse-event.schema.json` | SSE 이벤트 — `StateChangeDecision`·`StateChangeEvent`·`SessionStatus`·`RunStatus`·`ToolStepEvent`·`ToolKind` | 세션 상태 전이 머신 + 에이전트 스트림 |
+| `home-check.schema.json` | 우리집 체크 — `HomeCheckJob`·`HomeCheckReport`·`Violation`·`ExtensionCheck`·`ExtensionVerdict` | ADR-0008/0009. 별도 building-register 스키마 파일은 없다 — 이 파일이 해당 도메인 정본 |
+| `segmentation-result.schema.json` | `SegmentationResult`·`Instance`·`Region`·`Label` | 도면 세그멘테이션 (HF Mask2Former) |
 
-모든 스키마는 `schema_version`을 1.0.0으로 고정한다. 변경 시 PR 체크리스트(AGENTS.md §4.3)에 따라 bump하고, **본 README의 표 + ADR + SDD §5** 세 곳을 동시에 갱신한다.
+모든 스키마는 `schema_version`을 1.0.0으로 고정한다. 변경 시 PR 체크리스트(AGENTS.md §4.3)에 따라 bump하고, **본 README의 표 + ADR + SDD §5** 세 곳을 동시에 갱신한다. `evaluated_at` 류 타임스탬프 필드는 직렬화 시점에 주입한다 (스키마에 하드코딩 금지).
 
 ## 2. 사용법
 
-### 2.1 TypeScript (`apps/web`, 향후 사용처)
+### 2.1 TypeScript (`apps/web`)
 
 ```ts
 import type {
@@ -29,10 +35,12 @@ import type {
   RuleEvalResult,
   EstimateResult,
   ErrorResponse,
+  // 에이전트·우리집 체크·세그멘테이션 도메인 타입도 같은 배럴에서 —
+  // 전체 목록은 ts/index.ts (약 70개 이름 재익스포트)
 } from "@jippin/contracts";
 ```
 
-### 2.2 Python (`apps/api`, 향후 사용처)
+### 2.2 Python (`apps/api`)
 
 ```python
 from zippin_contracts import (
@@ -41,10 +49,10 @@ from zippin_contracts import (
     RuleEvalResult,
     EstimateResult,
     ErrorResponse,
+    # ExtensionVerdict, HomeCheckJob, SegmentationResult, StateChangeEvent 등 —
+    # 전체 목록은 python/zippin_contracts/__init__.py
 )
 ```
-
-> **주의**: 본 이슈(CMP-527) 범위는 패키지 골격까지다. 백엔드(CMP-524 #2)·프론트엔드(CMP-524 #3) 골격 이슈가 이 패키지를 import하도록 배선한다.
 
 ## 3. 코드 생성
 
@@ -65,10 +73,7 @@ pnpm -C packages/contracts run generate
 pnpm -C packages/contracts run check   # git diff --exit-code -- ts python
 ```
 
-## 4. 본 이슈 범위 밖
+## 4. 패키지 경계
 
-- HTTP 엔드포인트/라우터 구현(`apps/api`)
-- React 컴포넌트/오버레이(`apps/web`)
-- AI/RULE/REPORT 모듈의 비즈니스 로직
-
-위 항목은 모두 CMP-524 의 형제 자식 이슈에서 다룬다. 본 패키지는 그 형제 이슈들의 **의존**으로만 존재한다.
+- HTTP 엔드포인트/라우터 구현은 `apps/api`, React 컴포넌트/오버레이는 `apps/web` 소관 — 본 패키지에는 **스키마와 생성 타입만** 둔다.
+- AI/RULE/REPORT/에이전트 모듈의 비즈니스 로직은 여기 두지 않는다. 본 패키지는 그 모듈들의 **인터페이스 의존**으로만 존재한다.

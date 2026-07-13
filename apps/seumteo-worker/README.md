@@ -29,11 +29,17 @@ apps/api (app="jippin")                     apps/seumteo-worker (app="jippin-seu
 ## 발급 플로우 (실측 엔드포인트 계약)
 
 `<세움터-계정ID>` 계정으로 「여의대방로43나길 25 104동 504호」를 끝까지 발급하며 네트워크를 캡처해 도출.
-1~8 은 로그인 세션 위 in-page fetch(JSON), 9 만 DOM 클릭(리포트 뷰어 param 이 클라이언트측 AES).
+2~8 은 로그인 세션 위 in-page fetch(JSON), 1(로그인)과 9(발급)만 DOM 상호작용(리포트 뷰어 param 이 클라이언트측 AES).
+
+**로그인은 능동 인증 확인 기반이다** (SPA 폼 유무 휴리스틱 폐지 — 2026-07-09 수정):
+
+1. 세션 유효성은 in-page fetch `POST /cba/CBAAZA02R01` (세션 확인 엔드포인트) 로 **능동 검증**한다. 유효하면 로그인 생략(storage_state 재사용 포함).
+2. 무효면 로그인 페이지(`eais_login_path` = `/moct/awp/abb01/AWPABB01F13`)로 `goto` → Nuxt CSR hydrate 를 `#membId` `wait_for_selector` 로 대기(`login_form_timeout_ms`, 기본 8s — 폼 부재를 "이미 로그인"으로 오판하던 버그의 핵심 수정) → 폼 입력 + 버튼 클릭 → 다시 `/cba/CBAAZA02R01` 로 성공 확인.
+3. keep-alive 슈퍼바이저가 `seumteo_session_keepalive_seconds`(기본 1500s) 주기로 세션을 능동 검증해 ~60분 TTL 만료를 예방한다 (0 = 비활성).
 
 | # | 단계 | 엔드포인트 | 요지 |
 |---|---|---|---|
-| 1 | 로그인 | `POST /moct/awp/abb01/AWPABB01F13` | `#membId`/`#pwd` — 캡차·인증서 없음 |
+| 1 | 로그인 | 로그인 페이지 `goto` + DOM 폼(`#membId`/`#pwd`) → 검증 `POST /cba/CBAAZA02R01` | 캡차·인증서 없음. 위 절차 참조 |
 | 2 | 주소검색 | `POST search.eais.go.kr/bldrgstmst/_search` (ES) | `multi_match(jibunAddr, roadAddr^3)` → `mgmUpperBldrgstPk` |
 | 3 | 동목록 | `POST search.eais.go.kr/bldrgsttitle/_search` | `filter mgmUpperBldrgstPk` → 표제부PK |
 | 4 | 호목록 | `POST search.eais.go.kr/bldrgstexpos/_search` | `filter 표제부PK` → 전유부PK, recapTitlePk |
@@ -54,13 +60,20 @@ apps/api (app="jippin")                     apps/seumteo-worker (app="jippin-seu
 cd apps/seumteo-worker
 pip install -r requirements.txt
 python -m playwright install chromium
-$env:SEUMTER_ID="<세움터-계정ID>"; $env:SEUMTER_PASSWORD="********"
-# headed(기본, 눈으로 확인) — 정상 아파트
+
+# 권장 경로: 사람이 브라우저에서 1회 직접 로그인해 세션을 저장한다(자동화가 비밀번호를
+# 입력하지 않음). 저장 위치 = config.seumteo_storage_state_path (기본 .auth/state.json).
+python login.py
+
+# 이후 발급 검증은 저장된 세션을 재사용한다. (storage_state 없으면 SEUMTER_ID/PASSWORD 폴백)
 python poc.py "서울특별시 영등포구 여의대방로43나길 25" 104동 504호 exclusive
 python poc.py "서울특별시 영등포구 여의대방로43나길 25" 104동 "" heading
 # 위반건축물(노란딱지) 케이스 주소로도 반드시 검증(위반 검출 확인)
+
+# 로그인된 탭을 그대로 재사용해 발급·CLIP 추출까지 사람이 지켜보며 검증할 때:
+python attended_poc.py "<도로명주소>" <동> <호>
 ```
-`out/exclusive.pdf`·`out/heading.pdf` 저장 + 콘솔에 위반여부/필드 출력. `HEADLESS=1` 로 헤드리스 강제.
+`out/exclusive.pdf`·`out/heading.pdf` 저장 + 콘솔에 위반여부/필드 출력. `HEADLESS=1` 로 헤드리스 강제. (프로덕션 Fly 는 storage_state 파일이 없으므로 secrets 의 ID/비번 자동 로그인 — 무변경.)
 
 ## 배포 (리포 루트에서 — build context = 이 디렉토리)
 
@@ -71,6 +84,9 @@ fly deploy apps/seumteo-worker --flycast --remote-only --ha=false   # **반드�
 fly scale count 1 -a jippin-seumteo-worker            # HA 로 2대 뜨지 않게 1대 고정
 fly ips list -a jippin-seumteo-worker                 # private IPv6 만 있어야 함(public 없음)
 ```
+
+> Docker 베이스 이미지는 `python:3.13-slim-bookworm` 으로 **고정**한다 (`Dockerfile` 참조) —
+> `slim`(trixie 승격) 빌드 깨짐 방지. 태그를 `slim` 으로 되돌리지 말 것.
 
 > ⚠️ **단일 머신 필수(단일 세움터 계정)**: `fly deploy` 기본값은 HA 2머신인데, 두 머신이
 > 하나의 `<세움터-계정ID>` 계정·서버측 장바구니를 공유하면 한 머신의 `_isolate_cart` D01 삭제가 다른
@@ -105,8 +121,10 @@ fly secrets set -a jippin SEUMTEO_ENABLED=true SEUMTEO_WORKER_URL=http://jippin-
 ## 파일
 
 - `src/main.py` — FastAPI + Playwright lifespan, `POST /jobs/building-register`
-- `src/browser.py` — 로그인 세션 상주 브라우저 매니저(+ CLIP init script 주입)
+- `src/browser.py` — 로그인 세션 상주 브라우저 매니저(능동 세션 검증 + keep-alive + CLIP init script 주입)
 - `src/flow.py` — 1~9 단계 오케스트레이션(in-page fetch + DOM 발급)
 - `src/clip.py` — CLIP Report 텍스트/위반/PDF 추출
 - `src/models.py`·`src/config.py` — HTTP 계약·설정
 - `poc.py` — 로컬 단건 검증
+- `login.py` — 사람이 1회 직접 로그인해 storage_state 저장(로컬 세션 재사용용)
+- `attended_poc.py` — 로그인한 탭을 그대로 재사용하는 유인(attended) 발급 검증

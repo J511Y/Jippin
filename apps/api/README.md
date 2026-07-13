@@ -1,9 +1,16 @@
-# `apps/api` — Jippin FastAPI Backend (CMP-528)
+# `apps/api` — Jippin FastAPI Backend
 
 FastAPI 0.115 / Python 3.13 / `uv` 패키지 매니저.
-외부 managed Postgres (psycopg3 async) 연결 — **Supabase Postgres + Supabase Auth** — structlog JSON 로깅, `request_id` 컨텍스트, AGENTS.md §4.5 에러 봉투, `/healthz`, Supabase Auth JWT 검증 / 세션 브리지 (CMP-595) 를 제공한다.
+외부 managed Postgres (psycopg3 async) — **Supabase Postgres + Supabase Auth** — 위에서 집핀의 전 도메인 API 를 제공한다:
 
-본 이슈(CMP-528) 범위는 **API 골격 + `/healthz` + 표준 에러/로깅**까지다. 도메인 라우터(AUTH/INPUT/AI/RULE/REPORT 등)는 후속 이슈에서 채운다.
+- **인증/계정** — Supabase Auth JWT 검증(JWKS/HS256)·세션 브리지, 이메일+비밀번호 가입, SOLAPI 문자(OTP) 인증, 아이디/비번 찾기, 회원 탈퇴 (`/auth/*`)
+- **상담 리드** — 익명 허용 상담 신청 + 도로명주소(JUSO) 프록시 + 담당자 알림톡 (`/leads*`)
+- **자주묻는질문** — DB-backed 공개 FAQ (`/faqs*`)
+- **우리집 체크** — 집합건축물대장 전유부/표제부 발급(세움터 직결 워커 또는 CODEF)·위반/확장 판정·비동기 잡 (`/home-check*`, ADR-0008/0009)
+- **사전검토 세션** — 세션·주소·도면 업로드/세그멘테이션(HF Mask2Former)·벽/창호 선택·상태 전이 머신·리포트/PDF(WeasyPrint) (`/sessions*`)
+- **대화형 에이전트** — deepagents(LangGraph) 기반 사전검토 에이전트, SSE 런 스트림·resume/interrupt, langgraph Postgres 체크포인터 (`/sessions/{id}/agent/*`)
+
+공통 기반: structlog JSON 로깅, `request_id` 컨텍스트, AGENTS.md §4.5 에러 봉투, `/healthz`, 요청 로그 미들웨어.
 
 > **DB / Auth SSOT (CMP-603/CMP-604)**: forward schema authority is `supabase/migrations/*.sql` plus Supabase GitHub Integration. Alembic (`apps/api/migrations/`) remains historical reference only. Supabase JWT `sub` maps directly to `auth.users.id`; `public.users` is an app profile table and `public.terms_consents` is the product consent audit table.
 
@@ -54,7 +61,16 @@ curl http://localhost:8000/healthz
 | `SUPABASE_JWKS_URL` | — | (ADR-0004 §2.3 rev5+) JWKS 1순위 — 설정 시 비대칭 키 검증. 미설정이면 `SUPABASE_JWT_SECRET` HS256 로 fallback. |
 | `CORS_ALLOW_ORIGINS` | `["*"]` | JSON 리스트. 개발 외 환경에서는 좁힌다. |
 
-전체 키는 `.env.example` 참고. 시크릿은 절대 커밋하지 않는다 (AGENTS.md §4.4).
+위 표는 코어 부팅 변수만이다. **전체 정본은 `.env.example`** — 주요 그룹:
+
+- **파생 프리미티브**: `SUPABASE_REF`, `PUBLIC_WEB_ORIGIN` (여러 URL 을 부팅 시 파생 — `config.py::_derive_from_primitives`)
+- **리드/주소/스토리지**: `JUSO_CONFM_KEY`, `LEAD_FLOORPLAN_BUCKET`, `SESSION_FLOORPLAN_BUCKET`, `SESSION_REPORT_BUCKET`
+- **우리집 체크**: `CODEF_*`, `SEUMTER_ID/PASSWORD`, `HOME_CHECK_DOC_BUCKET`, `EXTENSION_JUDGE_ENABLED`, `SEUMTEO_ENABLED`, `SEUMTEO_WORKER_URL/TOKEN` (세움터 워커 스위치 — ADR-0009)
+- **에이전트/LLM**: `AGENT_ENABLED`, `AGENT_MODEL` (기본 `openai:gpt-5.4-mini`), `OPENAI_API_KEY`, `LANGCHAIN_TRACING_V2`, `LANGSMITH_*`. 에이전트 체크포인터는 **direct `:5432` `DATABASE_URL` 필수** (`config.py::_validate_agent_checkpointer_url` 이 부팅 차단)
+- **도면 세그멘테이션**: `HF_SEGMENTATION_ENDPOINT_URL/TOKEN` (+ 타임아웃/재시도/threshold — private endpoint, scale-to-zero 콜드스타트 유의)
+- **OAuth/가입/SMS**: `KAKAO_*`, `GOOGLE_OAUTH_*`, `NAVER_OAUTH_*`, `OAUTH_STATE_REDIS_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SOLAPI_*`, `PHONE_OTP_*`
+
+시크릿은 절대 커밋하지 않는다 (AGENTS.md §4.4).
 
 ---
 
@@ -62,34 +78,36 @@ curl http://localhost:8000/healthz
 
 ```
 apps/api/
-├── pyproject.toml
+├── pyproject.toml            # 의존성: fastapi·sqlalchemy·langchain/langgraph/deepagents·weasyprint·shapely·solapi 등
 ├── .python-version           # 3.13
-├── Dockerfile                # multi-stage (uv builder → non-root runtime)
+├── Dockerfile                # multi-stage (uv builder → non-root runtime + pango/cairo + fonts-nanum — WeasyPrint)
 ├── alembic.ini               # Historical reference only; forward SSOT is supabase/migrations
-├── .env.example
+├── .env.example              # 환경변수 정본 (§3)
 ├── src/
-│   ├── main.py               # create_app() + lifespan + CORS + GZip + middleware
-│   ├── config.py             # Pydantic Settings
+│   ├── main.py               # create_app() + lifespan(체크포인터 스키마 검증 등) + CORS + SelectiveGZip(/agent/runs SSE 제외) + RequestLog 미들웨어
+│   ├── config.py             # Pydantic Settings (+ 파생 프리미티브 · 에이전트 체크포인터 URL 가드)
 │   ├── db.py                 # SQLAlchemy async (psycopg3) — pool / non-pool engine
 │   ├── logging.py            # structlog JSON + RequestIDMiddleware
 │   ├── errors.py             # ZippinException + AGENTS.md §4.5 핸들러
-│   ├── models/              # ORM 모델 (faqs · consultation_leads · sessions/floorplans · auth · …)
-│   │   └── __init__.py       # Base = DeclarativeBase + naming convention (CMP-537)
-│   ├── schemas/             # Pydantic 요청/응답 계약 (leads · faq · account · …)
-│   ├── services/            # DB-backed 비즈니스 로직 (leads · faq · account · …)
-│   └── routers/             # HTTP 라우터
+│   ├── agent/                # 대화형 에이전트 런타임 — graph·runner·checkpointer·projection·warmup + tools/(segmentation·vlm·domain)
+│   ├── auth/                 # JWKS·Supabase JWT·세션·providers(google/kakao/naver)·state_store
+│   ├── middleware/           # request_log · selective_gzip · request_log_redaction
+│   ├── models/               # ORM — auth · faqs · consultation_leads · home_check · main_feature(Session/Floorplan/AgentRun/ChatMessage/SessionStatusEvent …) · request_log
+│   ├── schemas/              # Pydantic 요청/응답 계약
+│   ├── services/             # 비즈니스 로직 — leads · faq · account · home_check(+extension) · main_flow · estimate · rule_engine · report_content/overlay/pdf · storage · sms/alimtalk · codef/ · seumteo/ · report_templates/
+│   └── routers/              # HTTP 라우터 (모두 무조건 등록 — agent 만 AGENT_ENABLED 게이트)
 │       ├── healthz.py        # GET /healthz
-│       ├── auth.py           # Supabase 세션 브리지 / OAuth
-│       ├── account.py        # 회원가입 · 문자인증 · 아이디/비번 찾기 · 회원탈퇴
-│       ├── leads.py          # POST /leads · GET /leads/mine · 주소검색 프록시
-│       ├── faq.py            # GET /faqs · GET /faqs/{faq_id} (공개 자주묻는질문)
-│       └── sessions.py · floorplans.py · chat.py  # phase_a_skeleton 플래그에서만 등록
+│       ├── auth.py           # Supabase 세션 브리지 · 약관 · linking (`/auth/*`)
+│       ├── account.py        # 회원가입 · 문자인증 · 아이디/비번 찾기 · 회원탈퇴 (`/auth/*`)
+│       ├── leads.py          # POST /leads · GET /leads/mine · 주소검색 프록시 · 알림톡
+│       ├── faq.py            # GET /faqs · GET /faqs/{faq_id}
+│       ├── home_check.py     # POST /home-check(202) · mine · {id} · {id}/continue(추가인증)
+│       ├── sessions.py       # 세션 CRUD · 주소 · 리포트 · POST {id}/report/pdf
+│       ├── floorplans.py     # 도면 업로드/에셋/서명URL · PATCH selected-walls(벽+창호)
+│       ├── chat.py           # POST /sessions/{id}/chat/messages
+│       └── agent.py          # SSE 런 · resume/interrupt · messages · warmup (AGENT_ENABLED)
 ├── migrations/               # Historical Alembic scripts; do not add forward revisions
-│   ├── env.py                # sync psycopg3, Settings.database_url 만 사용
-│   ├── script.py.mako
-│   └── versions/             # 리비전 파일 (YYYYMMDD_HHMM_rev_slug.py)
-└── tests/
-    └── test_healthz.py       # /healthz + 에러 봉투 단위 테스트
+└── tests/                    # pytest ~50 파일 — 라우터·서비스·룰엔진·에이전트·세움터/CODEF·PDF·상태머신 등
 ```
 
 ---
@@ -132,7 +150,7 @@ docker build -t jippin-api:dev apps/api
 docker run --rm -p 8000:8000 --env-file apps/api/.env jippin-api:dev
 ```
 
-`docker compose` 오케스트레이션은 CMP-530 참고.
+`docker compose` 오케스트레이션은 `infra/compose/README.md` 참고. Dockerfile runtime 스테이지는 WeasyPrint 시스템 라이브러리(pango/cairo/gdk-pixbuf)와 한글 폰트(`fonts-nanum`)를 설치한다 — PDF 리포트 발부의 전제이며, 제거 시 `POST /sessions/{id}/report/pdf` 가 깨진다.
 
 ---
 
@@ -168,6 +186,8 @@ stdout JSON, 모든 라인에 `request_id` 자동 주입:
 
 - ADR-0001 §3 (백엔드), §4 (DB 클라이언트 — ADR-0004 가 Supabase 로 부분 supersede)
 - ADR-0004 (Supabase 전환)
+- ADR-0008 (우리집 체크 — 건축물대장 전유부+표제부) · ADR-0009 (세움터 직결 내재화 — CODEF 대체, `apps/seumteo-worker`)
 - AGENTS.md §4.4 (시크릿/환경변수), §4.5 (에러·응답 표준), §4.7 (사용자 식별 정책)
-- `docs/runbooks/supabase-migration-plan.md`, `docs/runbooks/supabase-auth-poc.md`, `docs/runbooks/supabase-session-bridge.md`
+- `docs/runbooks/supabase-migration-plan.md`, `docs/runbooks/supabase-auth-poc.md`, `docs/runbooks/supabase-session-bridge.md`, `docs/runbooks/fly-api-deploy.md`
+- `packages/contracts/` — 판단·룰·견적·에이전트 SSE·우리집 체크·세그멘테이션 스키마 정본 (관련 작업 전 선독)
 - SDD v1.9 §6 (모듈 구성), §8.2 (에러 코드)

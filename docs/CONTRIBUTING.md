@@ -1,4 +1,4 @@
-# 집핀(Jippin) 기여 가이드 — GitHub Flow + gitmoji
+# 집핀(Jippin) 기여 가이드 — `main ← dev ← feature/*` + gitmoji
 
 본 문서는 **집핀 모노레포(`J511Y/Jippin`)에서 코드를 변경하는 모든 기여자(사람·Paperclip 에이전트)** 가 따라야 하는 브랜치·커밋·PR 정책을 정한다.
 
@@ -13,11 +13,14 @@
 
 ---
 
-## 1. 브랜치 전략 — GitHub Flow
+## 1. 브랜치 전략 — `main ← dev ← feature/*`
 
-- `main` 은 **보호 브랜치**. 직접 푸시 금지. 머지는 PR 경유.
-- 새 작업은 **feature 브랜치** 에서 진행한다.
-- Paperclip 병렬 에이전트와 여러 사람이 동시에 작업할 때는 **브랜치별 git worktree** 에서만 변경한다.
+> 초기 GitHub Flow(main 단일) 정책은 AGENTS.md §4.2 개정으로 **`main ← dev ← feature/*`** 로 대체되었다. 본 절은 그 정합 버전이다.
+
+- `main` 은 **보호 브랜치**. 직접 푸시 금지. 운영 트래픽이 가리키는 단일 정본. `main` 으로의 PR 은 `dev` 승급(release 컷) 또는 CTO/DevOps 승인 핫픽스만 허용.
+- `dev` 도 **보호 브랜치**이며 통합 브랜치(integration branch)다. **모든 작업 PR 의 기본 base = `dev`.**
+- 새 작업은 `dev` 에서 분기한 **작업 브랜치**(feature/fix/docs/…) 에서 진행한다.
+- 병렬 에이전트와 여러 사람이 동시에 작업할 때는 **브랜치별 git worktree** 에서만 변경한다.
 - 머지 방식: **Squash and merge** 단일 옵션. (gitmoji prefix 가 머지 커밋 메시지에 남는다)
 
 ### 1.1 브랜치 이름 규칙
@@ -42,16 +45,18 @@
 
 **금지**
 
-- `dev`, `develop`, `master`, `release/*` (GitHub Flow 미사용)
+- 작업 브랜치 이름으로 `dev`, `develop`, `master` 사용 금지 (`dev` 는 보호된 통합 브랜치 그 자체)
 - 공백·한글·대문자·`/`가 3개 이상
+
+`release/*` 는 `dev`→`main` 승급·백머지 컷에만 사용한다 (예: `release/backmerge-main-dev-0630`, 커밋 prefix 는 🔖 `release:`).
 
 ### 1.2 작업 흐름
 
-1. 루트 체크아웃에서 최신 main 을 확인한다: `git fetch origin`
-2. 이슈별 worktree 를 만든다: `git worktree add -b <type>/<scope>-<short> C:\Users\jhyou\2026\jippin-worktrees\<CMP-ID>-<slug> origin/main`
+1. 루트 체크아웃에서 최신 원격 상태를 확인한다: `git fetch origin`
+2. 이슈별 worktree 를 만든다 (**base 는 `origin/dev`** — `origin/main` 은 hotfix/release 컷 예외만): `git worktree add -b <type>/<scope>-<short> C:\Users\jhyou\2026\jippin-worktrees\<CMP-ID>-<slug> origin/dev`
 3. worktree 로 이동한다: `cd C:\Users\jhyou\2026\jippin-worktrees\<CMP-ID>-<slug>`
 4. 작업 → 작은 단위로 자주 커밋 (`gitmoji` prefix 준수, §2)
-5. `git push -u origin <branch>` → GitHub 에서 PR 생성
+5. `git push -u origin <branch>` → GitHub 에서 **base=`dev`** 로 PR 생성
 6. 리뷰 통과 + CI 그린 → **Squash and merge**
 7. 머지 후 worktree 와 브랜치 삭제 (`git worktree remove <path>`, `git push origin --delete <branch>`)
 
@@ -68,7 +73,7 @@ $worktree = "C:\Users\jhyou\2026\jippin-worktrees\$issue-github-flow"
 
 New-Item -ItemType Directory -Force -Path C:\Users\jhyou\2026\jippin-worktrees | Out-Null
 git fetch origin
-git worktree add -b $branch $worktree origin/main
+git worktree add -b $branch $worktree origin/dev    # ← dev 가 정본 base (AGENTS.md §5.7)
 Set-Location $worktree
 git status --short --branch
 ```
@@ -225,7 +230,7 @@ $branch = "feat/<scope>-<short>"
 $worktree = "C:\Users\jhyou\2026\jippin-worktrees\$issue-<short>"
 New-Item -ItemType Directory -Force -Path C:\Users\jhyou\2026\jippin-worktrees | Out-Null
 git fetch origin
-git worktree add -b $branch $worktree origin/main
+git worktree add -b $branch $worktree origin/dev
 cd $worktree
 
 # 5) 커밋 (gitmoji prefix 필수)
