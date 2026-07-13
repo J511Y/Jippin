@@ -106,8 +106,9 @@ def create_app() -> FastAPI:
     app.include_router(sessions_router)
     app.include_router(floorplans_router)
     app.include_router(chat_router)
-    # 에이전트 세션 (우리집 체크 대화형 에이전트) — agent_enabled 환경에만 등록한다
-    # (config validator 가 agent_enabled 시 phase_a_skeleton_enabled·OPENAI 키를 요구).
+    # 에이전트 세션 (사전검토 대화형 에이전트) — agent_enabled 환경에만 등록한다
+    # (config validator 가 agent_enabled 시 direct :5432 DATABASE_URL·OPENAI 키를 요구.
+    #  구 phase_a_skeleton_enabled 선행 요구는 제거됨 — config #stale-phase-prereq).
     if settings.agent_enabled:
         app.include_router(agent_router)
 

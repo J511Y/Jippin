@@ -136,10 +136,12 @@ services:
       FRONTEND_AUTH_FAILURE_URL: "${FRONTEND_AUTH_FAILURE_URL:-http://localhost:3000/auth/failure}"
       FRONTEND_AUTH_TERMS_URL: "${FRONTEND_AUTH_TERMS_URL:-http://localhost:3000/auth/terms}"
       # ---------------------------------------------------------------------
-      # 에이전트 세션 (우리집 체크 대화형 에이전트) — CMP-DIRECT.
-      # AGENT_ENABLED=true 는 PHASE_A_SKELETON_ENABLED=true 와 OPENAI_API_KEY 를
-      # 함께 요구한다(아니면 config validator 가 부팅 차단). DATABASE_URL 은 위에서
+      # 에이전트 세션 (사전검토 대화형 에이전트) — CMP-DIRECT.
+      # 게이트는 AGENT_ENABLED 단독 (구 PHASE_A_SKELETON_ENABLED 선행 요구는 제거됨
+      # — api config #stale-phase-prereq). AGENT_ENABLED=true 는 OPENAI_API_KEY 를
+      # 요구한다(아니면 config validator 가 부팅 차단). DATABASE_URL 은 위에서
       # direct(:5432) 로 설정됨 — 체크포인터 요건. NEXT_PUBLIC_AGENT_ENABLED 와 맞춘다.
+      # PHASE_A_SKELETON_ENABLED 전달은 dead flag 잔존분 — 코드에서 게이트하지 않음.
       # ---------------------------------------------------------------------
       PHASE_A_SKELETON_ENABLED: "${PHASE_A_SKELETON_ENABLED:-false}"
       AGENT_ENABLED: "${AGENT_ENABLED:-false}"

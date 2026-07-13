@@ -122,10 +122,11 @@ class Settings(BaseSettings):
     # 별도 이슈로 켠다.
     phase_a_skeleton_enabled: bool = Field(default=False)
 
-    # ── 에이전트 세션 (우리집 체크 대화형 에이전트) — CMP-DIRECT ────────────────
-    # deepagents(LangGraph) 런타임. 운영 default 는 False — main.py 에서
-    # phase_a_skeleton_enabled 와 함께 켜져야 agent 라우터가 등록된다. LLM/추적/HF
-    # 시크릿은 Fly secrets 로 주입한다(.env.example 의 agent 섹션 참조).
+    # ── 에이전트 세션 (사전검토 대화형 에이전트) — CMP-DIRECT ────────────────
+    # deepagents(LangGraph) 런타임. 운영 default 는 False — main.py 가
+    # agent_enabled 단독으로 agent 라우터를 등록한다(구 phase_a 선행 요구는
+    # _validate_agent_checkpointer_url 에서 제거됨 — #stale-phase-prereq).
+    # LLM/추적/HF 시크릿은 Fly secrets 로 주입한다(.env.example 의 agent 섹션 참조).
     agent_enabled: bool = Field(default=False)
     agent_model: str = Field(default="openai:gpt-5.4-mini")
     # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
@@ -343,7 +344,7 @@ class Settings(BaseSettings):
         if normalized not in ALLOWED_APP_ENVS:
             raise ValueError(
                 f"APP_ENV={v!r} is not one of {sorted(ALLOWED_APP_ENVS)}. "
-                "See AGENTS.md §4.4 and docs/runbooks/neon-branches.md."
+                "See AGENTS.md §4.4 and docs/runbooks/supabase-branching.md."
             )
         return normalized
 
