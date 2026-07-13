@@ -38,7 +38,7 @@ apps/api (app="jippin")                     apps/seumteo-worker (app="jippin-seu
 | 5 | 조회 | `POST /bci/BCIAAA02R01`·`/bci/BCIAAA02R04` | 위치코드(sigunguCd/bjdongCd/mnnm/slno)·전유면적 |
 | 6 | 담기 | `POST /bci/BCIAAA02C01` | `regstrKindCd`(4전유/3표제)+loc*+**`ownrYn:"N"`**(소유자 미표시) |
 | 7 | 장바구니 | `POST /bci/BCIAAA02R05` | `pbsvcResveDtlsSeqno` |
-| 8 | 신청 | `POST /bci/BCIAZA02S01` → `/bci/BCIAAA06R01` | `pbsvcRecpNo`, progStateCd 91 |
+| 8 | 신청 | `POST /bci/BCIAZA02S01` → `/bci/BCIAAA06R01` | 신청 전후 접수번호 차집합으로 새 `pbsvcRecpNo` 식별, `progStateCd=91` |
 | 9 | 발급 | DOM: `BCIAAA04L01` "발급" 링크 → `/report/BCIAAA04V01` | **CLIP Report** 캔버스 뷰어(AnySign 불필요) |
 
 리포트 데이터는 뷰어가 `POST /report/RPTCAA02R02`(JSON, base64 `viewData`)로 받아 캔버스에
