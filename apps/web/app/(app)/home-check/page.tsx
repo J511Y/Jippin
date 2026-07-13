@@ -107,21 +107,19 @@ export default function HomeCheckLandingPage() {
         </SimpleGrid>
 
         {/* 1차 액션(제품 기능 진입) — 버튼 위계 §2: jippin filled. coral 은 전환 CTA
-            (상담·견적) 전용이고 이 페이지엔 전환 CTA 가 없다. 자연 폭 + 좌정렬.
+            (상담·견적) 전용이고 이 페이지엔 전환 CTA 가 없다. 풀폭으로 시선을 모으고,
+            클릭 시 곧장 첫 질문(주소)으로 진입한다(퍼널에 별도 인트로 없음).
             서버 컴포넌트라 component={Link} 는 SSG 프리렌더가 깨져 component="a" 유지. */}
         <Button
           component="a"
           href="/home-check/new"
           size="lg"
           color="jippin"
-          w="fit-content"
+          fullWidth
           rightSection={<IconArrowRight size={18} />}
         >
           내 집 체크 시작
         </Button>
-
-        {/* 제도 모티프 치수선 — 본문과 법적 고지 사이 구분(Divider 대체). */}
-        <div className="jp-dimline" aria-hidden="true" />
 
         <Text className="a2ui-legal" style={{ wordBreak: 'keep-all' }}>
           본 서비스는 건축물대장 기재사항을 조회 시점 기준으로 제공하는 참고용 정보이며,
