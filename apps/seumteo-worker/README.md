@@ -4,7 +4,8 @@
 Playwright headless Chromium 으로 로그인·발급·CLIP 리포트 추출·PDF 저장을 수행하고,
 CODEF 와 동형(同型)인 결과를 apps/api(jippin)에 돌려준다.
 
-- apps/api 는 이 워커를 Flycast 사설망(`http://jippin-seumteo-worker.flycast`)으로 호출한다.
+- apps/api 는 화면 진입 시 Flycast(`http://jippin-seumteo-worker.flycast/healthz`)로
+  scale-to-zero worker를 깨우고, ready 확인 뒤 `.internal:8080`으로 발급 잡을 직결한다.
 - 세움터 계정은 운영자 합의로 **분리하지 않고 단일 계정**(`<세움터-계정ID>`)만 사용한다. 로그인은
   아이디/비밀번호(인증서·간편인증·보안문자 없음 — 발급 정찰로 확인).
 - 발급된 PDF 는 결과의 `original_pdf_base64` 로 반환되며, apps/api 의 기존
@@ -19,8 +20,9 @@ IP·릴리즈가 완전히 독립이다.
 
 ```
 apps/api (app="jippin")                     apps/seumteo-worker (app="jippin-seumteo-worker")
- home_check → SeumteoBuildingRegisterClient  ──flycast──▶  POST /jobs/building-register
-   (services/seumteo/client.py)                              browser: 로그인 → 발급 → CLIP 추출 → PDF
+ home_check → healthz(warm-up) ──flycast──▶  scale-to-zero 기동 + browser ready
+ home_check → POST /jobs/building-register ──.internal──▶    로그인 → 발급 → CLIP 추출 → PDF
+   (services/seumteo/client.py)
    결과 = ExclusivePartResult/BuildingHeadingResult ◀────────  결과(JSON, CODEF 동형) + pdf_base64
 ```
 
@@ -76,13 +78,14 @@ fly ips list -a jippin-seumteo-worker                 # private IPv6 만 있어�
 > 머신 간 보호 못 함). **`--ha=false` + `fly scale count 1`** 로 정확히 1머신만 유지한다.
 그다음 apps/api(jippin)에:
 ```bash
-fly secrets set -a jippin SEUMTEO_ENABLED=true SEUMTEO_WORKER_URL=http://jippin-seumteo-worker.flycast SEUMTEO_WORKER_TOKEN=<위와 동일>
+fly secrets set -a jippin SEUMTEO_ENABLED=true SEUMTEO_WORKER_URL=http://jippin-seumteo-worker.flycast SEUMTEO_WORKER_JOB_URL=http://jippin-seumteo-worker.internal:8080 SEUMTEO_WORKER_TOKEN=<위와 동일>
 ```
 `SEUMTEO_ENABLED=true` 순간 home-check 가 CODEF 대신 이 워커를 쓴다. 롤백은 `false`.
 
-> **Flycast 60초 프록시 타임아웃 주의**: 발급 잡이 60초를 넘길 수 있으면(콜드스타트 포함)
-> `.internal` 직결 + `auto_stop_machines="off"`(상시가동)로 전환하고 `SEUMTEO_WORKER_URL`을
-> `http://jippin-seumteo-worker.internal:8080` 으로 바꾼다. 실측 후 결정.
+> **scale-to-zero 유지**: `min_machines_running=0`을 유지한다. `/home-check/new` 진입 시
+> Flycast health probe가 worker를 깨우고, 실제 발급은 browser ready 이후 `.internal`로 보내므로
+> cold-start와 Flycast 프록시 요청 상한을 분리한다. 제출 경로도 ready를 다시 확인해 사용자가
+> 화면 진입 직후 제출해도 안전하다.
 
 ## PoC 검증 체크리스트 (실주소로 확인 후 조정)
 

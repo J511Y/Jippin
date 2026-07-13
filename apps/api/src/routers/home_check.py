@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
 
 from ..auth.request_token import RequestUser, require_supabase_request_user
 from ..errors import ZippinException
@@ -35,6 +35,21 @@ def _not_found() -> ZippinException:
         code="HOME_CHECK_NOT_FOUND",
         http_status=404,
     )
+
+
+@router.post("/warmup", status_code=status.HTTP_204_NO_CONTENT)
+async def warmup_home_check_worker(
+    background_tasks: BackgroundTasks,
+) -> Response:
+    """우리집 체크 퍼널 진입 시 세움터 worker를 best-effort로 깨운다.
+
+    응답을 즉시 돌려 입력 UX를 막지 않는다. 실제 제출 경로는 별도의 ready 가드를 거치므로
+    warm-up이 진행 중이거나 실패해도 cold-start 상태에서 발급을 보내지 않는다.
+    """
+
+    background_tasks.add_task(home_check_service.warm_home_check_worker)
+    logger.info("home_check_worker_warmup_requested")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("", response_model=HomeCheckJob, status_code=202)

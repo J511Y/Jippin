@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import asynccontextmanager
 
 import structlog
@@ -62,17 +63,38 @@ async def building_register(
     _require_token(authorization)
     flow: SeumteoFlow = app.state.flow
     settings = get_settings()
+    started = time.monotonic()
+    # 주소·동·호는 로그에 남기지 않는다. 잡 수명과 대장 종류만 남겨 Flycast/세움터 경계를
+    # 구분할 수 있게 한다.
+    _log.info("job.received", register_kind=req.register_kind)
     try:
         result = await asyncio.wait_for(
             flow.run(req), timeout=settings.job_deadline_ms / 1000
         )
+        _log.info(
+            "job.completed",
+            register_kind=req.register_kind,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
         return result
     except LoginError as exc:
+        _log.warning(
+            "job.auth_error",
+            register_kind=req.register_kind,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
         return JSONResponse(
-            content=BuildingRegisterError(category="auth", message=str(exc)).model_dump()
+            content=BuildingRegisterError(
+                category="auth", message=str(exc)
+            ).model_dump()
         )
     except FlowError as exc:
-        _log.warning("job.flow_error", category=exc.category, message=exc.message)
+        _log.warning(
+            "job.flow_error",
+            category=exc.category,
+            message=exc.message,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
         return JSONResponse(
             content=BuildingRegisterError(
                 category=exc.category,
@@ -82,14 +104,22 @@ async def building_register(
             ).model_dump()
         )
     except asyncio.TimeoutError:
-        _log.warning("job.timeout")
+        _log.warning(
+            "job.timeout",
+            register_kind=req.register_kind,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
         return JSONResponse(
             content=BuildingRegisterError(
                 category="upstream", message="발급 처리가 시간 내 완료되지 않았습니다."
             ).model_dump()
         )
     except Exception:  # noqa: BLE001
-        _log.exception("job.unexpected")
+        _log.exception(
+            "job.unexpected",
+            register_kind=req.register_kind,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
         # 예기치 못한 오류(브라우저 크래시 등) — 다음 잡을 위해 브라우저 재기동 시도.
         try:
             await app.state.mgr.ensure_logged_in()

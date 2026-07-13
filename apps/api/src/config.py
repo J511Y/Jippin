@@ -95,12 +95,20 @@ class Settings(BaseSettings):
     # 로그인·발급·CLIP 리포트 추출·PDF 를 수행하고 CODEF 동형 결과를 돌려준다.
     # 세움터 자격증명(seumter_id/password)은 이 프로세스가 아니라 워커(Fly secrets)에 있다.
     seumteo_enabled: bool = Field(default=False)
+    # Flycast URL은 scale-to-zero worker를 깨우는 health probe 전용이다. 긴 발급 요청은
+    # ready 확인 후 .internal로 직결해 Flycast 프록시의 요청 상한을 피한다.
     seumteo_worker_url: str | None = Field(
         default="http://jippin-seumteo-worker.flycast"
+    )
+    seumteo_worker_job_url: str | None = Field(
+        default="http://jippin-seumteo-worker.internal:8080"
     )
     seumteo_worker_token: str | None = Field(default=None)
     # 워커 잡 상한(콜드스타트+발급). 워커 job_deadline_ms 보다 넉넉히.
     seumteo_worker_timeout_seconds: int = Field(default=180)
+    # 화면 진입 warm-up과 실제 조회 전 ready 가드의 총 대기 예산/폴링 간격.
+    seumteo_worker_warmup_timeout_seconds: int = Field(default=45)
+    seumteo_worker_warmup_poll_seconds: float = Field(default=2.0)
 
     # 사전검토 PDF 리포트 보관 Supabase Storage 버킷명. 운영자가 버킷 생성 필요
     # (인프라 선행). 발부된 PDF 는 이 버킷에 service-role 로 업로드되고 단기 서명

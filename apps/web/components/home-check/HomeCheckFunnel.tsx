@@ -17,7 +17,11 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { parseApiError } from '@/lib/api/error';
-import { createHomeCheck, type CreateHomeCheckPayload } from '@/lib/home-check/api';
+import {
+  createHomeCheck,
+  type CreateHomeCheckPayload,
+  warmHomeCheckWorker
+} from '@/lib/home-check/api';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
 import { openJusoAddressPopup } from '@/lib/leads/juso-popup';
 
@@ -112,6 +116,27 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
   const [hoTouched, setHoTouched] = useState(false);
 
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  // 이 화면에 진입한 동안 세움터 worker를 best-effort로 깨운다. scale-to-zero 비용은
+  // 유지하면서 사용자가 주소·동·호를 입력하는 시간에 Chromium cold-start를 숨긴다.
+  // warm-up은 익명 세션을 만들지 않는 공개·cooldown API라, 제출 전 불필요한 anonymous user를
+  // 생성하지 않는다. 미리보기는 백엔드를 쓰지 않으므로 실제 호출을 건너뛴다.
+  useEffect(() => {
+    if (onSubmitOverride) return;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        if (!cancelled) await warmHomeCheckWorker();
+      } catch {
+        // warm-up은 UX 최적화다. 실패해도 제출 시 서버의 ready 가드가 다시 준비를 시도한다.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [onSubmitOverride]);
 
   // 스텝 전환 시 새 스텝의 포커스 대상(질문 헤딩)으로 포커스를 옮긴다(스크린리더 맥락 전달).
   useEffect(() => {

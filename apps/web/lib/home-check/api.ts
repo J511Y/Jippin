@@ -45,6 +45,15 @@ export async function createHomeCheck(payload: CreateHomeCheckPayload): Promise<
   return response.data;
 }
 
+/**
+ * 우리집 체크 퍼널 진입 시 scale-to-zero 세움터 worker를 깨운다.
+ * 서버는 즉시 204를 돌리고 준비는 백그라운드에서 진행한다. 실제 제출 경로도 worker ready를
+ * 다시 보장하므로 이 호출은 UX 선행 작업일 뿐, 조회의 정확성 경계는 아니다.
+ */
+export async function warmHomeCheckWorker(): Promise<void> {
+  await apiClient.post('/home-check/warmup');
+}
+
 /** 잡 단건 조회(폴링). status=completed 면 `report`, needs_input 면 `needs_input`, failed 면 `error` 가 채워진다. */
 export async function getHomeCheck(id: string): Promise<HomeCheckJob> {
   const response = await apiClient.get<HomeCheckJob>(`/home-check/${id}`);

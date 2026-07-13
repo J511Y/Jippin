@@ -74,6 +74,43 @@ class ReceiptMatchingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["pbsvcRecpNo"], "20263470000G209088")
         self.assertEqual(result["appDate"], "20260713")
 
+    async def test_accepts_history_when_building_name_variant_has_same_jibun(
+        self,
+    ) -> None:
+        """실측 회귀: 검색 bldNm과 이력 주소의 법정동 접두어 표기가 다를 수 있다."""
+
+        self.targets["bld_nm"] = "유천포스코더샵아파트"
+        history = _row("20263470000G209107", "20260713105108")
+        self.flow._post = AsyncMock(
+            return_value={
+                "IssueReadHistList": [history],
+                "caisMessage": {"resultCode": "S00000"},
+            }
+        )
+
+        result = await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
+        self.assertEqual(result["pbsvcRecpNo"], "20263470000G209107")
+
+    async def test_rejects_name_variant_when_strong_jibun_does_not_match(self) -> None:
+        """동·호가 같아도 다른 단지의 이력은 지번 식별자로 차단한다."""
+
+        self.targets["bld_nm"] = "유천포스코더샵아파트"
+        other_building = _row(
+            "20263470000G209108",
+            "20260713105208",
+            address="대구광역시 달서구 유천동 489 다른아파트 105동 2001",
+        )
+        self.flow._post = AsyncMock(
+            return_value={
+                "IssueReadHistList": [other_building],
+                "caisMessage": {"resultCode": "S00000"},
+            }
+        )
+
+        with self.assertRaisesRegex(FlowError, "신청한 발급 건"):
+            await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
     async def test_never_reuses_receipt_present_before_submission(self) -> None:
         old = _row("20263470000G209084", "20260713103941")
         self.flow._post = AsyncMock(

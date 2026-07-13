@@ -791,10 +791,11 @@ class SeumteoFlow:
         dong = _norm_unit(t.get("es_dong_nm") or req.dong)
         ho = _norm_unit(t.get("es_ho_nm") or req.ho)
         # 건물 식별자 — 공용 계정에 다른 단지의 같은 동/호(예: 다른 단지 101동 1001호)가 섞여
-        # 있어, 동/호만으로 매칭하면 **엉뚱한 건물의 발급 문서**를 열 수 있다. 건물명(있으면)을
-        # 우선 쓰고, 없으면 **'시군구·법정동+본번' 지번 프리픽스**(짧은 본번의 부분일치 오매칭
-        # 방지)를 접수 주소(locDetlAddr)에서 확인한다(#recp-building). 둘 다 불충분하면 식별 불가로
-        # 보고 매칭에서 제외한다(fail-closed → 잘못된 건 발급 방지).
+        # 있어, 동/호만으로 매칭하면 **엉뚱한 건물의 발급 문서**를 열 수 있다. 건물명과
+        # **'시군구·법정동+본번' 지번 프리픽스**(짧은 본번의 부분일치 오매칭 방지)를 모두
+        # 확보한다. 세움터 검색(bldNm)과 신청이력(locDetlAddr)은 단지명에 법정동 접두어를
+        # 넣거나 빼는 식으로 표기가 달라질 수 있으므로, 건물명 불일치만으로 같은 강한 지번
+        # 식별자를 버리면 안 된다(#recp-building-name-variant).
         bld_nm = re.sub(r"[\s()]", "", str(t.get("bld_nm") or ""))
         mnnm = str((t.get("loc") or {}).get("mnnm") or "").lstrip("0")
         jibun_norm = re.sub(r"[\s()]", "", str(t.get("jibun_addr") or ""))
@@ -818,13 +819,9 @@ class SeumteoFlow:
                     continue
                 addr = str(r.get("locDetlAddr") or "")
                 addr_norm = re.sub(r"[\s()]", "", addr)
-                if bld_nm:
-                    if bld_nm not in addr_norm:
-                        continue
-                elif len(jibun_key) >= 8:
-                    if jibun_key not in addr_norm:
-                        continue
-                else:
+                name_matches = bool(bld_nm and bld_nm in addr_norm)
+                jibun_matches = bool(len(jibun_key) >= 8 and jibun_key in addr_norm)
+                if not (name_matches or jibun_matches):
                     continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
                 if dong and (dong + "동") not in addr_norm:
                     continue
