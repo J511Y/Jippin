@@ -111,6 +111,27 @@ class ReceiptMatchingTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(FlowError, "신청한 발급 건"):
             await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
 
+    async def test_rejects_name_variant_when_parcel_number_only_has_prefix(
+        self,
+    ) -> None:
+        """488과 4880은 다른 필지이므로 부분 문자열 매칭을 허용하지 않는다."""
+
+        self.targets["bld_nm"] = "유천포스코더샵아파트"
+        prefixed_parcel = _row(
+            "20263470000G209109",
+            "20260713105308",
+            address="대구광역시 달서구 유천동 4880 다른아파트 105동 2001",
+        )
+        self.flow._post = AsyncMock(
+            return_value={
+                "IssueReadHistList": [prefixed_parcel],
+                "caisMessage": {"resultCode": "S00000"},
+            }
+        )
+
+        with self.assertRaisesRegex(FlowError, "신청한 발급 건"):
+            await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
     async def test_never_reuses_receipt_present_before_submission(self) -> None:
         old = _row("20263470000G209084", "20260713103941")
         self.flow._post = AsyncMock(

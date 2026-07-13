@@ -144,6 +144,22 @@ async def test_fetch_heading_maps_result():
     assert result.comm_unique_no == "1020129529"
 
 
+async def test_falls_back_to_worker_url_when_job_url_is_not_configured():
+    settings = _Settings()
+    settings.seumteo_worker_job_url = None
+    http = _FakeHttp([_FakeResponse(200, _EXCLUSIVE_OK)])
+    client = SeumteoBuildingRegisterClient(
+        settings, redis_client=None, http_client=http
+    )
+    query = BuildingRegisterQuery(
+        road_addr="서울시 어딘가 1", dong="101동", ho="1001호"
+    )
+
+    await client.fetch_exclusive_part(query)
+
+    assert http.calls[0]["url"] == "http://worker.flycast/jobs/building-register"
+
+
 @pytest.mark.parametrize(
     "category,exc",
     [

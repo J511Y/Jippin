@@ -798,12 +798,23 @@ class SeumteoFlow:
         # 식별자를 버리면 안 된다(#recp-building-name-variant).
         bld_nm = re.sub(r"[\s()]", "", str(t.get("bld_nm") or ""))
         mnnm = str((t.get("loc") or {}).get("mnnm") or "").lstrip("0")
+        slno = str((t.get("loc") or {}).get("slno") or "").lstrip("0")
         jibun_norm = re.sub(r"[\s()]", "", str(t.get("jibun_addr") or ""))
         # 본번을 지번주소 안에서 찾아 그 지점까지(=시군구+법정동+본번)를 강한 식별자로 삼는다.
         jibun_key = (
             jibun_norm[: jibun_norm.find(mnnm) + len(mnnm)]
             if mnnm and mnnm in jibun_norm
             else ""
+        )
+        # 본번 488은 4880과 달라야 한다. 부번이 있으면 함께 비교하고, 부번이 없으면 '488-1'도
+        # 다른 필지로 취급한다. 세움터 이력 주소는 번지 뒤 공백이 제거되므로 숫자·하이픈 경계를
+        # 정규식 lookahead로 보존한다(#recp-parcel-boundary).
+        parcel_key = f"{jibun_key}-{slno}" if jibun_key and slno else jibun_key
+        parcel_suffix = r"(?!\d)" if slno else r"(?![\d-])"
+        parcel_pattern = (
+            re.compile(re.escape(parcel_key) + parcel_suffix)
+            if len(jibun_key) >= 8
+            else None
         )
         # S01/D02 응답에서 얻은 번호는 새 행이 여러 개일 때의 tie-breaker 로만 사용한다. 실측상
         # 신청은 완료됐지만 응답에서 재귀 추출한 번호가 06R01 의 실제 pbsvcRecpNo 와 달라,
@@ -820,7 +831,9 @@ class SeumteoFlow:
                 addr = str(r.get("locDetlAddr") or "")
                 addr_norm = re.sub(r"[\s()]", "", addr)
                 name_matches = bool(bld_nm and bld_nm in addr_norm)
-                jibun_matches = bool(len(jibun_key) >= 8 and jibun_key in addr_norm)
+                jibun_matches = bool(
+                    parcel_pattern and parcel_pattern.search(addr_norm)
+                )
                 if not (name_matches or jibun_matches):
                     continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
                 if dong and (dong + "동") not in addr_norm:

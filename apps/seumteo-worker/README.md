@@ -85,7 +85,8 @@ fly secrets set -a jippin SEUMTEO_ENABLED=true SEUMTEO_WORKER_URL=http://jippin-
 > **scale-to-zero 유지**: `min_machines_running=0`을 유지한다. `/home-check/new` 진입 시
 > Flycast health probe가 worker를 깨우고, 실제 발급은 browser ready 이후 `.internal`로 보내므로
 > cold-start와 Flycast 프록시 요청 상한을 분리한다. 제출 경로도 ready를 다시 확인해 사용자가
-> 화면 진입 직후 제출해도 안전하다.
+> 화면 진입 직후 제출해도 안전하다. 워커 `JOB_DEADLINE_MS=120000`은 API 180초 상한보다
+> 짧아 긴 발급이 내부 55초 상한에 잘리는 것을 막는다.
 
 ## PoC 검증 체크리스트 (실주소로 확인 후 조정)
 

@@ -100,9 +100,9 @@ class Settings(BaseSettings):
     seumteo_worker_url: str | None = Field(
         default="http://jippin-seumteo-worker.flycast"
     )
-    seumteo_worker_job_url: str | None = Field(
-        default="http://jippin-seumteo-worker.internal:8080"
-    )
+    # 미설정이면 기존 SEUMTEO_WORKER_URL로 발급까지 수행해 기존 로컬/비-Fly 환경을 보존한다.
+    # Fly scale-to-zero 운영은 환경변수로 .internal 직결 URL을 명시한다.
+    seumteo_worker_job_url: str | None = Field(default=None)
     seumteo_worker_token: str | None = Field(default=None)
     # 워커 잡 상한(콜드스타트+발급). 워커 job_deadline_ms 보다 넉넉히.
     seumteo_worker_timeout_seconds: int = Field(default=180)

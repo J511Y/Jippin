@@ -54,10 +54,10 @@ class Settings(BaseSettings):
     action_timeout_ms: int = Field(default=30_000)
     # 리포트 렌더 완료(RPTCAA02R02 응답 + 캔버스) 대기 상한. 2쪽 발급은 실측 ~10s 라 넉넉.
     report_render_timeout_ms: int = Field(default=45_000)
-    # 단일 잡 전체 상한. **Flycast 프록시(~60s)보다 짧게** 잡아, 실제 발급까지 마친 느린 잡이
-    # 프록시 절단으로 오류처럼 보여 재시도→중복발급되는 것을 막는다(잡이 프록시보다 먼저 깨끗이
-    # 실패). 더 긴 렌더가 필요하면 fly.toml 을 .internal 직결 + auto_stop=off 로 바꾼다(README).
-    job_deadline_ms: int = Field(default=55_000)
+    # 단일 잡 전체 상한. 실제 발급은 browser ready 뒤 .internal로 직결하므로 Flycast 프록시
+    # 상한과 분리된다. API의 180초 상한보다 작게 두되, 로그인·발급·CLIP 렌더가 55초를 넘겨도
+    # 완료할 수 있도록 120초를 기본으로 한다.
+    job_deadline_ms: int = Field(default=120_000)
 
     # 로그인 폼(#membId) hydrate 대기 상한. eais 로그인 페이지는 Nuxt CSR 이라 domcontentloaded
     # 직후엔 폼이 아직 없다 → wait_for_selector 로 렌더를 기다린다(폼 부재를 '이미 로그인'으로

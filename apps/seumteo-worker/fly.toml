@@ -22,6 +22,8 @@ swap_size_mb = 1024             # Chromium 메모리 스파이크 OOM-kill 방�
 [env]
   # 렌더 동시성 1(2GB에서 안전). 워커 내부 세마포어와 concurrency.soft_limit 를 맞춘다.
   SEUMTEO_MAX_CONCURRENCY = "1"
+  # 실제 발급은 browser ready 뒤 .internal로 직결한다. API(180초)보다 짧은 전체 잡 상한.
+  JOB_DEADLINE_MS = "120000"
 
 [http_service]
   internal_port = 8080
