@@ -137,6 +137,40 @@ def _block_background(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# POST /home-check/warmup
+# ---------------------------------------------------------------------------
+def test_warmup_returns_204_and_runs_best_effort_task(monkeypatch) -> None:
+    called = False
+
+    async def fake_warmup() -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(svc, "warm_home_check_worker", fake_warmup)
+    client, token, _subject = _auth_client(monkeypatch, is_anonymous=True)
+    with client:
+        response = client.post(
+            "/home-check/warmup", headers={"authorization": f"Bearer {token}"}
+        )
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert called is True
+
+
+def test_warmup_does_not_create_or_require_anonymous_session(monkeypatch) -> None:
+    async def fake_warmup() -> None:
+        return None
+
+    monkeypatch.setattr(svc, "warm_home_check_worker", fake_warmup)
+    client = TestClient(create_app())
+    with client:
+        response = client.post("/home-check/warmup")
+
+    assert response.status_code == 204
+
+
+# ---------------------------------------------------------------------------
 # POST /home-check
 # ---------------------------------------------------------------------------
 def test_create_requires_bearer_token() -> None:

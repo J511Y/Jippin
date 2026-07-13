@@ -13,7 +13,9 @@ PII 정책(ADR-0008 §2.3): 소유자/설계자 성명·주민번호·세움터 
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import time
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any
@@ -226,6 +228,9 @@ async def get_home_check_documents(*, home_check_id: uuid.UUID) -> list[dict[str
 # 공유해야 한다(요청마다 새 클라이언트가 생성되므로). in-process dict 폴백이면 토큰을
 # 저장한 클라이언트가 폐기된 뒤 resume 가 항상 만료로 떨어진다 → 프로세스 공유 Redis 사용.
 _codef_redis: aioredis.Redis | None = None
+_worker_warmup_lock: asyncio.Lock | None = None
+_worker_warmup_last_attempt = 0.0
+_WORKER_WARMUP_COOLDOWN_SECONDS = 45.0
 
 
 def _get_codef_redis() -> aioredis.Redis:
@@ -257,6 +262,39 @@ def _new_client() -> CodefBuildingRegisterClient:
             settings, redis_client=_get_codef_redis()
         )
     return CodefBuildingRegisterClient(settings, redis_client=_get_codef_redis())
+
+
+async def warm_home_check_worker() -> None:
+    """우리집 체크 화면 진입 시 scale-to-zero 세움터 worker를 best-effort로 준비한다.
+
+    실제 발급 경로도 ``SeumteoBuildingRegisterClient._run_job``에서 ready를 다시 확인하므로,
+    이 background warm-up이 아직 끝나지 않은 상태로 사용자가 즉시 제출해도 안전하다.
+    """
+
+    global _worker_warmup_lock, _worker_warmup_last_attempt
+    if _worker_warmup_lock is None:
+        _worker_warmup_lock = asyncio.Lock()
+
+    async with _worker_warmup_lock:
+        now = time.monotonic()
+        if now - _worker_warmup_last_attempt < _WORKER_WARMUP_COOLDOWN_SECONDS:
+            logger.info("home_check_worker_warmup_skipped", reason="cooldown")
+            return
+        _worker_warmup_last_attempt = now
+
+    client = _new_client()
+    warmup = getattr(client, "warmup", None)
+    if not callable(warmup):
+        return
+    try:
+        await warmup()
+        logger.info("home_check_worker_warmed")
+    except CodefError as exc:
+        # 화면 진입 warm-up 실패는 조회 자체를 막지 않는다. 제출 시 ready 가드가 재시도하고,
+        # 그 결과만 잡 상태에 반영한다.
+        logger.info("home_check_worker_warmup_failed", error=type(exc).__name__)
+    except Exception:  # noqa: BLE001 — warm-up은 best-effort.
+        logger.warning("home_check_worker_warmup_unexpected", exc_info=True)
 
 
 async def run_home_check(

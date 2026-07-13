@@ -24,8 +24,11 @@ from src.services.seumteo import (
 
 class _Settings:
     seumteo_worker_url = "http://worker.flycast"
+    seumteo_worker_job_url = "http://worker.internal:8080"
     seumteo_worker_token = "t0ken"
     seumteo_worker_timeout_seconds = 30
+    seumteo_worker_warmup_timeout_seconds = 2
+    seumteo_worker_warmup_poll_seconds = 0.01
     codef_breaker_error_threshold = 5
     codef_breaker_window_seconds = 300
     codef_breaker_open_seconds = 600
@@ -39,21 +42,37 @@ class _FakeResponse:
     def json(self) -> dict:
         return self._body
 
+    @property
+    def is_success(self) -> bool:
+        return 200 <= self.status_code < 300
+
 
 class _FakeHttp:
     """httpx.AsyncClient 대역 — post 호출을 기록하고 큐에서 응답을 돌려준다."""
 
-    def __init__(self, responses: list[_FakeResponse]) -> None:
+    def __init__(
+        self,
+        responses: list[_FakeResponse],
+        health_responses: list[_FakeResponse] | None = None,
+    ) -> None:
         self._responses = list(responses)
+        self._health_responses = list(health_responses or [])
         self.calls: list[dict] = []
+        self.health_calls: list[dict] = []
+
+    async def get(self, url, *, headers=None, timeout=None):
+        self.health_calls.append({"url": url, "headers": headers, "timeout": timeout})
+        if self._health_responses:
+            return self._health_responses.pop(0)
+        return _FakeResponse(200, {"ok": True, "browser": True})
 
     async def post(self, url, *, json=None, headers=None):  # noqa: A002
         self.calls.append({"url": url, "json": json, "headers": headers})
         return self._responses.pop(0)
 
 
-def _client(responses):
-    http = _FakeHttp(responses)
+def _client(responses, *, health_responses=None):
+    http = _FakeHttp(responses, health_responses)
     client = SeumteoBuildingRegisterClient(
         _Settings(), redis_client=None, http_client=http
     )
@@ -104,12 +123,13 @@ async def test_fetch_exclusive_maps_result():
 
     # 요청 payload/헤더 확인
     call = http.calls[0]
-    assert call["url"] == "http://worker.flycast/jobs/building-register"
+    assert call["url"] == "http://worker.internal:8080/jobs/building-register"
     assert call["json"]["register_kind"] == "exclusive"
     assert call["json"]["road_addr"] == "서울특별시 영등포구 여의대방로43나길 25"
     assert call["json"]["dong"] == "104동"
     assert call["json"]["ho"] == "504호"
     assert call["headers"]["Authorization"] == "Bearer t0ken"
+    assert http.health_calls[0]["url"] == "http://worker.flycast/healthz"
 
 
 async def test_fetch_heading_maps_result():
@@ -122,6 +142,22 @@ async def test_fetch_heading_maps_result():
     assert result.violation_status is None
     assert result.detail_list[0]["resContents"] == "공동주택(아파트)"
     assert result.comm_unique_no == "1020129529"
+
+
+async def test_falls_back_to_worker_url_when_job_url_is_not_configured():
+    settings = _Settings()
+    settings.seumteo_worker_job_url = None
+    http = _FakeHttp([_FakeResponse(200, _EXCLUSIVE_OK)])
+    client = SeumteoBuildingRegisterClient(
+        settings, redis_client=None, http_client=http
+    )
+    query = BuildingRegisterQuery(
+        road_addr="서울시 어딘가 1", dong="101동", ho="1001호"
+    )
+
+    await client.fetch_exclusive_part(query)
+
+    assert http.calls[0]["url"] == "http://worker.flycast/jobs/building-register"
 
 
 @pytest.mark.parametrize(
@@ -184,3 +220,20 @@ async def test_needs_input_normalizes_options():
     assert exc.field == "dong"
     assert exc.resume_token  # 토큰 발급됨
     assert exc.options == [{"value": "1020129529", "label": "104동", "area": None}]
+
+
+async def test_warmup_retries_flycast_until_browser_is_ready():
+    client, http = _client(
+        [],
+        health_responses=[
+            _FakeResponse(503, {"ok": False, "browser": False}),
+            _FakeResponse(200, {"ok": True, "browser": True}),
+        ],
+    )
+
+    await client.warmup()
+
+    assert len(http.health_calls) == 2
+    assert all(
+        call["url"] == "http://worker.flycast/healthz" for call in http.health_calls
+    )

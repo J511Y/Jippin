@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 from typing import Any
@@ -39,6 +40,7 @@ from ..codef.types import (
 _log = structlog.get_logger(__name__)
 
 _JOB_PATH = "/jobs/building-register"
+_HEALTH_PATH = "/healthz"
 _RESUME_PREFIX = "seumteo:resume:"
 _RESUME_TTL = 600
 
@@ -54,11 +56,20 @@ class SeumteoBuildingRegisterClient:
         self._settings = settings
         self._redis = redis_client
         self._http = http_client
-        self._base_url = str(getattr(settings, "seumteo_worker_url", "") or "").rstrip(
+        self._wake_url = str(getattr(settings, "seumteo_worker_url", "") or "").rstrip(
             "/"
         )
+        self._job_url = str(
+            getattr(settings, "seumteo_worker_job_url", "") or self._wake_url
+        ).rstrip("/")
         self._token = getattr(settings, "seumteo_worker_token", None)
         self._timeout = float(getattr(settings, "seumteo_worker_timeout_seconds", 180))
+        self._warmup_timeout = float(
+            getattr(settings, "seumteo_worker_warmup_timeout_seconds", 45)
+        )
+        self._warmup_poll = float(
+            getattr(settings, "seumteo_worker_warmup_poll_seconds", 2)
+        )
         self._breaker = CodefCircuitBreaker(
             error_threshold=settings.codef_breaker_error_threshold,
             window_seconds=settings.codef_breaker_window_seconds,
@@ -121,12 +132,23 @@ class SeumteoBuildingRegisterClient:
     # ------------------------------------------------------------------
     # 워커 호출
     # ------------------------------------------------------------------
+    async def warmup(self) -> None:
+        """scale-to-zero worker를 깨우고 Chromium 준비까지 기다린다.
+
+        Flycast URL은 stopped machine을 autostart하지만 긴 발급 요청은 프록시 시간 제한에
+        걸릴 수 있다. 따라서 화면 진입 warm-up과 실제 조회 직전 모두 이 가드를 거친 뒤,
+        발급은 ``.internal`` job URL로 보낸다.
+        """
+
+        await self._ensure_worker_ready()
+
     async def _run_job(
         self, query: BuildingRegisterQuery, *, register_kind: str
     ) -> dict[str, Any]:
-        if not self._base_url:
+        if not self._wake_url or not self._job_url:
             raise CodefUpstreamError("세움터 워커 URL이 설정되지 않았습니다.")
         await self._breaker.ensure_closed()
+        await self._ensure_worker_ready()
 
         payload = {
             "road_addr": query.road_addr.strip(),
@@ -135,9 +157,8 @@ class SeumteoBuildingRegisterClient:
             "jibun_addr": query.jibun_addr,
             "register_kind": register_kind,
         }
-        headers = {"Content-Type": "application/json"}
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+        headers = self._worker_headers()
+        headers["Content-Type"] = "application/json"
 
         # 워커 토큰 401(인프라 오류)은 세움터 계정 서킷과 무관 — _post 가 upstream 으로 낸다.
         # 계정 자격증명 실패(로그인 실패)는 워커가 body category=="auth" 로 주고, 그것만
@@ -164,10 +185,56 @@ class SeumteoBuildingRegisterClient:
             raise
         raise CodefUpstreamError("세움터 응답 분류 실패")  # unreachable
 
+    def _worker_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
+
+    async def _ensure_worker_ready(self) -> None:
+        if not self._wake_url:
+            raise CodefUpstreamError("세움터 워커 URL이 설정되지 않았습니다.")
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(1.0, self._warmup_timeout)
+        attempt = 0
+        last_error = "not_ready"
+        _log.info("seumteo.warmup_started")
+
+        while loop.time() < deadline:
+            attempt += 1
+            remaining = max(0.1, deadline - loop.time())
+            # 첫 cold-start 연결이 Flycast 프록시에서 오래 붙들리지 않게 짧게 끊고 재시도한다.
+            request_timeout = min(8.0, remaining)
+            try:
+                response = await self._health_probe(request_timeout)
+                body = response.json() if response.is_success else {}
+                if response.is_success and body.get("ok") and body.get("browser"):
+                    _log.info("seumteo.warmup_ready", attempt=attempt)
+                    return
+                last_error = f"http_{response.status_code}"
+            except (httpx.HTTPError, ValueError) as exc:
+                last_error = exc.__class__.__name__
+
+            delay = min(max(0.1, self._warmup_poll), max(0.0, deadline - loop.time()))
+            if delay:
+                await asyncio.sleep(delay)
+
+        _log.warning("seumteo.warmup_timeout", attempts=attempt, error=last_error)
+        raise CodefUpstreamError("세움터 조회 준비 시간이 초과되었습니다.")
+
+    async def _health_probe(self, timeout: float) -> httpx.Response:
+        url = f"{self._wake_url}{_HEALTH_PATH}"
+        headers = self._worker_headers()
+        if self._http is not None:
+            return await self._http.get(url, headers=headers, timeout=timeout)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await client.get(url, headers=headers)
+
     async def _post(
         self, payload: dict[str, Any], headers: dict[str, str]
     ) -> dict[str, Any]:
-        url = f"{self._base_url}{_JOB_PATH}"
+        url = f"{self._job_url}{_JOB_PATH}"
 
         async def _do(client: httpx.AsyncClient) -> httpx.Response:
             return await client.post(url, json=payload, headers=headers)
