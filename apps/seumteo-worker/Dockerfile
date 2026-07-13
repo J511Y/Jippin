@@ -44,4 +44,7 @@ USER app
 EXPOSE 8080
 
 # workers=1: 브라우저 1개를 프로세스 내에서 공유(멀티워커면 브라우저 중복 → OOM).
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+# API의 실제 잡 요청은 worker의 Fly 6PN 주소(.internal)를 통해 IPv6로 직접 들어온다.
+# 0.0.0.0에만 bind하면 healthz(Flycast)는 통과해도 .internal:8080은 connection refused가 된다.
+# Linux의 dual-stack :: listener로 Flycast health check와 .internal job 요청을 모두 수신한다.
+CMD ["uvicorn", "src.main:app", "--host", "::", "--port", "8080", "--workers", "1"]
