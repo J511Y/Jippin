@@ -1,0 +1,1 @@
+"""jippin-seumteo-worker tests."""

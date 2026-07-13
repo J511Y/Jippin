@@ -59,8 +59,9 @@ def _kst_today() -> datetime.date:
 
 
 # 신청(S01) 접수번호 매칭: 공용 단일계정엔 같은 세대의 '과거 접수'가 [어제,오늘] 창에 남아 있을 수
-# 있다. 방금 신청한 건(=S01 이 돌려준 접수번호)만 06R01 에서 수용해 과거 접수의 '구발급'을 막고
-# (#recp-fresh), 방금 건이 아직 신청내역에 안 뜬 경우 잠깐 폴링한다.
+# 있다. 신청 전 06R01 접수번호 스냅샷을 잡고, 신청 후 새로 생긴 동일 건물·동·호 행만 수용해
+# 과거 접수의 '구발급'을 막는다(#recp-fresh). S01/D02 응답의 pbsvcRecpNo 는 응답 위치·의미가
+# 안정적이지 않아 후보(tie-breaker)로만 쓰고, 새 행이 아직 신청내역에 안 뜨면 잠깐 폴링한다.
 _RECP_POLL_TRIES = 4
 _RECP_POLL_WAIT_MS = 1500
 
@@ -71,11 +72,11 @@ _PDF_RETURN_RESERVE_MS = 4000
 
 
 def _extract_recp_no(obj: object) -> str:
-    """S01(신청) 응답에서 방금 생성된 접수번호(pbsvcRecpNo)를 방어적으로 찾는다(중첩 관용).
+    """S01/D02 응답에서 접수번호 후보(pbsvcRecpNo)를 방어적으로 찾는다(중첩 관용).
 
-    06R01 신청내역엔 공용 단일계정의 과거 접수가 섞일 수 있어, '방금 신청한 건'을 식별하는 정본은
-    S01 이 돌려준 접수번호다. 응답 구조가 버전마다 달라질 수 있어 dict/list 를 재귀로 훑어 첫 값을
-    집는다. 못 찾으면 "" — 그 경우 _find_recp_no 가 기존(최신 건물매칭) 동작으로 폴백한다.
+    응답 구조가 버전마다 달라질 수 있어 dict/list 를 재귀로 훑어 첫 값을 집는다. 이 값은 06R01
+    실제 접수번호와 다를 수 있으므로 정본으로 강제하지 않고, 신청 전후 이력 차집합이 복수일 때만
+    tie-breaker 로 사용한다.
     """
 
     stack: list[object] = [obj]
@@ -89,6 +90,29 @@ def _extract_recp_no(obj: object) -> str:
         elif isinstance(cur, list):
             stack.extend(cur)
     return ""
+
+
+def _norm_recp_no(value: object) -> str:
+    """접수번호 비교용 정규화 — 영숫자만 보존하고 대문자로 통일한다."""
+
+    return re.sub(r"[^0-9A-Za-z]", "", str(value or "")).upper()
+
+
+def _receipt_history_body() -> dict:
+    """06R01 발급이력 조회 조건. ``01`` 은 세움터 UI 의 전체 상태 플래그다."""
+
+    today = _kst_today()
+    return {
+        "membNo": "",
+        "pbsvcGbCd": "",
+        "progStateFlagArr": ["01"],
+        "pbsvcProcessGbCd": "",
+        "firstSaveStartDate": (today - datetime.timedelta(days=1)).isoformat(),
+        "firstSaveEndDate": today.isoformat(),
+        "pageNo": 0,
+        "recordSize": 50,
+        "pageYn": "N",
+    }
 
 
 # 발급 뷰어 param 은 CryptoJS.AES(passphrase)로 암호화된다(뷰어 html2xmlDwg 가 같은 키로 복호,
@@ -261,11 +285,16 @@ class SeumteoFlow:
         await self._add_to_cart(page, req, targets)  # 담기(C01)
         item = await self._isolate_cart(page, targets)  # R05: 내 항목 + 잔여 제거(D01)
         appnt = await self._appnt_info(page)  # 신청자 정보(세션+사업자)
+        # 신청 전에 이미 존재하던 접수번호를 고정한다. 신청 응답의 pbsvcRecpNo 가 06R01 의
+        # 실제 발급 접수번호와 다르더라도, 이후 새로 생긴 동일 세대 행을 안전하게 식별할 수 있다.
+        known_receipts = await self._receipt_snapshot(page)
         submitted_recp = await self._submit(
             page, item, appnt
         )  # 신청(S01+D02)→ 방금 건 접수번호
-        # 06R01 에서 '방금 신청한 접수번호' 행만 수용(공용계정의 과거 접수 구발급 방지, #recp-fresh).
-        recp = await self._find_recp_no(page, req, targets, submitted_recp)
+        # 06R01 에서 신청 전 스냅샷에 없던 새 행만 수용(공용계정의 과거 접수 구발급 방지).
+        recp = await self._find_recp_no(
+            page, req, targets, known_receipts, submitted_recp
+        )
         popup = await self._open_report(page, req, targets, recp)  # 그 건 발급→리포트
         try:
             extracted = await clip.extract_report(
@@ -724,36 +753,40 @@ class SeumteoFlow:
         self._check_cais(data)
         d02 = await self._post(page, f"{base}/bci/BCIAAA02D02", [item])
         self._check_cais(d02)
-        # 방금 신청한 건의 접수번호 — 06R01 에서 이 건만 골라 과거 접수의 구발급을 막는다(#recp-fresh).
-        # S01 이 안 돌려주면 ""(→ _find_recp_no 가 기존 최신-건물매칭으로 폴백).
+        # 접수번호 후보 — 06R01 신청 전후 차집합이 복수일 때만 tie-breaker 로 쓴다.
         return _extract_recp_no(data) or _extract_recp_no(d02)
 
     # ------------------------------------------------------------------
-    # 8) 신청내역(06R01) — 방금 신청한 건의 접수번호(pbsvcRecpNo)를 확보한다.
-    #    최신순으로 정렬해 대장서식(regstrKindCd)+주소(동/호) 일치 + progStateCd:91(완료) 매칭.
-    #    실패 시 fail-closed(다른 건 발급 방지).
+    # 8) 신청내역(06R01) — 신청 전후 접수번호 차집합에서 방금 신청한 건을 확보한다.
+    #    대장서식(regstrKindCd)+주소(동/호)가 일치하는 새 행만 허용하고, 실패/복수면
+    #    fail-closed(다른 건 발급 방지).
     # ------------------------------------------------------------------
+    async def _receipt_snapshot(self, page: Page) -> set[str]:
+        """신청 전에 존재한 최근 접수번호를 캡처한다.
+
+        이 조회가 실패하면 신청 자체를 시작하지 않는다. 스냅샷 없이 최신 행으로 폴백하면
+        공용 계정의 과거 발급을 잘못 열 수 있기 때문이다.
+        """
+
+        data = await self._post(
+            page,
+            f"{self._s.eais_base_url}/bci/BCIAAA06R01",
+            _receipt_history_body(),
+        )
+        self._check_cais(data)
+        rows = data.get("IssueReadHistList") or []
+        return {recp for row in rows if (recp := _norm_recp_no(row.get("pbsvcRecpNo")))}
+
     async def _find_recp_no(
         self,
         page: Page,
         req: BuildingRegisterRequest,
         t: dict,
+        known_receipts: set[str],
         submitted_recp: str = "",
     ) -> dict:
         base = self._s.eais_base_url
-        today = _kst_today()  # KST — UTC date.today()면 심야 구간에 하루 어긋남.
-        # 방금(초 단위 전) 신청한 건 근처로 좁히되, KST 경계·서버 시계 오차 대비 어제까지 포함.
-        body = {
-            "membNo": "",
-            "pbsvcGbCd": "",
-            "progStateFlagArr": ["01"],
-            "pbsvcProcessGbCd": "",
-            "firstSaveStartDate": (today - datetime.timedelta(days=1)).isoformat(),
-            "firstSaveEndDate": today.isoformat(),
-            "pageNo": 0,
-            "recordSize": 50,
-            "pageYn": "N",
-        }
+        body = _receipt_history_body()
         kind = _REGSTR_KIND[req.register_kind]
         dong = _norm_unit(t.get("es_dong_nm") or req.dong)
         ho = _norm_unit(t.get("es_ho_nm") or req.ho)
@@ -771,13 +804,15 @@ class SeumteoFlow:
             if mnnm and mnnm in jibun_norm
             else ""
         )
-        # 방금 신청(S01)한 건의 접수번호(숫자만). 있으면 **이 접수번호와 일치하는 행만** 수용해,
-        # 같은 세대의 과거 접수(구발급) 대신 '방금 신청한 건'을 연다(#recp-fresh).
-        want = re.sub(r"\D", "", submitted_recp or "")
+        # S01/D02 응답에서 얻은 번호는 새 행이 여러 개일 때의 tie-breaker 로만 사용한다. 실측상
+        # 신청은 완료됐지만 응답에서 재귀 추출한 번호가 06R01 의 실제 pbsvcRecpNo 와 달라,
+        # 정확 일치만 강제하면 완료 행을 모두 버리고 중복 발급을 유발했다.
+        want = _norm_recp_no(submitted_recp)
 
         def _pick(rows: list[dict]) -> dict | None:
-            # 최신순 정렬 — want 가 없을 때(폴백) 가장 최근 건물매칭을 고르기 위함.
+            # 최신순 정렬 후, 신청 전 스냅샷에 없던 동일 대상 행만 모은다.
             rows.sort(key=lambda r: str(r.get("firstCrtnDt") or ""), reverse=True)
+            candidates: list[dict] = []
             for r in rows:
                 if str(r.get("regstrKindCd")) != kind:
                     continue
@@ -799,45 +834,62 @@ class SeumteoFlow:
                     and not _addr_has_ho(addr, ho)
                 ):
                     continue
-                recp = str(r.get("pbsvcRecpNo") or "")
-                if not recp:
+                recp = _norm_recp_no(r.get("pbsvcRecpNo"))
+                if not recp or recp in known_receipts:
                     continue
-                # want 가 있는데 다른 접수번호면 = 같은 세대의 과거 발급 → 스킵(구발급 방지).
-                if want and re.sub(r"\D", "", recp) != want:
-                    continue
-                _log.info(
-                    "flow.recp_no",
-                    recp_no=recp,
-                    prog=r.get("progStateCd"),
-                    by_submit=bool(want),
-                )
-                # 발급 준비(06R03)는 이 접수의 처리일 기준이다. 검색창이 [어제,오늘]이라 어제 건이
-                # 매칭될 수 있으니, 오늘로 재계산하지 말고 이 행의 처리일을 그대로 넘긴다(#recp-date).
-                app_date = (
-                    str(r.get("realProcessDateStr") or "")
-                    or str(r.get("recpDate") or "").replace("-", "")
-                    or str(r.get("firstCrtnDt") or "")[:8]
-                )
-                return {
-                    "pbsvcRecpNo": recp,
-                    "mgmNo": str(r.get("mgmNo") or ""),
-                    "issueReadGbCd": str(r.get("issueReadGbCd") or "0"),
-                    "bldrgstGbCd": str(r.get("bldrgstGbCd") or "1"),
-                    "appDate": app_date,
-                }
-            return None
+                candidates.append(r)
 
-        # want(방금 신청 접수번호)가 있으면 그 건이 06R01 에 올라올 때까지 잠깐 폴링한다 — 과거
-        # 접수로 성급히 떨어지지 않게(구발급 방지). 안 뜨면 fail-closed(구발급보다 재시도가 안전).
-        # want 가 없으면(S01 미반환·이례) 단발 조회 후 최신 건물매칭으로 폴백(기존 동작).
-        tries = _RECP_POLL_TRIES if want else 1
-        for attempt in range(tries):
+            if want:
+                exact = [
+                    row
+                    for row in candidates
+                    if _norm_recp_no(row.get("pbsvcRecpNo")) == want
+                ]
+                if len(exact) == 1:
+                    candidates = exact
+            if len(candidates) != 1:
+                if len(candidates) > 1:
+                    _log.warning(
+                        "flow.recp_ambiguous",
+                        candidate_count=len(candidates),
+                        submitted_candidate=bool(want),
+                    )
+                return None
+
+            r = candidates[0]
+            recp = str(r.get("pbsvcRecpNo") or "")
+            _log.info(
+                "flow.recp_no",
+                recp_no=recp,
+                prog=r.get("progStateCd"),
+                by_submit=bool(want and _norm_recp_no(recp) == want),
+                by_snapshot=not bool(want and _norm_recp_no(recp) == want),
+            )
+            # 발급 준비(06R03)는 이 접수의 처리일 기준이다. 검색창이 [어제,오늘]이라 어제 건이
+            # 매칭될 수 있으니, 오늘로 재계산하지 말고 이 행의 처리일을 그대로 넘긴다(#recp-date).
+            app_date = (
+                str(r.get("realProcessDateStr") or "")
+                or str(r.get("recpDate") or "").replace("-", "")
+                or str(r.get("firstCrtnDt") or "")[:8]
+            )
+            return {
+                "pbsvcRecpNo": recp,
+                "mgmNo": str(r.get("mgmNo") or ""),
+                "issueReadGbCd": str(r.get("issueReadGbCd") or "0"),
+                "bldrgstGbCd": str(r.get("bldrgstGbCd") or "1"),
+                "appDate": app_date,
+            }
+
+        # 새 행이 06R01 에 올라올 때까지 잠깐 폴링한다. 신청 응답에 접수번호가 없더라도 스냅샷
+        # 차집합으로 식별할 수 있으므로 동일하게 폴링한다.
+        for attempt in range(_RECP_POLL_TRIES):
             data = await self._post(page, f"{base}/bci/BCIAAA06R01", body)
+            self._check_cais(data)
             rows = data.get("IssueReadHistList") or []
             hit = _pick(rows)
             if hit is not None:
                 return hit
-            if want and attempt < tries - 1:
+            if attempt < _RECP_POLL_TRIES - 1:
                 await page.wait_for_timeout(_RECP_POLL_WAIT_MS)
         raise FlowError("upstream", "신청한 발급 건을 확인하지 못했습니다.")
 
