@@ -332,22 +332,25 @@ export function HomeCheckReportView({
           title="발급 대장 PDF"
         >
           <Stack gap="xs">
-            {documents.map((doc) => (
-              <Button
-                key={doc.kind}
-                component="a"
-                href={doc.url ?? '#'}
-                target="_blank"
-                rel="noopener noreferrer"
-                variant="light"
-                color="jippin"
-                radius="md"
-                justify="space-between"
-                leftSection={<IconDownload size={16} />}
-              >
-                {doc.kind === 'building_heading' ? '표제부 대장 PDF' : '전유부 대장 PDF'}
-              </Button>
-            ))}
+            {/* 버튼은 콘텐츠 폭으로 나란히(좁은 화면에선 줄바꿈) — Stack 풀폭 + space-between
+                은 아이콘/라벨이 양끝으로 벌어져 어색하다(운영자 피드백 2026-07-14). */}
+            <Group gap="xs">
+              {documents.map((doc) => (
+                <Button
+                  key={doc.kind}
+                  component="a"
+                  href={doc.url ?? '#'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  variant="light"
+                  color="jippin"
+                  radius="md"
+                  leftSection={<IconDownload size={16} />}
+                >
+                  {doc.kind === 'building_heading' ? '표제부 대장 PDF' : '전유부 대장 PDF'}
+                </Button>
+              ))}
+            </Group>
             <Text size="xs" c="dimmed">
               다운로드 링크는 보안을 위해 일정 시간이 지나면 만료될 수 있어요.
             </Text>

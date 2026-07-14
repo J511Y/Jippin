@@ -24,13 +24,16 @@ PoC 검증 필요(실주소로 확인 후 조정): (a) 7단계 신청(S01) 요�
 from __future__ import annotations
 
 import asyncio
+import base64
 import datetime
+import io
 import json
 import re
 from urllib.parse import quote
 
 import structlog
 from playwright.async_api import Page
+from pypdf import PdfReader
 
 from .browser import BrowserManager
 from .config import Settings
@@ -1009,7 +1012,15 @@ class SeumteoFlow:
                     {"resType": "주용도", "resContents": t["main_prpos"]}
                 )
 
-        change_list = _parse_changes(ex.get("full_text") or "")
+        # 변동사항은 발급 PDF 텍스트 레이어가 정본이다 — CLIP viewData(글자단위 분절 +
+        # 좌표숫자 잡음) 채굴은 절단/중복/필러 행을 만든다(실측: 세션 903c0c36). PDF 가
+        # 없거나(예산 초과 생략) 파싱 불가일 때만 CLIP 텍스트로 폴백한다.
+        change_list = _parse_changes_pdf(ex.get("pdf_base64"))
+        change_source = "pdf"
+        if change_list is None:
+            change_list = _parse_changes(ex.get("full_text") or "")
+            change_source = "clip_text"
+        _log.info("flow.changes", source=change_source, rows=len(change_list))
 
         return BuildingRegisterResult(
             register_kind=req.register_kind,
@@ -1035,7 +1046,9 @@ class SeumteoFlow:
 
 
 # 실연도(19/20xx) 날짜만 — 고유번호(4146310100-3-07…) 등 잡음 배제.
-_YEAR_DATE = re.compile(r"(?:19|20)\d{2}[.\-]\d{1,2}[.\-]\d{1,2}")
+_YEAR_DATE = re.compile(r"((?:19|20)\d{2})[.\-](\d{1,2})[.\-](\d{1,2})")
+# PDF 텍스트의 변동사항 행 시작 — 줄머리 변동일 + 같은 줄 변동내용(있으면).
+_ROW_DATE = re.compile(r"^((?:19|20)\d{2})[.\-](\d{1,2})[.\-](\d{1,2})\.?\s*(.*)$")
 # 건축 변동 사유 키워드(확장 등재 판정 신호). 소유권이전 등 소유자 변동은 제외(PII·무관).
 _CHANGE_KEYWORDS = (
     "신규작성",
@@ -1053,28 +1066,225 @@ _CHANGE_KEYWORDS = (
     "위반건축물",
     "표시변경",
 )
+# 서식 라벨/빈칸 필러 — 이것만으로 이뤄진 문구는 변동 이력이 아니다("사용승인일,사용승인일 ,,").
+_FORM_LABEL_CORES = (
+    "이하여백",
+    "사용승인일",
+    "허가일",
+    "착공일",
+    "변동내용및원인",
+    "변동내용",
+    "변동원인",
+    "변동일자",
+    "변동일",
+    "변동사항",
+    "그밖의기재사항",
+)
+# PDF 줄 스캔에서 변동 행의 연속(continuation)을 끊는 서식 고정 문구 줄머리. 변동사항 표
+# 다음에 오는 인접 표(대지위치/설계자·감리자 성명 등)가 사유에 빨려 들어가는 것을 막는다(PII).
+_STRUCTURAL_PREFIXES = (
+    "변동사항",
+    "변동일",
+    "그 밖의",
+    "그밖의",
+    "공 용 부 분",
+    "공용부분",
+    "대지위치",
+    "건물ID",
+    "고유번호",
+    "도로명주소",
+    "지번",
+    "구분",
+    "집합건축물대장",
+    "이 등(초)본",
+    "발급일",
+    "담 당 자",
+    "담당자",
+    "전 화",
+    "건축물 현황",
+    "건 축 물 현 황",
+    "건축물현황",
+    "건축물 관리",
+    "건축물 구조",
+    "인허가",
+    "허가일",
+    "착공일",
+    "사용승인일",
+    "건축주",
+    "설계자",
+    "공사감리자",
+    "공사시공자",
+    "호수/",
+    "명칭",
+    "※",
+    "■",
+    "297",
+)
+
+
+def _normalize_change_date(y: str, m: str, d: str) -> str | None:
+    """변동일 표기("2011.5.20.")를 ISO("2011-05-20")로 — 표시/정렬/대조 일관성."""
+
+    try:
+        return datetime.date(int(y), int(m), int(d)).isoformat()
+    except ValueError:
+        return None
+
+
+def _reason_core(reason: str) -> str:
+    """사유의 문자 골자(한글·영문만) — 필러(서식 라벨) 판정용."""
+
+    return re.sub(r"[^가-힣A-Za-z]", "", reason)
+
+
+def _dedupe_key(reason: str) -> str:
+    """근사중복 비교 키 — 숫자(문서번호·일자)를 보존해 상용구("…과-N호 의거")끼리의
+    오붕괴를 막는다. 구두점·공백만 제거한다."""
+
+    return re.sub(r"[^가-힣A-Za-z0-9]", "", reason)
+
+
+def _is_meaningful_reason(reason: str) -> bool:
+    """서식 라벨/필러를 걷어낸 뒤에도 실질 내용이 남는 사유만 변동 이력으로 인정한다.
+
+    "증축"/"말소"처럼 짧아도 변동 키워드면 인정한다(2글자 사유 절삭 방지).
+    """
+
+    core = _reason_core(reason)
+    for label in _FORM_LABEL_CORES:
+        core = core.replace(label, "")
+    return len(core) >= 4 or any(kw in core for kw in _CHANGE_KEYWORDS)
+
+
+def _dedupe_changes(rows: list[dict]) -> list[dict]:
+    """같은 행의 절단본(한쪽 골자가 다른 쪽에 포함)을 붕괴시킨다 — 더 긴 사유를 남긴다.
+
+    날짜가 서로 다르면 별개 변동으로 보고 붕괴하지 않는다(같은 사유 반복 변동 보존).
+    """
+
+    kept: list[dict] = []
+    keys: list[str] = []
+    for row in rows:
+        key = _dedupe_key(row["resChangeReason"])
+        merged = False
+        for i, k in enumerate(kept):
+            if (
+                row["resChangeDate"] is not None
+                and k["resChangeDate"] is not None
+                and row["resChangeDate"] != k["resChangeDate"]
+            ):
+                continue
+            if key != keys[i] and key not in keys[i] and keys[i] not in key:
+                continue
+            if len(key) > len(keys[i]):
+                k["resChangeReason"] = row["resChangeReason"]
+                keys[i] = key
+            if k["resChangeDate"] is None:
+                k["resChangeDate"] = row["resChangeDate"]
+            merged = True
+            break
+        if not merged:
+            kept.append(dict(row))
+            keys.append(key)
+    return kept
+
+
+def _scan_change_lines(lines: list[str]) -> list[dict]:
+    """PDF 텍스트 줄에서 변동사항 행(변동일 줄머리 + 이어지는 내용 줄)을 모은다.
+
+    셀 폭 줄바꿈은 단어 중간에서 갈라지므로("확장(6" + ".84㎡)") 공백 없이 잇는다.
+    날짜 줄머리라도 사유에 한글 실질이 없으면(공동주택가격 "858,000,000", 인허가 시기의
+    날짜 단독 줄) `_is_meaningful_reason` 이 걸러낸다.
+    """
+
+    rows: list[dict] = []
+    date: str | None = None
+    parts: list[str] = []
+
+    def flush() -> None:
+        nonlocal date, parts
+        if date is not None:
+            reason = re.sub(r"\s+", " ", "".join(parts)).strip()[:400]
+            if _is_meaningful_reason(reason):
+                rows.append({"resChangeDate": date, "resChangeReason": reason})
+        date, parts = None, []
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        m = _ROW_DATE.match(line)
+        if m:
+            flush()
+            date = _normalize_change_date(m.group(1), m.group(2), m.group(3))
+            parts = [m.group(4)] if m.group(4) else []
+            continue
+        if date is None:
+            continue
+        if "이하여백" in line or line.startswith(_STRUCTURAL_PREFIXES):
+            flush()
+            continue
+        parts.append(line)
+    flush()
+    return rows
+
+
+def _parse_changes_pdf(pdf_b64: str | None) -> list[dict] | None:
+    """발급 PDF 텍스트 레이어에서 변동사항을 파싱한다(정본 경로).
+
+    '변동사항'이 있는 쪽만 훑으므로 갑지 소유자현황(성명·주소·주민번호) 쪽은 열지 않는다.
+    반환 None 은 "파싱 불가(PDF 없음/깨짐/변동사항 쪽 없음)" — 호출측이 CLIP 텍스트로
+    폴백한다. 빈 리스트는 "변동 이력 없음"으로 신뢰한다(폴백해 잡음을 만들지 않는다).
+    """
+
+    if not pdf_b64:
+        return None
+    found_section = False
+    rows: list[dict] = []
+    try:
+        reader = PdfReader(io.BytesIO(base64.b64decode(pdf_b64)))
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            if "변동사항" not in text:
+                continue
+            found_section = True
+            rows.extend(_scan_change_lines(text.splitlines()))
+    except Exception:  # noqa: BLE001 — PDF 파싱 실패는 CLIP 텍스트 폴백으로.
+        _log.warning("flow.pdf_changes_failed", exc_info=True)
+        return None
+    if not found_section:
+        return None
+    return _dedupe_changes(rows)[:20]
 
 
 def _clean_reason(s: str) -> str:
-    """CLIP 메타(좌표·플래그 숫자런, true/false/blank)를 걷어내고 한글 부위·〈면적〉·구분자만 남긴다.
+    """CLIP 메타(좌표·플래그 숫자런, true/false/blank)와 빈칸 필러를 걷어낸다(폴백 경로).
 
     좌표/문서번호/면적 숫자런은 부위명 판정에 불필요하므로 제거하되, 한글 부위명(거실/발코니 등)과
     구조 구분자(〈 〉 / ㎡)는 보존한다 — 판정 LLM 이 신고 부위와 대조할 근거다.
     """
 
+    # "이하여백"은 셀 내용의 끝 표식 — 그 뒤는 이웃 셀/표의 텍스트이므로 창을 절단한다.
+    cut = s.find("이하여백")
+    if cut >= 0:
+        s = s[:cut]
     s = re.sub(r"(?:true|false|blank|null)", " ", s)
     s = re.sub(r"-?\d[\d.,\-]{2,}", " ", s)
     s = re.sub(r"[|]+", " ", s)
-    return re.sub(r"\s+", " ", s).strip()[:80]
+    s = re.sub(r"[,]{2,}", " ", s)
+    # 창 절단이 남긴 선두 숫자·구두점("9.", ".") — 같은 행 절단본의 중복 붕괴를 방해한다.
+    s = re.sub(r"^[\d.,\-)\s]+", "", s)
+    return re.sub(r"\s+", " ", s).strip(" ,-")[:80]
 
 
 def _parse_changes(text: str) -> list[dict]:
-    """변동사항 사유(**부위 포함**)+가능 시 날짜를 추출한다(PII·잡음 배제, 판정 LLM 입력용).
+    """CLIP viewData 텍스트에서 변동사항을 채굴한다(**PDF 부재 시 폴백**).
 
     CLIP viewData 는 글자단위 분절 + 위치숫자 잡음이 심하다. 소유자현황(성명·주소·주민번호)을
     피하려 '변동사항' 헤더 이후, 다음 섹션 전까지만 본다(→ PII 안전). 건축 변동 키워드 주변 창을
     잡아 CLIP 메타를 정리해 사유로 넣는다 — **키워드만 넣으면 부위(거실/발코니 등)가 사라져**
     판정 LLM 이 신고 부위와 대조할 수 없다(#change-area). 인접에 실연도 날짜가 있으면 붙인다.
+    창 방식은 같은 행의 절단본을 여러 개 만들므로 필러 필터+근사중복 붕괴로 정리한다.
     """
 
     compact = re.sub(
@@ -1096,13 +1306,14 @@ def _parse_changes(text: str) -> list[dict]:
         for m0 in re.finditer(re.escape(kw), seg):
             pos = m0.start()
             # 키워드 + 뒤따르는 부위/면적(〈…〉)을 포함하도록 창을 잡고 메타를 정리한다.
-            reason = _clean_reason(seg[max(0, pos - 12) : pos + 72]) or kw
+            # 정리 후 빈 사유 = 창이 순수 잡음(필러 꼬리 등) — 행으로 만들지 않는다.
+            reason = _clean_reason(seg[max(0, pos - 12) : pos + 72])
+            if not reason or not _is_meaningful_reason(reason):
+                continue
             m = _YEAR_DATE.search(seg[max(0, pos - 40) : pos + 72])
-            date = m.group(0) if m else None
+            date = _normalize_change_date(*m.groups()) if m else None
             if (date, reason) in seen:
                 continue
             seen.add((date, reason))
             out.append({"resChangeDate": date, "resChangeReason": reason})
-            if len(out) >= 20:
-                return out
-    return out
+    return _dedupe_changes(out)[:20]
