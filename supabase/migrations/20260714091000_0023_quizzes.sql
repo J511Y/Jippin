@@ -121,7 +121,7 @@ insert into public.quizzes (categories, sort_order, question, choices, answer_in
   (array['use_inspection', 'act_permit']::text[], 15,
    $quiz$예전에 확장하면서 사용검사를 받지 않았다면, 지금은 건축물대장에 등재할 방법이 없다.$quiz$,
    array['O', 'X'], 1,
-   $quiz$지금이라도 **사용검사를 받아 건축물대장에 등재(양성화)**할 수 있는 경우가 많습니다. 현재 상태가 방화·구조 기준에 맞는지 점검이 선행돼요.$quiz$),
+   $quiz$지금이라도 **사용검사를 받아 건축물대장에 등재(양성화)할 수 있는** 경우가 많습니다. 현재 상태가 방화·구조 기준에 맞는지 점검이 선행돼요.$quiz$),
   (array['fireproofing']::text[], 16,
    $quiz$확장 발코니에 설치하는 방화판·방화유리의 최소 높이는? (바닥판 두께 포함)$quiz$,
    array['60cm 이상', '90cm 이상', '120cm 이상'], 1,

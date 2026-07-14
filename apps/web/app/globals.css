@@ -1087,3 +1087,242 @@ a[data-faq-row]:focus-visible {
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
+
+/* ==========================================================================
+   우리집 체크 대기 화면 (.hc-wait-*, .hc-quiz*) — 진행 스테퍼 + 집 상식 퀴즈.
+   조회는 보통 2~3분 — 스피너 대신 실제 phase 연동 스텝과 O/X·객관식 퀴즈로
+   이탈을 막는다(components/home-check/waiting/*). 색은 전부 브랜드/상태 토큰,
+   진행은 틸(jippin), 정답/오답만 success/danger. 모션은 reduced-motion 존중.
+   ========================================================================== */
+
+/* 세로 4스텝 스테퍼 — 모바일(390px)에서 한국어 라벨+설명이 가로로 안 눕는다. */
+.hc-wait-stepper {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+}
+.hc-wait-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  column-gap: 12px;
+  padding-block: 9px;
+}
+/* 스텝 사이 연결선 — 불릿 중앙 정렬(28px 불릿의 가운데 = 14px - 0.75px). */
+.hc-wait-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 13.25px;
+  top: 40px;
+  bottom: -4px;
+  width: 1.5px;
+  background: var(--jippin-brand-border);
+}
+.hc-wait-step[data-state='done']:not(:last-child)::before {
+  background: var(--jippin-brand-primary);
+}
+.hc-wait-step__bullet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 1.5px solid var(--jippin-brand-border);
+  background: var(--jippin-brand-surface-alt, #ffffff);
+  color: var(--jippin-brand-copy);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.hc-wait-step[data-state='done'] .hc-wait-step__bullet {
+  border-color: var(--jippin-brand-primary);
+  background: var(--jippin-brand-primary);
+  color: #fff;
+}
+.hc-wait-step[data-state='current'] .hc-wait-step__bullet {
+  border-color: var(--jippin-brand-primary);
+  background: var(--mantine-color-jippin-0);
+  color: var(--jippin-brand-primary);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hc-wait-step[data-state='current'] .hc-wait-step__bullet {
+    animation: hc-wait-pulse 1.8s ease-in-out infinite;
+  }
+}
+@keyframes hc-wait-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(20, 122, 115, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(20, 122, 115, 0);
+  }
+}
+.hc-wait-step__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-top: 3px;
+}
+.hc-wait-step__label {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--jippin-brand-ink);
+  word-break: keep-all;
+}
+.hc-wait-step[data-state='todo'] .hc-wait-step__label {
+  color: var(--jippin-brand-copy);
+  font-weight: 500;
+}
+/* 설명은 현재 스텝에만 — 세로 공간 절약(퀴즈 카드가 아래에 있다). */
+.hc-wait-step__desc {
+  display: none;
+  margin-top: 2px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--jippin-brand-copy);
+  word-break: keep-all;
+}
+.hc-wait-step[data-state='current'] .hc-wait-step__desc {
+  display: block;
+}
+
+/* 퀴즈 카드 — eyebrow(틸) + 질문 + 선택지(O/X 원형 또는 세로 리스트) + 해설. */
+.hc-quiz__eyebrow {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--jippin-brand-primary);
+}
+.hc-quiz__question {
+  margin: 6px 0 0;
+  font-size: 1.0625rem;
+  line-height: 1.55;
+  font-weight: 700;
+  color: var(--jippin-brand-ink);
+  word-break: keep-all;
+}
+
+/* O/X — 72px 원형 버튼 2개(≥44px 터치 타깃). 공개 후에는 disabled 대신 data-reveal
+   시각 상태만 바꾼다(포커스 유지 — 클릭 무시는 컴포넌트가 담당). */
+.hc-ox {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  padding-block: 4px;
+}
+.hc-ox__btn {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 1.5px solid var(--jippin-brand-border);
+  background: var(--jippin-brand-surface-alt, #ffffff);
+  color: var(--jippin-brand-copy);
+  font-size: 1.625rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease,
+    transform 120ms ease;
+}
+.hc-ox__btn:hover {
+  border-color: var(--jippin-brand-primary);
+  color: var(--jippin-brand-primary);
+  background: var(--mantine-color-jippin-0);
+}
+.hc-ox__btn:active {
+  transform: translateY(1px);
+}
+.hc-ox__btn:focus-visible {
+  outline: 2px solid var(--jippin-brand-primary);
+  outline-offset: 2px;
+}
+.hc-ox__btn[data-reveal='correct'],
+.hc-quiz-choice[data-reveal='correct'] {
+  border-color: var(--mantine-color-success-6);
+  color: var(--mantine-color-success-8);
+  background: var(--mantine-color-success-0);
+}
+.hc-ox__btn[data-reveal='incorrect'],
+.hc-quiz-choice[data-reveal='incorrect'] {
+  border-color: var(--mantine-color-danger-6);
+  color: var(--mantine-color-danger-8);
+  background: var(--mantine-color-danger-0);
+}
+
+/* 객관식 세로 선택지 — 퍼널 .hc-choice 의 축약형(아이콘 없는 슬림 카드). */
+.hc-quiz-choice {
+  width: 100%;
+  min-height: 52px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--jippin-brand-border);
+  border-radius: 12px;
+  background: var(--jippin-brand-surface-alt, #ffffff);
+  color: var(--jippin-brand-ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-align: left;
+  word-break: keep-all;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 120ms ease;
+}
+.hc-quiz-choice:hover {
+  border-color: var(--jippin-brand-primary);
+  background: var(--mantine-color-jippin-0);
+}
+.hc-quiz-choice:active {
+  transform: translateY(1px);
+}
+.hc-quiz-choice:focus-visible {
+  outline: 2px solid var(--jippin-brand-primary);
+  outline-offset: 2px;
+}
+
+/* 정답/오답 피드백 + 마크다운 해설 + 점수/다음 버튼 줄. */
+.hc-quiz__feedback {
+  border-top: 1px solid var(--jippin-brand-border);
+  padding-top: 14px;
+}
+.hc-quiz__feedback[data-tone='correct'] .hc-quiz__verdict {
+  color: var(--mantine-color-success-8);
+}
+.hc-quiz__feedback[data-tone='incorrect'] .hc-quiz__verdict {
+  color: var(--mantine-color-danger-8);
+}
+.hc-quiz__explanation {
+  margin-top: 6px;
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--jippin-brand-copy);
+  word-break: keep-all;
+}
+.hc-quiz__explanation p {
+  margin: 0 0 6px;
+}
+.hc-quiz__explanation p:last-child {
+  margin-bottom: 0;
+}
+.hc-quiz__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hc-quiz__feedback {
+    animation: hc-step-in 260ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  }
+}
