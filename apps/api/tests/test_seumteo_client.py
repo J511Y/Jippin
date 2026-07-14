@@ -237,3 +237,117 @@ async def test_warmup_retries_flycast_until_browser_is_ready():
     assert all(
         call["url"] == "http://worker.flycast/healthz" for call in http.health_calls
     )
+
+
+# ---------------------------------------------------------------------------
+# 통합 잡(fetch_bundle) — 봉투 매핑 + 구 워커 404 순차 폴백.
+# ---------------------------------------------------------------------------
+_BUNDLE_OK = {"exclusive": _EXCLUSIVE_OK, "heading": _HEADING_OK}
+
+
+async def test_fetch_bundle_maps_both_envelopes():
+    client, http = _client([_FakeResponse(200, _BUNDLE_OK)])
+    q = BuildingRegisterQuery(
+        road_addr="서울특별시 영등포구 여의대방로43나길 25", dong="104동", ho="504호"
+    )
+
+    exclusive, heading, heading_error = await client.fetch_bundle(q)
+
+    assert exclusive.violation_status == "위반건축물"
+    assert heading is not None and heading.comm_unique_no == "1020129529"
+    assert heading_error is False
+    call = http.calls[0]
+    assert call["url"] == "http://worker.internal:8080/jobs/building-register-bundle"
+    assert "register_kind" not in call["json"]
+    assert call["headers"]["Authorization"] == "Bearer t0ken"
+
+
+async def test_fetch_bundle_heading_error_becomes_flag():
+    body = {
+        "exclusive": _EXCLUSIVE_OK,
+        "heading": {"ok": False, "category": "upstream", "message": "표제부 실패"},
+    }
+    client, _ = _client([_FakeResponse(200, body)])
+    q = BuildingRegisterQuery(road_addr="서울시 어딘가 1", dong="1동", ho="1호")
+
+    exclusive, heading, heading_error = await client.fetch_bundle(q)
+
+    assert exclusive.comm_unique_no == "102011442"
+    assert heading is None
+    assert heading_error is True
+
+
+async def test_fetch_bundle_exclusive_error_raises():
+    body = {
+        "exclusive": {"ok": False, "category": "not_found", "message": "못 찾음"},
+        "heading": {"ok": False, "category": "not_found", "message": "못 찾음"},
+    }
+    client, _ = _client([_FakeResponse(200, body)])
+    q = BuildingRegisterQuery(road_addr="서울시 어딘가 1", dong="1동", ho="1호")
+
+    with pytest.raises(CodefNotFound):
+        await client.fetch_bundle(q)
+
+
+async def test_fetch_bundle_needs_input_saves_resume_token():
+    body = {
+        "exclusive": {
+            "ok": False,
+            "category": "needs_input",
+            "message": "동을 선택해 주세요.",
+            "field": "dong",
+            "options": [{"value": "1", "label": "104동"}],
+        },
+        "heading": {
+            "ok": False,
+            "category": "needs_input",
+            "message": "동을 선택해 주세요.",
+            "field": "dong",
+        },
+    }
+    client, _ = _client([_FakeResponse(200, body)])
+    q = BuildingRegisterQuery(road_addr="서울시 어딘가 1", dong="104", ho="504호")
+
+    with pytest.raises(CodefNeedsUserInput) as ei:
+        await client.fetch_bundle(q)
+
+    assert ei.value.field == "dong"
+    assert ei.value.resume_token
+
+
+async def test_fetch_bundle_falls_back_to_sequential_on_404():
+    # 구 워커(bundle 엔드포인트 없음) → 단건 2회 순차 호출로 내부 폴백.
+    client, http = _client(
+        [
+            _FakeResponse(404, {}),
+            _FakeResponse(200, _EXCLUSIVE_OK),
+            _FakeResponse(200, _HEADING_OK),
+        ]
+    )
+    q = BuildingRegisterQuery(road_addr="서울시 어딘가 1", dong="1동", ho="1호")
+
+    exclusive, heading, heading_error = await client.fetch_bundle(q)
+
+    assert exclusive.comm_unique_no == "102011442"
+    assert heading is not None
+    assert heading_error is False
+    assert http.calls[0]["url"].endswith("/jobs/building-register-bundle")
+    assert http.calls[1]["json"]["register_kind"] == "exclusive"
+    assert http.calls[2]["json"]["register_kind"] == "heading"
+
+
+async def test_fetch_bundle_sequential_fallback_swallows_heading_error():
+    client, _ = _client(
+        [
+            _FakeResponse(404, {}),
+            _FakeResponse(200, _EXCLUSIVE_OK),
+            _FakeResponse(200, {"ok": False, "category": "upstream", "message": "x"}),
+        ]
+    )
+    q = BuildingRegisterQuery(road_addr="서울시 어딘가 1", dong="1동", ho="1호")
+
+    exclusive, heading, heading_error = await client.fetch_bundle(q)
+
+    assert exclusive.comm_unique_no == "102011442"
+    assert heading is None
+    assert heading_error is True

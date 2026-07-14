@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     # 화면 진입 warm-up과 실제 조회 전 ready 가드의 총 대기 예산/폴링 간격.
     seumteo_worker_warmup_timeout_seconds: int = Field(default=45)
     seumteo_worker_warmup_poll_seconds: float = Field(default=2.0)
+    # 전유부+표제부 통합 잡(/jobs/building-register-bundle) 사용 여부. 워커에 bundle
+    # 엔드포인트가 배포된 뒤 수동 검증을 거쳐 켠다(구 워커면 클라이언트가 404 를 보고
+    # 기존 2회 순차 호출로 내부 폴백하므로 켜져 있어도 안전).
+    seumteo_bundle_enabled: bool = Field(default=False)
+    # 통합 잡 HTTP 상한 — 워커 bundle_deadline_ms(180s)보다 넉넉히.
+    seumteo_worker_bundle_timeout_seconds: int = Field(default=240)
 
     # 사전검토 PDF 리포트 보관 Supabase Storage 버킷명. 운영자가 버킷 생성 필요
     # (인프라 선행). 발부된 PDF 는 이 버킷에 service-role 로 업로드되고 단기 서명
