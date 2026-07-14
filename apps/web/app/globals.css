@@ -831,13 +831,16 @@ a[data-faq-row]:focus-visible {
   color: var(--a2ui-verdict-fg, var(--jippin-brand-ink));
 }
 
-/* 위험/확인 목록 — Alert 기본을 안 쓰고 가벼운 인라인 목록으로. 각 항목에 마커 점. */
+/* 위험/확인 목록 — Alert 기본을 안 쓰고 가벼운 인라인 목록으로. 각 항목에 마커 점.
+   배경은 컨텐츠 폭에만 — 카드 전체 폭으로 늘리면 빈 영역까지 칠해진다(운영자 피드백 2026-07-14). */
 .a2ui-risks {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
+  width: fit-content;
+  max-width: 100%;
   margin: 0;
-  padding: 0.625rem 0.75rem;
+  padding: 0.625rem 1rem 0.625rem 0.75rem;
   list-style: none;
   border-radius: 11px;
   background: var(--mantine-color-warning-0);

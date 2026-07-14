@@ -7,14 +7,13 @@ import {
   IconCalendarStats,
   IconChevronRight,
   IconCircleCheck,
-  IconClipboardCheck,
   IconDownload,
   IconFileText,
   IconHelpCircle,
   IconRulerMeasure
 } from '@tabler/icons-react';
 import Link from 'next/link';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useId } from 'react';
 import type { HomeCheckReport } from '@contracts/home-check';
 
@@ -48,21 +47,6 @@ const TONE_TO_ACCENT: Record<VerdictTone, CardAccent> = {
   success: 'success',
   gray: 'neutral'
 };
-
-type VerdictBannerVars = CSSProperties & {
-  '--a2ui-verdict-surface': string;
-  '--a2ui-verdict-border': string;
-  '--a2ui-verdict-fg': string;
-};
-
-/** `.a2ui-verdict` 배너 색 묶음. tone 은 전부 Mantine 색 토큰(0/2/7 셰이드)로 환원. */
-function verdictBannerVars(tone: VerdictTone): VerdictBannerVars {
-  return {
-    '--a2ui-verdict-surface': `var(--mantine-color-${tone}-0)`,
-    '--a2ui-verdict-border': `var(--mantine-color-${tone}-2)`,
-    '--a2ui-verdict-fg': `var(--mantine-color-${tone}-7)`
-  };
-}
 
 /** verdict 별 CTA 카피(coral 버튼 전용). normal 은 CTA 를 노출하지 않는다. */
 const CTA_COPY: Partial<Record<Verdict, { title: string; desc: string; label: string }>> = {
@@ -174,14 +158,16 @@ export function HomeCheckReportView({
 
   return (
     <Stack gap="xl">
-      {/* 1. VerdictHero — 두 축을 합친 4-상태 결론. 오늘 3중 알럿을 여기로 통합. */}
+      {/* 1. VerdictHero — 두 축을 합친 4-상태 결론. 판정 아이콘+라벨을 카드 헤드에 직접
+          싣는다(별도 결론 배너는 헤드와 중복이라 제거 — 운영자 디자인 피드백 2026-07-14).
+          색+아이콘+라벨 동시 전달(WCAG·색 단독 금지)은 accent 헤드가 그대로 담당한다. */}
       <CardShell accent={accent} labelledBy={heroTitleId}>
         <div className="a2ui-card__head">
           <span className="a2ui-card__icon" aria-hidden>
-            <IconClipboardCheck size={17} />
+            <HeroIcon size={17} />
           </span>
           <span style={{ minWidth: 0 }}>
-            <span className="a2ui-card__eyebrow">우리집 체크 결과</span>
+            <span className="a2ui-card__eyebrow">{meta.label}</span>
             <span
               className="a2ui-card__title"
               id={heroTitleId}
@@ -192,14 +178,14 @@ export function HomeCheckReportView({
           </span>
         </div>
 
-        {/* 판정 한 줄 — 리포트 최상단 결론. 크기는 판정 전용 display 토큰만 쓴다
-            (TYPOGRAPHY.md §2 — 페이지별 임의 크기 발명 금지). */}
+        {/* 판정 한 줄 — 리포트 최상단 결론. 페이지 타이틀(h1)보다 커 보이지 않게 heading
+            h2 토큰을 쓴다(TYPOGRAPHY.md §2 — 페이지별 임의 크기 발명 금지). */}
         <Text
           fw={700}
           mt="md"
           style={{
-            fontSize: 'var(--jippin-fz-display)',
-            lineHeight: 1.4,
+            fontSize: 'var(--mantine-h2-font-size)',
+            lineHeight: 1.45,
             letterSpacing: '-0.01em',
             color: 'var(--jippin-brand-ink)',
             wordBreak: 'keep-all'
@@ -207,18 +193,6 @@ export function HomeCheckReportView({
         >
           {heroOneLiner}
         </Text>
-
-        {/* 결론 배너 — 색 + 아이콘 + 라벨 셋으로 동시 전달(WCAG·색 단독 금지). */}
-        <div
-          className="a2ui-verdict"
-          role="status"
-          style={{ ...verdictBannerVars(meta.tone), marginTop: '0.75rem' }}
-        >
-          <span className="a2ui-verdict__icon">
-            <HeroIcon size={18} aria-hidden />
-          </span>
-          <span className="a2ui-verdict__label">{meta.label}</span>
-        </div>
 
         {checkPoints.length > 0 ? (
           <Stack gap={6} mt="md">
@@ -259,7 +233,11 @@ export function HomeCheckReportView({
                       : '2px solid var(--jippin-brand-border)',
                     background: highlighted ? 'var(--mantine-color-warning-0)' : undefined,
                     borderRadius: highlighted ? 12 : 0,
-                    padding: highlighted ? '0.625rem 0.75rem 0.625rem 0.875rem' : '0.5rem 0 0.5rem 0.875rem',
+                    padding: highlighted ? '0.625rem 1rem 0.625rem 0.875rem' : '0.5rem 0 0.5rem 0.875rem',
+                    // 강조 배경은 컨텐츠 폭에만 — 카드 전체 폭으로 늘리면 빈 영역까지
+                    // 칠해진다(운영자 피드백 2026-07-14).
+                    width: highlighted ? 'fit-content' : undefined,
+                    maxWidth: '100%',
                     marginBottom: i === changes.length - 1 ? 0 : 6
                   }}
                 >
@@ -332,22 +310,25 @@ export function HomeCheckReportView({
           title="발급 대장 PDF"
         >
           <Stack gap="xs">
-            {documents.map((doc) => (
-              <Button
-                key={doc.kind}
-                component="a"
-                href={doc.url ?? '#'}
-                target="_blank"
-                rel="noopener noreferrer"
-                variant="light"
-                color="jippin"
-                radius="md"
-                justify="space-between"
-                leftSection={<IconDownload size={16} />}
-              >
-                {doc.kind === 'building_heading' ? '표제부 대장 PDF' : '전유부 대장 PDF'}
-              </Button>
-            ))}
+            {/* 버튼은 콘텐츠 폭으로 나란히(좁은 화면에선 줄바꿈) — Stack 풀폭 + space-between
+                은 아이콘/라벨이 양끝으로 벌어져 어색하다(운영자 피드백 2026-07-14). */}
+            <Group gap="xs">
+              {documents.map((doc) => (
+                <Button
+                  key={doc.kind}
+                  component="a"
+                  href={doc.url ?? '#'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  variant="light"
+                  color="jippin"
+                  radius="md"
+                  leftSection={<IconDownload size={16} />}
+                >
+                  {doc.kind === 'building_heading' ? '표제부 대장 PDF' : '전유부 대장 PDF'}
+                </Button>
+              ))}
+            </Group>
             <Text size="xs" c="dimmed">
               다운로드 링크는 보안을 위해 일정 시간이 지나면 만료될 수 있어요.
             </Text>
@@ -478,24 +459,39 @@ function ExtensionDiagnosisCard({ report }: { report: HomeCheckReport }) {
       title="신고한 확장 ↔ 대장 등재"
     >
       <Stack gap="md">
+        {/* 신고 부위 ↔ 대장 등재를 행 단위로 맞대는 비교 표 — 배지 나열 + 상태 리스트의
+            이중 나열을 대체한다(운영자 디자인 피드백 2026-07-14). */}
         {reported.length > 0 ? (
-          <Stack gap={6}>
-            <Text size="xs" fw={600} c="dimmed">
-              신고한 확장
-            </Text>
-            <Group gap="xs">
-              {reported.map((area) => (
-                <Badge key={area} variant="light" color="gray" radius="sm" size="md">
-                  {area}
-                </Badge>
-              ))}
-            </Group>
-          </Stack>
-        ) : null}
-
-        {reported.length > 0 ? (
-          <Stack gap={8}>
-            {reported.map((area) => {
+          <div
+            role="table"
+            aria-label="신고한 확장과 대장 등재 대조"
+            style={{
+              border: '1px solid var(--jippin-brand-border)',
+              borderRadius: 12,
+              overflow: 'hidden'
+            }}
+          >
+            <div
+              role="row"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 28px 1.4fr',
+                gap: 8,
+                alignItems: 'center',
+                padding: '0.5rem 0.75rem',
+                background: 'var(--jippin-brand-surface)',
+                borderBottom: '1px solid var(--jippin-brand-border)'
+              }}
+            >
+              <Text component="span" role="columnheader" size="xs" fw={600} c="dimmed">
+                신고한 확장
+              </Text>
+              <span aria-hidden />
+              <Text component="span" role="columnheader" size="xs" fw={600} c="dimmed">
+                대장 등재
+              </Text>
+            </div>
+            {reported.map((area, idx) => {
               const isUnrecorded = unrecorded.includes(area);
               // 동의어(베란다↔발코니)로 matched 라벨이 신고 라벨과 다를 수 있다. legal 판정이고
               // 미등재가 아니면 등재로 본다(exact matched 포함에만 의존하지 않음, #row-synonym).
@@ -508,22 +504,50 @@ function ExtensionDiagnosisCard({ report }: { report: HomeCheckReport }) {
                   : { color: 'var(--mantine-color-gray-6)', Icon: IconHelpCircle, note: '대조 확인 필요' };
               const RowIcon = tone.Icon;
               return (
-                <Group key={area} gap="sm" wrap="nowrap" align="flex-start">
-                  <span style={{ color: tone.color, flexShrink: 0, marginTop: 1 }}>
-                    <RowIcon size={18} aria-hidden />
+                <div
+                  key={area}
+                  role="row"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 28px 1.4fr',
+                    gap: 8,
+                    alignItems: 'center',
+                    padding: '0.625rem 0.75rem',
+                    borderTop: idx > 0 ? '1px solid var(--jippin-brand-border)' : undefined
+                  }}
+                >
+                  <Text role="cell" size="sm" fw={500} style={{ wordBreak: 'keep-all' }}>
+                    {area}
+                  </Text>
+                  <span
+                    aria-hidden
+                    style={{
+                      display: 'inline-flex',
+                      justifyContent: 'center',
+                      color: 'var(--mantine-color-gray-5)'
+                    }}
+                  >
+                    <IconArrowRight size={15} />
                   </span>
-                  <div style={{ minWidth: 0 }}>
-                    <Text size="sm" fw={500} style={{ wordBreak: 'keep-all' }}>
-                      {area}
-                    </Text>
-                    <Text size="xs" style={{ color: tone.color }}>
+                  <div
+                    role="cell"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      color: tone.color,
+                      minWidth: 0
+                    }}
+                  >
+                    <RowIcon size={16} aria-hidden style={{ flexShrink: 0 }} />
+                    <Text component="span" size="sm" fw={500} style={{ color: 'inherit' }}>
                       {tone.note}
                     </Text>
                   </div>
-                </Group>
+                </div>
               );
             })}
-          </Stack>
+          </div>
         ) : null}
 
         {ext.reason ? (

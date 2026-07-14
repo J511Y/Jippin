@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 import time
 import uuid
 from datetime import date, datetime, timezone
@@ -538,6 +539,81 @@ def _merge_change_history(
     return entries
 
 
+# 서식 라벨/필러 골자 — 구 워커가 변동 이력으로 잘못 승격했던 문구(읽기 시점 정화용).
+_CHANGE_LABEL_CORES = (
+    "이하여백",
+    "사용승인일",
+    "허가일",
+    "착공일",
+    "변동내용및원인",
+    "변동내용",
+    "변동원인",
+    "변동일자",
+    "변동일",
+    "변동사항",
+    "그밖의기재사항",
+)
+# 짧아도 실질인 변동 키워드("증축" 단독 행 보존).
+_CHANGE_KEYWORDS = (
+    "신규작성",
+    "신축",
+    "증축",
+    "개축",
+    "재축",
+    "대수선",
+    "용도변경",
+    "행위허가",
+    "사용검사",
+    "직권",
+    "말소",
+    "위반건축물",
+    "표시변경",
+)
+
+
+def _present_change_history(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """저장된 change_list 의 표시 전 정화 — 구 워커가 남긴 절단 중복·필러 행을 걷어낸다.
+
+    새 워커(PDF 텍스트 파싱)는 깨끗한 행을 저장하지만, 이미 저장된 세션(공유 링크로
+    재열람되는 리포트)도 타임라인이 읽혀야 하므로 직렬화 시점에 방어적으로 정리한다.
+    같은 행의 절단본(숫자 보존 키가 한쪽에 포함)은 더 긴 사유로 붕괴한다. DB 원본은 불변.
+    """
+
+    cleaned: list[dict[str, Any]] = []
+    keys: list[str] = []
+    for entry in entries:
+        reason = str(entry.get("reason") or "")
+        # "이하여백"은 셀 끝 표식 — 그 뒤는 이웃 셀 잡음이므로 절단.
+        cut = reason.find("이하여백")
+        if cut >= 0:
+            reason = reason[:cut]
+        reason = re.sub(r"^[\d.,\-)\s]+", "", reason).strip(" ,-")
+        core = re.sub(r"[^가-힣A-Za-z]", "", reason)
+        for label in _CHANGE_LABEL_CORES:
+            core = core.replace(label, "")
+        if len(core) < 4 and not any(kw in core for kw in _CHANGE_KEYWORDS):
+            continue
+        key = re.sub(r"[^가-힣A-Za-z0-9]", "", reason)
+        date_value = entry.get("date")
+        merged = False
+        for i, kept in enumerate(cleaned):
+            if date_value and kept.get("date") and date_value != kept["date"]:
+                continue
+            if key != keys[i] and key not in keys[i] and keys[i] not in key:
+                continue
+            if len(key) > len(keys[i]):
+                kept["reason"] = reason
+                keys[i] = key
+            if not kept.get("date"):
+                kept["date"] = date_value
+            merged = True
+            break
+        if not merged:
+            cleaned.append({**entry, "reason": reason})
+            keys.append(key)
+    return cleaned
+
+
 def _parse_date(value: Any) -> date | None:
     text = _str_or_none(value)
     if text is None:
@@ -1022,7 +1098,8 @@ async def _build_report(
         )
 
     change_history = [
-        ChangeEntry(**entry) for entry in (row.get("change_list") or [])
+        ChangeEntry(**entry)
+        for entry in _present_change_history(row.get("change_list") or [])
     ] or None
 
     raw_extension = fields.get("extension_check")

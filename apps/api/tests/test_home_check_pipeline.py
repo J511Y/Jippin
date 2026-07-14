@@ -153,3 +153,78 @@ def test_summary_rich_when_report_parsed():
     changes = _merge_change_history(excl, head)
     assert changes[0].reason == "신규작성(신축)"
     assert changes[0].source == "exclusive"
+
+
+def test_present_change_history_cleans_legacy_garbage():
+    # 세션 903c0c36 실측: 구 워커(CLIP 창 채굴)가 저장한 change_list 그대로.
+    # 읽기 시점 정화가 절단 중복을 붕괴하고 필러/라벨 행을 걷어내야 한다(DB 원본 불변).
+    from src.services.home_check import _present_change_history
+
+    stored = [
+        {
+            "date": None,
+            "reason": "9.이전고시되어신규작성(신축)표 이하여백-,-이하여백-,",
+            "source": "exclusive",
+        },
+        {
+            "date": None,
+            "reason": ".이전고시되어신규작성(신축)표 이하여백-,-이하여백-,",
+            "source": "exclusive",
+        },
+        {
+            "date": "2011.5.20",
+            "reason": "9.이전고시되어신규작성(신축) 발코니확장(",
+            "source": "heading",
+        },
+        {
+            "date": "2011.5.20",
+            "reason": ".이전고시되어신규작성(신축) 발코니확장(재건축과-",
+            "source": "heading",
+        },
+        {
+            "date": "2011.5.2",
+            "reason": "판및자동화재감지기설치【행위허가】표",
+            "source": "heading",
+        },
+        {
+            "date": None,
+            "reason": "사용승인일,사용승인일, 사용승인일 ,,",
+            "source": "heading",
+        },
+        {
+            "date": None,
+            "reason": "사용승인일,사용승인일, 사용승인일 ,, 0,",
+            "source": "heading",
+        },
+        {"date": None, "reason": ", 사용승인일 ,,", "source": "heading"},
+    ]
+
+    cleaned = _present_change_history(stored)
+
+    reasons = [e["reason"] for e in cleaned]
+    # 필러(이하여백)·라벨(사용승인일) 행 제거 + 절단 중복 붕괴 → 8행이 3행으로.
+    assert len(cleaned) == 3
+    assert all("이하여백" not in r and "사용승인일" not in r for r in reasons)
+    # 절단본 쌍은 더 긴 사유로 붕괴되고, 절단 잔재(후행 '-')는 정리된다.
+    assert "이전고시되어신규작성(신축) 발코니확장(재건축과" in reasons
+    assert "이전고시되어신규작성(신축)표" in reasons
+
+
+def test_present_change_history_keeps_clean_rows_intact():
+    # 새 워커(PDF 파싱) 출력 형태는 그대로 통과한다.
+    from src.services.home_check import _present_change_history
+
+    stored = [
+        {
+            "date": "2026-05-21",
+            "reason": "공동주택과-14300호(2026.05.21.)에 의거 403호거실과 발코니 사이 비내력벽 철거(창호포함) 및 발코니 확장(6.84㎡) 【행위허가】",
+            "source": "heading",
+        },
+        {
+            "date": "2011-05-20",
+            "reason": "주택재건축과-10582(2011.5.13)호 의거 2011.3.9. 이전고시되어 신규작성(신축)",
+            "source": "exclusive",
+        },
+    ]
+
+    assert _present_change_history(stored) == stored

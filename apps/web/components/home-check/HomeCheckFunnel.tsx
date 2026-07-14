@@ -88,8 +88,7 @@ const AREA_OPTIONS: ReadonlyArray<{ key: string; label: string }> = [
   { key: 'living', label: '거실' },
   { key: 'bedroom', label: '침실' },
   { key: 'kitchen', label: '주방' },
-  { key: 'bathroom', label: '화장실' },
-  { key: 'etc', label: '기타' }
+  { key: 'etc', label: '직접 입력할게요' }
 ];
 
 /** 확장 선택 → 페이로드(reported_extension/extended_areas) 매핑. HomeCheckNewForm 과 동일 규칙. */
@@ -231,10 +230,11 @@ export function HomeCheckFunnel({ searchAddressOverride, onSubmitOverride }: Hom
     );
   }
 
-  /** 선택 부위 → extended_areas 문자열. '기타'는 자유입력이 있으면 그 텍스트로 치환. */
+  /** 선택 부위 → extended_areas 문자열. 직접 입력은 자유입력 텍스트로, 비어 있으면 '기타'로.
+   *  버튼 라벨("직접 입력할게요")은 UI 카피일 뿐 부위명이 아니므로 페이로드에 싣지 않는다. */
   function buildAreasText(): string {
     return AREA_OPTIONS.filter((o) => areaKeys.includes(o.key))
-      .map((o) => (o.key === 'etc' && etcText.trim() ? etcText.trim() : o.label))
+      .map((o) => (o.key === 'etc' ? etcText.trim() || '기타' : o.label))
       .join(', ');
   }
 
