@@ -43,8 +43,7 @@ COPY --chown=app:app src ./src
 USER app
 EXPOSE 8080
 
-# workers=1: 브라우저 1개를 프로세스 내에서 공유(멀티워커면 브라우저 중복 → OOM).
-# API의 실제 잡 요청은 worker의 Fly 6PN 주소(.internal)를 통해 IPv6로 직접 들어온다.
-# 0.0.0.0에만 bind하면 healthz(Flycast)는 통과해도 .internal:8080은 connection refused가 된다.
-# Linux의 dual-stack :: listener로 Flycast health check와 .internal job 요청을 모두 수신한다.
-CMD ["uvicorn", "src.main:app", "--host", "::", "--port", "8080", "--workers", "1"]
+# Flycast/헬스체크(IPv4)와 .internal 잡 요청(IPv6)을 모두 받아야 한다. uvicorn CLI의
+# 단일 --host 바인드로는 불가능(0.0.0.0 → v6 refused, :: → asyncio IPV6_V6ONLY로 v4 refused)
+# 하므로 듀얼스택 소켓을 직접 만드는 런처로 기동한다. 상세는 src/serve.py docstring.
+CMD ["python", "-m", "src.serve"]
