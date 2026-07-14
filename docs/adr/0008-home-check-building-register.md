@@ -79,3 +79,8 @@ CODEF가 세움터 집합건축물대장을 API로 제공한다. 다만 (a) 스�
 - **전유부 단독 조회**: 건물 단위 위반표시 누락(위음성)으로 "정상" 오안내 위험 → 표제부 병행으로 대체.
 - **소유자 정보 구조화 저장**: 위반/변동 판정에 불필요 + 타인 PII 보관 리스크. 원본 PDF 보관으로 충분 → 기각.
 - **하이브리드(건축HUB 무료 API + 부분 스크래핑)**: 위반여부 오픈API 공백을 CODEF가 일괄 커버하므로, 운영 단순성 위해 CODEF 단일 소스로 통일.
+
+## 5. 후속 변경 (schema changelog)
+
+- **1.3.0 (2026-07-14)**: `HomeCheckJob` 에 `phase`(진행 단계, 정보성 open string) 추가 — 대기 화면(약 1.5~3분)의 실시간 스텝 표시용. 알려진 값 `received → issuing_registers → judging → saving_report`. `status` 가 상태 기계 정본이고 phase 는 파이프라인 힌트라 DB CHECK/엄격 enum 을 두지 않는다(값 추가는 마이그레이션 없이 배포, 클라이언트는 미지 값을 일반 대기 문구로 폴백). DDL: `0022_home_check_phase.sql`.
+- **1.2.0**: `report.extension_check`(신고확장↔변동사항 LLM 대조) 추가 + `prices` 제거.

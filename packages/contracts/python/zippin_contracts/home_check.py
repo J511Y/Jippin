@@ -391,9 +391,9 @@ class HomeCheckJob(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.2.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.3.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 1.2.0: report 에 extension_check(신고확장↔변동사항 LLM 대조) 추가 + prices(공동주택가격) 제거 — 우리집 체크는 확장 등재 여부가 목적이라 가격/속성 노이즈 제외.
+    스키마 버전 (semver). 1.3.0: phase(진행 단계, 정보성 open string) 추가 — 대기 화면 실시간 스텝 표시용. 1.2.0: report 에 extension_check(신고확장↔변동사항 LLM 대조) 추가 + prices(공동주택가격) 제거 — 우리집 체크는 확장 등재 여부가 목적이라 가격/속성 노이즈 제외.
     """
     id: str
     """
@@ -402,6 +402,10 @@ class HomeCheckJob(BaseModel):
     status: Status
     """
     잡 상태. needs_input = 동·호 자동매칭 실패 또는 보안문자(reqSecureNo) 발생 폴백.
+    """
+    phase: str | None = None
+    """
+    백그라운드 파이프라인 진행 단계(정보성 — status 가 상태 기계 정본). 알려진 값: received → issuing_registers → judging → saving_report. status=pending|querying 일 때만 의미가 있으며 터미널 상태에선 마지막 값이 남는다. 워커 통합/세분화로 값이 추가될 수 있으므로 엄격 enum 이 아니다 — 클라이언트는 미지의 값을 일반 대기 문구로 폴백해야 한다.
     """
     signal: Signal | None = None
     """

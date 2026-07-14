@@ -211,11 +211,15 @@ class HomeCheckReport(BaseModel):
 class HomeCheckJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.2.0"] = Field(
-        default="1.2.0", pattern=r"^\d+\.\d+\.\d+$"
+    schema_version: Literal["1.3.0"] = Field(
+        default="1.3.0", pattern=r"^\d+\.\d+\.\d+$"
     )
     id: str
     status: Status
+    # 진행 phase(정보성, open string) — 알려진 값은 services.home_check.PHASE_* 참조.
+    # 미지의 값도 통과시킨다(엄격 Literal 금지 — 새 phase 배포 시 폴링 GET 이 500 나면
+    # 안 된다; 클라이언트는 미지 값을 일반 대기 문구로 폴백).
+    phase: str | None = None
     signal: Signal | None = None
     created_at: str | None = None
     updated_at: str | None = None
