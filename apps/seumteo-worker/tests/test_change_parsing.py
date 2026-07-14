@@ -255,7 +255,6 @@ class ClipFallbackTest(unittest.TestCase):
 
 
 class ParseChangesPdfTest(unittest.TestCase):
-    def test_missing_or_broken_pdf_falls_back(self) -> None:
+    def test_missing_pdf_falls_back(self) -> None:
+        # pages=None(=PDF 없음/깨짐 — _pdf_page_texts 가 판정)이면 CLIP 텍스트 폴백 신호.
         self.assertIsNone(_parse_changes_pdf(None))
-        self.assertIsNone(_parse_changes_pdf(""))
-        self.assertIsNone(_parse_changes_pdf("bm90LWEtcGRm"))  # "not-a-pdf"

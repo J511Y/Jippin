@@ -1000,6 +1000,10 @@ class SeumteoFlow:
         self, req: BuildingRegisterRequest, t: dict, ex: dict
     ) -> BuildingRegisterResult:
         violation_status = "위반건축물" if ex.get("violation") else None
+        # 발급 PDF 텍스트 레이어는 여기서 **한 번만** 추출한다 — pypdf 전 쪽 추출은 쪽수에
+        # 비례해 수 초씩 걸려(실측: 표제부 ~9s), 대장상세·변동사항 파서가 각자 추출하면
+        # 그 비용이 두 배가 된다. 파서들은 추출된 쪽 텍스트를 공유한다.
+        pdf_pages = _pdf_page_texts(ex.get("pdf_base64"))
         owned: list[dict] = []
         detail_list: list[dict] = []
         if req.register_kind == "exclusive":
@@ -1009,16 +1013,14 @@ class SeumteoFlow:
             area = t.get("exclusive_area")
             if area is not None:
                 owned_row["resArea"] = str(area)
-            pdf_detail = _parse_exclusive_detail_pdf(
-                ex.get("pdf_base64"), area_hint=area
-            )
+            pdf_detail = _parse_exclusive_detail_pdf(pdf_pages, area_hint=area)
             for key, value in (pdf_detail or {}).items():
                 owned_row.setdefault(key, value)
             if len(owned_row) > 1:
                 owned.append(owned_row)
         else:
             # R01 의 mainPrposNm(주용도)이 정본, 층수/인허가 일자는 PDF 에서 보강.
-            detail_map = _parse_heading_detail_pdf(ex.get("pdf_base64")) or {}
+            detail_map = _parse_heading_detail_pdf(pdf_pages) or {}
             if t.get("main_prpos"):
                 detail_map["주용도"] = t["main_prpos"]
             for label in ("주용도", "주구조", "층수", "허가일", "착공일", "사용승인일"):
@@ -1035,7 +1037,7 @@ class SeumteoFlow:
         # 변동사항은 발급 PDF 텍스트 레이어가 정본이다 — CLIP viewData(글자단위 분절 +
         # 좌표숫자 잡음) 채굴은 절단/중복/필러 행을 만든다(실측: 세션 903c0c36). PDF 가
         # 없거나(예산 초과 생략) 파싱 불가일 때만 CLIP 텍스트로 폴백한다.
-        change_list = _parse_changes_pdf(ex.get("pdf_base64"))
+        change_list = _parse_changes_pdf(pdf_pages)
         change_source = "pdf"
         if change_list is None:
             change_list = _parse_changes(ex.get("full_text") or "")
@@ -1249,15 +1251,14 @@ def _scan_change_lines(lines: list[str]) -> list[dict]:
     return rows
 
 
-def _parse_changes_pdf(pdf_b64: str | None) -> list[dict] | None:
-    """발급 PDF 텍스트 레이어에서 변동사항을 파싱한다(정본 경로).
+def _parse_changes_pdf(pages: list[str] | None) -> list[dict] | None:
+    """발급 PDF 쪽별 텍스트(_pdf_page_texts 결과)에서 변동사항을 파싱한다(정본 경로).
 
     '변동사항'이 있는 쪽만 훑으므로 갑지 소유자현황(성명·주소·주민번호) 쪽은 열지 않는다.
     반환 None 은 "파싱 불가(PDF 없음/깨짐/변동사항 쪽 없음)" — 호출측이 CLIP 텍스트로
     폴백한다. 빈 리스트는 "변동 이력 없음"으로 신뢰한다(폴백해 잡음을 만들지 않는다).
     """
 
-    pages = _pdf_page_texts(pdf_b64)
     if pages is None:
         return None
     found_section = False
@@ -1370,16 +1371,15 @@ _DATE_ONLY = re.compile(r"^((?:19|20)\d{2})[.\-](\d{1,2})[.\-](\d{1,2})\.?$")
 
 
 def _parse_exclusive_detail_pdf(
-    pdf_b64: str | None, *, area_hint: object = None
+    pages: list[str] | None, *, area_hint: object = None
 ) -> dict | None:
-    """전유부 PDF 의 전유부분 표에서 우리 세대 행(층/구조/용도/면적)을 뽑는다.
+    """전유부 PDF 쪽별 텍스트에서 우리 세대 행(층/구조/용도/면적)을 뽑는다.
 
     같은 쪽에 공용부분 표가 붙어 있으므로, R04 가 준 전유면적(area_hint)과 면적이
     일치하는 행을 우선 선택하고, 없으면 '주' 행(전유 주 용도)으로 폴백한다.
     소유자현황(성명·주소·주민번호) 줄은 행 패턴(구분+층별+구조+용도+면적)에 걸리지 않는다.
     """
 
-    pages = _pdf_page_texts(pdf_b64)
     if pages is None:
         return None
     rows: list[tuple[str, ...]] = []
@@ -1421,15 +1421,14 @@ def _parse_exclusive_detail_pdf(
     }
 
 
-def _parse_heading_detail_pdf(pdf_b64: str | None) -> dict[str, str] | None:
-    """표제부 PDF 에서 주구조/주용도/층수(1쪽 값줄)와 허가일/착공일/사용승인일을 뽑는다.
+def _parse_heading_detail_pdf(pages: list[str] | None) -> dict[str, str] | None:
+    """표제부 PDF 쪽별 텍스트에서 주구조/주용도/층수(1쪽 값줄)와 허가일/착공일/사용승인일을 뽑는다.
 
     인허가 일자는 서식상 라벨(허가일/착공일/사용승인일)과 값이 떨어져 추출되므로,
     해당 쪽의 **날짜 단독 줄 연속 3개**가 정확히 한 묶음일 때만 서식 순서대로 매핑한다
     (묶음이 없거나 애매하면 채우지 않는다 — 오매핑이 누락보다 나쁘다).
     """
 
-    pages = _pdf_page_texts(pdf_b64)
     if pages is None:
         return None
     out: dict[str, str] = {}

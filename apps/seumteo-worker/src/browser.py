@@ -37,18 +37,6 @@ _LAUNCH_ARGS = [
     "--font-render-hinting=none",
 ]
 
-# 세션 엔드포인트 능동 확인용 in-page fetch(same-origin, 4xx 에도 throw 하지 않고 status 반환).
-_SESSION_CHECK_JS = """
-async (url) => {
-  try {
-    const r = await fetch(url, { method: 'GET', credentials: 'same-origin' });
-    const text = await r.text();
-    return { status: r.status, text: text.slice(0, 20000) };
-  } catch (e) { return { status: 0, text: '' }; }
-}
-"""
-
-
 class LoginError(RuntimeError):
     """세움터 로그인 실패(자격증명/계정잠금 등). api 는 auth 로 매핑."""
 
@@ -158,15 +146,23 @@ class BrowserManager:
     # 로그인
     # ------------------------------------------------------------------
     async def ensure_logged_in(self) -> None:
-        """로그인 상태 보장. 폼이 보이면 자격증명으로 로그인한다(동시 진입은 lock 으로 1회만)."""
+        """로그인 상태 보장. 세션이 끊겼으면 자격증명으로 로그인한다(동시 진입은 lock 으로 1회만).
+
+        능동 인증 확인은 페이지 없이 수행한다(_is_authenticated 참조) — 잡마다 검증만을 위해
+        eais 홈(무거운 SPA)을 goto 하던 비용(실측 10~19s/잡)을 없앤다. 페이지는 실제 폼
+        로그인이 필요할 때만 연다.
+        """
 
         async with self._login_lock:
             if not self.is_healthy():
                 # 브라우저가 죽었으면 재기동 후 새 컨텍스트.
                 await self._restart()
+            if await self._is_authenticated():
+                _log.info("login.session_valid")
+                return
             page = await self._context.new_page()
             try:
-                await self._login_if_needed(page)
+                await self._login(page)
             finally:
                 await page.close()
 
@@ -179,28 +175,31 @@ class BrowserManager:
             pass
         await self._launch_browser()
 
-    async def _is_authenticated(self, page: Page) -> bool:
+    async def _is_authenticated(self) -> bool:
         """세션 엔드포인트(/cba/CBAAZA02R01)로 실제 로그인 여부를 능동 확인한다.
 
         폼 유무 heuristic 은 Nuxt CSR 에서 오탐한다(렌더 전엔 폼이 없어 '로그인됨'으로 오판).
         대신 인증 세션에서만 membNo 가 채워지는 세션 엔드포인트를 직접 친다:
-        401/403(세션 만료) · 비200 · 빈 membNo → 미인증. 요청은 same-origin 이라 eais 위에서 실행."""
+        401/403(세션 만료) · 비200 · 빈 membNo → 미인증.
+
+        요청은 페이지의 in-page fetch 가 아니라 컨텍스트의 APIRequestContext 로 보낸다 —
+        쿠키 저장소를 브라우저 컨텍스트와 공유하므로 세션 신호는 동일하면서, 검증만을 위해
+        eais 홈(무거운 SPA)을 goto 하던 잡당 10~19s(실측 login.session_valid 구간)를 없앤다.
+        실패는 전부 미인증 취급 → 폼 로그인 폴백이라 오판해도 정확성은 유지된다."""
 
         base = self._s.eais_base_url
-        if not (page.url or "").startswith(base):
-            try:
-                await page.goto(base + "/", wait_until="domcontentloaded")
-            except Exception:  # noqa: BLE001
-                return False
         try:
-            res = await page.evaluate(_SESSION_CHECK_JS, f"{base}/cba/CBAAZA02R01")
+            res = await self._context.request.get(
+                f"{base}/cba/CBAAZA02R01",
+                headers={"Referer": base + "/"},
+                timeout=10_000,
+            )
         except Exception:  # noqa: BLE001
             return False
-        status = res.get("status") if isinstance(res, dict) else None
-        if status != 200:  # 401/403(세션 끊김) 포함 — 비200 은 미인증 취급.
+        if res.status != 200:  # 401/403(세션 끊김) 포함 — 비200 은 미인증 취급.
             return False
         try:
-            data = json.loads(res.get("text") or "{}")
+            data = json.loads(await res.text() or "{}")
         except (ValueError, TypeError):
             return False
         rep = data.get("ds_SessionRep") or {}
@@ -217,13 +216,8 @@ class BrowserManager:
         except Exception:  # noqa: BLE001
             return False
 
-    async def _login_if_needed(self, page: Page) -> None:
-        # 1) 능동 인증 확인 — 폼 유무(SPA 오탐) 대신 세션 엔드포인트로 실제 로그인 여부를 본다.
-        if await self._is_authenticated(page):
-            _log.info("login.session_valid")
-            return
-
-        # 2) 세션 끊김(401/403/빈 membNo) → 자격증명으로 로그인.
+    async def _login(self, page: Page) -> None:
+        # 세션 끊김(401/403/빈 membNo) → 자격증명으로 로그인.
         if not self._s.seumter_id or not self._s.seumter_password:
             raise LoginError(
                 "세움터 자격증명(SEUMTER_ID/PASSWORD)이 설정되지 않았습니다."
@@ -266,7 +260,7 @@ class BrowserManager:
         except Exception:  # noqa: BLE001
             pass
 
-        # 3) 재검증 — 폼 사라짐 ≠ 인증 성공일 수 있어, 능동 확인으로 로그인 성공을 보장.
-        if not await self._is_authenticated(page):
+        # 재검증 — 폼 사라짐 ≠ 인증 성공일 수 있어, 능동 확인으로 로그인 성공을 보장.
+        if not await self._is_authenticated():
             raise LoginError("세움터 로그인에 실패했습니다(자격증명/계정 확인).")
         _log.info("login.ok")
