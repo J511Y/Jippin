@@ -1003,14 +1003,34 @@ class SeumteoFlow:
         owned: list[dict] = []
         detail_list: list[dict] = []
         if req.register_kind == "exclusive":
+            # R04 의 전유면적이 정본, 층/구조/용도는 PDF 전유부분 표에서 보강한다
+            # (JSON 에 없어 리포트 '대장 상세'가 면적만 남던 결함).
+            owned_row: dict = {"resType": "0"}
             area = t.get("exclusive_area")
             if area is not None:
-                owned.append({"resType": "0", "resArea": str(area)})
+                owned_row["resArea"] = str(area)
+            pdf_detail = _parse_exclusive_detail_pdf(
+                ex.get("pdf_base64"), area_hint=area
+            )
+            for key, value in (pdf_detail or {}).items():
+                owned_row.setdefault(key, value)
+            if len(owned_row) > 1:
+                owned.append(owned_row)
         else:
+            # R01 의 mainPrposNm(주용도)이 정본, 층수/인허가 일자는 PDF 에서 보강.
+            detail_map = _parse_heading_detail_pdf(ex.get("pdf_base64")) or {}
             if t.get("main_prpos"):
-                detail_list.append(
-                    {"resType": "주용도", "resContents": t["main_prpos"]}
-                )
+                detail_map["주용도"] = t["main_prpos"]
+            for label in ("주용도", "주구조", "층수", "허가일", "착공일", "사용승인일"):
+                value = detail_map.get(label)
+                if value:
+                    detail_list.append({"resType": label, "resContents": value})
+        _log.info(
+            "flow.register_detail",
+            kind=req.register_kind,
+            owned_fields=sorted(owned[0].keys()) if owned else [],
+            detail_labels=[d["resType"] for d in detail_list],
+        )
 
         # 변동사항은 발급 PDF 텍스트 레이어가 정본이다 — CLIP viewData(글자단위 분절 +
         # 좌표숫자 잡음) 채굴은 절단/중복/필러 행을 만든다(실측: 세션 903c0c36). PDF 가
@@ -1237,24 +1257,38 @@ def _parse_changes_pdf(pdf_b64: str | None) -> list[dict] | None:
     폴백한다. 빈 리스트는 "변동 이력 없음"으로 신뢰한다(폴백해 잡음을 만들지 않는다).
     """
 
-    if not pdf_b64:
+    pages = _pdf_page_texts(pdf_b64)
+    if pages is None:
         return None
     found_section = False
     rows: list[dict] = []
-    try:
-        reader = PdfReader(io.BytesIO(base64.b64decode(pdf_b64)))
-        for page in reader.pages:
-            text = page.extract_text() or ""
-            if "변동사항" not in text:
-                continue
-            found_section = True
-            rows.extend(_scan_change_lines(text.splitlines()))
-    except Exception:  # noqa: BLE001 — PDF 파싱 실패는 CLIP 텍스트 폴백으로.
-        _log.warning("flow.pdf_changes_failed", exc_info=True)
-        return None
+    for text in pages:
+        if "변동사항" not in text:
+            continue
+        found_section = True
+        rows.extend(_scan_change_lines(text.splitlines()))
     if not found_section:
         return None
     return _dedupe_changes(rows)[:20]
+
+
+def _pdf_page_texts(pdf_b64: str | None) -> list[str] | None:
+    """발급 PDF 의 쪽별 텍스트 레이어. None = PDF 없음/깨짐(호출측 폴백/생략 신호)."""
+
+    if not pdf_b64:
+        return None
+    try:
+        reader = PdfReader(io.BytesIO(base64.b64decode(pdf_b64)))
+        pages: list[str] = []
+        for page in reader.pages:
+            try:
+                pages.append(page.extract_text() or "")
+            except Exception:  # noqa: BLE001 — 한 쪽 추출 실패는 그 쪽만 건너뛴다.
+                pages.append("")
+        return pages
+    except Exception:  # noqa: BLE001 — 디코드/파싱 실패는 폴백으로.
+        _log.warning("flow.pdf_text_failed", exc_info=True)
+        return None
 
 
 def _clean_reason(s: str) -> str:
@@ -1317,3 +1351,129 @@ def _parse_changes(text: str) -> list[dict]:
             seen.add((date, reason))
             out.append({"resChangeDate": date, "resChangeReason": reason})
     return _dedupe_changes(out)[:20]
+
+
+# ---------------------------------------------------------------------------
+# 대장 상세(전유부 층/구조/용도/면적 + 표제부 주용도/층수/인허가 일자) — PDF 보강.
+# 내부 JSON(R04/R01)은 totArea/mainPrposNm 만 주므로, 나머지는 발급 PDF 텍스트에서
+# 채운다(변동사항 파서와 동일한 정본 소스). 실패는 전부 조용히 생략 — 기존 필드 유지.
+# ---------------------------------------------------------------------------
+# 전유부분/공용부분/건축물현황 표의 행: "구분 층별 구조 용도 면적" (예: "주 15층 철근콘크리트구조 아파트 59.98")
+_DETAIL_ROW = re.compile(
+    r"^(주\d*|부\d*)\s+(\S+)\s+(\S+)\s+(.+?)\s+([\d,]+(?:\.\d+)?)$"
+)
+# 표제부 1쪽 값줄: "…<주구조> <주용도> 지하: N층, 지상: M층"
+_STRUCT_USE_FLOORS = re.compile(r"(\S*구조)\s+(.+?)\s+(지하\s*:.*)$")
+_FLOORS = re.compile(r"지하\s*:\s*(\d*)\s*층?\s*[,·]?\s*지상\s*:\s*(\d+)\s*층")
+# 인허가 시기 값(날짜 단독 줄) — 변동/가격 행은 날짜 뒤에 내용이 붙어 매칭되지 않는다.
+_DATE_ONLY = re.compile(r"^((?:19|20)\d{2})[.\-](\d{1,2})[.\-](\d{1,2})\.?$")
+
+
+def _parse_exclusive_detail_pdf(
+    pdf_b64: str | None, *, area_hint: object = None
+) -> dict | None:
+    """전유부 PDF 의 전유부분 표에서 우리 세대 행(층/구조/용도/면적)을 뽑는다.
+
+    같은 쪽에 공용부분 표가 붙어 있으므로, R04 가 준 전유면적(area_hint)과 면적이
+    일치하는 행을 우선 선택하고, 없으면 '주' 행(전유 주 용도)으로 폴백한다.
+    소유자현황(성명·주소·주민번호) 줄은 행 패턴(구분+층별+구조+용도+면적)에 걸리지 않는다.
+    """
+
+    pages = _pdf_page_texts(pdf_b64)
+    if pages is None:
+        return None
+    rows: list[tuple[str, ...]] = []
+    for text in pages:
+        if "전유부분" not in re.sub(r"\s+", "", text):
+            continue
+        for raw in text.splitlines():
+            m = _DETAIL_ROW.match(raw.strip())
+            if m:
+                rows.append(m.groups())
+    if not rows:
+        return None
+
+    hint: float | None = None
+    if area_hint is not None:
+        try:
+            hint = float(str(area_hint).replace(",", ""))
+        except ValueError:
+            hint = None
+    chosen: tuple[str, ...] | None = None
+    if hint is not None:
+        for row in rows:
+            try:
+                area = float(row[4].replace(",", ""))
+            except ValueError:
+                continue
+            if abs(area - hint) < 0.005:
+                chosen = row
+                break
+    if chosen is None:
+        chosen = next((r for r in rows if r[0].startswith("주")), None)
+    if chosen is None:
+        return None
+    return {
+        "resArea": chosen[4].replace(",", ""),
+        "resFloor": chosen[1],
+        "resStructure": chosen[2],
+        "resUseType": chosen[3].strip(),
+    }
+
+
+def _parse_heading_detail_pdf(pdf_b64: str | None) -> dict[str, str] | None:
+    """표제부 PDF 에서 주구조/주용도/층수(1쪽 값줄)와 허가일/착공일/사용승인일을 뽑는다.
+
+    인허가 일자는 서식상 라벨(허가일/착공일/사용승인일)과 값이 떨어져 추출되므로,
+    해당 쪽의 **날짜 단독 줄 연속 3개**가 정확히 한 묶음일 때만 서식 순서대로 매핑한다
+    (묶음이 없거나 애매하면 채우지 않는다 — 오매핑이 누락보다 나쁘다).
+    """
+
+    pages = _pdf_page_texts(pdf_b64)
+    if pages is None:
+        return None
+    out: dict[str, str] = {}
+    for text in pages:
+        compact_page = re.sub(r"\s+", "", text)
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+        if "주용도" in compact_page and "층수" not in out:
+            for ln in lines:
+                m = _STRUCT_USE_FLOORS.search(ln)
+                if m is None:
+                    continue
+                out.setdefault("주구조", m.group(1))
+                out.setdefault("주용도", m.group(2).strip())
+                fl = _FLOORS.search(m.group(3))
+                if fl:
+                    under, ground = fl.group(1), fl.group(2)
+                    parts = [f"지하 {under}층" if under else None, f"지상 {ground}층"]
+                    out.setdefault("층수", "/".join(p for p in parts if p))
+                else:
+                    out.setdefault("층수", m.group(3).strip())
+                break
+
+        if "인허가" in compact_page and "사용승인일" not in out:
+            runs: list[list[tuple[str, ...]]] = []
+            cur: list[tuple[str, ...]] = []
+            for ln in lines:
+                m = _DATE_ONLY.match(ln)
+                if m:
+                    cur.append(m.groups())
+                elif cur:
+                    runs.append(cur)
+                    cur = []
+            if cur:
+                runs.append(cur)
+            triples = [r for r in runs if len(r) == 3]
+            if len(triples) == 1:
+                permit, start, approval = triples[0]
+                for label, ymd in (
+                    ("허가일", permit),
+                    ("착공일", start),
+                    ("사용승인일", approval),
+                ):
+                    value = _normalize_change_date(*ymd)
+                    if value:
+                        out.setdefault(label, value)
+    return out or None
