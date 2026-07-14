@@ -130,8 +130,16 @@ services:
       PUBLIC_WEB_ORIGIN: "${PUBLIC_WEB_ORIGIN:-}"
       SUPABASE_JWKS_URL: "${SUPABASE_JWKS_URL:-}"
       SUPABASE_JWT_ISSUER: "${SUPABASE_JWT_ISSUER:-}"
-      SUPABASE_JWT_SECRET: "${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET must be set}"
+      # legacy — api 코드가 읽지 않는다(HS256 폴백 미구현, JWKS 전용). 기존 .env
+      # 형상 호환으로 전달만 유지하고 필수 가드는 해제한다.
+      SUPABASE_JWT_SECRET: "${SUPABASE_JWT_SECRET:-}"
       SUPABASE_JWT_AUDIENCE: "${SUPABASE_JWT_AUDIENCE:-authenticated}"
+      # GoTrue admin (이메일 가입·비밀번호 변경·회원 탈퇴) — 미설정 시 부팅은 되고
+      # 해당 라우트만 503(AUTH_ADMIN_NOT_CONFIGURED). PUBLISHABLE 은 비밀번호 변경의
+      # 현재 비밀번호 검증(password grant)용 — anon key 와 동일 값.
+      SUPABASE_URL: "${SUPABASE_URL:-}"
+      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY:-}"
+      SUPABASE_PUBLISHABLE_KEY: "${SUPABASE_PUBLISHABLE_KEY:-}"
       FRONTEND_AUTH_SUCCESS_URL: "${FRONTEND_AUTH_SUCCESS_URL:-http://localhost:3000/auth/success}"
       FRONTEND_AUTH_FAILURE_URL: "${FRONTEND_AUTH_FAILURE_URL:-http://localhost:3000/auth/failure}"
       FRONTEND_AUTH_TERMS_URL: "${FRONTEND_AUTH_TERMS_URL:-http://localhost:3000/auth/terms}"
