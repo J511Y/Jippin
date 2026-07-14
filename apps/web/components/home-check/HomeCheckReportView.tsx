@@ -233,7 +233,11 @@ export function HomeCheckReportView({
                       : '2px solid var(--jippin-brand-border)',
                     background: highlighted ? 'var(--mantine-color-warning-0)' : undefined,
                     borderRadius: highlighted ? 12 : 0,
-                    padding: highlighted ? '0.625rem 0.75rem 0.625rem 0.875rem' : '0.5rem 0 0.5rem 0.875rem',
+                    padding: highlighted ? '0.625rem 1rem 0.625rem 0.875rem' : '0.5rem 0 0.5rem 0.875rem',
+                    // 강조 배경은 컨텐츠 폭에만 — 카드 전체 폭으로 늘리면 빈 영역까지
+                    // 칠해진다(운영자 피드백 2026-07-14).
+                    width: highlighted ? 'fit-content' : undefined,
+                    maxWidth: '100%',
                     marginBottom: i === changes.length - 1 ? 0 : 6
                   }}
                 >
