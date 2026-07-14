@@ -29,14 +29,16 @@ apps/web/
 │   ├── (app)/                 # 공통 SiteShell(헤더/푸터)이 감싸는 route group
 │   │   ├── layout.tsx         # SiteShell 적용
 │   │   ├── page.tsx           # / (랜딩)
-│   │   ├── sessions/          # /sessions, /sessions/new, /sessions/[sessionId], …/report
-│   │   ├── leads/             # /leads, /leads/new
-│   │   ├── contacts/          # /contacts, /contacts/[contactId]
+│   │   ├── sessions/          # /sessions, /sessions/new, /sessions/[sessionId], …/report, landing/, (workflow)/
+│   │   ├── home-check/        # /home-check(인트로), /home-check/new, /home-check/[checkId] (우리집 체크)
+│   │   ├── leads/             # /leads, /leads/new, juso-callback/, upload-url/
+│   │   ├── contacts/          # /contacts, /contacts/[contactId] (→ /mypage 리다이렉트)
 │   │   ├── prices/
 │   │   ├── faq/              # /faq (자주묻는질문 — DB-backed: GET /faqs 렌더 + 정적 폴백)
 │   │   ├── mypage/
 │   │   ├── terms/
 │   │   └── privacy/
+│   ├── (auth)/                # /login, /signup, /find-email, /find-password route group
 │   ├── api/healthz/route.ts   # Next.js BFF 헬스 핸들러
 │   ├── auth/                  # /auth/callback 등 Supabase OAuth 라우트 (shell 밖 — root layout)
 │   ├── layout.tsx             # 루트 레이아웃 + LegalNotice 강제 노출 (AGENTS.md §4.6)
@@ -44,9 +46,14 @@ apps/web/
 ├── components/
 │   ├── LegalNotice.tsx        # 푸터(약관·개인정보·자주묻는질문 링크 + 법적 고지)
 │   ├── SiteShell.tsx          # 공통 헤더(검토·가격·자주묻는질문)/푸터 셸 + 로그인/마이페이지
+│   ├── GridParallax.tsx       # 제도 격자 캔버스 패럴랙스 (DESIGN.md §4.9 도면 모티프)
 │   ├── faq/                   # FaqBrowser(필터·검색·페이징) + FaqAnswer(react-markdown 답변)
-│   ├── a2ui/                  # 채팅·동적 컴포넌트 placeholder (SDD §6.2 CHAT)
-│   └── ui/                    # Mantine 기본 컴포넌트 re-export
+│   ├── a2ui/                  # 에이전트 채팅 서피스 (A2uiSurface·MessageList·cards — SDD §6.2 CHAT)
+│   ├── agent/                 # 사전검토 에이전트 런 UI (SSE 스트림·인터럽트/재개)
+│   ├── home-check/            # 우리집 체크 퍼널 (주소 검색·진행 폴링·판정 결과)
+│   ├── landing/               # 랜딩 섹션 컴포넌트
+│   ├── inputs/ · leads/ · auth/ · analytics/
+│   └── ui/                    # Mantine re-export + PageColumn·PageHeader·CtaButton
 ├── lib/
 │   ├── api-client.ts          # axios + 401 refresh 인터셉터
 │   ├── api-base-url.ts        # 클라이언트/서버 API base URL 헬퍼
@@ -73,7 +80,10 @@ apps/web/
 | `/sessions` | 사전검토 세션 목록 + 새 세션 진입. | 검토 |
 | `/sessions/new` | 주소/도면 입력 시작. | 검토 |
 | `/sessions/:sessionId` | 사전검토 진행 화면. | 검토 |
-| `/sessions/:sessionId/report` | AI 판단 결과 + inline `LegalNotice` + 상담 전환 CTA. | 검토 |
+| `/sessions/:sessionId/report` | AI 판단 결과 + inline `LegalNotice` + 상담 전환 CTA (+ PDF 다운로드 — `POST /sessions/{id}/report/pdf`). | 검토 |
+| `/home-check` | 우리집 체크 인트로 — 위반건축물·확장 등재 셀프 진단 진입. | — |
+| `/home-check/new` | 주소(도로명 팝업)·동/호 입력 → `POST /home-check` (202 + 잡 폴링). | — |
+| `/home-check/:checkId` | 발급 진행/판정 결과 + 상담 전환 CTA. 추가인증 시 `POST …/continue`. | — |
 | `/leads` | 사전검토 없이 상담 신청 진입. | — |
 | `/leads/new` | 상담 신청 폼 (메뉴에는 노출하지 않음). | — |
 | `/faq` | 자주묻는질문 — 카테고리별 아코디언(마크다운 답변). DB-backed(`GET /faqs`) + 정적 폴백. 헤더·푸터·sitemap 노출. | 자주묻는질문 |
@@ -94,7 +104,7 @@ apps/web/
 - 로그인/회원가입: 이메일+비밀번호와 카카오 OAuth 를 함께 제공합니다. 비밀번호는 Supabase Auth(auth.users)가 단독 관리하며 우리 테이블에는 저장하지 않습니다(AGENTS §4.7 #3). 휴대폰 본인확인은 SOLAPI 문자 인증(백엔드)으로 처리합니다.
 - `/sessions/:sessionId/report` 는 AI 사전검토 → 상담 전환의 중심이므로 항상 inline `LegalNotice` 를 노출합니다. (AGENTS.md §4.6 정본 문구)
 - 모든 `(app)` 화면은 `(app)/layout.tsx` 가 공통 `SiteShell` 로 감쌉니다. `SiteShell` 은 상단 헤더(브랜드 + 메뉴 + 로그인/마이페이지)를 제공하고, root layout 의 `LegalNotice` 푸터가 sticky-footer 로 하단에 노출됩니다.
-- 상담/리드(`POST /leads`)·자주묻는질문(`GET /faqs`)·이메일/카카오 인증은 DB-backed 실 기능입니다. 사전검토 세션 흐름 일부는 후속 이슈에서 채워집니다.
+- 상담/리드(`POST /leads`)·자주묻는질문(`GET /faqs`)·이메일/카카오 인증·우리집 체크(`/home-check`)·사전검토 세션(주소 → 도면 업로드/세그멘테이션 → 벽·창호 선택 → 대화형 에이전트 → 리포트/PDF)은 모두 DB-backed 실 기능입니다.
 
 ## 인증 전략 (Supabase Auth SSOT)
 
@@ -112,14 +122,15 @@ CMP-603/CMP-604 이후 웹 인증의 정본은 **Supabase Auth** 입니다. 기�
 
 env 추가 변수는 `apps/web/.env.example` 의 `NEXT_PUBLIC_SUPABASE_*` 두 라인을 참조하십시오. 실제 값은 `.env.local` 또는 운영 시크릿 매니저에만 보관합니다.
 
-## A2UI
+## A2UI / 에이전트 채팅
 
-`components/a2ui/` 는 LLM 응답에 첨부되는 동적 컴포넌트의 렌더 골격입니다.
+`components/a2ui/` 는 사전검토 에이전트 응답에 첨부되는 동적 컴포넌트의 렌더 계층입니다 (placeholder 아님 — 실 운용).
 
-- `MessageList` / `MessageInput` — 기본 채팅 UI
-- `DynamicComponent` — `{ kind, payload }` 스펙을 받아 클라이언트 레지스트리에서 매칭
+- `A2uiSurface` / `MessageList` / `MessageInput` — 세션 채팅 UI
+- `cards/` + `jsonrender.tsx` — 에이전트가 내려주는 `{ kind, payload }` 스펙을 카드로 렌더
+- `components/agent/` — 에이전트 런 수명주기 (SSE `POST /sessions/{id}/agent/runs` 스트림 구독, resume/interrupt)
 
-정본 스키마는 `packages/contracts` (CMP-528) 와 후속 CHAT 이슈에서 확정합니다.
+정본 스키마는 `packages/contracts` 의 `agent-sse-event` · `agent-run-request` · `agent-run-status` 스키마입니다.
 
 ## 컴포넌트 / 디자인 규칙
 
