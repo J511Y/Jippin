@@ -22,6 +22,11 @@ import {
   type CreateHomeCheckPayload,
   warmHomeCheckWorker
 } from '@/lib/home-check/api';
+import {
+  searchAddress as searchAddressApi,
+  type AddressItem,
+  type AddressSearchResult
+} from '@/lib/leads/api';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
 import { openJusoAddressPopup } from '@/lib/leads/juso-popup';
 
@@ -29,14 +34,20 @@ import { openJusoAddressPopup } from '@/lib/leads/juso-popup';
  * 우리집 체크 입력 퍼널 (CMP-DIRECT, ADR-0008 — 토스/삼쩜삼식 재설계).
  *
  * 기존 밀집형 단일 폼(HomeCheckNewForm)을 "한 화면에 한 질문" 퍼널로 바꿔 이탈을 줄인다.
- * 스텝: 인트로 → 주소 → 동 → 호 → 확장 여부(큰 카드) → (있으면) 부위 선택 → 제출.
+ * 스텝: 주소 → 동 → 호 → 확장 여부(큰 카드) → (있으면) 부위 선택 → 제출.
  * 제출 페이로드(CreateHomeCheckPayload)는 기존 폼과 100% 동일하게 유지한다.
  *
+ * 주소는 **퍼널 안 인앱 검색**(백엔드 프록시 `GET /leads/address/search`)으로 받는다.
+ * juso 공식 팝업은 주소 선택 후 "상세주소 입력" 화면을 강제하는데(useDetailAddr 은
+ * 그 화면의 입력 방식만 바꿀 뿐 화면 자체를 끄지 못함 — 실측 확인), 동·호를 전용
+ * 스텝으로 받는 본 퍼널에서는 중복 입력 혼동만 남긴다. 검색 프록시가 실패하면
+ * (승인키 미설정 등) juso 팝업 폴백 버튼을 노출해 흐름이 끊기지 않게 한다.
+ *
  * 미리보기(백엔드 없음)에서 재사용할 수 있도록 주소 검색과 제출을 주입 가능하게 뒀다.
- * override 가 없으면 실제 juso 팝업 + `POST /home-check` + 결과 페이지 이동으로 동작한다.
+ * override 가 없으면 실제 검색 API + `POST /home-check` + 결과 페이지 이동으로 동작한다.
  */
 
-/** 주소 검색 결과(퍼널이 쓰는 최소 형태). juso 팝업 결과를 이 형태로 좁혀서 받는다. */
+/** 주소 선택 결과(퍼널이 쓰는 최소 형태). 검색 API·팝업 폴백 결과를 이 형태로 좁혀서 받는다. */
 export interface PickedAddress {
   /** 세움터 조회용 도로명 part1(건물명 괄호 제외). API 로 보내는 값. */
   roadAddrPart1: string;
@@ -46,9 +57,10 @@ export interface PickedAddress {
 
 export interface HomeCheckFunnelProps {
   /**
-   * 미리보기용: 주소 검색 팝업 대신 mock 주소를 돌려준다. 없으면 실제 juso 팝업을 연다.
+   * 미리보기용: 실제 주소 검색 API 대신 mock 결과를 돌려준다.
+   * 없으면 백엔드 프록시(`GET /leads/address/search`)를 호출한다.
    */
-  resolveAddress?: () => Promise<PickedAddress>;
+  searchAddressOverride?: (keyword: string) => Promise<AddressSearchResult>;
   /**
    * 미리보기용: 실제 제출/이동 대신 페이로드만 받는다. resolve 되면 '완료' 화면을 보여 준다.
    * 없으면 익명 세션 보장 후 `POST /home-check` → 결과 상세로 이동한다.
@@ -95,13 +107,18 @@ function extensionPayload(
   return {};
 }
 
-export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckFunnelProps) {
+export function HomeCheckFunnel({ searchAddressOverride, onSubmitOverride }: HomeCheckFunnelProps) {
   const router = useRouter();
 
   // 스텝 상태 + 뒤로가기 스택. 확장 분기(있어요→부위) 때문에 index 대신 명시 스택을 쓴다.
   // 첫 질문(address)부터 시작한다 — 인트로는 랜딩(`/home-check`)이 담당한다.
-  const [step, setStep] = useState<StepKey>('address');
-  const [history, setHistory] = useState<StepKey[]>([]);
+  // step 과 스택은 반드시 한 상태로 묶어 원자적으로 갱신한다 — 따로 두면 뒤로가기
+  // 더블클릭(같은 프레임 2회) 때 스택만 두 번 pop 되고 step 은 한 번만 움직여 꼬인다.
+  const [nav, setNav] = useState<{ step: StepKey; stack: StepKey[] }>({
+    step: 'address',
+    stack: []
+  });
+  const step = nav.step;
 
   // 입력값.
   const [roadAddr, setRoadAddr] = useState(''); // API 로 보내는 part1
@@ -138,9 +155,14 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
     };
   }, [onSubmitOverride]);
 
-  // 스텝 전환 시 새 스텝의 포커스 대상(질문 헤딩)으로 포커스를 옮긴다(스크린리더 맥락 전달).
+  // 스텝 전환 시 새 스텝의 포커스 대상으로 포커스를 옮긴다. 입력 스텝(주소 검색·동·호)은
+  // 입력칸에 곧장 포커스해 키보드 조작(엔터 진행)이 끊기지 않게 하고, 그 외 스텝은 질문
+  // 헤딩에 포커스한다(스크린리더 맥락 전달). input 이 있으면 input 이 우선한다.
   useEffect(() => {
-    const target = bodyRef.current?.querySelector<HTMLElement>('[data-step-focus]');
+    const root = bodyRef.current;
+    const target =
+      root?.querySelector<HTMLElement>('input[data-step-focus]') ??
+      root?.querySelector<HTMLElement>('[data-step-focus]');
     target?.focus();
   }, [step]);
 
@@ -160,34 +182,23 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
   const showTopBar = step !== 'submitting' && step !== 'done';
 
   function go(next: StepKey) {
-    setHistory((h) => [...h, step]);
-    setStep(next);
+    setNav((n) => ({ step: next, stack: [...n.stack, n.step] }));
   }
 
   function back() {
-    const prev = history[history.length - 1];
     // 첫 질문(address)에서 뒤로 = 랜딩으로 (인트로 스텝이 없으므로).
-    if (!prev) {
+    if (nav.stack.length === 0) {
       router.push('/home-check');
       return;
     }
-    setHistory((h) => h.slice(0, -1));
-    setStep(prev);
+    setNav((n) => {
+      const prev = n.stack[n.stack.length - 1];
+      return prev === undefined ? n : { step: prev, stack: n.stack.slice(0, -1) };
+    });
   }
 
-  async function pickAddress() {
-    const resolver =
-      resolveAddress ??
-      (async (): Promise<PickedAddress> => {
-        // 동·호는 전용 스텝으로 받으므로 팝업 상세주소(동/호) 단계는 끈다.
-        const result = await openJusoAddressPopup({ useDetailAddr: false });
-        // CODEF 는 "동·호 전 도로명" 만 받는다 → 건물명 괄호(part2) 제외, part1 만 전송.
-        return {
-          roadAddrPart1: result.roadAddrPart1.trim(),
-          roadFullAddr: result.roadFullAddr.trim() || result.roadAddrPart1.trim()
-        };
-      });
-    const picked = await resolver();
+  /** 주소 확정 공통 처리 — 인앱 검색 선택·팝업 폴백 양쪽이 이 경로로 합류한다. */
+  function applyPicked(picked: PickedAddress) {
     // 주소가 바뀌면 이후 단계(동/호/확장) 값을 초기화한다 — 뒤로 가서 다른 주소를 골라도 이전
     // 동·호·확장 답이 남아 새 주소에 옛 호수로 조회되는 것을 막는다.
     if (picked.roadAddrPart1 !== roadAddr) {
@@ -200,6 +211,18 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
     }
     setRoadAddr(picked.roadAddrPart1);
     setDisplayAddr(picked.roadFullAddr);
+    // 주소를 골랐으면 곧장 동 입력으로 — 선택 카드에서 '다음'을 한 번 더 누르게 하지 않는다.
+    go('dong');
+  }
+
+  /** 검색 프록시 실패 시 폴백 — juso 공식 팝업(상세주소 화면은 juso 강제라 못 없앰). */
+  async function pickAddressViaPopup() {
+    const result = await openJusoAddressPopup({ useDetailAddr: false });
+    // CODEF/세움터는 "동·호 전 도로명" 만 받는다 → 건물명 괄호(part2) 제외, part1 만 전송.
+    applyPicked({
+      roadAddrPart1: result.roadAddrPart1.trim(),
+      roadFullAddr: result.roadFullAddr.trim() || result.roadAddrPart1.trim()
+    });
   }
 
   function toggleArea(key: string) {
@@ -229,7 +252,7 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
     try {
       if (onSubmitOverride) {
         await onSubmitOverride(payload);
-        setStep('done');
+        setNav((n) => ({ ...n, step: 'done' }));
         return;
       }
       // 세션 보장: apiClient 가 Bearer 를 부착한다(익명 세션 허용).
@@ -298,7 +321,14 @@ export function HomeCheckFunnel({ resolveAddress, onSubmitOverride }: HomeCheckF
           {step === 'address' ? (
             <AddressStep
               displayAddr={displayAddr}
-              onPick={() => void pickAddress()}
+              onSearch={searchAddressOverride ?? ((keyword) => searchAddressApi(keyword))}
+              onSelect={(item) =>
+                applyPicked({
+                  roadAddrPart1: item.road_addr_part1.trim(),
+                  roadFullAddr: item.road_addr.trim() || item.road_addr_part1.trim()
+                })
+              }
+              onPopupFallback={() => void pickAddressViaPopup()}
               onNext={() => go('dong')}
             />
           ) : step === 'dong' ? (
@@ -393,21 +423,55 @@ function DockButton({
 
 function AddressStep({
   displayAddr,
-  onPick,
+  onSearch,
+  onSelect,
+  onPopupFallback,
   onNext
 }: {
   displayAddr: string;
-  onPick: () => void;
+  onSearch: (keyword: string) => Promise<AddressSearchResult>;
+  onSelect: (item: AddressItem) => void;
+  onPopupFallback: () => void;
   onNext: () => void;
 }) {
   const hasAddr = displayAddr.trim().length > 0;
-  return (
-    <>
-      <StepHeading>어느 집을 확인해 드릴까요?</StepHeading>
-      <StepSub>건물 도로명주소를 검색해 주세요. 동·호는 다음 단계에서 입력해요.</StepSub>
+  // 뒤로 이동으로 재진입해 이미 고른 주소가 있으면 선택 카드부터, 없으면 검색부터 시작.
+  const [searching, setSearching] = useState(!hasAddr);
+  const [keyword, setKeyword] = useState('');
+  const [result, setResult] = useState<AddressSearchResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-      <div style={{ marginTop: 28 }}>
-        {hasAddr ? (
+  // '다른 주소로 다시 검색' 토글은 스텝 전환이 아니라 부모의 스텝 포커스 효과가 안 돈다 —
+  // 검색 UI 가 마운트되면 직접 검색어 입력칸에 포커스한다(초기 마운트에도 무해).
+  useEffect(() => {
+    if (searching) inputRef.current?.focus();
+  }, [searching]);
+
+  async function runSearch() {
+    const trimmed = keyword.trim();
+    if (!trimmed || loading) return;
+    setLoading(true);
+    setFailed(false);
+    try {
+      setResult(await onSearch(trimmed));
+    } catch {
+      // 검색 프록시 실패(승인키 미설정·네트워크 등) — 팝업 폴백 버튼을 노출한다.
+      setResult(null);
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (hasAddr && !searching) {
+    return (
+      <>
+        <StepHeading>어느 집을 확인해 드릴까요?</StepHeading>
+        <StepSub>이 주소가 맞는지 확인해 주세요. 동·호는 다음 단계에서 입력해요.</StepSub>
+
+        <div style={{ marginTop: 28 }}>
           <div className="hc-address-picked">
             <span className="hc-address-picked__icon" aria-hidden>
               <IconMapPin size={20} />
@@ -428,28 +492,113 @@ function AddressStep({
                 px={0}
                 mt={4}
                 leftSection={<IconSearch size={14} aria-hidden />}
-                onClick={onPick}
+                onClick={() => setSearching(true)}
               >
                 다른 주소로 다시 검색
               </Button>
             </div>
           </div>
-        ) : (
-          <Button
-            variant="light"
+        </div>
+
+        <DockButton label="다음" onClick={onNext} />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <StepHeading>어느 집을 확인해 드릴까요?</StepHeading>
+      <StepSub>건물 도로명주소로 검색해 주세요. 동·호는 다음 단계에서 입력해요.</StepSub>
+
+      <TextInput
+        ref={inputRef}
+        data-step-focus
+        mt={28}
+        size="lg"
+        radius="lg"
+        placeholder="예: 여의대방로43나길 25"
+        value={keyword}
+        onChange={(e) => setKeyword(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          // 한글 IME 조합 중 엔터(isComposing)는 조합 확정일 뿐 — 검색을 실행하지 않는다.
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing) void runSearch();
+        }}
+        rightSectionWidth={56}
+        rightSection={
+          <ActionIcon
+            variant="subtle"
             color="jippin"
             size="lg"
-            fullWidth
-            justify="center"
-            leftSection={<IconSearch size={18} aria-hidden />}
-            onClick={onPick}
+            radius="md"
+            aria-label="주소 검색"
+            loading={loading}
+            onClick={() => void runSearch()}
           >
-            주소 검색하기
-          </Button>
-        )}
-      </div>
+            <IconSearch size={20} />
+          </ActionIcon>
+        }
+        aria-label="도로명주소 검색어"
+      />
 
-      <DockButton label="다음" disabled={!hasAddr} onClick={onNext} />
+      {failed ? (
+        <div style={{ marginTop: 16 }}>
+          <Text size="sm" c="var(--mantine-color-danger-7)">
+            주소 검색 서비스에 연결하지 못했어요. 잠시 후 다시 시도하거나, 주소 검색
+            팝업으로 찾아 주세요.
+          </Text>
+          <Button
+            mt={10}
+            variant="light"
+            color="jippin"
+            fullWidth
+            leftSection={<IconSearch size={16} aria-hidden />}
+            onClick={onPopupFallback}
+          >
+            주소 검색 팝업으로 찾기
+          </Button>
+        </div>
+      ) : null}
+
+      {result ? (
+        result.items.length > 0 ? (
+          <div
+            role="group"
+            aria-label="주소 검색 결과"
+            style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}
+          >
+            {result.items.map((item) => (
+              <button
+                key={`${item.road_addr}-${item.zip_no ?? ''}`}
+                type="button"
+                className="hc-choice"
+                onClick={() => onSelect(item)}
+              >
+                <span className="hc-choice__icon" aria-hidden>
+                  <IconMapPin size={22} />
+                </span>
+                <span className="hc-choice__body">
+                  <span className="hc-choice__label">{item.road_addr}</span>
+                  {item.jibun_addr ? (
+                    <span className="hc-choice__desc">지번 {item.jibun_addr}</span>
+                  ) : null}
+                </span>
+                <IconChevronRight size={18} className="hc-choice__chev" aria-hidden />
+              </button>
+            ))}
+            {result.total_count > result.items.length ? (
+              <Text size="xs" c="dimmed">
+                총 {result.total_count}건 중 {result.items.length}건이에요. 건물번호까지
+                입력하면 더 정확하게 찾을 수 있어요.
+              </Text>
+            ) : null}
+          </div>
+        ) : (
+          <Text mt={20} size="sm" c="dimmed">
+            검색 결과가 없어요. 도로명과 건물번호(예: 여의대방로43나길 25)로 다시 검색해
+            보세요.
+          </Text>
+        )
+      ) : null}
     </>
   );
 }
@@ -469,6 +618,7 @@ function DongStep({
       <StepSub>아파트라면 동 번호를 적어 주세요. 동이 없는 집이면 비워두고 넘어가도 돼요.</StepSub>
 
       <TextInput
+        data-step-focus
         mt={28}
         size="lg"
         radius="lg"
@@ -477,7 +627,8 @@ function DongStep({
         value={value}
         onChange={(e) => onChange(e.currentTarget.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') onNext();
+          // IME 조합 확정 엔터로 다음 스텝이 튀지 않게 가드('가'동 같은 한글 동 대비).
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing) onNext();
         }}
         aria-label="동"
       />
@@ -506,6 +657,7 @@ function HoStep({
       <StepSub>세대를 정확히 찾기 위해 호수가 필요해요.</StepSub>
 
       <TextInput
+        data-step-focus
         mt={28}
         size="lg"
         radius="lg"
@@ -515,7 +667,7 @@ function HoStep({
         error={showError ? '호를 입력해 주세요' : undefined}
         onChange={(e) => onChange(e.currentTarget.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') onNext();
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing) onNext();
         }}
         aria-label="호"
       />
