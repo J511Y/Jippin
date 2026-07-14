@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # 상한과 분리된다. API의 180초 상한보다 작게 두되, 로그인·발급·CLIP 렌더가 55초를 넘겨도
     # 완료할 수 있도록 120초를 기본으로 한다.
     job_deadline_ms: int = Field(default=120_000)
+    # 통합 잡(전유부+표제부) 전체 상한 — 공유 단계 1회 + CLIP 추출 2회(각 ~35-45s) 기준.
+    # API 의 bundle 타임아웃(240s)보다 작게 유지한다.
+    bundle_deadline_ms: int = Field(default=180_000)
+    # 통합 잡에서 두 건을 하나의 S01 로 신청할지. 세움터 카트 UI 는 원래 복수 건 일괄 신청
+    # (maxIssueCnt=10)이지만 자동화 경로 실검증 전이므로, 라이브에서 문제가 보이면 재배포 없이
+    # env 로 끄고 잡 내부의 종류별 순차 신청 폴백만 쓰게 한다.
+    seumteo_bundle_single_submit: bool = Field(default=True)
 
     # 로그인 폼(#membId) hydrate 대기 상한. eais 로그인 페이지는 Nuxt CSR 이라 domcontentloaded
     # 직후엔 폼이 아직 없다 → wait_for_selector 로 렌더를 기다린다(폼 부재를 '이미 로그인'으로

@@ -19,7 +19,12 @@ from fastapi.responses import JSONResponse
 from .browser import BrowserManager, LoginError
 from .config import get_settings
 from .flow import FlowError, SeumteoFlow
-from .models import BuildingRegisterError, BuildingRegisterRequest
+from .models import (
+    BuildingRegisterBundleRequest,
+    BuildingRegisterBundleResponse,
+    BuildingRegisterError,
+    BuildingRegisterRequest,
+)
 
 _log = structlog.get_logger(__name__)
 
@@ -137,4 +142,88 @@ async def building_register(
             content=BuildingRegisterError(
                 category="upstream", message="발급 처리 중 오류가 발생했습니다."
             ).model_dump(),
+        )
+
+
+def _bundle_error_payload(
+    category: str, message: str, *, field: str | None = None, options=None
+) -> dict:
+    """공유 단계 실패 — 동일 오류 봉투를 양쪽 종류에 복제한다(호출측 매핑은 단건과 동일)."""
+
+    err = BuildingRegisterError(
+        category=category, message=message, field=field, options=options
+    )
+    return BuildingRegisterBundleResponse(exclusive=err, heading=err).model_dump()
+
+
+@app.post("/jobs/building-register-bundle")
+async def building_register_bundle(
+    req: BuildingRegisterBundleRequest,
+    authorization: str | None = Header(default=None),
+):
+    _require_token(authorization)
+    flow: SeumteoFlow = app.state.flow
+    settings = get_settings()
+    started = time.monotonic()
+    # 주소·동·호는 로그에 남기지 않는다(단건 잡과 동일 정책).
+    _log.info("job.received", register_kind="bundle")
+    try:
+        result = await asyncio.wait_for(
+            flow.run_bundle(req), timeout=settings.bundle_deadline_ms / 1000
+        )
+        _log.info(
+            "job.completed",
+            register_kind="bundle",
+            exclusive_ok=result.exclusive.ok,
+            heading_ok=result.heading.ok,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        return result
+    except LoginError as exc:
+        _log.warning(
+            "job.auth_error",
+            register_kind="bundle",
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        return JSONResponse(content=_bundle_error_payload("auth", str(exc)))
+    except FlowError as exc:
+        _log.warning(
+            "job.flow_error",
+            register_kind="bundle",
+            category=exc.category,
+            message=exc.message,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        return JSONResponse(
+            content=_bundle_error_payload(
+                exc.category, exc.message, field=exc.field, options=exc.options
+            )
+        )
+    except asyncio.TimeoutError:
+        _log.warning(
+            "job.timeout",
+            register_kind="bundle",
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        return JSONResponse(
+            content=_bundle_error_payload(
+                "upstream", "발급 처리가 시간 내 완료되지 않았습니다."
+            )
+        )
+    except Exception:  # noqa: BLE001
+        _log.exception(
+            "job.unexpected",
+            register_kind="bundle",
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        # 예기치 못한 오류(브라우저 크래시 등) — 다음 잡을 위해 브라우저 재기동 시도.
+        try:
+            await app.state.mgr.ensure_logged_in()
+        except Exception:  # noqa: BLE001
+            pass
+        return JSONResponse(
+            status_code=502,
+            content=_bundle_error_payload(
+                "upstream", "발급 처리 중 오류가 발생했습니다."
+            ),
         )
