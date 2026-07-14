@@ -65,8 +65,12 @@ def _kst_today() -> datetime.date:
 # 있다. 신청 전 06R01 접수번호 스냅샷을 잡고, 신청 후 새로 생긴 동일 건물·동·호 행만 수용해
 # 과거 접수의 '구발급'을 막는다(#recp-fresh). S01/D02 응답의 pbsvcRecpNo 는 응답 위치·의미가
 # 안정적이지 않아 후보(tie-breaker)로만 쓰고, 새 행이 아직 신청내역에 안 뜨면 잠깐 폴링한다.
-_RECP_POLL_TRIES = 4
-_RECP_POLL_WAIT_MS = 1500
+# 폴 간격은 백오프(짧게 시작) — 새 행은 대개 1초 안에 올라오므로 빠른 상류는 조기 완료하고,
+# 느린 상류엔 기존(3×1500ms)보다 넉넉한 총예산을 준다.
+_RECP_POLL_WAITS_MS = (400, 800, 1500, 2500, 3000)
+
+# 발급 준비(06R03) FILE_ID 폴 간격 — 동일한 백오프 원칙(기존 6×1500ms 균등 대비 총예산 증가).
+_R03_POLL_WAITS_MS = (400, 700, 1200, 1800, 2500, 3000, 3000)
 
 # PDF(best-effort)는 잡 데드라인(main.py wait_for=job_deadline_ms)보다 이 여유만큼 일찍 끊어,
 # 판정이 끝난 잡이 느린 PDF 때문에 취소(→과금된 발급이 오류로 보여 재시도→중복발급)되지 않게
@@ -911,16 +915,16 @@ class SeumteoFlow:
             }
 
         # 새 행이 06R01 에 올라올 때까지 잠깐 폴링한다. 신청 응답에 접수번호가 없더라도 스냅샷
-        # 차집합으로 식별할 수 있으므로 동일하게 폴링한다.
-        for attempt in range(_RECP_POLL_TRIES):
+        # 차집합으로 식별할 수 있으므로 동일하게 폴링한다. 마지막 조회 뒤에는 기다리지 않는다.
+        for wait_ms in (*_RECP_POLL_WAITS_MS, 0):
             data = await self._post(page, f"{base}/bci/BCIAAA06R01", body)
             self._check_cais(data)
             rows = data.get("IssueReadHistList") or []
             hit = _pick(rows)
             if hit is not None:
                 return hit
-            if attempt < _RECP_POLL_TRIES - 1:
-                await page.wait_for_timeout(_RECP_POLL_WAIT_MS)
+            if wait_ms:
+                await page.wait_for_timeout(wait_ms)
         raise FlowError("upstream", "신청한 발급 건을 확인하지 못했습니다.")
 
     # ------------------------------------------------------------------
@@ -948,8 +952,9 @@ class SeumteoFlow:
         )
         # 발급이 아직 준비 전이면 06R03 에 FILE_ID 가 없다 — 잠깐 대기 후 재조회한다(방금 신청건이
         # 완료 상태에 이르기 전이면 곧 준비되므로 잡을 성급히 실패시키지 않는다, #recp-ready).
+        # 백오프 스케줄로 폴링 — 준비돼 있으면 첫 조회로 끝나고, 마지막 조회 뒤에는 기다리지 않는다.
         counts: dict = {}
-        for _ in range(6):
+        for wait_ms in (*_R03_POLL_WAITS_MS, 0):
             r03 = await self._post(
                 page,
                 f"{base}/report/BCIAAA06R03",
@@ -958,7 +963,8 @@ class SeumteoFlow:
             counts = r03.get("count") or {}
             if counts.get("FILE_ID"):
                 break
-            await page.wait_for_timeout(1500)
+            if wait_ms:
+                await page.wait_for_timeout(wait_ms)
         if not counts.get("FILE_ID"):
             raise FlowError("upstream", "발급 리포트를 준비하지 못했습니다.")
         # 완전성 검증용 섹션 수(위반표시가 실리는 '그 밖의 기재사항' 등)를 넘겨 둔다.
