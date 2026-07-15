@@ -339,9 +339,12 @@ class SeumteoFlow:
         실패해도 전유부 성공 결과를 버리지 않고 표제부 봉투에만 담는다. 표제부 추출은
         남은 예산으로 타임박스해 표제부 지연이 bundle 데드라인 전체를 태우지 않게 한다."""
 
-        await self._mgr.ensure_logged_in()
+        # 데드라인은 **로그인 전에** 시작한다 — main.py 의 외부 wait_for(bundle_deadline_ms)
+        # 와 같은 시점에서 출발해야, 콜드/만료 세션 로그인이 예산을 먹어도 내부(표제부)
+        # 타임박스가 외부 타임아웃보다 늦게 걸려 전유부 성공 결과째 취소되는 일이 없다.
         loop = asyncio.get_event_loop()
         overall_deadline = loop.time() + self._s.bundle_deadline_ms / 1000
+        await self._mgr.ensure_logged_in()
         async with self._mgr.render_semaphore:
             page = await self._mgr.context.new_page()
             try:
@@ -434,26 +437,44 @@ class SeumteoFlow:
         if t_head is not None:
             item_list.append(items["heading"])
 
-        # 신청 — 기본은 단일 S01(세움터 카트 UI 의 일괄 신청과 동일). 두 건 일괄이
-        # 거부되면(자동화 경로 미검증 리스크) 같은 잡 안에서 종류별 순차 신청으로 폴백한다.
-        # 부분 생성된 행이 있으면 종류별 새 행이 복수가 돼 _pick_receipt 가 fail-closed 한다.
-        submitted: list[str]
+        # 신청 — 기본은 단일 S01(세움터 카트 UI 의 일괄 신청과 동일). 종류별 순차 폴백은
+        # **S01 자체가 거부됐을 때만** 건다 — S01 이 수리된 뒤(D02 등) 실패에 재신청하면
+        # 중복 신청이 생기고 접수 매칭이 ambiguous 로 fail-closed 된다(#no-resubmit).
+        # 폴백에서도 전유부 신청은 필수(실패 = 전체 실패), 표제부 신청은 best-effort 다.
+        submitted: list[str] = []
+        s01_candidates: list[str] | None = None
         if self._s.seumteo_bundle_single_submit or len(item_list) == 1:
             try:
-                submitted = await self._submit_many(page, item_list, appnt)
+                s01_candidates = await self._submit_s01(page, item_list, appnt)
             except FlowError as exc:
                 if len(item_list) == 1:
-                    raise  # 전유부 단건 신청 실패 = 전체 실패(폴백 여지 없음).
+                    raise  # 전유부 단건 신청 거부 = 전체 실패(폴백 여지 없음).
                 _log.warning(
                     "flow.bundle_submit_fallback",
                     category=exc.category,
                     message=exc.message[:120],
                 )
-                submitted = await self._submit_many(page, [items["exclusive"]], appnt)
-                submitted += await self._submit_many(page, [items["heading"]], appnt)
+        if s01_candidates is not None:
+            # 일괄 S01 수리됨 — D02 실패는 재신청하지 않고 전파한다(단건 경로와 동일).
+            submitted = list(s01_candidates)
+            for cand in await self._submit_d02(page, item_list):
+                if cand not in submitted:
+                    submitted.append(cand)
         else:
             submitted = await self._submit_many(page, [items["exclusive"]], appnt)
-            submitted += await self._submit_many(page, [items["heading"]], appnt)
+            if t_head is not None:
+                try:
+                    submitted += await self._submit_many(
+                        page, [items["heading"]], appnt
+                    )
+                except FlowError as exc:
+                    _log.warning(
+                        "flow.bundle_heading_failed",
+                        stage="submit",
+                        category=exc.category,
+                    )
+                    heading_failure = self._heading_error(exc)
+                    t_head = None
 
         kinds: dict[str, tuple[BuildingRegisterRequest, dict]] = {
             "exclusive": (req_ex, t_ex)
@@ -1063,8 +1084,10 @@ class SeumteoFlow:
     # ------------------------------------------------------------------
     # 7) 신청 — S01(완전체) + D02. D02 가 빠지면 신청내역에 완료(progStateCd:91)로 안 올라온다.
     #    세움터 카트는 원래 복수 건 일괄 신청 UI(maxIssueCnt=10)라 items 리스트를 그대로 싣는다.
+    #    S01/D02 를 분리해 둔 이유: S01 이 **수리된 뒤** 실패(D02 등)에 재신청 폴백을 걸면
+    #    중복 신청이 생기므로, 통합 잡의 순차 폴백은 S01 거부에만 반응해야 한다(#no-resubmit).
     # ------------------------------------------------------------------
-    async def _submit_many(
+    async def _submit_s01(
         self, page: Page, items: list[dict], appnt: dict
     ) -> list[str]:
         base = self._s.eais_base_url
@@ -1083,11 +1106,20 @@ class SeumteoFlow:
         }
         data = await self._post(page, f"{base}/bci/BCIAZA02S01", s01)
         self._check_cais(data)
+        # 접수번호 후보들 — 06R01 신청 전후 차집합이 복수일 때만 tie-breaker 로 쓴다.
+        return _extract_recp_nos(data)
+
+    async def _submit_d02(self, page: Page, items: list[dict]) -> list[str]:
+        base = self._s.eais_base_url
         d02 = await self._post(page, f"{base}/bci/BCIAAA02D02", items)
         self._check_cais(d02)
-        # 접수번호 후보들 — 06R01 신청 전후 차집합이 복수일 때만 tie-breaker 로 쓴다.
-        out = _extract_recp_nos(data)
-        for cand in _extract_recp_nos(d02):
+        return _extract_recp_nos(d02)
+
+    async def _submit_many(
+        self, page: Page, items: list[dict], appnt: dict
+    ) -> list[str]:
+        out = await self._submit_s01(page, items, appnt)
+        for cand in await self._submit_d02(page, items):
             if cand not in out:
                 out.append(cand)
         return out

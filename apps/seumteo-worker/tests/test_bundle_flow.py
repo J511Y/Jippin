@@ -52,6 +52,8 @@ class _Router:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
         self.s01_fail_first = False
+        self.s01_fail_calls: set[int] = set()  # 1-base 호출 번호로 S01 실패 지정.
+        self.d02_fail = False
         self.fail_heading_resolve = False
         self._s01_calls = 0
         self._r05_calls = 0
@@ -172,10 +174,17 @@ class _Router:
             return {"resultData": {"results": [{"bizno": "123", "nm": "집핀"}]}}
         if url.endswith("/bci/BCIAZA02S01"):
             self._s01_calls += 1
-            if self.s01_fail_first and self._s01_calls == 1:
+            fail = (self.s01_fail_first and self._s01_calls == 1) or (
+                self._s01_calls in self.s01_fail_calls
+            )
+            if fail:
                 return {"caisMessage": {"resultCode": "E99999", "resultMessage": "오류"}}
             return self._ok({"pbsvcRecpNo": "SUBMIT-CAND"})
         if url.endswith("/bci/BCIAAA02D02"):
+            if self.d02_fail:
+                return {
+                    "caisMessage": {"resultCode": "E88888", "resultMessage": "확정 오류"}
+                }
             return self._ok()
         if url.endswith("/bci/BCIAAA06R01"):
             self._hist_calls += 1
@@ -337,6 +346,47 @@ class BundleFlowTest(unittest.IsolatedAsyncioTestCase):
             await self.flow._run_bundle_on_page(
             _Page(), self.req, asyncio.get_running_loop().time() + 60.0
         )
+
+    async def test_no_resubmit_when_d02_fails_after_batch_s01(self) -> None:
+        """S01 이 수리된 뒤(D02) 실패에는 재신청 폴백을 걸지 않는다 — 중복 신청 방지."""
+
+        self.router.d02_fail = True
+
+        async def _fake_extract(page, req, t, recp, *, pdf_deadline=None):
+            return _result(req.register_kind)
+
+        self.flow._issue_and_extract = _fake_extract
+
+        with self.assertRaisesRegex(FlowError, "확정 오류"):
+            await self.flow._run_bundle_on_page(
+                _Page(), self.req, asyncio.get_running_loop().time() + 60.0
+            )
+
+        # 일괄 S01 정확히 1회 — D02 실패 후 어떤 형태의 재신청도 없어야 한다.
+        self.assertEqual(len(self.router.urls("/bci/BCIAZA02S01")), 1)
+        self.assertEqual(len(self.router.urls("/bci/BCIAAA02D02")), 1)
+
+    async def test_fallback_heading_submit_failure_keeps_exclusive(self) -> None:
+        """순차 폴백에서 표제부 신청 실패는 best-effort — 전유부 결과를 보존한다."""
+
+        # 1번(일괄)·3번(폴백 표제부) S01 실패, 2번(폴백 전유부)만 수리.
+        self.router.s01_fail_calls = {1, 3}
+        extract_calls: list[str] = []
+
+        async def _fake_extract(page, req, t, recp, *, pdf_deadline=None):
+            extract_calls.append(req.register_kind)
+            return _result(req.register_kind)
+
+        self.flow._issue_and_extract = _fake_extract
+
+        res = await self.flow._run_bundle_on_page(
+            _Page(), self.req, asyncio.get_running_loop().time() + 60.0
+        )
+
+        self.assertTrue(res.exclusive.ok)
+        self.assertIsInstance(res.heading, BuildingRegisterError)
+        self.assertEqual(extract_calls, ["exclusive"])
+        self.assertEqual(len(self.router.urls("/bci/BCIAZA02S01")), 3)
 
     async def test_heading_resolve_failure_keeps_exclusive_result(self) -> None:
         """표제부 해석(R01) 실패는 best-effort — 전유부만으로 단건 신청해 완주한다."""
