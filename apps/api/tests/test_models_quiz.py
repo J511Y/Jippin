@@ -55,9 +55,10 @@ def test_quiz_check_constraints_match_migration() -> None:
     assert "cardinality(categories) >= 1" in categories_sql
 
     # 선택지 2~5개(2=O/X, 3~5=객관식) + 정답 인덱스는 선택지 범위 안(0-base).
-    assert "cardinality(choices) between 2 and 5" in check_constraints[
-        "ck_quizzes_choices_range"
-    ]
+    assert (
+        "cardinality(choices) between 2 and 5"
+        in check_constraints["ck_quizzes_choices_range"]
+    )
     answer_sql = check_constraints["ck_quizzes_answer_index_valid"]
     assert "answer_index >= 0" in answer_sql
     assert "answer_index < cardinality(choices)" in answer_sql

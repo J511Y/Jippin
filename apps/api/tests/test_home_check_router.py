@@ -941,9 +941,7 @@ def test_phase_stops_at_issuing_on_needs_input(monkeypatch) -> None:
     exc = CodefNeedsUserInput(
         "dong_ho", "tok-1", "동을 선택해 주세요.", field="dong", options=None
     )
-    monkeypatch.setattr(
-        svc, "_new_client", lambda: _FakeClient(exclusive_exc=exc)
-    )
+    monkeypatch.setattr(svc, "_new_client", lambda: _FakeClient(exclusive_exc=exc))
 
     _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="", ho="1"))
 
