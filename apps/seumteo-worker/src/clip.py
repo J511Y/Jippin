@@ -32,6 +32,9 @@ _VIOLATION = "위반건축물"
 _PDF_MIN_BUDGET_MS = 3000
 # 준비 폴링 후, 실제 다운로드에 최소 이만큼은 남아 있어야 시도한다(그보다 적으면 생략).
 _PDF_MIN_DOWNLOAD_MS = 1500
+# 렌더 완료(m_isEndReport) 폴 간격 — 이미 렌더돼 대개 즉시이므로 짧게 시작하는 백오프.
+# 총예산은 기존(20×500ms)과 동등(~10s).
+_PDF_READY_WAITS_MS = (150, 250, 400, 600, 800) + (1000,) * 8
 
 # 컨텍스트의 모든 페이지(팝업 포함)에 렌더 전 주입되는 스크립트.
 INIT_SCRIPT = r"""
@@ -150,11 +153,14 @@ async def extract_report(
         )
     except Exception:  # noqa: BLE001
         _log.warning("clip.render_wait_timeout")
-    await popup.wait_for_timeout(1800)
+    # 캔버스만 먼저 뜨고 첫 RPTCAA02R02 캡처가 늦는 경우를 조건 대기로 흡수한다 —
+    # 데이터가 이미 도착한 보통의 경우 수백 ms 로 끝나고, cap 은 기존 고정 sleep 과 동일.
+    await _wait_clipdata_stable(popup, cap_ms=1800)
 
     # 모든 쪽 로드 — 변동사항·위반표시(2쪽)를 반드시 포함시키기 위해.
     await _load_all_pages(popup)
-    await popup.wait_for_timeout(800)
+    # 마지막 쪽 XHR 리스너 flush 지연을 조건 대기로 흡수(동일 cap).
+    await _wait_clipdata_stable(popup, cap_ms=800)
 
     # 팝업의 모든 프레임에서 **엔트리별로** 모든 쪽 텍스트를 수집·병합(레이스 회피).
     paint_parts: list[str] = []
@@ -229,6 +235,27 @@ async def _clipdata_total(popup: Page) -> int:
         except Exception:  # noqa: BLE001
             continue
     return total
+
+
+async def _wait_clipdata_stable(
+    popup: Page, *, cap_ms: int, interval_ms: int = 150
+) -> None:
+    """__clipData 총 바이트가 도착·안정(2연속 동일, >0)될 때까지 대기한다(고정 sleep 대체).
+
+    데이터가 이미 도착해 있으면 ~interval 수준으로 끝난다. 데이터가 전혀 없는 리포트
+    (캔버스 전용 등)는 안정 조건을 만족하지 못해 cap_ms 를 다 기다린다 — 기존 고정
+    sleep 과 동일한 fail-safe 라 어떤 경우에도 예전보다 나빠지지 않는다.
+    """
+
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + cap_ms / 1000
+    prev = await _clipdata_total(popup)
+    while loop.time() < deadline:
+        await popup.wait_for_timeout(interval_ms)
+        cur = await _clipdata_total(popup)
+        if cur > 0 and cur == prev:
+            return
+        prev = cur
 
 
 async def _load_all_pages(
@@ -317,7 +344,7 @@ async def _capture_pdf(
     # 렌더 완료된 리포트 인스턴스를 폴링(최대 ~10s; 이미 렌더돼 대개 즉시). 예산이 있으면 그 안에서만.
     target_frame = None
     report_hash = None
-    for _ in range(20):
+    for wait_ms in (*_PDF_READY_WAITS_MS, 0):
         if cutoff is not None and loop.time() >= cutoff:
             break
         for fr in popup.frames:
@@ -339,7 +366,8 @@ async def _capture_pdf(
                 ready = False
             if ready:
                 break
-        await popup.wait_for_timeout(500)
+        if wait_ms:
+            await popup.wait_for_timeout(wait_ms)
 
     if target_frame is None or not report_hash:
         _log.warning("clip.pdf_no_report")

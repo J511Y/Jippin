@@ -298,6 +298,16 @@ async def warm_home_check_worker() -> None:
         logger.warning("home_check_worker_warmup_unexpected", exc_info=True)
 
 
+def _use_bundle(client: Any) -> bool:
+    """통합 잡(전유부+표제부 1회) 사용 여부 — 플래그 on + 클라이언트가 지원할 때만.
+
+    CODEF 클라이언트는 fetch_bundle 이 없어 자동으로 순차 경로를 탄다."""
+
+    return bool(getattr(get_settings(), "seumteo_bundle_enabled", False)) and callable(
+        getattr(client, "fetch_bundle", None)
+    )
+
+
 async def run_home_check(
     home_check_id: uuid.UUID,
     *,
@@ -312,6 +322,9 @@ async def run_home_check(
     query = BuildingRegisterQuery(
         road_addr=road_addr, dong=dong, ho=ho, jibun_addr=jibun_addr
     )
+    if _use_bundle(client):
+        await _process(home_check_id, bundle_factory=lambda: client.fetch_bundle(query))
+        return
     await _process(
         home_check_id,
         exclusive_factory=lambda: client.fetch_exclusive_part(query),
@@ -346,6 +359,18 @@ async def resume_home_check(
         ho=other_ho,
         jibun_addr=other_jibun_addr,
     )
+    if _use_bundle(client) and callable(getattr(client, "resume_bundle", None)):
+        await _process(
+            home_check_id,
+            bundle_factory=lambda: client.resume_bundle(
+                resume_token,
+                selection=selection,
+                dong=dong,
+                ho=ho,
+                secure_no=secure_no,
+            ),
+        )
+        return
     await _process(
         home_check_id,
         exclusive_factory=lambda: client.resume_exclusive_part(
@@ -358,15 +383,37 @@ async def resume_home_check(
 async def _process(
     home_check_id: uuid.UUID,
     *,
-    exclusive_factory: Any,
-    heading_factory: Any,
+    exclusive_factory: Any = None,
+    heading_factory: Any = None,
+    bundle_factory: Any = None,
 ) -> None:
     """전유부+표제부 조회를 수행하고 결과/예외를 행에 반영한다.
 
     전유부는 핵심 신호이므로 먼저 await 한다. 전유부가 일찍 종료(needs_input/오류)하면
     표제부 조회는 시작조차 하지 않는다(coroutine 은 factory 로 지연 생성). 표제부 조회
     실패는 치명이 아니라 caution 사유로만 반영한다(ADR-0008 §2.4 신호등).
+
+    ``bundle_factory`` 가 주어지면 두 대장을 워커 통합 잡 1회로 받는다 — 반환
+    ``(exclusive, heading|None, heading_error)`` 는 순차 경로와 동일한 의미이고,
+    needs_input(공유 해석 단계에서 발생)은 전유부와 같은 예외로 온다.
     """
+
+    if bundle_factory is not None:
+        try:
+            exclusive, heading, heading_error = await bundle_factory()
+        except CodefNeedsUserInput as exc:
+            await _mark_needs_input(home_check_id, exc, product="exclusive")
+            return
+        except CodefError as exc:
+            await _mark_failed(home_check_id, exc)
+            return
+        except Exception:  # noqa: BLE001 — 예기치 못한 오류도 안전 메시지로 마감.
+            await _mark_unexpected(home_check_id)
+            return
+        await _mark_completed(
+            home_check_id, exclusive, heading, heading_error=heading_error
+        )
+        return
 
     # 전유부 — needs_input/오류면 즉시 행 반영 후 종료.
     try:

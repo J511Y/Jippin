@@ -37,7 +37,14 @@ from pypdf import PdfReader
 
 from .browser import BrowserManager
 from .config import Settings
-from .models import BuildingRegisterRequest, BuildingRegisterResult, ExtractionMeta
+from .models import (
+    BuildingRegisterBundleRequest,
+    BuildingRegisterBundleResponse,
+    BuildingRegisterError,
+    BuildingRegisterRequest,
+    BuildingRegisterResult,
+    ExtractionMeta,
+)
 from . import clip
 
 _log = structlog.get_logger(__name__)
@@ -65,34 +72,52 @@ def _kst_today() -> datetime.date:
 # 있다. 신청 전 06R01 접수번호 스냅샷을 잡고, 신청 후 새로 생긴 동일 건물·동·호 행만 수용해
 # 과거 접수의 '구발급'을 막는다(#recp-fresh). S01/D02 응답의 pbsvcRecpNo 는 응답 위치·의미가
 # 안정적이지 않아 후보(tie-breaker)로만 쓰고, 새 행이 아직 신청내역에 안 뜨면 잠깐 폴링한다.
-_RECP_POLL_TRIES = 4
-_RECP_POLL_WAIT_MS = 1500
+# 폴 간격은 백오프(짧게 시작) — 새 행은 대개 1초 안에 올라오므로 빠른 상류는 조기 완료하고,
+# 느린 상류엔 기존(3×1500ms)보다 넉넉한 총예산을 준다.
+_RECP_POLL_WAITS_MS = (400, 800, 1500, 2500, 3000)
+
+# 발급 준비(06R03) FILE_ID 폴 간격 — 동일한 백오프 원칙(기존 6×1500ms 균등 대비 총예산 증가).
+_R03_POLL_WAITS_MS = (400, 700, 1200, 1800, 2500, 3000, 3000)
 
 # PDF(best-effort)는 잡 데드라인(main.py wait_for=job_deadline_ms)보다 이 여유만큼 일찍 끊어,
 # 판정이 끝난 잡이 느린 PDF 때문에 취소(→과금된 발급이 오류로 보여 재시도→중복발급)되지 않게
 # 한다(#pdf-budget). PDF 는 옵션이므로 예산 부족 시 생략하고 결과를 반환한다.
 _PDF_RETURN_RESERVE_MS = 4000
 
+# 통합 잡에서 전유부 PDF 마감에 추가로 남겨 두는 표제부 몫 — 표제부의 06R03 폴 + CLIP 렌더 +
+# 텍스트 추출(필수 단계, 실측 ~30s)이 전유부 PDF 지연에 잡아먹히지 않게 한다.
+_PER_KIND_RESERVE_MS = 35_000
 
-def _extract_recp_no(obj: object) -> str:
-    """S01/D02 응답에서 접수번호 후보(pbsvcRecpNo)를 방어적으로 찾는다(중첩 관용).
 
-    응답 구조가 버전마다 달라질 수 있어 dict/list 를 재귀로 훑어 첫 값을 집는다. 이 값은 06R01
-    실제 접수번호와 다를 수 있으므로 정본으로 강제하지 않고, 신청 전후 이력 차집합이 복수일 때만
-    tie-breaker 로 사용한다.
+def _extract_recp_nos(obj: object) -> list[str]:
+    """S01/D02 응답에서 접수번호 후보(pbsvcRecpNo)를 **모두** 방어적으로 찾는다(중첩 관용).
+
+    응답 구조가 버전마다 달라질 수 있어 dict/list 를 재귀로 훑는다. 이 값들은 06R01 실제
+    접수번호와 다를 수 있으므로 정본으로 강제하지 않고, 신청 전후 이력 차집합이 복수일 때만
+    tie-breaker 로 사용한다. 통합 신청(두 건 S01)은 응답에 접수번호가 여러 개 실릴 수 있다.
     """
 
+    out: list[str] = []
     stack: list[object] = [obj]
     while stack:
         cur = stack.pop()
         if isinstance(cur, dict):
             v = cur.get("pbsvcRecpNo")
             if isinstance(v, (str, int)) and str(v).strip():
-                return str(v).strip()
+                s = str(v).strip()
+                if s not in out:
+                    out.append(s)
             stack.extend(cur.values())
         elif isinstance(cur, list):
             stack.extend(cur)
-    return ""
+    return out
+
+
+def _extract_recp_no(obj: object) -> str:
+    """단건 경로용 — 탐색 순서상 첫 접수번호 후보(없으면 빈 문자열)."""
+
+    nos = _extract_recp_nos(obj)
+    return nos[0] if nos else ""
 
 
 def _norm_recp_no(value: object) -> str:
@@ -288,6 +313,241 @@ class SeumteoFlow:
             finally:
                 await page.close()
 
+    @staticmethod
+    def _heading_error(exc: BaseException) -> BuildingRegisterError:
+        """표제부 단계 예외 → 그 종류의 오류 봉투(전유부 결과를 지우지 않는다)."""
+
+        if isinstance(exc, FlowError):
+            return BuildingRegisterError(
+                category=exc.category,
+                message=exc.message,
+                field=exc.field,
+                options=exc.options,
+            )
+        return BuildingRegisterError(
+            category="upstream", message="표제부 발급 처리 중 오류가 발생했습니다."
+        )
+
+    async def run_bundle(
+        self, req: BuildingRegisterBundleRequest
+    ) -> BuildingRegisterBundleResponse:
+        """전유부+표제부 통합 잡 — 로그인·주소해석·카트·신청을 1회로 공유한다.
+
+        전유부가 핵심 신호다: 공유 단계(로그인/공유 해석)와 전유부 단계 실패는 예외로
+        전파돼 main.py 가 양쪽 봉투에 복제한다. 표제부는 **해석부터 추출까지 전 구간
+        best-effort** — 순차 경로가 표제부 실패를 caution 으로 흡수하듯, 어느 단계에서
+        실패해도 전유부 성공 결과를 버리지 않고 표제부 봉투에만 담는다. 표제부 추출은
+        남은 예산으로 타임박스해 표제부 지연이 bundle 데드라인 전체를 태우지 않게 한다."""
+
+        # 데드라인은 **로그인 전에** 시작한다 — main.py 의 외부 wait_for(bundle_deadline_ms)
+        # 와 같은 시점에서 출발해야, 콜드/만료 세션 로그인이 예산을 먹어도 내부(표제부)
+        # 타임박스가 외부 타임아웃보다 늦게 걸려 전유부 성공 결과째 취소되는 일이 없다.
+        loop = asyncio.get_event_loop()
+        overall_deadline = loop.time() + self._s.bundle_deadline_ms / 1000
+        await self._mgr.ensure_logged_in()
+        async with self._mgr.render_semaphore:
+            page = await self._mgr.context.new_page()
+            try:
+                return await self._run_bundle_on_page(page, req, overall_deadline)
+            finally:
+                await page.close()
+
+    async def _run_bundle_on_page(
+        self,
+        page: Page,
+        req: BuildingRegisterBundleRequest,
+        overall_deadline: float,
+    ) -> BuildingRegisterBundleResponse:
+        req_ex = BuildingRegisterRequest(
+            road_addr=req.road_addr,
+            dong=req.dong,
+            ho=req.ho,
+            jibun_addr=req.jibun_addr,
+            register_kind="exclusive",
+        )
+        req_head = BuildingRegisterRequest(
+            road_addr=req.road_addr,
+            dong=req.dong,
+            ho=req.ho,
+            jibun_addr=req.jibun_addr,
+            register_kind="heading",
+        )
+
+        await page.goto(
+            self._s.eais_base_url + "/moct/bci/aaa02/BCIAAA02L01",
+            wait_until="domcontentloaded",
+        )
+        # 공유 해석(총괄PK+동) 1회 → 종류별 해석은 상호 독립이라 동시 실행(같은 페이지의
+        # in-page fetch 는 프로토콜상 병렬 안전 — 브라우저 동시 XHR 과 동일).
+        # 전유부 해석 실패는 전체 실패(순차 경로 동일)지만, 표제부는 여기부터 전 구간
+        # best-effort 다 — R01 이 비거나 일시 오류여도 전유부 성공 결과를 버리지 않고
+        # 표제부 봉투에만 담는다(순차 경로의 caution 흡수와 동일 의미).
+        shared = await self._resolve_shared(page, req_ex)
+        t_ex_raw, t_head_raw = await asyncio.gather(
+            self._resolve_kind(page, req_ex, shared),
+            self._resolve_kind(page, req_head, shared),
+            return_exceptions=True,
+        )
+        if isinstance(t_ex_raw, BaseException):
+            raise t_ex_raw
+        t_ex: dict = t_ex_raw
+        t_head: dict | None = None
+        heading_failure: BuildingRegisterError | None = None
+        if isinstance(t_head_raw, BaseException):
+            if not isinstance(t_head_raw, Exception):
+                raise t_head_raw  # CancelledError 등 제어 예외는 삼키지 않는다.
+            _log.warning(
+                "flow.bundle_heading_failed",
+                stage="resolve",
+                error=str(t_head_raw)[:120],
+            )
+            heading_failure = self._heading_error(t_head_raw)
+        else:
+            t_head = t_head_raw
+
+        await self._clear_cart(page)  # 잔재 카트 정리(#cart-preclean) — 잡당 1회
+        await self._add_to_cart(page, req_ex, t_ex)
+        if t_head is not None:
+            try:
+                await self._add_to_cart(page, req_head, t_head)
+            except FlowError as exc:
+                _log.warning(
+                    "flow.bundle_heading_failed", stage="cart", category=exc.category
+                )
+                heading_failure = self._heading_error(exc)
+                t_head = None
+
+        targets_by_kind: dict[str, dict] = {"exclusive": t_ex}
+        if t_head is not None:
+            targets_by_kind["heading"] = t_head
+        items = await self._isolate_cart_many(
+            page, targets_by_kind, optional_kinds=frozenset({"heading"})
+        )
+        if t_head is not None and "heading" not in items:
+            _log.warning("flow.bundle_heading_failed", stage="isolate")
+            heading_failure = BuildingRegisterError(
+                category="upstream",
+                message="표제부 발급 예약 항목을 확인하지 못했습니다.",
+            )
+            t_head = None
+        appnt = await self._appnt_info(page)
+        known_receipts = await self._receipt_snapshot(page)
+
+        item_list = [items["exclusive"]]
+        if t_head is not None:
+            item_list.append(items["heading"])
+
+        # 신청 — 기본은 단일 S01(세움터 카트 UI 의 일괄 신청과 동일). 종류별 순차 폴백은
+        # **S01 자체가 거부됐을 때만** 건다 — S01 이 수리된 뒤(D02 등) 실패에 재신청하면
+        # 중복 신청이 생기고 접수 매칭이 ambiguous 로 fail-closed 된다(#no-resubmit).
+        # 폴백에서도 전유부 신청은 필수(실패 = 전체 실패), 표제부 신청은 best-effort 다.
+        submitted: list[str] = []
+        s01_candidates: list[str] | None = None
+        if self._s.seumteo_bundle_single_submit or len(item_list) == 1:
+            try:
+                s01_candidates = await self._submit_s01(page, item_list, appnt)
+            except FlowError as exc:
+                if len(item_list) == 1:
+                    raise  # 전유부 단건 신청 거부 = 전체 실패(폴백 여지 없음).
+                _log.warning(
+                    "flow.bundle_submit_fallback",
+                    category=exc.category,
+                    message=exc.message[:120],
+                )
+        if s01_candidates is not None:
+            # 일괄 S01 수리됨 — D02 실패는 재신청하지 않고 전파한다(단건 경로와 동일).
+            submitted = list(s01_candidates)
+            for cand in await self._submit_d02(page, item_list):
+                if cand not in submitted:
+                    submitted.append(cand)
+        else:
+            submitted = await self._submit_many(page, [items["exclusive"]], appnt)
+            if t_head is not None:
+                try:
+                    submitted += await self._submit_many(
+                        page, [items["heading"]], appnt
+                    )
+                except FlowError as exc:
+                    _log.warning(
+                        "flow.bundle_heading_failed",
+                        stage="submit",
+                        category=exc.category,
+                    )
+                    heading_failure = self._heading_error(exc)
+                    t_head = None
+
+        kinds: dict[str, tuple[BuildingRegisterRequest, dict]] = {
+            "exclusive": (req_ex, t_ex)
+        }
+        if t_head is not None:
+            kinds["heading"] = (req_head, t_head)
+        recps = await self._find_recp_nos(
+            page, kinds, known_receipts, submitted=submitted
+        )
+
+        # 전유부 먼저(핵심 신호) — 접수 미확인/추출 실패는 예외 전파(양쪽 실패 봉투).
+        recp_ex = recps.get("exclusive")
+        if recp_ex is None:
+            raise FlowError("upstream", "신청한 발급 건을 확인하지 못했습니다.")
+        pdf_deadline_ex = (
+            overall_deadline
+            - (_PDF_RETURN_RESERVE_MS + _PER_KIND_RESERVE_MS) / 1000
+        )
+        exclusive = await self._issue_and_extract(
+            page, req_ex, t_ex, recp_ex, pdf_deadline=pdf_deadline_ex
+        )
+
+        # 표제부 — 실패는 이 종류의 봉투에만 담는다(호출측 caution 처리).
+        heading: BuildingRegisterResult | BuildingRegisterError
+        recp_head = recps.get("heading") if t_head is not None else None
+        if t_head is None:
+            heading = heading_failure or BuildingRegisterError(
+                category="upstream",
+                message="표제부 발급 처리 중 오류가 발생했습니다.",
+            )
+        elif recp_head is None:
+            heading = BuildingRegisterError(
+                category="upstream", message="표제부 발급 건을 확인하지 못했습니다."
+            )
+        else:
+            # 남은 예산으로 타임박스 — 표제부가 렌더/다운로드에서 멈춰도 bundle 데드라인
+            # (main.py wait_for)까지 끌려가 **전유부 성공 결과째 타임아웃**되지 않게 한다.
+            # 마감은 표제부 PDF 마감과 동일 시점(응답 반환 예약분 확보).
+            pdf_deadline_head = overall_deadline - _PDF_RETURN_RESERVE_MS / 1000
+            remaining_s = pdf_deadline_head - asyncio.get_event_loop().time()
+            try:
+                if remaining_s <= 0:
+                    raise asyncio.TimeoutError
+                heading = await asyncio.wait_for(
+                    self._issue_and_extract(
+                        page, req_head, t_head, recp_head,
+                        pdf_deadline=pdf_deadline_head,
+                    ),
+                    timeout=remaining_s,
+                )
+            except asyncio.TimeoutError:
+                _log.warning("flow.bundle_heading_failed", stage="extract_timeout")
+                heading = BuildingRegisterError(
+                    category="upstream",
+                    message="표제부 발급이 시간 내 완료되지 않았습니다.",
+                )
+            except FlowError as exc:
+                _log.warning(
+                    "flow.bundle_heading_failed",
+                    stage="extract",
+                    category=exc.category,
+                    message=exc.message[:120],
+                )
+                heading = self._heading_error(exc)
+            except Exception:  # noqa: BLE001 — 표제부 실패가 전유부 결과를 지우면 안 된다.
+                _log.exception("flow.bundle_heading_unexpected")
+                heading = BuildingRegisterError(
+                    category="upstream",
+                    message="표제부 발급 처리 중 오류가 발생했습니다.",
+                )
+
+        return BuildingRegisterBundleResponse(exclusive=exclusive, heading=heading)
+
     async def _run_on_page(
         self,
         page: Page,
@@ -306,6 +566,7 @@ class SeumteoFlow:
                 wait_until="domcontentloaded",
             )
         targets = await self._resolve(page, req)
+        await self._clear_cart(page)  # 잔재 카트 정리(#cart-preclean) — 잡당 1회
         await self._add_to_cart(page, req, targets)  # 담기(C01)
         item = await self._isolate_cart(page, targets)  # R05: 내 항목 + 잔여 제거(D01)
         appnt = await self._appnt_info(page)  # 신청자 정보(세션+사업자)
@@ -319,6 +580,21 @@ class SeumteoFlow:
         recp = await self._find_recp_no(
             page, req, targets, known_receipts, submitted_recp
         )
+        return await self._issue_and_extract(
+            page, req, targets, recp, pdf_deadline=pdf_deadline
+        )
+
+    async def _issue_and_extract(
+        self,
+        page: Page,
+        req: BuildingRegisterRequest,
+        targets: dict,
+        recp: dict,
+        *,
+        pdf_deadline: float | None = None,
+    ) -> BuildingRegisterResult:
+        """접수 건 발급 → CLIP 추출 → 완전성 게이트 → 결과 조립(종류별 단계)."""
+
         popup = await self._open_report(page, req, targets, recp)  # 그 건 발급→리포트
         try:
             extracted = await clip.extract_report(
@@ -415,6 +691,16 @@ class SeumteoFlow:
     # 1~4) 주소 → PK → 위치코드/면적
     # ------------------------------------------------------------------
     async def _resolve(self, page: Page, req: BuildingRegisterRequest) -> dict:
+        shared = await self._resolve_shared(page, req)
+        return await self._resolve_kind(page, req, shared)
+
+    async def _resolve_shared(
+        self, page: Page, req: BuildingRegisterRequest
+    ) -> dict:
+        """1~2단계(총괄PK + 표제부PK·동 매칭) — 대장 종류와 무관한 공유 단계.
+
+        통합 잡은 이 결과를 전유부·표제부가 함께 재사용한다(ES 검색 중복 제거)."""
+
         search = self._s.eais_search_base_url
 
         # 1) 총괄PK
@@ -465,6 +751,27 @@ class SeumteoFlow:
         # 담기(C01) loc* 는 사용자 입력(req)이 아니라 ES 원본값을 쓴다(앱 동작과 일치 —
         # 건물별로 "504호"/"901" 처럼 포맷이 달라짐).
         es_dong_nm = _es_field(thits, title_pk, "dongNm") or req.dong
+
+        return {
+            "mgm_upper_pk": mgm_upper_pk,
+            "title_pk": title_pk,
+            "unt": unt,
+            "road_addr": road_addr,
+            "jibun_addr": jibun_addr,
+            "es_dong_nm": es_dong_nm,
+        }
+
+    async def _resolve_kind(
+        self, page: Page, req: BuildingRegisterRequest, shared: dict
+    ) -> dict:
+        """3~4단계(종류별 PK·위치코드·면적) — shared 를 복사해 종류별 targets 로 완성한다.
+
+        반환 dict 는 종류별로 **독립 사본**이다(_cart_seqno/_section_counts 등 이후 단계가
+        쓰는 키가 종류 간에 섞이지 않게 — 완전성 게이트 crosstalk 방지)."""
+
+        search = self._s.eais_search_base_url
+        title_pk = shared["title_pk"]
+        unt = shared["unt"]
 
         expos_pk = None
         recap_pk = None
@@ -528,17 +835,12 @@ class SeumteoFlow:
             loc = _loc_from(trow)
 
         return {
-            "mgm_upper_pk": mgm_upper_pk,
-            "title_pk": title_pk,
+            **shared,
             "expos_pk": expos_pk,
-            "recap_pk": recap_pk or mgm_upper_pk,
-            "unt": unt,
+            "recap_pk": recap_pk or shared["mgm_upper_pk"],
             "loc": loc,
-            "road_addr": road_addr,
-            "jibun_addr": jibun_addr,
             "bld_nm": loc.get("bldNm"),
             "dong_nm": dong_nm,
-            "es_dong_nm": es_dong_nm,
             "es_ho_nm": es_ho_nm,
             "main_prpos": main_prpos,
             "exclusive_area": exclusive_area,
@@ -629,9 +931,8 @@ class SeumteoFlow:
             "multiUseBildYn": "N",
             "bldrgstCurdiGbCd": "0",
         }
-        # 담기 전에 잔재 카트를 비운다 — 계정 카트가 maxIssueCnt(10)로 차 있으면 C01 자체가
-        # 실패해 이후 모든 발급이 막힌다(#cart-preclean).
-        await self._clear_cart(page)
+        # 잔재 카트 정리(#cart-preclean)는 호출측이 잡당 1회 수행한다(_clear_cart) — 통합
+        # 잡은 두 번째 담기 전에 비우면 첫 건이 지워지므로 여기서 비우면 안 된다.
         data = await self._post(page, f"{self._s.eais_base_url}/bci/BCIAAA02C01", body)
         self._check_cais(data)
         t["_cart_seqno"] = seqno
@@ -668,31 +969,57 @@ class SeumteoFlow:
     #    남기고 나머지(이전 잡 잔재)는 D01 로 지운다(렌더 세마포어로 직렬화돼 동시 잡 없음).
     # ------------------------------------------------------------------
     async def _isolate_cart(self, page: Page, t: dict) -> dict:
+        return (await self._isolate_cart_many(page, {"only": t}))["only"]
+
+    async def _isolate_cart_many(
+        self,
+        page: Page,
+        targets_by_kind: dict[str, dict],
+        *,
+        optional_kinds: frozenset[str] = frozenset(),
+    ) -> dict[str, dict]:
+        """이번 잡의 항목들을 종류별로 확보하고, 어느 종류에도 속하지 않는 잔재만 제거한다.
+
+        통합 잡에서는 전유부·표제부 두 행이 함께 카트에 있으므로, 단건 격리처럼 '선택 1건
+        외 전부 삭제'하면 **상대 종류의 행을 지워** 신청이 깨진다 — 선택된 행 집합을 먼저
+        확정한 뒤 그 밖의 행만 지운다. ``optional_kinds``(통합 잡의 표제부 등 best-effort
+        종류)는 확보 실패 시 반환에서 빠질 뿐 예외를 내지 않고, 그 외 종류는 fail-closed."""
+
         base = self._s.eais_base_url
         data = await self._post(page, f"{base}/bci/BCIAAA02R05", {})
         items = data.get("findPbsvcResveDtls") or []
-        seqno = str(t.get("_cart_seqno"))
-        dong = str(t.get("es_dong_nm") or "")
-        ho = str(t.get("es_ho_nm") or "")
 
-        def _is_mine(it: dict) -> bool:
-            if str(it.get("bldrgstSeqno")) != seqno:
+        def _is_mine(it: dict, t: dict) -> bool:
+            if str(it.get("bldrgstSeqno")) != str(t.get("_cart_seqno")):
                 return False
             # 같은 건물 다른 호를 구분(전유부). 동/호 세팅돼 있으면 대조.
+            ho = str(t.get("es_ho_nm") or "")
+            dong = str(t.get("es_dong_nm") or "")
             if ho and str(it.get("locHoNm") or "") != ho:
                 return False
             if dong and str(it.get("locDongNm") or "") != dong:
                 return False
             return True
 
-        mine = [it for it in items if _is_mine(it)]
-        if not mine:
-            mine = [it for it in items if str(it.get("bldrgstSeqno")) == seqno]
-        if not mine:
-            raise FlowError("upstream", "발급 예약 항목을 확인하지 못했습니다.")
-        mine.sort(key=lambda it: str(it.get("firstCrtnDt") or ""), reverse=True)
-        chosen = mine[0]
-        chosen_seq = str(chosen.get("pbsvcResveDtlsSeqno") or "")
+        chosen_by_kind: dict[str, dict] = {}
+        chosen_seqs: set[str] = set()
+        for kind, t in targets_by_kind.items():
+            mine = [it for it in items if _is_mine(it, t)]
+            if not mine:
+                mine = [
+                    it
+                    for it in items
+                    if str(it.get("bldrgstSeqno")) == str(t.get("_cart_seqno"))
+                ]
+            if not mine:
+                if kind in optional_kinds:
+                    continue  # best-effort 종류 — 호출측이 오류 봉투로 처리한다.
+                raise FlowError("upstream", "발급 예약 항목을 확인하지 못했습니다.")
+            mine.sort(key=lambda it: str(it.get("firstCrtnDt") or ""), reverse=True)
+            chosen = mine[0]
+            chosen["ownrExprsYn"] = "N"  # S01 요구값(R05 는 null 로 옴).
+            chosen_by_kind[kind] = chosen
+            chosen_seqs.add(str(chosen.get("pbsvcResveDtlsSeqno") or ""))
 
         # 나머지 예약(잔재) 제거 — 실패는 무시(있으면 좋고 없어도 신청은 진행).
         # **동시성 1일 때만** 안전하다: 잡이 직렬화(render_semaphore)돼 있으므로 다른 항목은
@@ -701,7 +1028,7 @@ class SeumteoFlow:
         if self._s.seumteo_max_concurrency <= 1:
             for it in items:
                 s = str(it.get("pbsvcResveDtlsSeqno") or "")
-                if s and s != chosen_seq:
+                if s and s not in chosen_seqs:
                     try:
                         await self._post(
                             page, f"{base}/bci/BCIAAA02D01", {"pbsvcResveDtlsSeqno": s}
@@ -709,8 +1036,7 @@ class SeumteoFlow:
                     except FlowError:
                         pass
 
-        chosen["ownrExprsYn"] = "N"  # S01 요구값(R05 는 null 로 옴).
-        return chosen
+        return chosen_by_kind
 
     # 신청자 정보(세션 계정) — S01 appntInfo. 세션당 1회 조회 후 캐시.
     async def _appnt_info(self, page: Page) -> dict:
@@ -757,28 +1083,50 @@ class SeumteoFlow:
 
     # ------------------------------------------------------------------
     # 7) 신청 — S01(완전체) + D02. D02 가 빠지면 신청내역에 완료(progStateCd:91)로 안 올라온다.
+    #    세움터 카트는 원래 복수 건 일괄 신청 UI(maxIssueCnt=10)라 items 리스트를 그대로 싣는다.
+    #    S01/D02 를 분리해 둔 이유: S01 이 **수리된 뒤** 실패(D02 등)에 재신청 폴백을 걸면
+    #    중복 신청이 생기므로, 통합 잡의 순차 폴백은 S01 거부에만 반응해야 한다(#no-resubmit).
     # ------------------------------------------------------------------
-    async def _submit(self, page: Page, item: dict, appnt: dict) -> str:
+    async def _submit_s01(
+        self, page: Page, items: list[dict], appnt: dict
+    ) -> list[str]:
         base = self._s.eais_base_url
         s01 = {
-            "pbsvcResveDtls": [item],
+            "pbsvcResveDtls": items,
             "ownrExprsYn": "N",
             "bldrgstGbCd": "1",
             "pbsvcRecpInfo": {
                 "pbsvcGbCd": "01",
                 "issueReadGbCd": "0",
                 "certDn": None,
-                "pbsvcResveDtlsCnt": 1,
+                "pbsvcResveDtlsCnt": len(items),
             },
             "appntInfo": appnt,
             "indvGbCd": None,
         }
         data = await self._post(page, f"{base}/bci/BCIAZA02S01", s01)
         self._check_cais(data)
-        d02 = await self._post(page, f"{base}/bci/BCIAAA02D02", [item])
+        # 접수번호 후보들 — 06R01 신청 전후 차집합이 복수일 때만 tie-breaker 로 쓴다.
+        return _extract_recp_nos(data)
+
+    async def _submit_d02(self, page: Page, items: list[dict]) -> list[str]:
+        base = self._s.eais_base_url
+        d02 = await self._post(page, f"{base}/bci/BCIAAA02D02", items)
         self._check_cais(d02)
-        # 접수번호 후보 — 06R01 신청 전후 차집합이 복수일 때만 tie-breaker 로 쓴다.
-        return _extract_recp_no(data) or _extract_recp_no(d02)
+        return _extract_recp_nos(d02)
+
+    async def _submit_many(
+        self, page: Page, items: list[dict], appnt: dict
+    ) -> list[str]:
+        out = await self._submit_s01(page, items, appnt)
+        for cand in await self._submit_d02(page, items):
+            if cand not in out:
+                out.append(cand)
+        return out
+
+    async def _submit(self, page: Page, item: dict, appnt: dict) -> str:
+        candidates = await self._submit_many(page, [item], appnt)
+        return candidates[0] if candidates else ""
 
     # ------------------------------------------------------------------
     # 8) 신청내역(06R01) — 신청 전후 접수번호 차집합에서 방금 신청한 건을 확보한다.
@@ -809,8 +1157,61 @@ class SeumteoFlow:
         known_receipts: set[str],
         submitted_recp: str = "",
     ) -> dict:
+        found = await self._find_recp_nos(
+            page,
+            {req.register_kind: (req, t)},
+            known_receipts,
+            submitted=[submitted_recp] if submitted_recp else [],
+        )
+        hit = found.get(req.register_kind)
+        if hit is None:
+            raise FlowError("upstream", "신청한 발급 건을 확인하지 못했습니다.")
+        return hit
+
+    async def _find_recp_nos(
+        self,
+        page: Page,
+        kinds: dict[str, tuple[BuildingRegisterRequest, dict]],
+        known_receipts: set[str],
+        submitted: list[str] | None = None,
+    ) -> dict[str, dict]:
+        """종류별 새 접수 행을 하나의 폴 루프에서 확보한다(06R01 조회는 iteration 당 1회).
+
+        반환은 확보된 종류만 담는다(부분 성공 허용 — 통합 잡에서 표제부만 실패하면 호출측이
+        그 종류만 오류 봉투로 처리한다). 한 종류의 접수번호를 known_receipts 에 추가하지
+        않는다 — 통합 신청은 두 행이 **같은 pbsvcRecpNo 를 공유**할 수 있고(행 구분은
+        regstrKindCd+mgmNo), 추가하면 두 번째 종류가 자기 행을 못 찾는다."""
+
         base = self._s.eais_base_url
         body = _receipt_history_body()
+        wants = {w for w in (_norm_recp_no(s) for s in submitted or []) if w}
+        found: dict[str, dict] = {}
+        # 새 행이 06R01 에 올라올 때까지 잠깐 폴링한다. 신청 응답에 접수번호가 없더라도 스냅샷
+        # 차집합으로 식별할 수 있으므로 동일하게 폴링한다. 마지막 조회 뒤에는 기다리지 않는다.
+        for wait_ms in (*_RECP_POLL_WAITS_MS, 0):
+            data = await self._post(page, f"{base}/bci/BCIAAA06R01", body)
+            self._check_cais(data)
+            rows = data.get("IssueReadHistList") or []
+            for key, (req, t) in kinds.items():
+                if key in found:
+                    continue
+                hit = self._pick_receipt(rows, req, t, known_receipts, wants)
+                if hit is not None:
+                    found[key] = hit
+            if len(found) == len(kinds):
+                return found
+            if wait_ms:
+                await page.wait_for_timeout(wait_ms)
+        return found
+
+    def _pick_receipt(
+        self,
+        rows: list[dict],
+        req: BuildingRegisterRequest,
+        t: dict,
+        known_receipts: set[str],
+        wants: set[str],
+    ) -> dict | None:
         kind = _REGSTR_KIND[req.register_kind]
         dong = _norm_unit(t.get("es_dong_nm") or req.dong)
         ho = _norm_unit(t.get("es_ho_nm") or req.ho)
@@ -839,89 +1240,75 @@ class SeumteoFlow:
         # S01/D02 응답에서 얻은 번호는 새 행이 여러 개일 때의 tie-breaker 로만 사용한다. 실측상
         # 신청은 완료됐지만 응답에서 재귀 추출한 번호가 06R01 의 실제 pbsvcRecpNo 와 달라,
         # 정확 일치만 강제하면 완료 행을 모두 버리고 중복 발급을 유발했다.
-        want = _norm_recp_no(submitted_recp)
 
-        def _pick(rows: list[dict]) -> dict | None:
-            # 최신순 정렬 후, 신청 전 스냅샷에 없던 동일 대상 행만 모은다.
-            rows.sort(key=lambda r: str(r.get("firstCrtnDt") or ""), reverse=True)
-            candidates: list[dict] = []
-            for r in rows:
-                if str(r.get("regstrKindCd")) != kind:
-                    continue
-                addr = str(r.get("locDetlAddr") or "")
-                addr_norm = re.sub(r"[\s()]", "", addr)
-                name_matches = bool(bld_nm and bld_nm in addr_norm)
-                jibun_matches = bool(
-                    parcel_pattern and parcel_pattern.search(addr_norm)
+        # 최신순 정렬 후, 신청 전 스냅샷에 없던 동일 대상 행만 모은다.
+        rows = sorted(
+            rows, key=lambda r: str(r.get("firstCrtnDt") or ""), reverse=True
+        )
+        candidates: list[dict] = []
+        for r in rows:
+            if str(r.get("regstrKindCd")) != kind:
+                continue
+            addr = str(r.get("locDetlAddr") or "")
+            addr_norm = re.sub(r"[\s()]", "", addr)
+            name_matches = bool(bld_nm and bld_nm in addr_norm)
+            jibun_matches = bool(parcel_pattern and parcel_pattern.search(addr_norm))
+            if not (name_matches or jibun_matches):
+                continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
+            if dong and (dong + "동") not in addr_norm:
+                continue
+            if (
+                req.register_kind == "exclusive"
+                and ho
+                and not _addr_has_ho(addr, ho)
+            ):
+                continue
+            recp = _norm_recp_no(r.get("pbsvcRecpNo"))
+            if not recp or recp in known_receipts:
+                continue
+            candidates.append(r)
+
+        if wants:
+            exact = [
+                row
+                for row in candidates
+                if _norm_recp_no(row.get("pbsvcRecpNo")) in wants
+            ]
+            if len(exact) == 1:
+                candidates = exact
+        if len(candidates) != 1:
+            if len(candidates) > 1:
+                _log.warning(
+                    "flow.recp_ambiguous",
+                    candidate_count=len(candidates),
+                    submitted_candidate=bool(wants),
                 )
-                if not (name_matches or jibun_matches):
-                    continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
-                if dong and (dong + "동") not in addr_norm:
-                    continue
-                if (
-                    req.register_kind == "exclusive"
-                    and ho
-                    and not _addr_has_ho(addr, ho)
-                ):
-                    continue
-                recp = _norm_recp_no(r.get("pbsvcRecpNo"))
-                if not recp or recp in known_receipts:
-                    continue
-                candidates.append(r)
+            return None
 
-            if want:
-                exact = [
-                    row
-                    for row in candidates
-                    if _norm_recp_no(row.get("pbsvcRecpNo")) == want
-                ]
-                if len(exact) == 1:
-                    candidates = exact
-            if len(candidates) != 1:
-                if len(candidates) > 1:
-                    _log.warning(
-                        "flow.recp_ambiguous",
-                        candidate_count=len(candidates),
-                        submitted_candidate=bool(want),
-                    )
-                return None
-
-            r = candidates[0]
-            recp = str(r.get("pbsvcRecpNo") or "")
-            _log.info(
-                "flow.recp_no",
-                recp_no=recp,
-                prog=r.get("progStateCd"),
-                by_submit=bool(want and _norm_recp_no(recp) == want),
-                by_snapshot=not bool(want and _norm_recp_no(recp) == want),
-            )
-            # 발급 준비(06R03)는 이 접수의 처리일 기준이다. 검색창이 [어제,오늘]이라 어제 건이
-            # 매칭될 수 있으니, 오늘로 재계산하지 말고 이 행의 처리일을 그대로 넘긴다(#recp-date).
-            app_date = (
-                str(r.get("realProcessDateStr") or "")
-                or str(r.get("recpDate") or "").replace("-", "")
-                or str(r.get("firstCrtnDt") or "")[:8]
-            )
-            return {
-                "pbsvcRecpNo": recp,
-                "mgmNo": str(r.get("mgmNo") or ""),
-                "issueReadGbCd": str(r.get("issueReadGbCd") or "0"),
-                "bldrgstGbCd": str(r.get("bldrgstGbCd") or "1"),
-                "appDate": app_date,
-            }
-
-        # 새 행이 06R01 에 올라올 때까지 잠깐 폴링한다. 신청 응답에 접수번호가 없더라도 스냅샷
-        # 차집합으로 식별할 수 있으므로 동일하게 폴링한다.
-        for attempt in range(_RECP_POLL_TRIES):
-            data = await self._post(page, f"{base}/bci/BCIAAA06R01", body)
-            self._check_cais(data)
-            rows = data.get("IssueReadHistList") or []
-            hit = _pick(rows)
-            if hit is not None:
-                return hit
-            if attempt < _RECP_POLL_TRIES - 1:
-                await page.wait_for_timeout(_RECP_POLL_WAIT_MS)
-        raise FlowError("upstream", "신청한 발급 건을 확인하지 못했습니다.")
+        r = candidates[0]
+        recp = str(r.get("pbsvcRecpNo") or "")
+        by_submit = _norm_recp_no(recp) in wants
+        _log.info(
+            "flow.recp_no",
+            recp_no=recp,
+            prog=r.get("progStateCd"),
+            by_submit=by_submit,
+            by_snapshot=not by_submit,
+        )
+        # 발급 준비(06R03)는 이 접수의 처리일 기준이다. 검색창이 [어제,오늘]이라 어제 건이
+        # 매칭될 수 있으니, 오늘로 재계산하지 말고 이 행의 처리일을 그대로 넘긴다(#recp-date).
+        app_date = (
+            str(r.get("realProcessDateStr") or "")
+            or str(r.get("recpDate") or "").replace("-", "")
+            or str(r.get("firstCrtnDt") or "")[:8]
+        )
+        return {
+            "pbsvcRecpNo": recp,
+            "mgmNo": str(r.get("mgmNo") or ""),
+            "issueReadGbCd": str(r.get("issueReadGbCd") or "0"),
+            "bldrgstGbCd": str(r.get("bldrgstGbCd") or "1"),
+            "appDate": app_date,
+        }
 
     # ------------------------------------------------------------------
     # 9) 발급 — **순수 API 로 리포트 뷰어를 연다**(신청내역 DOM/게이트 불필요 → 헤드리스 가능).
@@ -948,8 +1335,9 @@ class SeumteoFlow:
         )
         # 발급이 아직 준비 전이면 06R03 에 FILE_ID 가 없다 — 잠깐 대기 후 재조회한다(방금 신청건이
         # 완료 상태에 이르기 전이면 곧 준비되므로 잡을 성급히 실패시키지 않는다, #recp-ready).
+        # 백오프 스케줄로 폴링 — 준비돼 있으면 첫 조회로 끝나고, 마지막 조회 뒤에는 기다리지 않는다.
         counts: dict = {}
-        for _ in range(6):
+        for wait_ms in (*_R03_POLL_WAITS_MS, 0):
             r03 = await self._post(
                 page,
                 f"{base}/report/BCIAAA06R03",
@@ -958,7 +1346,8 @@ class SeumteoFlow:
             counts = r03.get("count") or {}
             if counts.get("FILE_ID"):
                 break
-            await page.wait_for_timeout(1500)
+            if wait_ms:
+                await page.wait_for_timeout(wait_ms)
         if not counts.get("FILE_ID"):
             raise FlowError("upstream", "발급 리포트를 준비하지 못했습니다.")
         # 완전성 검증용 섹션 수(위반표시가 실리는 '그 밖의 기재사항' 등)를 넘겨 둔다.
@@ -1000,6 +1389,10 @@ class SeumteoFlow:
         self, req: BuildingRegisterRequest, t: dict, ex: dict
     ) -> BuildingRegisterResult:
         violation_status = "위반건축물" if ex.get("violation") else None
+        # 발급 PDF 텍스트 레이어는 여기서 **한 번만** 추출한다 — pypdf 전 쪽 추출은 쪽수에
+        # 비례해 수 초씩 걸려(실측: 표제부 ~9s), 대장상세·변동사항 파서가 각자 추출하면
+        # 그 비용이 두 배가 된다. 파서들은 추출된 쪽 텍스트를 공유한다.
+        pdf_pages = _pdf_page_texts(ex.get("pdf_base64"))
         owned: list[dict] = []
         detail_list: list[dict] = []
         if req.register_kind == "exclusive":
@@ -1009,16 +1402,14 @@ class SeumteoFlow:
             area = t.get("exclusive_area")
             if area is not None:
                 owned_row["resArea"] = str(area)
-            pdf_detail = _parse_exclusive_detail_pdf(
-                ex.get("pdf_base64"), area_hint=area
-            )
+            pdf_detail = _parse_exclusive_detail_pdf(pdf_pages, area_hint=area)
             for key, value in (pdf_detail or {}).items():
                 owned_row.setdefault(key, value)
             if len(owned_row) > 1:
                 owned.append(owned_row)
         else:
             # R01 의 mainPrposNm(주용도)이 정본, 층수/인허가 일자는 PDF 에서 보강.
-            detail_map = _parse_heading_detail_pdf(ex.get("pdf_base64")) or {}
+            detail_map = _parse_heading_detail_pdf(pdf_pages) or {}
             if t.get("main_prpos"):
                 detail_map["주용도"] = t["main_prpos"]
             for label in ("주용도", "주구조", "층수", "허가일", "착공일", "사용승인일"):
@@ -1035,7 +1426,7 @@ class SeumteoFlow:
         # 변동사항은 발급 PDF 텍스트 레이어가 정본이다 — CLIP viewData(글자단위 분절 +
         # 좌표숫자 잡음) 채굴은 절단/중복/필러 행을 만든다(실측: 세션 903c0c36). PDF 가
         # 없거나(예산 초과 생략) 파싱 불가일 때만 CLIP 텍스트로 폴백한다.
-        change_list = _parse_changes_pdf(ex.get("pdf_base64"))
+        change_list = _parse_changes_pdf(pdf_pages)
         change_source = "pdf"
         if change_list is None:
             change_list = _parse_changes(ex.get("full_text") or "")
@@ -1249,15 +1640,14 @@ def _scan_change_lines(lines: list[str]) -> list[dict]:
     return rows
 
 
-def _parse_changes_pdf(pdf_b64: str | None) -> list[dict] | None:
-    """발급 PDF 텍스트 레이어에서 변동사항을 파싱한다(정본 경로).
+def _parse_changes_pdf(pages: list[str] | None) -> list[dict] | None:
+    """발급 PDF 쪽별 텍스트(_pdf_page_texts 결과)에서 변동사항을 파싱한다(정본 경로).
 
     '변동사항'이 있는 쪽만 훑으므로 갑지 소유자현황(성명·주소·주민번호) 쪽은 열지 않는다.
     반환 None 은 "파싱 불가(PDF 없음/깨짐/변동사항 쪽 없음)" — 호출측이 CLIP 텍스트로
     폴백한다. 빈 리스트는 "변동 이력 없음"으로 신뢰한다(폴백해 잡음을 만들지 않는다).
     """
 
-    pages = _pdf_page_texts(pdf_b64)
     if pages is None:
         return None
     found_section = False
@@ -1370,16 +1760,15 @@ _DATE_ONLY = re.compile(r"^((?:19|20)\d{2})[.\-](\d{1,2})[.\-](\d{1,2})\.?$")
 
 
 def _parse_exclusive_detail_pdf(
-    pdf_b64: str | None, *, area_hint: object = None
+    pages: list[str] | None, *, area_hint: object = None
 ) -> dict | None:
-    """전유부 PDF 의 전유부분 표에서 우리 세대 행(층/구조/용도/면적)을 뽑는다.
+    """전유부 PDF 쪽별 텍스트에서 우리 세대 행(층/구조/용도/면적)을 뽑는다.
 
     같은 쪽에 공용부분 표가 붙어 있으므로, R04 가 준 전유면적(area_hint)과 면적이
     일치하는 행을 우선 선택하고, 없으면 '주' 행(전유 주 용도)으로 폴백한다.
     소유자현황(성명·주소·주민번호) 줄은 행 패턴(구분+층별+구조+용도+면적)에 걸리지 않는다.
     """
 
-    pages = _pdf_page_texts(pdf_b64)
     if pages is None:
         return None
     rows: list[tuple[str, ...]] = []
@@ -1421,15 +1810,14 @@ def _parse_exclusive_detail_pdf(
     }
 
 
-def _parse_heading_detail_pdf(pdf_b64: str | None) -> dict[str, str] | None:
-    """표제부 PDF 에서 주구조/주용도/층수(1쪽 값줄)와 허가일/착공일/사용승인일을 뽑는다.
+def _parse_heading_detail_pdf(pages: list[str] | None) -> dict[str, str] | None:
+    """표제부 PDF 쪽별 텍스트에서 주구조/주용도/층수(1쪽 값줄)와 허가일/착공일/사용승인일을 뽑는다.
 
     인허가 일자는 서식상 라벨(허가일/착공일/사용승인일)과 값이 떨어져 추출되므로,
     해당 쪽의 **날짜 단독 줄 연속 3개**가 정확히 한 묶음일 때만 서식 순서대로 매핑한다
     (묶음이 없거나 애매하면 채우지 않는다 — 오매핑이 누락보다 나쁘다).
     """
 
-    pages = _pdf_page_texts(pdf_b64)
     if pages is None:
         return None
     out: dict[str, str] = {}

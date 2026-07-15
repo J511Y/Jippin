@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import unittest
 
-from src.flow import _parse_exclusive_detail_pdf, _parse_heading_detail_pdf
-from src.flow import _pdf_page_texts  # noqa: F401 — 파서가 쓰는 헬퍼(임포트 회귀 가드)
-from src import flow
+from src.flow import (
+    _parse_exclusive_detail_pdf,
+    _parse_heading_detail_pdf,
+    _pdf_page_texts,
+)
 
 # 전유부(갑) 1쪽 — 소유자현황(가명) + 전유부분/공용부분 표가 한 쪽에 섞인 실측 레이아웃.
 EXCLUSIVE_PAGE1 = """■ 건축물대장의 기재 및 관리 등에 관한 규칙 [별지 제5호서식] <개정 2023. 8. 1.>
@@ -99,23 +101,9 @@ HEADING_PAGE2 = """■ 건축물대장의 기재 및 관리 등에 관한 규칙
 그 밖의 기재사항"""
 
 
-def _fake_pages(monkey_pages):
-    """_pdf_page_texts 를 fixture 페이지로 대체하는 헬퍼(디코드 경로 우회)."""
-
-    def fake(pdf_b64):
-        return monkey_pages if pdf_b64 else None
-
-    return fake
-
-
 class ExclusiveDetailTest(unittest.TestCase):
     def test_extracts_unit_row_matching_area_hint(self) -> None:
-        original = flow._pdf_page_texts
-        flow._pdf_page_texts = _fake_pages([EXCLUSIVE_PAGE1])
-        try:
-            detail = _parse_exclusive_detail_pdf("stub", area_hint="59.98")
-        finally:
-            flow._pdf_page_texts = original
+        detail = _parse_exclusive_detail_pdf([EXCLUSIVE_PAGE1], area_hint="59.98")
 
         self.assertEqual(
             detail,
@@ -128,12 +116,7 @@ class ExclusiveDetailTest(unittest.TestCase):
         )
 
     def test_falls_back_to_ju_row_without_area_hint(self) -> None:
-        original = flow._pdf_page_texts
-        flow._pdf_page_texts = _fake_pages([EXCLUSIVE_PAGE1])
-        try:
-            detail = _parse_exclusive_detail_pdf("stub", area_hint=None)
-        finally:
-            flow._pdf_page_texts = original
+        detail = _parse_exclusive_detail_pdf([EXCLUSIVE_PAGE1], area_hint=None)
 
         # 공용부분 '부' 행(지하주차장 등)이 아니라 전유 '주' 행을 고른다.
         self.assertIsNotNone(detail)
@@ -141,30 +124,21 @@ class ExclusiveDetailTest(unittest.TestCase):
         self.assertEqual(detail["resFloor"], "15층")
 
     def test_owner_pii_never_leaks_into_fields(self) -> None:
-        original = flow._pdf_page_texts
-        flow._pdf_page_texts = _fake_pages([EXCLUSIVE_PAGE1])
-        try:
-            detail = _parse_exclusive_detail_pdf("stub", area_hint="59.98")
-        finally:
-            flow._pdf_page_texts = original
+        detail = _parse_exclusive_detail_pdf([EXCLUSIVE_PAGE1], area_hint="59.98")
 
         joined = " ".join(str(v) for v in (detail or {}).values())
         for pii in ("홍가명", "700101", "어느구 어딘가"):
             self.assertNotIn(pii, joined)
 
     def test_missing_pdf_returns_none(self) -> None:
+        # pages=None(=PDF 없음/깨짐)이면 보강 없이 생략. b64→쪽 텍스트 변환과 깨진 입력
+        # 처리는 _pdf_page_texts 가 책임진다(아래 PdfPageTextsTest).
         self.assertIsNone(_parse_exclusive_detail_pdf(None))
-        self.assertIsNone(_parse_exclusive_detail_pdf(""))
 
 
 class HeadingDetailTest(unittest.TestCase):
     def test_extracts_use_structure_floors_and_permit_dates(self) -> None:
-        original = flow._pdf_page_texts
-        flow._pdf_page_texts = _fake_pages([HEADING_PAGE1, HEADING_PAGE2])
-        try:
-            detail = _parse_heading_detail_pdf("stub")
-        finally:
-            flow._pdf_page_texts = original
+        detail = _parse_heading_detail_pdf([HEADING_PAGE1, HEADING_PAGE2])
 
         self.assertEqual(
             detail,
@@ -181,12 +155,7 @@ class HeadingDetailTest(unittest.TestCase):
     def test_ambiguous_date_runs_leave_permit_dates_empty(self) -> None:
         # 날짜 단독 줄 묶음이 3개가 아니면(사용승인 전 건물 등) 오매핑 대신 생략한다.
         page = HEADING_PAGE2.replace("2010.3.12.\n", "")
-        original = flow._pdf_page_texts
-        flow._pdf_page_texts = _fake_pages([HEADING_PAGE1, page])
-        try:
-            detail = _parse_heading_detail_pdf("stub")
-        finally:
-            flow._pdf_page_texts = original
+        detail = _parse_heading_detail_pdf([HEADING_PAGE1, page])
 
         self.assertNotIn("사용승인일", detail)
         self.assertNotIn("허가일", detail)
@@ -194,13 +163,16 @@ class HeadingDetailTest(unittest.TestCase):
     def test_dates_are_iso_normalized_for_api_parse_date(self) -> None:
         # api _parse_date 는 숫자 8자리만 받는다 — "2010.3.12."(7자리)는 탈락하므로
         # 워커가 zero-pad ISO 로 내보내는 것이 계약이다.
-        original = flow._pdf_page_texts
-        flow._pdf_page_texts = _fake_pages([HEADING_PAGE1, HEADING_PAGE2])
-        try:
-            detail = _parse_heading_detail_pdf("stub")
-        finally:
-            flow._pdf_page_texts = original
+        detail = _parse_heading_detail_pdf([HEADING_PAGE1, HEADING_PAGE2])
 
         for label in ("허가일", "착공일", "사용승인일"):
             digits = "".join(ch for ch in detail[label] if ch.isdigit())
             self.assertEqual(len(digits), 8, detail[label])
+
+
+class PdfPageTextsTest(unittest.TestCase):
+    def test_missing_or_broken_pdf_returns_none(self) -> None:
+        # 파서들의 pages 입력을 만드는 단일 진입점 — 없거나 깨진 PDF 는 None(생략/폴백 신호).
+        self.assertIsNone(_pdf_page_texts(None))
+        self.assertIsNone(_pdf_page_texts(""))
+        self.assertIsNone(_pdf_page_texts("bm90LWEtcGRm"))  # "not-a-pdf"

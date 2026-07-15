@@ -778,3 +778,118 @@ def test_completed_even_if_pdf_upload_fails(monkeypatch) -> None:
     values = updates[str(hid)]
     assert values["status"] == "completed"
     assert values["signal"] == "normal"
+
+
+# ---------------------------------------------------------------------------
+# 통합 잡(bundle) 경로 — 플래그 on + 클라이언트 지원 시 fetch_bundle 1회.
+# ---------------------------------------------------------------------------
+class _FakeBundleClient:
+    """fetch_bundle 만으로 처리돼야 한다 — 단건 fetch 가 불리면 경로 회귀."""
+
+    def __init__(self, *, result=None, exc=None):
+        self._result = result
+        self._exc = exc
+        self.bundle_calls = 0
+
+    async def fetch_bundle(self, _query):
+        self.bundle_calls += 1
+        if self._exc is not None:
+            raise self._exc
+        return self._result
+
+    async def fetch_exclusive_part(self, _query):
+        raise AssertionError("bundle 경로에서 단건 전유부 fetch 가 호출되면 안 된다")
+
+    async def fetch_building_heading(self, _query):
+        raise AssertionError("bundle 경로에서 단건 표제부 fetch 가 호출되면 안 된다")
+
+
+def _enable_bundle(monkeypatch) -> None:
+    monkeypatch.setenv("SEUMTEO_BUNDLE_ENABLED", "true")
+    get_settings.cache_clear()
+
+
+def test_bundle_path_completes_with_single_call(monkeypatch) -> None:
+    captured = _capture_updates(monkeypatch)
+    _enable_bundle(monkeypatch)
+    hid = uuid.uuid4()
+    fake = _FakeBundleClient(result=(_exclusive(None), _heading(None), False))
+    monkeypatch.setattr(svc, "_new_client", lambda: fake)
+
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    assert fake.bundle_calls == 1
+    values = captured[str(hid)]
+    assert values["status"] == "completed"
+    assert values["signal"] == "normal"
+
+
+def test_bundle_heading_error_becomes_caution(monkeypatch) -> None:
+    captured = _capture_updates(monkeypatch)
+    _enable_bundle(monkeypatch)
+    hid = uuid.uuid4()
+    fake = _FakeBundleClient(result=(_exclusive(None), None, True))
+    monkeypatch.setattr(svc, "_new_client", lambda: fake)
+
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    values = captured[str(hid)]
+    assert values["status"] == "completed"
+    assert values["signal"] == "caution"
+
+
+def test_bundle_needs_input_marks_row(monkeypatch) -> None:
+    captured = _capture_updates(monkeypatch)
+    _enable_bundle(monkeypatch)
+    hid = uuid.uuid4()
+    exc = CodefNeedsUserInput(
+        "dong_ho",
+        "resume-token-1",
+        "동을 선택해 주세요.",
+        field="dong",
+        options=[{"value": "1", "label": "104동", "area": None}],
+    )
+    fake = _FakeBundleClient(exc=exc)
+    monkeypatch.setattr(svc, "_new_client", lambda: fake)
+
+    _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="", ho="1001"))
+
+    values = captured[str(hid)]
+    assert values["status"] == "needs_input"
+
+
+def test_bundle_flag_off_keeps_sequential_path(monkeypatch) -> None:
+    # 기본값(off)에서는 fetch_bundle 이 있어도 기존 순차 경로를 탄다.
+    # autouse _env 픽스처가 테스트마다 settings 캐시를 비우지만, 앞선 bundle-on
+    # 테스트의 잔재(env 는 monkeypatch 가, 캐시는 픽스처가 각각 되돌린다)에 기대지
+    # 않도록 여기서도 명시적으로 비워 자기완결로 만든다.
+    get_settings.cache_clear()
+    captured = _capture_updates(monkeypatch)
+    hid = uuid.uuid4()
+
+    class _SequentialOnly(_FakeClient):
+        async def fetch_bundle(self, _query):
+            raise AssertionError("플래그 off 에서 bundle 이 호출되면 안 된다")
+
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _SequentialOnly(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    values = captured[str(hid)]
+    assert values["status"] == "completed"

@@ -86,3 +86,29 @@ class BuildingRegisterError(BaseModel):
     # needs_input 일 때만: 자동매칭 실패 축과 후보(main-api 가 사용자에게 되물음).
     field: str | None = None
     options: list[dict[str, Any]] | None = None
+
+
+class BuildingRegisterBundleRequest(BaseModel):
+    """전유부+표제부 통합 발급 요청 — 로그인·주소해석·카트·신청을 1회로 공유한다.
+
+    우리집 체크는 항상 두 대장을 함께 쓰므로 종류 선택 필드를 두지 않는다(단일 종류는
+    기존 ``/jobs/building-register`` 사용).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    road_addr: str = Field(min_length=1, max_length=255)
+    dong: str = Field(default="", max_length=50)
+    ho: str = Field(default="", max_length=50)
+    jibun_addr: str | None = Field(default=None, max_length=255)
+
+
+class BuildingRegisterBundleResponse(BaseModel):
+    """종류별 봉투 2개 — 공유 단계(로그인/주소해석/카트/신청) 실패는 양쪽에 동일 오류를
+    복제하고, 종류별 단계(발급/추출) 실패는 그 종류의 봉투에만 담는다. api 는 각 봉투를
+    기존 단건 응답과 동일하게 매핑한다(``ok`` 로 Result/Error 구분)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    exclusive: BuildingRegisterResult | BuildingRegisterError
+    heading: BuildingRegisterResult | BuildingRegisterError
