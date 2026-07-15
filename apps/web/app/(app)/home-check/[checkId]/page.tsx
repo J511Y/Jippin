@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import { HomeCheckResultClient } from '@/components/home-check/HomeCheckResultClient';
 import { PageColumn, PageHeader } from '@/components/ui';
+import { fetchQuizzes } from '@/lib/quiz';
 
 type HomeCheckResultPageProps = {
   params: Promise<{ checkId: string }>;
@@ -16,6 +17,9 @@ export const metadata: Metadata = {
 
 export default async function HomeCheckResultPage({ params }: HomeCheckResultPageProps) {
   const { checkId } = await params;
+  // 대기 화면 퀴즈 — 서버에서 ISR 로 받아 클라이언트에 주입한다(실패 시 정적 폴백이
+  // 반환되므로 대기 화면 콘텐츠는 API 가용성과 무관하게 항상 있다).
+  const quizzes = await fetchQuizzes();
 
   return (
     // 컨테이너가 전 페이지 lg(1140px)로 통일돼, 리포트 카드 열은 PageColumn(prose
@@ -26,7 +30,7 @@ export default async function HomeCheckResultPage({ params }: HomeCheckResultPag
         title="우리집 체크 결과"
         subtitle="건축물대장(전유부·표제부) 조회 결과예요."
       />
-      <HomeCheckResultClient checkId={checkId} />
+      <HomeCheckResultClient checkId={checkId} quizzes={quizzes} />
     </PageColumn>
   );
 }

@@ -70,6 +70,10 @@ class HomeCheck(TimestampMixin, Base):
         server_default=sa.text("'pending'"),
     )
     signal: Mapped[str | None] = mapped_column(sa.Text)
+    # 진행 phase (정보성 — 대기 화면 표시용). status 가 상태 기계 정본이고 phase 는
+    # 파이프라인이 남기는 힌트다. 알려진 값: received/issuing_registers/judging/
+    # saving_report — CHECK 없음(0022, 새 phase 를 마이그레이션 없이 배포).
+    phase: Mapped[str | None] = mapped_column(sa.Text)
 
     # 조회 주소 (도로명주소 팝업 입력 + 정규화)
     road_addr: Mapped[str | None] = mapped_column(sa.Text)

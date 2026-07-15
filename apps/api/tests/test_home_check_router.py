@@ -199,7 +199,7 @@ def test_create_returns_202_querying_job(monkeypatch) -> None:
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "querying"
-    assert body["schema_version"] == "1.2.0"
+    assert body["schema_version"] == "1.3.0"
     assert body["report"] is None
     # 정본 계약으로 재검증.
     ContractHomeCheckJob.model_validate(body)
@@ -615,7 +615,7 @@ def test_serialize_completed_report_validates_against_contract() -> None:
     # documents 발급(외부 호출) 생략.
     job = _run(svc.serialize_job(row, with_documents=False))
     payload = job.model_dump(mode="json")
-    assert payload["schema_version"] == "1.2.0"
+    assert payload["schema_version"] == "1.3.0"
     assert payload["report"]["signal"] == "violation"
     assert payload["report"]["disclaimer"].startswith("본 결과는")
     # 1.2.0: prices 제거, extension_check 미입력 시 null.
@@ -893,3 +893,114 @@ def test_bundle_flag_off_keeps_sequential_path(monkeypatch) -> None:
 
     values = captured[str(hid)]
     assert values["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# 진행 phase (schema 1.3.0) — 파이프라인이 순서대로 기록하고, 실패는 잡을 죽이지 않는다.
+# ---------------------------------------------------------------------------
+def _capture_update_sequence(monkeypatch) -> list[tuple[str, dict]]:
+    """dict-merge(_capture_updates)와 달리 중간 phase 쓰기를 순서대로 보존한다."""
+
+    calls: list[tuple[str, dict]] = []
+
+    async def fake_update(home_check_id, values):
+        calls.append((str(home_check_id), dict(values)))
+
+    async def fake_store(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(svc, "_update_row", fake_update)
+    monkeypatch.setattr(svc, "_store_pdfs", fake_store)
+    return calls
+
+
+def test_phase_sequence_on_success(monkeypatch) -> None:
+    calls = _capture_update_sequence(monkeypatch)
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    phases = [v["phase"] for (_id, v) in calls if set(v) == {"phase"}]
+    assert phases == ["issuing_registers", "judging", "saving_report"]
+    # 최종 완료 쓰기는 phase 이후에 온다.
+    assert calls[-1][1]["status"] == "completed"
+
+
+def test_phase_stops_at_issuing_on_needs_input(monkeypatch) -> None:
+    calls = _capture_update_sequence(monkeypatch)
+    hid = uuid.uuid4()
+    exc = CodefNeedsUserInput(
+        "dong_ho", "tok-1", "동을 선택해 주세요.", field="dong", options=None
+    )
+    monkeypatch.setattr(svc, "_new_client", lambda: _FakeClient(exclusive_exc=exc))
+
+    _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="", ho="1"))
+
+    phases = [v["phase"] for (_id, v) in calls if set(v) == {"phase"}]
+    assert phases == ["issuing_registers"]
+    assert calls[-1][1]["status"] == "needs_input"
+
+
+def test_phase_write_failure_does_not_kill_job(monkeypatch) -> None:
+    captured = _capture_updates(monkeypatch)
+    hid = uuid.uuid4()
+    real_update = svc._update_row
+
+    async def flaky_update(home_check_id, values):
+        if set(values) == {"phase"}:
+            raise RuntimeError("phase 쓰기 일시 오류")
+        await real_update(home_check_id, values)
+
+    monkeypatch.setattr(svc, "_update_row", flaky_update)
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    assert captured[str(hid)]["status"] == "completed"
+
+
+def test_reset_for_resume_restarts_phase(monkeypatch) -> None:
+    captured = _capture_updates(monkeypatch)
+    hid = uuid.uuid4()
+
+    _run(svc.reset_for_resume(hid))
+
+    assert captured[str(hid)] == {"status": "querying", "phase": "received"}
+
+
+def test_serialize_job_exposes_phase(monkeypatch) -> None:
+    row = {
+        "id": uuid.uuid4(),
+        "status": "querying",
+        "phase": "issuing_registers",
+        "created_at": datetime.now(UTC),
+        "updated_at": datetime.now(UTC),
+    }
+    payload = _run(svc.serialize_job(row)).model_dump(mode="json")
+
+    assert payload["phase"] == "issuing_registers"
+    assert payload["schema_version"] == "1.3.0"
+    ContractHomeCheckJob.model_validate(payload)
+
+    # 구 행(phase 키 부재) — None 으로 관용.
+    old_row = {k: v for k, v in row.items() if k != "phase"}
+    old_payload = _run(svc.serialize_job(old_row)).model_dump(mode="json")
+    assert old_payload["phase"] is None
+    ContractHomeCheckJob.model_validate(old_payload)

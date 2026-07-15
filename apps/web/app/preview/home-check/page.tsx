@@ -3,10 +3,12 @@
 /**
  * 우리집 체크 UI/UX 미리보기 (개발용, 백엔드 불필요).
  *
- * 두 가지를 백엔드 없이 눈으로 확인한다:
+ * 세 가지를 백엔드 없이 눈으로 확인한다:
  *   1) 입력 퍼널(HomeCheckFunnel) — 토스/삼쩜삼식 한 화면 한 질문 흐름을 mock 주소·mock
  *      제출로 클릭해 본다(실제 juso 팝업·네트워크 없음).
- *   2) 결과 리포트(HomeCheckReportView) — 5개 verdict 상태를 mock 리포트로 렌더한다.
+ *   2) 대기 화면(HomeCheckWaiting) — phase 선택/경과 프리셋/자동 시뮬레이션으로 스테퍼와
+ *      집 상식 퀴즈(O/X·객관식)를 확인한다(퀴즈는 정적 폴백 데이터).
+ *   3) 결과 리포트(HomeCheckReportView) — 5개 verdict 상태를 mock 리포트로 렌더한다.
  * 모바일 폭·라이트/다크도 함께 토글할 수 있다. 인증/Supabase 가 필요 없어 클라이언트 전용.
  *
  * 경로: /preview/home-check
@@ -18,17 +20,21 @@ import {
   Group,
   SegmentedControl,
   Stack,
+  Switch,
   Text,
   Title,
   useMantineColorScheme
 } from '@mantine/core';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { HomeCheckReport } from '@contracts/home-check';
 
 import { HomeCheckFunnel } from '@/components/home-check/HomeCheckFunnel';
 import { HomeCheckReportView } from '@/components/home-check/HomeCheckReportView';
+import { HomeCheckWaiting } from '@/components/home-check/waiting/HomeCheckWaiting';
+import { WAIT_STEPS } from '@/components/home-check/waiting/phases';
 import { VERDICT_META, type Verdict } from '@/lib/home-check/display';
 import type { AddressSearchResult } from '@/lib/leads/api';
+import { QUIZ_FALLBACK } from '@/lib/quiz-fallback';
 
 const DISCLAIMER =
   '본 결과는 건축물대장(전유부·표제부) 조회 시점 기준의 참고 정보예요. 최종 판단은 관할 행정청이나 전문가 확인이 필요해요.';
@@ -214,16 +220,75 @@ function mockSubmit(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 1800));
 }
 
-type PreviewMode = 'funnel' | 'report';
+type PreviewMode = 'funnel' | 'waiting' | 'report';
+
+/** 대기 화면 phase 선택지 — 실제 4단계 + 시간 폴백(null) + 자동 시뮬 + 완료 비트. */
+type WaitPhaseChoice =
+  | 'none'
+  | 'received'
+  | 'issuing_registers'
+  | 'judging'
+  | 'saving_report'
+  | 'done'
+  | 'auto';
+
+const WAIT_PHASE_OPTIONS: { value: WaitPhaseChoice; label: string }[] = [
+  { value: 'none', label: 'phase 없음(시간 추정)' },
+  ...WAIT_STEPS.map((s) => ({ value: s.key as WaitPhaseChoice, label: s.label })),
+  { value: 'done', label: '완료 비트' },
+  { value: 'auto', label: '자동 시뮬레이션' }
+];
+
+const ELAPSED_PRESETS: { value: string; label: string; ms: number }[] = [
+  { value: 'now', label: '방금', ms: 0 },
+  { value: '3m', label: '3분 경과', ms: 3 * 60_000 },
+  { value: '5m', label: '5분 경과', ms: 5 * 60_000 }
+];
+
+/**
+ * 자동 시뮬레이션 — 4s 간격으로 phase 를 진행시키고, 완료 비트(1.4s)를 거쳐 mock
+ * 리포트로 스왑한다. 실제 폴링 전환의 end-to-end 리허설(백엔드 불필요).
+ */
+function WaitingAutoSim({ quizEmpty }: { quizEmpty: boolean }) {
+  const [tick, setTick] = useState(0); // 0..3 = phase, 4 = 완료 비트, 5 = 리포트
+  useEffect(() => {
+    if (tick >= 5) return undefined;
+    const timer = setTimeout(() => setTick((t) => t + 1), tick === 4 ? 1400 : 4000);
+    return () => clearTimeout(timer);
+  }, [tick]);
+
+  if (tick >= 5) {
+    return <HomeCheckReportView report={MOCK_REPORTS.normal} checkId="preview-mock" />;
+  }
+  return (
+    <HomeCheckWaiting
+      phase={WAIT_STEPS[Math.min(tick, 3)]?.key}
+      done={tick >= 4}
+      quizItems={quizEmpty ? [] : QUIZ_FALLBACK}
+    />
+  );
+}
 
 export default function HomeCheckPreviewPage() {
   const [mode, setMode] = useState<PreviewMode>('funnel');
   const [verdict, setVerdict] = useState<Verdict>('illegal');
+  const [waitPhase, setWaitPhase] = useState<WaitPhaseChoice>('issuing_registers');
+  const [elapsedPreset, setElapsedPreset] = useState('now');
+  const [quizEmpty, setQuizEmpty] = useState(false);
   const [width, setWidth] = useState<'mobile' | 'full'>('mobile');
   const { colorScheme, setColorScheme } = useMantineColorScheme();
 
   const report = MOCK_REPORTS[verdict];
   const isMobile = width === 'mobile';
+  // createdAt 을 과거로 밀어 시간 폴백/안심 문구 티어를 그대로 exercise 한다.
+  // Date.now 는 렌더 중 호출 금지(react-hooks/purity) — 프리셋 변경 핸들러에서 계산.
+  // 초기값 null 은 HomeCheckWaiting 의 마운트 시각 폴백('방금'과 동일)을 쓴다.
+  const [waitCreatedAt, setWaitCreatedAt] = useState<string | null>(null);
+  const applyElapsedPreset = (value: string) => {
+    setElapsedPreset(value);
+    const elapsedMs = ELAPSED_PRESETS.find((p) => p.value === value)?.ms ?? 0;
+    setWaitCreatedAt(new Date(Date.now() - elapsedMs).toISOString());
+  };
 
   return (
     <Container size="md" py="xl">
@@ -245,11 +310,12 @@ export default function HomeCheckPreviewPage() {
             onChange={(v) => setMode(v as PreviewMode)}
             data={[
               { value: 'funnel', label: '입력 퍼널' },
+              { value: 'waiting', label: '대기 화면' },
               { value: 'report', label: '결과 리포트' }
             ]}
           />
 
-          {mode === 'report' ? (
+          {mode === 'report' && (
             <Box style={{ overflowX: 'auto' }}>
               <SegmentedControl
                 value={verdict}
@@ -260,7 +326,40 @@ export default function HomeCheckPreviewPage() {
                 }))}
               />
             </Box>
-          ) : (
+          )}
+
+          {mode === 'waiting' && (
+            <Stack gap="xs">
+              <Box style={{ overflowX: 'auto' }}>
+                <SegmentedControl
+                  size="xs"
+                  value={waitPhase}
+                  onChange={(v) => setWaitPhase(v as WaitPhaseChoice)}
+                  data={WAIT_PHASE_OPTIONS}
+                />
+              </Box>
+              <Group gap="md">
+                <SegmentedControl
+                  size="xs"
+                  value={elapsedPreset}
+                  onChange={applyElapsedPreset}
+                  data={ELAPSED_PRESETS.map(({ value, label }) => ({ value, label }))}
+                />
+                <Switch
+                  size="xs"
+                  label="퀴즈 비우기"
+                  checked={quizEmpty}
+                  onChange={(e) => setQuizEmpty(e.currentTarget.checked)}
+                />
+              </Group>
+              <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                phase 없음 = 시간 추정 폴백(경과 프리셋으로 스텝·안심 문구 티어 확인).
+                자동 시뮬레이션은 4초마다 진행 → 완료 비트 → mock 리포트로 전환돼요.
+              </Text>
+            </Stack>
+          )}
+
+          {mode === 'funnel' && (
             <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
               주소 검색은 mock 주소로 대체돼요. 확장 여부에서 &lsquo;있어요&rsquo;를
               고르면 부위 선택 단계가 나오고, 제출하면 로딩 후 완료 화면이 떠요.
@@ -301,12 +400,27 @@ export default function HomeCheckPreviewPage() {
             background: 'var(--mantine-color-body)'
           }}
         >
-          {mode === 'funnel' ? (
+          {mode === 'funnel' && (
             <HomeCheckFunnel
               searchAddressOverride={mockSearchAddress}
               onSubmitOverride={mockSubmit}
             />
-          ) : (
+          )}
+          {mode === 'waiting' &&
+            (waitPhase === 'auto' ? (
+              // 컨트롤 변경 시 처음부터 다시 돌도록 key 로 리셋.
+              <WaitingAutoSim key={`${elapsedPreset}-${quizEmpty}`} quizEmpty={quizEmpty} />
+            ) : (
+              <HomeCheckWaiting
+                // phase/프리셋 변경 시 단조 가드(maxIndexRef)·퀴즈 상태를 리셋한다.
+                key={`${waitPhase}-${elapsedPreset}-${quizEmpty}`}
+                phase={waitPhase === 'none' || waitPhase === 'done' ? null : waitPhase}
+                done={waitPhase === 'done'}
+                createdAt={waitCreatedAt}
+                quizItems={quizEmpty ? [] : QUIZ_FALLBACK}
+              />
+            ))}
+          {mode === 'report' && (
             // verdict 를 key 로 줘 상태 전환 시 useId·내부 상태를 확실히 리셋.
             <HomeCheckReportView key={verdict} report={report} checkId="preview-mock" />
           )}

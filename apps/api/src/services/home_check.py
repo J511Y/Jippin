@@ -64,7 +64,15 @@ DISCLAIMER = (
 )
 
 _VIOLATION_VALUE = "위반건축물"
-_SCHEMA_VERSION = "1.2.0"
+_SCHEMA_VERSION = "1.3.0"
+
+# 진행 phase (정보성 — 대기 화면 표시용, schema 1.3.0). status 가 상태 기계 정본이고
+# phase 는 파이프라인이 남기는 힌트다. 값 추가는 자유(DB CHECK 없음, 계약 open string) —
+# 클라이언트는 미지의 값을 일반 대기 문구로 폴백한다.
+PHASE_RECEIVED = "received"
+PHASE_ISSUING_REGISTERS = "issuing_registers"
+PHASE_JUDGING = "judging"
+PHASE_SAVING_REPORT = "saving_report"
 
 # 확장 verdict=uncertain 일 때 종합 신호에 덧붙이는 🟡 caution 사유(한국어).
 _EXTENSION_UNCERTAIN_CAUTION = (
@@ -116,6 +124,7 @@ async def create_home_check(
                     user_id=user_id,
                     is_anonymous=is_anonymous,
                     status="querying",
+                    phase=PHASE_RECEIVED,
                     road_addr=road_addr,
                     jibun_addr=jibun_addr,
                     addr_dong=dong or None,
@@ -126,6 +135,7 @@ async def create_home_check(
                 .returning(
                     HomeCheck.id,
                     HomeCheck.status,
+                    HomeCheck.phase,
                     HomeCheck.created_at,
                     HomeCheck.updated_at,
                 )
@@ -397,6 +407,9 @@ async def _process(
     ``(exclusive, heading|None, heading_error)`` 는 순차 경로와 동일한 의미이고,
     needs_input(공유 해석 단계에서 발생)은 전유부와 같은 예외로 온다.
     """
+
+    # 대기 화면 스텝 표시용 phase — 워커 워밍업+전유부+표제부 발급 전 구간을 포괄한다.
+    await _set_phase(home_check_id, PHASE_ISSUING_REGISTERS)
 
     if bundle_factory is not None:
         try:
@@ -703,6 +716,8 @@ async def _mark_completed(
     *,
     heading_error: bool,
 ) -> None:
+    # 발급이 끝나고 판정(+확장 LLM 대조) 구간에 들어섰다 — 대기 화면 스텝 갱신.
+    await _set_phase(home_check_id, PHASE_JUDGING)
     (
         exclusive_violation,
         heading_violation,
@@ -752,6 +767,7 @@ async def _mark_completed(
                 signal = "normal"
 
     # PDF 보관(best-effort) — 실패해도 잡은 completed 로 둔다(문서 링크만 생략).
+    await _set_phase(home_check_id, PHASE_SAVING_REPORT)
     await _store_pdfs(home_check_id, exclusive, heading)
 
     values: dict[str, Any] = {
@@ -867,15 +883,32 @@ async def reset_for_resume(home_check_id: uuid.UUID) -> None:
 
     signal_requires_completed CHECK 때문에 signal 은 항상 null 인 상태이므로 status 만
     바꾼다. resume_token 등 result_fields 는 재개 호출이 끝나며 _mark_* 가 덮어쓴다.
+    phase 도 received 로 되돌려 대기 화면 스텝 표시가 처음부터 다시 진행되게 한다.
     """
 
-    await _update_row(home_check_id, {"status": "querying"})
+    await _update_row(home_check_id, {"status": "querying", "phase": PHASE_RECEIVED})
 
 
 async def _update_row(home_check_id: uuid.UUID, values: dict[str, Any]) -> None:
     async with get_engine().begin() as conn:
         await conn.execute(
             sa.update(HomeCheck).where(HomeCheck.id == home_check_id).values(**values)
+        )
+
+
+async def _set_phase(home_check_id: uuid.UUID, phase: str) -> None:
+    """정보성 phase 기록 — 실패해도 파이프라인을 멈추지 않는다(best-effort).
+
+    phase 는 대기 화면 표시용 힌트일 뿐이라, 이 짧은 UPDATE 의 일시 오류로 실제 조회를
+    실패시키면 본말이 전도된다."""
+
+    try:
+        await _update_row(home_check_id, {"phase": phase})
+    except Exception:  # noqa: BLE001 — phase 는 표시용.
+        logger.warning(
+            "home_check_phase_update_failed",
+            home_check_id=str(home_check_id),
+            phase=phase,
         )
 
 
@@ -1055,6 +1088,8 @@ async def serialize_job(
         "schema_version": _SCHEMA_VERSION,
         "id": str(row["id"]),
         "status": status,
+        # 진행 phase(정보성) — 구 행/테스트 fake 행에는 키가 없을 수 있어 .get 으로 관용.
+        "phase": row.get("phase"),
         "created_at": _iso(row.get("created_at")),
         "updated_at": _iso(row.get("updated_at")),
     }

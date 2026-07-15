@@ -33,6 +33,7 @@ from .consultation_lead import (  # noqa: E402
 )
 from .faq import FAQ_CATEGORIES, Faq  # noqa: E402
 from .home_check import HomeCheck, HomeCheckDocument  # noqa: E402
+from .quiz import QUIZ_CATEGORIES, Quiz  # noqa: E402
 from .main_feature import (  # noqa: E402
     AgentRun,
     ChatMessage,
@@ -67,6 +68,8 @@ __all__ = [
     "FloorplanCandidate",
     "FloorplanUpload",
     "NAMING_CONVENTION",
+    "QUIZ_CATEGORIES",
+    "Quiz",
     "RequestLog",
     "Session",
     "SessionAddress",
