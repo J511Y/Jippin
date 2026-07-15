@@ -313,15 +313,31 @@ class SeumteoFlow:
             finally:
                 await page.close()
 
+    @staticmethod
+    def _heading_error(exc: BaseException) -> BuildingRegisterError:
+        """표제부 단계 예외 → 그 종류의 오류 봉투(전유부 결과를 지우지 않는다)."""
+
+        if isinstance(exc, FlowError):
+            return BuildingRegisterError(
+                category=exc.category,
+                message=exc.message,
+                field=exc.field,
+                options=exc.options,
+            )
+        return BuildingRegisterError(
+            category="upstream", message="표제부 발급 처리 중 오류가 발생했습니다."
+        )
+
     async def run_bundle(
         self, req: BuildingRegisterBundleRequest
     ) -> BuildingRegisterBundleResponse:
         """전유부+표제부 통합 잡 — 로그인·주소해석·카트·신청을 1회로 공유한다.
 
-        공유 단계(로그인/해석/카트/신청) 실패는 예외로 전파돼 main.py 가 양쪽 봉투에
-        복제하고, 종류별 단계(발급/추출) 실패는 여기서 봉투로 갈라 담는다. 전유부 추출
-        실패는 전체 실패(현행 단건 경로와 동일 — 전유부가 핵심 신호), 표제부 실패는
-        best-effort(호출측이 caution 으로 흡수)."""
+        전유부가 핵심 신호다: 공유 단계(로그인/공유 해석)와 전유부 단계 실패는 예외로
+        전파돼 main.py 가 양쪽 봉투에 복제한다. 표제부는 **해석부터 추출까지 전 구간
+        best-effort** — 순차 경로가 표제부 실패를 caution 으로 흡수하듯, 어느 단계에서
+        실패해도 전유부 성공 결과를 버리지 않고 표제부 봉투에만 담는다. 표제부 추출은
+        남은 예산으로 타임박스해 표제부 지연이 bundle 데드라인 전체를 태우지 않게 한다."""
 
         await self._mgr.ensure_logged_in()
         loop = asyncio.get_event_loop()
@@ -360,31 +376,74 @@ class SeumteoFlow:
         )
         # 공유 해석(총괄PK+동) 1회 → 종류별 해석은 상호 독립이라 동시 실행(같은 페이지의
         # in-page fetch 는 프로토콜상 병렬 안전 — 브라우저 동시 XHR 과 동일).
+        # 전유부 해석 실패는 전체 실패(순차 경로 동일)지만, 표제부는 여기부터 전 구간
+        # best-effort 다 — R01 이 비거나 일시 오류여도 전유부 성공 결과를 버리지 않고
+        # 표제부 봉투에만 담는다(순차 경로의 caution 흡수와 동일 의미).
         shared = await self._resolve_shared(page, req_ex)
-        t_ex, t_head = await asyncio.gather(
+        t_ex_raw, t_head_raw = await asyncio.gather(
             self._resolve_kind(page, req_ex, shared),
             self._resolve_kind(page, req_head, shared),
+            return_exceptions=True,
         )
+        if isinstance(t_ex_raw, BaseException):
+            raise t_ex_raw
+        t_ex: dict = t_ex_raw
+        t_head: dict | None = None
+        heading_failure: BuildingRegisterError | None = None
+        if isinstance(t_head_raw, BaseException):
+            if not isinstance(t_head_raw, Exception):
+                raise t_head_raw  # CancelledError 등 제어 예외는 삼키지 않는다.
+            _log.warning(
+                "flow.bundle_heading_failed",
+                stage="resolve",
+                error=str(t_head_raw)[:120],
+            )
+            heading_failure = self._heading_error(t_head_raw)
+        else:
+            t_head = t_head_raw
 
         await self._clear_cart(page)  # 잔재 카트 정리(#cart-preclean) — 잡당 1회
         await self._add_to_cart(page, req_ex, t_ex)
-        await self._add_to_cart(page, req_head, t_head)
+        if t_head is not None:
+            try:
+                await self._add_to_cart(page, req_head, t_head)
+            except FlowError as exc:
+                _log.warning(
+                    "flow.bundle_heading_failed", stage="cart", category=exc.category
+                )
+                heading_failure = self._heading_error(exc)
+                t_head = None
+
+        targets_by_kind: dict[str, dict] = {"exclusive": t_ex}
+        if t_head is not None:
+            targets_by_kind["heading"] = t_head
         items = await self._isolate_cart_many(
-            page, {"exclusive": t_ex, "heading": t_head}
+            page, targets_by_kind, optional_kinds=frozenset({"heading"})
         )
+        if t_head is not None and "heading" not in items:
+            _log.warning("flow.bundle_heading_failed", stage="isolate")
+            heading_failure = BuildingRegisterError(
+                category="upstream",
+                message="표제부 발급 예약 항목을 확인하지 못했습니다.",
+            )
+            t_head = None
         appnt = await self._appnt_info(page)
         known_receipts = await self._receipt_snapshot(page)
 
-        # 신청 — 기본은 두 건 단일 S01(세움터 카트 UI 의 일괄 신청과 동일). 단일 신청이
+        item_list = [items["exclusive"]]
+        if t_head is not None:
+            item_list.append(items["heading"])
+
+        # 신청 — 기본은 단일 S01(세움터 카트 UI 의 일괄 신청과 동일). 두 건 일괄이
         # 거부되면(자동화 경로 미검증 리스크) 같은 잡 안에서 종류별 순차 신청으로 폴백한다.
         # 부분 생성된 행이 있으면 종류별 새 행이 복수가 돼 _pick_receipt 가 fail-closed 한다.
         submitted: list[str]
-        if self._s.seumteo_bundle_single_submit:
+        if self._s.seumteo_bundle_single_submit or len(item_list) == 1:
             try:
-                submitted = await self._submit_many(
-                    page, [items["exclusive"], items["heading"]], appnt
-                )
+                submitted = await self._submit_many(page, item_list, appnt)
             except FlowError as exc:
+                if len(item_list) == 1:
+                    raise  # 전유부 단건 신청 실패 = 전체 실패(폴백 여지 없음).
                 _log.warning(
                     "flow.bundle_submit_fallback",
                     category=exc.category,
@@ -396,11 +455,13 @@ class SeumteoFlow:
             submitted = await self._submit_many(page, [items["exclusive"]], appnt)
             submitted += await self._submit_many(page, [items["heading"]], appnt)
 
+        kinds: dict[str, tuple[BuildingRegisterRequest, dict]] = {
+            "exclusive": (req_ex, t_ex)
+        }
+        if t_head is not None:
+            kinds["heading"] = (req_head, t_head)
         recps = await self._find_recp_nos(
-            page,
-            {"exclusive": (req_ex, t_ex), "heading": (req_head, t_head)},
-            known_receipts,
-            submitted=submitted,
+            page, kinds, known_receipts, submitted=submitted
         )
 
         # 전유부 먼저(핵심 신호) — 접수 미확인/추출 실패는 예외 전파(양쪽 실패 봉투).
@@ -415,31 +476,48 @@ class SeumteoFlow:
             page, req_ex, t_ex, recp_ex, pdf_deadline=pdf_deadline_ex
         )
 
-        # 표제부 — best-effort. 실패는 이 종류의 봉투에만 담는다(호출측 caution 처리).
+        # 표제부 — 실패는 이 종류의 봉투에만 담는다(호출측 caution 처리).
         heading: BuildingRegisterResult | BuildingRegisterError
-        recp_head = recps.get("heading")
-        if recp_head is None:
+        recp_head = recps.get("heading") if t_head is not None else None
+        if t_head is None:
+            heading = heading_failure or BuildingRegisterError(
+                category="upstream",
+                message="표제부 발급 처리 중 오류가 발생했습니다.",
+            )
+        elif recp_head is None:
             heading = BuildingRegisterError(
                 category="upstream", message="표제부 발급 건을 확인하지 못했습니다."
             )
         else:
+            # 남은 예산으로 타임박스 — 표제부가 렌더/다운로드에서 멈춰도 bundle 데드라인
+            # (main.py wait_for)까지 끌려가 **전유부 성공 결과째 타임아웃**되지 않게 한다.
+            # 마감은 표제부 PDF 마감과 동일 시점(응답 반환 예약분 확보).
             pdf_deadline_head = overall_deadline - _PDF_RETURN_RESERVE_MS / 1000
+            remaining_s = pdf_deadline_head - asyncio.get_event_loop().time()
             try:
-                heading = await self._issue_and_extract(
-                    page, req_head, t_head, recp_head, pdf_deadline=pdf_deadline_head
+                if remaining_s <= 0:
+                    raise asyncio.TimeoutError
+                heading = await asyncio.wait_for(
+                    self._issue_and_extract(
+                        page, req_head, t_head, recp_head,
+                        pdf_deadline=pdf_deadline_head,
+                    ),
+                    timeout=remaining_s,
+                )
+            except asyncio.TimeoutError:
+                _log.warning("flow.bundle_heading_failed", stage="extract_timeout")
+                heading = BuildingRegisterError(
+                    category="upstream",
+                    message="표제부 발급이 시간 내 완료되지 않았습니다.",
                 )
             except FlowError as exc:
                 _log.warning(
                     "flow.bundle_heading_failed",
+                    stage="extract",
                     category=exc.category,
                     message=exc.message[:120],
                 )
-                heading = BuildingRegisterError(
-                    category=exc.category,
-                    message=exc.message,
-                    field=exc.field,
-                    options=exc.options,
-                )
+                heading = self._heading_error(exc)
             except Exception:  # noqa: BLE001 — 표제부 실패가 전유부 결과를 지우면 안 된다.
                 _log.exception("flow.bundle_heading_unexpected")
                 heading = BuildingRegisterError(
@@ -873,13 +951,18 @@ class SeumteoFlow:
         return (await self._isolate_cart_many(page, {"only": t}))["only"]
 
     async def _isolate_cart_many(
-        self, page: Page, targets_by_kind: dict[str, dict]
+        self,
+        page: Page,
+        targets_by_kind: dict[str, dict],
+        *,
+        optional_kinds: frozenset[str] = frozenset(),
     ) -> dict[str, dict]:
         """이번 잡의 항목들을 종류별로 확보하고, 어느 종류에도 속하지 않는 잔재만 제거한다.
 
         통합 잡에서는 전유부·표제부 두 행이 함께 카트에 있으므로, 단건 격리처럼 '선택 1건
         외 전부 삭제'하면 **상대 종류의 행을 지워** 신청이 깨진다 — 선택된 행 집합을 먼저
-        확정한 뒤 그 밖의 행만 지운다. 어느 한 종류라도 확보 실패면 fail-closed."""
+        확정한 뒤 그 밖의 행만 지운다. ``optional_kinds``(통합 잡의 표제부 등 best-effort
+        종류)는 확보 실패 시 반환에서 빠질 뿐 예외를 내지 않고, 그 외 종류는 fail-closed."""
 
         base = self._s.eais_base_url
         data = await self._post(page, f"{base}/bci/BCIAAA02R05", {})
@@ -908,6 +991,8 @@ class SeumteoFlow:
                     if str(it.get("bldrgstSeqno")) == str(t.get("_cart_seqno"))
                 ]
             if not mine:
+                if kind in optional_kinds:
+                    continue  # best-effort 종류 — 호출측이 오류 봉투로 처리한다.
                 raise FlowError("upstream", "발급 예약 항목을 확인하지 못했습니다.")
             mine.sort(key=lambda it: str(it.get("firstCrtnDt") or ""), reverse=True)
             chosen = mine[0]

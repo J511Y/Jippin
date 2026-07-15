@@ -303,9 +303,9 @@ def _use_bundle(client: Any) -> bool:
 
     CODEF 클라이언트는 fetch_bundle 이 없어 자동으로 순차 경로를 탄다."""
 
-    return bool(
-        getattr(get_settings(), "seumteo_bundle_enabled", False)
-    ) and callable(getattr(client, "fetch_bundle", None))
+    return bool(getattr(get_settings(), "seumteo_bundle_enabled", False)) and callable(
+        getattr(client, "fetch_bundle", None)
+    )
 
 
 async def run_home_check(
@@ -323,9 +323,7 @@ async def run_home_check(
         road_addr=road_addr, dong=dong, ho=ho, jibun_addr=jibun_addr
     )
     if _use_bundle(client):
-        await _process(
-            home_check_id, bundle_factory=lambda: client.fetch_bundle(query)
-        )
+        await _process(home_check_id, bundle_factory=lambda: client.fetch_bundle(query))
         return
     await _process(
         home_check_id,

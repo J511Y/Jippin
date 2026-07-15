@@ -860,11 +860,7 @@ def test_bundle_needs_input_marks_row(monkeypatch) -> None:
     fake = _FakeBundleClient(exc=exc)
     monkeypatch.setattr(svc, "_new_client", lambda: fake)
 
-    _run(
-        svc.run_home_check(
-            hid, road_addr="addr", jibun_addr=None, dong="", ho="1001"
-        )
-    )
+    _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="", ho="1001"))
 
     values = captured[str(hid)]
     assert values["status"] == "needs_input"
@@ -872,6 +868,10 @@ def test_bundle_needs_input_marks_row(monkeypatch) -> None:
 
 def test_bundle_flag_off_keeps_sequential_path(monkeypatch) -> None:
     # 기본값(off)에서는 fetch_bundle 이 있어도 기존 순차 경로를 탄다.
+    # autouse _env 픽스처가 테스트마다 settings 캐시를 비우지만, 앞선 bundle-on
+    # 테스트의 잔재(env 는 monkeypatch 가, 캐시는 픽스처가 각각 되돌린다)에 기대지
+    # 않도록 여기서도 명시적으로 비워 자기완결로 만든다.
+    get_settings.cache_clear()
     captured = _capture_updates(monkeypatch)
     hid = uuid.uuid4()
 

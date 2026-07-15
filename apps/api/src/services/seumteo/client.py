@@ -225,9 +225,7 @@ class SeumteoBuildingRegisterClient:
     async def _fetch_bundle_sequential(
         self, query: BuildingRegisterQuery
     ) -> tuple[ExclusivePartResult, BuildingHeadingResult | None, bool]:
-        exclusive = _to_exclusive(
-            await self._run_job(query, register_kind="exclusive")
-        )
+        exclusive = _to_exclusive(await self._run_job(query, register_kind="exclusive"))
         heading: BuildingHeadingResult | None = None
         heading_error = False
         try:

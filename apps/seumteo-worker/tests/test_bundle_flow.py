@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -51,6 +52,7 @@ class _Router:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
         self.s01_fail_first = False
+        self.fail_heading_resolve = False
         self._s01_calls = 0
         self._r05_calls = 0
         self._hist_calls = 0
@@ -108,6 +110,13 @@ class _Router:
                 }
             )
         if url.endswith("/bci/BCIAAA02R01"):
+            if self.fail_heading_resolve:
+                return {
+                    "caisMessage": {
+                        "resultCode": "E99999",
+                        "resultMessage": "표제부 조회 오류",
+                    }
+                }
             return self._ok(
                 {
                     "jibunAddr": [
@@ -236,7 +245,9 @@ class BundleFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.flow._issue_and_extract = _fake_extract
 
-        res = await self.flow._run_bundle_on_page(_Page(), self.req, 10_000.0)
+        res = await self.flow._run_bundle_on_page(
+            _Page(), self.req, asyncio.get_running_loop().time() + 60.0
+        )
 
         # C01 두 번 — 종류코드/PK 가 각각 전유(4/EXPOS1)·표제(3/TITLE1).
         c01 = self.router.urls("/bci/BCIAAA02C01")
@@ -277,7 +288,9 @@ class BundleFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.flow._issue_and_extract = _fake_extract
 
-        res = await self.flow._run_bundle_on_page(_Page(), self.req, 10_000.0)
+        res = await self.flow._run_bundle_on_page(
+            _Page(), self.req, asyncio.get_running_loop().time() + 60.0
+        )
 
         # 실패한 2건 S01 + 폴백 단건 S01 ×2 = 총 3회. D02 는 성공한 신청 뒤 2회.
         self.assertEqual(len(self.router.urls("/bci/BCIAZA02S01")), 3)
@@ -293,7 +306,9 @@ class BundleFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.flow._issue_and_extract = _fake_extract
 
-        res = await self.flow._run_bundle_on_page(_Page(), self.req, 10_000.0)
+        res = await self.flow._run_bundle_on_page(
+            _Page(), self.req, asyncio.get_running_loop().time() + 60.0
+        )
 
         self.assertTrue(res.exclusive.ok)
         self.assertIsInstance(res.heading, BuildingRegisterError)
@@ -306,7 +321,9 @@ class BundleFlowTest(unittest.IsolatedAsyncioTestCase):
         self.flow._issue_and_extract = _fake_extract
 
         with self.assertRaisesRegex(FlowError, "전유부 리포트 실패"):
-            await self.flow._run_bundle_on_page(_Page(), self.req, 10_000.0)
+            await self.flow._run_bundle_on_page(
+            _Page(), self.req, asyncio.get_running_loop().time() + 60.0
+        )
 
     async def test_resolve_not_found_propagates_with_field(self) -> None:
         async def _empty_mst(_page, url, body):
@@ -317,7 +334,57 @@ class BundleFlowTest(unittest.IsolatedAsyncioTestCase):
         self.flow._post = _empty_mst
 
         with self.assertRaisesRegex(FlowError, "찾지 못했"):
-            await self.flow._run_bundle_on_page(_Page(), self.req, 10_000.0)
+            await self.flow._run_bundle_on_page(
+            _Page(), self.req, asyncio.get_running_loop().time() + 60.0
+        )
+
+    async def test_heading_resolve_failure_keeps_exclusive_result(self) -> None:
+        """표제부 해석(R01) 실패는 best-effort — 전유부만으로 단건 신청해 완주한다."""
+
+        self.router.fail_heading_resolve = True
+        extract_calls: list[str] = []
+
+        async def _fake_extract(page, req, t, recp, *, pdf_deadline=None):
+            extract_calls.append(req.register_kind)
+            return _result(req.register_kind)
+
+        self.flow._issue_and_extract = _fake_extract
+
+        res = await self.flow._run_bundle_on_page(
+            _Page(), self.req, asyncio.get_running_loop().time() + 60.0
+        )
+
+        self.assertTrue(res.exclusive.ok)
+        self.assertIsInstance(res.heading, BuildingRegisterError)
+        # R01 cais 오류("...조회 오류")는 _check_cais 가 not_found 로 분류한다 —
+        # 봉투는 원래 FlowError category 를 보존한다(호출측 caution 흡수는 동일).
+        self.assertEqual(res.heading.category, "not_found")
+        self.assertEqual(extract_calls, ["exclusive"])
+        # 표제부가 빠졌으니 담기(C01)·신청(S01)도 전유부 1건만.
+        self.assertEqual(len(self.router.urls("/bci/BCIAAA02C01")), 1)
+        s01 = self.router.urls("/bci/BCIAZA02S01")
+        self.assertEqual(len(s01), 1)
+        self.assertEqual(s01[0][1]["pbsvcRecpInfo"]["pbsvcResveDtlsCnt"], 1)
+
+    async def test_heading_extract_timeout_keeps_exclusive_result(self) -> None:
+        """표제부 추출이 멈춰도 남은 예산 타임박스로 끊고 전유부 결과를 보존한다."""
+
+        loop = asyncio.get_running_loop()
+        # 표제부 몫 예산이 ~0.05s 만 남도록 데드라인을 당긴다(반환 예약 4s 제외).
+        overall_deadline = loop.time() + (4000 / 1000) + 0.05
+
+        async def _fake_extract(page, req, t, recp, *, pdf_deadline=None):
+            if req.register_kind == "heading":
+                await asyncio.sleep(5)  # 타임박스(0.05s)보다 훨씬 길게 — 중단돼야 한다.
+            return _result(req.register_kind)
+
+        self.flow._issue_and_extract = _fake_extract
+
+        res = await self.flow._run_bundle_on_page(_Page(), self.req, overall_deadline)
+
+        self.assertTrue(res.exclusive.ok)
+        self.assertIsInstance(res.heading, BuildingRegisterError)
+        self.assertIn("시간 내", res.heading.message)
 
     async def test_shared_receipt_number_matches_both_kinds(self) -> None:
         # 통합 신청이 하나의 pbsvcRecpNo 를 두 행에 공유해도 종류별 매칭이 성립해야 한다.
@@ -351,7 +418,9 @@ class BundleFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.flow._issue_and_extract = _fake_extract
 
-        res = await self.flow._run_bundle_on_page(_Page(), self.req, 10_000.0)
+        res = await self.flow._run_bundle_on_page(
+            _Page(), self.req, asyncio.get_running_loop().time() + 60.0
+        )
 
         self.assertTrue(res.exclusive.ok)
         self.assertTrue(res.heading.ok)
