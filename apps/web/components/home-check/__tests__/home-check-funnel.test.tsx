@@ -102,33 +102,10 @@ describe('HomeCheckFunnel — 동/호 입력 포커스·엔터 진행', () => {
     renderFunnel();
     await goToDongStep();
     const dongInput = screen.getByLabelText('동');
-    fireEvent.change(dongInput, { target: { value: '10' } });
+    fireEvent.change(dongInput, { target: { value: '가' } });
     fireEvent.keyDown(dongInput, { key: 'Enter', isComposing: true });
     // 조합 확정 엔터는 무시 — 여전히 동 스텝.
     expect(screen.getByText('동이 어떻게 되나요?')).toBeDefined();
     expect(screen.queryByText('우리 집은 몇 호인가요?')).toBeNull();
-  });
-});
-
-describe('HomeCheckFunnel — 동/호는 숫자만 받는다', () => {
-  // 세움터 조회는 동/호를 숫자로 매칭한다 — 한글·영문·기호가 섞이면 매칭이 깨져 조회가
-  // 실패하므로, 입력 시점에 걸러 숫자만 통과시킨다(붙여넣기 포함).
-  it('동 입력의 한글·기호를 걸러 숫자만 남긴다', async () => {
-    renderFunnel();
-    await goToDongStep();
-    const dongInput = screen.getByLabelText('동') as HTMLInputElement;
-    fireEvent.change(dongInput, { target: { value: '가10-3동' } });
-    expect(dongInput.value).toBe('103');
-  });
-
-  it('호 입력의 문자를 걸러 숫자만 남긴다', async () => {
-    renderFunnel();
-    await goToDongStep();
-    const dongInput = screen.getByLabelText('동');
-    fireEvent.change(dongInput, { target: { value: '103' } });
-    fireEvent.keyDown(dongInput, { key: 'Enter' });
-    const hoInput = (await screen.findByLabelText('호')) as HTMLInputElement;
-    fireEvent.change(hoInput, { target: { value: '303호' } });
-    expect(hoInput.value).toBe('303');
   });
 });

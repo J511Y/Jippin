@@ -80,13 +80,6 @@ type StepKey =
 /** 확장 신고 선택. yes=있음, no=없음, unsure=모름(대조 생략). */
 type ExtensionChoice = 'yes' | 'no' | 'unsure';
 
-/**
- * 동·호 입력 정규화 — 숫자만 남긴다. 세움터 조회는 동/호를 숫자로 매칭하는데, 한글·영문·
- * 기호(예: "303호", "가-101")가 섞이면 매칭이 깨져 조회가 실패한다. 붙여넣기·IME 조합
- * 잔여물까지 입력 시점에 걸러 항상 숫자만 통과시킨다.
- */
-const digitsOnly = (v: string): string => v.replace(/[^0-9]/g, '');
-
 /** 확장 부위 다중 선택지. key 는 내부 식별용, label 은 표시·extended_areas 조립용. */
 // '발코니/베란다' 단독 항목은 두지 않는다 — 통용상 "거실"이 곧 거실 발코니 확장을 뜻한다.
 const AREA_OPTIONS: ReadonlyArray<{ key: string; label: string }> = [
@@ -609,12 +602,11 @@ function DongStep({
         size="lg"
         radius="lg"
         inputMode="numeric"
-        pattern="[0-9]*"
         placeholder="예: 101"
         value={value}
-        onChange={(e) => onChange(digitsOnly(e.currentTarget.value))}
+        onChange={(e) => onChange(e.currentTarget.value)}
         onKeyDown={(e) => {
-          // 숫자만 통과하지만, IME 조합 확정 엔터가 다음 스텝으로 튀는 것은 방어한다.
+          // IME 조합 확정 엔터로 다음 스텝이 튀지 않게 가드('가'동 같은 한글 동 대비).
           if (e.key === 'Enter' && !e.nativeEvent.isComposing) onNext();
         }}
         aria-label="동"
@@ -649,11 +641,10 @@ function HoStep({
         size="lg"
         radius="lg"
         inputMode="numeric"
-        pattern="[0-9]*"
         placeholder="예: 1502"
         value={value}
         error={showError ? '호를 입력해 주세요' : undefined}
-        onChange={(e) => onChange(digitsOnly(e.currentTarget.value))}
+        onChange={(e) => onChange(e.currentTarget.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.nativeEvent.isComposing) onNext();
         }}
