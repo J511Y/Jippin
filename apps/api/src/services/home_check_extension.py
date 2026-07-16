@@ -270,6 +270,27 @@ _NO_EXTENSION = ExtensionJudgment(
 )
 
 
+def offline_extension_judgment(
+    reported_extension: bool | None,
+) -> ExtensionJudgment | None:
+    """확장 LLM 게이트가 꺼졌을 때(default)의 **비-LLM** 판정.
+
+    사용자는 게이트와 무관하게 퍼널에서 확장 여부를 답한다. 게이트가 꺼졌다고 그 입력을
+    버리면 web 이 '확장 여부를 입력하지 않아 미대조'(not_checked)로 오표시한다. OpenAI 의존은
+    ``reported_extension=True`` 대조에만 있으므로, LLM 없이 확정 가능한 축은 정직하게 채운다:
+
+    - ``None``: 사용자가 확장 질문에 답하지 않음 → None(리포트에 확장판정 미포함, not_checked).
+    - ``False``: '확장 없음' 신고 → ``judge_extension`` 과 동일하게 legal(규칙 3).
+    - ``True``: 신고했으나 자동 대조가 꺼져 있음 → uncertain(타임라인 직접 확인 안내).
+    """
+
+    if reported_extension is None:
+        return None
+    if reported_extension is False:
+        return _NO_EXTENSION
+    return _UNCERTAIN_FALLBACK
+
+
 # ---------------------------------------------------------------------------
 # 판정 진입점 (I/O). invoke 를 주입하면 LLM 없이 테스트 가능.
 # ---------------------------------------------------------------------------
