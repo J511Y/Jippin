@@ -10,15 +10,16 @@ import {
   PasswordInput,
   Stack,
   Text,
-  TextInput,
-  Title
+  TextInput
 } from '@mantine/core';
+import Link from 'next/link';
 import { useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 
 import { AccountApiError, signup } from '@/lib/auth/account-api';
 import { signupSchema, type SignupValues } from '@/lib/auth/validation';
 import { PhoneVerification } from '@/components/auth/PhoneVerification';
+import { PageHeader } from '@/components/ui';
 
 /**
  * 이메일/비밀번호 회원가입 폼 (CMP-DIRECT).
@@ -91,20 +92,18 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} noValidate>
+      {/* 타이틀은 PageHeader 표준 블록(h1 은 theme headings SSOT — fz 오버라이드 금지). */}
+      <PageHeader
+        title="회원가입"
+        subtitle="이름, 이메일, 휴대폰 인증, 비밀번호로 집핀 계정을 만듭니다."
+      />
       <Stack gap="md">
-        <Stack gap={4}>
-          <Title order={1} fz="h2">
-            회원가입
-          </Title>
-          <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-            이름, 이메일, 휴대폰 인증, 비밀번호로 집핀 계정을 만듭니다.
-          </Text>
-        </Stack>
-
+        {/* 입력·버튼 모두 md(42px) — 인증 플로우 공통 크기(모바일 터치 타깃). */}
         <TextInput
           label="이름"
           placeholder="홍길동"
           autoComplete="name"
+          size="md"
           error={errors.name?.message}
           {...register('name')}
         />
@@ -113,6 +112,7 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
           placeholder="you@example.com"
           inputMode="email"
           autoComplete="email"
+          size="md"
           error={errors.email?.message}
           {...register('email')}
         />
@@ -132,6 +132,7 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
           description="6자 이상, 영문과 숫자 포함"
           placeholder="비밀번호"
           autoComplete="new-password"
+          size="md"
           error={errors.password?.message}
           {...register('password')}
         />
@@ -139,6 +140,7 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
           label="비밀번호 확인"
           placeholder="비밀번호 재입력"
           autoComplete="new-password"
+          size="md"
           error={errors.confirm?.message}
           {...register('confirm')}
         />
@@ -183,18 +185,18 @@ export function SignupForm({ nextPath }: { nextPath: string }) {
         />
 
         {serverError ? (
-          <Alert color="red" variant="light">
+          <Alert color="danger" variant="light">
             {serverError}
           </Alert>
         ) : null}
 
-        <Button type="submit" color="jippin" size="md" radius="md" loading={isSubmitting} fullWidth>
+        <Button type="submit" color="jippin" size="md" loading={isSubmitting} fullWidth>
           가입하기
         </Button>
 
         <Text size="sm" c="dimmed" ta="center">
           이미 계정이 있으신가요?{' '}
-          <Anchor href="/login" c="var(--jippin-brand-primary)">
+          <Anchor component={Link} href="/login" c="var(--jippin-brand-primary)">
             로그인
           </Anchor>
         </Text>

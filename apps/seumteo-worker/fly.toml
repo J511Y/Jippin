@@ -1,0 +1,52 @@
+# Fly.io — jippin-seumteo-worker
+# 세움터(eais.go.kr) 건축물대장 발급 자동화 워커. Playwright headless Chromium.
+# CODEF 대체(ADR-0009). apps/api(jippin)가 Flycast 사설망으로 호출한다.
+#
+# 이 앱은 apps/api(app="jippin")와 완전히 분리된 별개 Fly 앱이다. app 이름이 다르므로
+# Machine·secrets·IP·릴리즈 히스토리가 서로 간섭하지 않는다.
+#
+# 배포(리포 루트에서 — build context = 이 디렉토리만):
+#   fly apps create jippin-seumteo-worker           # 최초 1회
+#   fly deploy apps/seumteo-worker --flycast --remote-only
+#   fly ips list -a jippin-seumteo-worker           # private IPv6 만 있는지 확인(public 없어야 함)
+# 시크릿(앱 단위):
+#   fly secrets set -a jippin-seumteo-worker SEUMTER_ID=... SEUMTER_PASSWORD=... SEUMTEO_WORKER_TOKEN=...
+
+app = "jippin-seumteo-worker"
+primary_region = "nrt"          # apps/api 와 동일 리전(도쿄) — 사설망 왕복 최소화
+swap_size_mb = 1024             # Chromium 메모리 스파이크 OOM-kill 방어(안전벨트)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # 렌더 동시성 1(2GB에서 안전). 워커 내부 세마포어와 concurrency.soft_limit 를 맞춘다.
+  SEUMTEO_MAX_CONCURRENCY = "1"
+  # 실제 발급은 browser ready 뒤 .internal로 직결한다. API(180초)보다 짧은 전체 잡 상한.
+  JOB_DEADLINE_MS = "120000"
+
+[http_service]
+  internal_port = 8080
+  force_https = false           # Flycast(사설)는 HTTP 전용
+  # 간헐 워크로드 — 유휴 시 정지, 요청 오면 기동. 콜드스타트(수 초) 감안해 호출측 타임아웃 넉넉히.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 1              # 렌더 1건씩 직렬 처리(메모리 보호)
+    hard_limit = 2
+
+  # 헬스체크 — /healthz 는 브라우저 기동 여부까지 확인한다.
+  [[http_service.checks]]
+    method = "get"
+    path = "/healthz"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "40s"        # 브라우저 launch 콜드스타트 여유
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "2gb"               # headless Chromium 단일 페이지 렌더 안전 최소치
+  cpus = 1

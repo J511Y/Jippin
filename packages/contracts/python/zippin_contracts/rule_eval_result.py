@@ -10,7 +10,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import AnyUrl, BaseModel, ConfigDict, Field
+from pydantic import AnyUrl, BaseModel, ConfigDict, Field, RootModel
 
 
 class Verdict(Enum):
@@ -22,6 +22,10 @@ class Verdict(Enum):
     WARN = "WARN"
     DENY = "DENY"
     HOLD = "HOLD"
+
+
+class AdditionalCheck(RootModel[str]):
+    root: str = Field(..., min_length=1)
 
 
 class Code(Enum):
@@ -85,9 +89,9 @@ class RuleEvalResult(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.0.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.1.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 본 ADR-0001 / CMP-527 시점 고정값.
+    스키마 버전 (semver). 1.1.0: additional_checks 추가(추가형, 하위호환 — REPORT-001 보류/조건부 시 추가 확인 체크리스트).
     """
     verdict: Verdict
     """
@@ -116,4 +120,8 @@ class RuleEvalResult(BaseModel):
     user_message: str | None = None
     """
     사용자에게 표시할 한 줄 요약. RULE 의 메시지 빌더 결과.
+    """
+    additional_checks: list[AdditionalCheck] | None = None
+    """
+    추가 확인 항목 체크리스트 (1.1.0 추가). 보류(HOLD)·보수적 가정(WARN) 시 사용자가 현장에서 확인할 항목을 생활어로 담는다 — REPORT-001 '판단 상태' 섹션의 데이터 소스.
     """

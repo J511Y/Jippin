@@ -37,7 +37,6 @@ export default function RouteError({
       variant="subtle"
       color="jippin"
       size="sm"
-      radius="md"
       fullWidth
       leftSection={<IconHome size={16} />}
     >
@@ -53,7 +52,6 @@ export default function RouteError({
         href="/login"
         color="jippin"
         size="md"
-        radius="md"
         fullWidth
         leftSection={<IconLogin2 size={18} />}
       >
@@ -66,7 +64,6 @@ export default function RouteError({
         onClick={reset}
         color="jippin"
         size="md"
-        radius="md"
         fullWidth
         leftSection={<IconRefresh size={18} />}
       >

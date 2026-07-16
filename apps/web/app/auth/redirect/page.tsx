@@ -1,9 +1,12 @@
 'use client';
 
-import { Suspense, useEffect, useMemo } from 'react';
+import { Button, Card, Group, Loader, Stack, Text, Title } from '@mantine/core';
+import Link from 'next/link';
+import { Suspense, useEffect, useMemo, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 import { isSafeOAuthHandoff } from '@/lib/safe-redirect';
+import { PageColumn } from '@/components/ui';
 
 // /auth/redirect — OAuth 진입 단계 small client page (CMP-577 runbook §4.6, line ~1032).
 //
@@ -35,6 +38,30 @@ function decide(to: string | null, supabaseUrl: string | undefined): RedirectDec
   return { kind: 'navigate', to: to as string };
 }
 
+// SiteShell(헤더) 없는 독립 레이아웃 — 폭은 인증 폼 표준(form 560)을 따르고 가로
+// 패딩(px)을 자체 부담한다. 세 상태(설정 오류/차단/이동 중)가 같은 프레임을 공유한다.
+function RedirectFrame({ children }: { children: ReactNode }) {
+  return (
+    <PageColumn width="form" px="md" py={48}>
+      {children}
+    </PageColumn>
+  );
+}
+
+// 이동 중 안내 한 줄 — 본문 + 로더. 복귀 링크가 없는 순간적 화면이다.
+function RedirectPending() {
+  return (
+    <RedirectFrame>
+      <Group gap="xs">
+        <Loader size="sm" color="jippin" />
+        <Text size="sm" c="dimmed">
+          소셜 로그인 화면으로 이동 중…
+        </Text>
+      </Group>
+    </RedirectFrame>
+  );
+}
+
 function RedirectRunner() {
   const sp = useSearchParams();
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -58,49 +85,51 @@ function RedirectRunner() {
 
   if (decision.kind === 'invalid_config') {
     return (
-      <main className="mx-auto flex max-w-md flex-col gap-4 px-6 py-20">
-        <h1 className="text-xl font-semibold">로그인 설정 오류</h1>
-        <p className="text-sm text-slate-600">
-          OAuth 진입 URL 을 검증할 수 있는 설정이 없습니다. 운영자에게 문의해 주세요.
-        </p>
-        <a href="/login" className="text-sm underline underline-offset-2">
-          로그인 화면으로 돌아가기
-        </a>
-      </main>
+      <RedirectFrame>
+        <Stack gap="md">
+          <Title order={1}>로그인 설정 오류</Title>
+          <Card withBorder>
+            <Stack gap="md" align="flex-start">
+              <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                OAuth 진입 URL 을 검증할 수 있는 설정이 없습니다. 운영자에게 문의해 주세요.
+              </Text>
+              <Button component={Link} href="/login" variant="light" color="jippin" size="md" mih={44}>
+                로그인 화면으로 돌아가기
+              </Button>
+            </Stack>
+          </Card>
+        </Stack>
+      </RedirectFrame>
     );
   }
 
   if (decision.kind === 'invalid_target') {
     return (
-      <main className="mx-auto flex max-w-md flex-col gap-4 px-6 py-20">
-        <h1 className="text-xl font-semibold">잘못된 로그인 요청</h1>
-        <p className="text-sm text-slate-600">
-          허용되지 않은 외부 주소로 이동을 시도했습니다. 안전을 위해 진행을 중단했어요.
-        </p>
-        <a href="/login" className="text-sm underline underline-offset-2">
-          로그인 화면으로 돌아가기
-        </a>
-      </main>
+      <RedirectFrame>
+        <Stack gap="md">
+          <Title order={1}>잘못된 로그인 요청</Title>
+          <Card withBorder>
+            <Stack gap="md" align="flex-start">
+              <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                허용되지 않은 외부 주소로 이동을 시도했습니다. 안전을 위해 진행을 중단했어요.
+              </Text>
+              <Button component={Link} href="/login" variant="light" color="jippin" size="md" mih={44}>
+                로그인 화면으로 돌아가기
+              </Button>
+            </Stack>
+          </Card>
+        </Stack>
+      </RedirectFrame>
     );
   }
 
-  return (
-    <main className="mx-auto flex max-w-md flex-col gap-4 px-6 py-20">
-      <p className="text-sm text-slate-600">소셜 로그인 화면으로 이동 중…</p>
-    </main>
-  );
+  return <RedirectPending />;
 }
 
 export default function AuthRedirectPage() {
   // useSearchParams 는 Suspense boundary 가 필요하다 (Next.js App Router).
   return (
-    <Suspense
-      fallback={
-        <main className="mx-auto flex max-w-md flex-col gap-4 px-6 py-20">
-          <p className="text-sm text-slate-600">소셜 로그인 화면으로 이동 중…</p>
-        </main>
-      }
-    >
+    <Suspense fallback={<RedirectPending />}>
       <RedirectRunner />
     </Suspense>
   );

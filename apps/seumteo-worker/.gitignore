@@ -1,0 +1,12 @@
+# 로컬 로그인 세션(storage_state) — 인증 쿠키 포함, 절대 커밋 금지.
+.auth/
+# 로컬 PoC 발급 산출물.
+out/
+# 로컬 venv / 캐시.
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.env
+.env.*

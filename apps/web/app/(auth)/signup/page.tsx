@@ -1,5 +1,6 @@
-import { Center, Divider, Stack } from '@mantine/core';
+import { Divider, Stack } from '@mantine/core';
 
+import { PageColumn } from '@/components/ui';
 import { isSafeNext } from '@/lib/safe-redirect';
 
 import { LoginButtons } from '../login/login-buttons';
@@ -31,8 +32,9 @@ export default async function SignupPage({ searchParams }: PageProps) {
   const nextPath = pickNext(resolved.next);
 
   return (
-    <Center mih="68vh" py="xl">
-      <Stack gap="lg" w="100%" maw={420}>
+    // 수직 센터링 대신 상단 고정(pt 48) — 인증 4페이지 공통 패턴(login/page.tsx 참조).
+    <PageColumn width="form" pt={48}>
+      <Stack gap="lg">
         <SignupForm nextPath={nextPath} />
 
         {/* 로그인 페이지와 대칭 — 카카오 간편가입도 같은 진입점에서 시작할 수 있게 한다.
@@ -40,6 +42,6 @@ export default async function SignupPage({ searchParams }: PageProps) {
         <Divider label="또는" labelPosition="center" />
         <LoginButtons nextPath={nextPath} />
       </Stack>
-    </Center>
+    </PageColumn>
   );
 }

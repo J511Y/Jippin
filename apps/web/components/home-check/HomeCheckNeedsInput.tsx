@@ -85,7 +85,8 @@ export function HomeCheckNeedsInput({
   return (
     <Card withBorder radius="lg" padding="lg" component="form" onSubmit={handleSubmit}>
       <Stack gap="md">
-        <Alert color="yellow" variant="light" radius="md" title="추가 입력이 필요해요">
+        {/* 주의 알림은 Mantine 기본 yellow 가 아니라 정본 status 토큰(warning)을 쓴다. */}
+        <Alert color="warning" variant="light" radius="md" title="추가 입력이 필요해요">
           <Text size="sm" style={{ wordBreak: 'keep-all' }}>
             {needsInput.message}
           </Text>
@@ -133,12 +134,13 @@ export function HomeCheckNeedsInput({
         )}
 
         {serverError ? (
-          <Alert color="red" variant="light" py="xs">
+          <Alert color="danger" variant="light" py="xs">
             {serverError}
           </Alert>
         ) : null}
 
-        <Button type="submit" color="coral" radius="md" fullWidth loading={submitting}>
+        {/* 폼 제출 = 1차 액션(버튼 위계 §2: jippin filled) — coral 은 전환 CTA 전용. */}
+        <Button type="submit" color="jippin" radius="md" fullWidth loading={submitting}>
           다시 조회하기
         </Button>
       </Stack>

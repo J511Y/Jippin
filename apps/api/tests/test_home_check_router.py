@@ -47,6 +47,18 @@ def _env(monkeypatch):
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_extension_load(monkeypatch):
+    """확장 입력 로드(_load_extension_input)는 DB seam — 완료 경로가 항상 이걸 읽으므로
+    기본은 '미응답'(None,None)으로 중립화해 DB 없이 돈다. 확장 판정을 검증하는 테스트는
+    테스트 본문에서 이 seam 을 재패치한다(later-wins)."""
+
+    async def fake_load(_hid):
+        return None, None
+
+    monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+
+
 def _auth_client(monkeypatch, *, is_anonymous: bool = False):
     pem, jwk = helpers.rsa_keypair()
     helpers.install_jwks(monkeypatch, {"keys": [jwk]})
@@ -137,6 +149,40 @@ def _block_background(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# POST /home-check/warmup
+# ---------------------------------------------------------------------------
+def test_warmup_returns_204_and_runs_best_effort_task(monkeypatch) -> None:
+    called = False
+
+    async def fake_warmup() -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(svc, "warm_home_check_worker", fake_warmup)
+    client, token, _subject = _auth_client(monkeypatch, is_anonymous=True)
+    with client:
+        response = client.post(
+            "/home-check/warmup", headers={"authorization": f"Bearer {token}"}
+        )
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert called is True
+
+
+def test_warmup_does_not_create_or_require_anonymous_session(monkeypatch) -> None:
+    async def fake_warmup() -> None:
+        return None
+
+    monkeypatch.setattr(svc, "warm_home_check_worker", fake_warmup)
+    client = TestClient(create_app())
+    with client:
+        response = client.post("/home-check/warmup")
+
+    assert response.status_code == 204
+
+
+# ---------------------------------------------------------------------------
 # POST /home-check
 # ---------------------------------------------------------------------------
 def test_create_requires_bearer_token() -> None:
@@ -165,6 +211,7 @@ def test_create_returns_202_querying_job(monkeypatch) -> None:
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "querying"
+    assert body["schema_version"] == "1.3.0"
     assert body["report"] is None
     # 정본 계약으로 재검증.
     ContractHomeCheckJob.model_validate(body)
@@ -251,12 +298,230 @@ def test_signal_normal_when_both_clean(monkeypatch) -> None:
     assert values["status"] == "completed"
     assert values["signal"] == "normal"
     assert values["violation"] is False
-    # 요약/변동/가격 매핑.
+    # 요약/변동 매핑 (price_list 는 1.2.0 에서 리포트 미노출 — 저장하지 않는다).
     assert float(values["exclusive_area_m2"]) == 84.99
     assert values["building_main_use"] == "공동주택"
     assert values["building_floors"] == "지하 1층 지상 12층"
     assert len(values["change_list"]) == 2  # 전유부 + 표제부
-    assert values["price_list"][0]["base_price"] == 500000000
+    assert "price_list" not in values
+    # 확장 미응답(reported_extension=None)이면 게이트 여부와 무관하게 extension_check 는 없다.
+    assert values["result_fields"]["extension_check"] is None
+
+
+def test_extension_offline_no_report_is_legal_when_gate_off(monkeypatch) -> None:
+    """게이트 off(default)여도 사용자가 '확장 없음'을 답했으면 LLM 없이 legal 로 채운다.
+
+    게이트가 꺼졌다고 확장 입력을 버리면 web 이 '확장 여부를 입력하지 않아 미대조'(not_checked)로
+    오표시한다(#167 리뷰). None=미포함, False=legal, True=uncertain 을 비-LLM 으로 채운다.
+    """
+
+    captured = _capture_updates(monkeypatch)
+
+    async def fake_load(_hid):
+        return False, None
+
+    monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+    values = captured[str(hid)]
+    ext = values["result_fields"]["extension_check"]
+    assert ext is not None
+    assert ext["verdict"] == "legal"
+    assert values["signal"] == "normal"
+
+
+def test_extension_offline_reported_true_is_uncertain_when_gate_off(
+    monkeypatch,
+) -> None:
+    """게이트 off + 확장 신고(True) → 자동 대조 불가라 uncertain(caution)으로 정직하게 표기."""
+
+    captured = _capture_updates(monkeypatch)
+
+    async def fake_load(_hid):
+        return True, "거실"
+
+    monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+    values = captured[str(hid)]
+    ext = values["result_fields"]["extension_check"]
+    assert ext is not None
+    assert ext["verdict"] == "uncertain"
+    assert values["signal"] == "caution"
+
+
+def test_signal_folds_extension_violation_over_official_normal(monkeypatch) -> None:
+    """공식 축은 normal 인데 확장 verdict=violation → 종합 signal 만 violation 으로 오른다.
+
+    공식 노란딱지 축(violation/exclusive_violation/heading_violation)은 확장 verdict 에
+    절대 영향받지 않아야 한다(별개 축).
+    """
+
+    from src.services.home_check_extension import ExtensionJudgment
+
+    captured = _capture_updates(monkeypatch)
+    monkeypatch.setenv("EXTENSION_JUDGE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    async def fake_load(_hid):
+        return True, "거실"
+
+    async def fake_judge(**_kwargs):
+        return ExtensionJudgment(
+            verdict="violation",
+            reason="신고한 거실 확장이 대장 변동사항에 없습니다.",
+            reported_areas=["거실"],
+            matched_areas=[],
+            unrecorded_areas=["거실"],
+        )
+
+    monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+    monkeypatch.setattr(svc, "judge_extension", fake_judge)
+
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+    values = captured[str(hid)]
+    assert values["status"] == "completed"
+    # 종합 신호는 확장 verdict 를 접어 violation.
+    assert values["signal"] == "violation"
+    # 공식 노란딱지 축은 확장 verdict 에 영향받지 않는다.
+    assert values["violation"] is False
+    assert values["exclusive_violation"] is False
+    assert values["heading_violation"] is False
+    ext = values["result_fields"]["extension_check"]
+    assert ext["verdict"] == "violation"
+    assert ext["unrecorded_areas"] == ["거실"]
+
+
+def test_extension_judge_receives_only_unit_changes(monkeypatch) -> None:
+    """확장 판정 LLM 입력엔 **전유부(unit) 변동만** 넣는다.
+
+    표제부(건물/공용) 변동이 섞이면 무관한 건물 변동을 이 세대 확장의 '등재'로 오인해
+    미등재(위반)를 legal 로 오판할 수 있다(#ext-unit-scope). 판정 입력에서 source=heading 을
+    걸러내는지 검증한다.
+    """
+
+    from src.services.home_check_extension import ExtensionJudgment
+
+    _capture_updates(monkeypatch)
+    monkeypatch.setenv("EXTENSION_JUDGE_ENABLED", "true")
+    get_settings.cache_clear()
+
+    seen: dict[str, object] = {}
+
+    async def fake_load(_hid):
+        return True, "거실"
+
+    async def fake_judge(**kwargs):
+        seen["change_history"] = kwargs.get("change_history")
+        return ExtensionJudgment(
+            verdict="legal",
+            reason="…",
+            reported_areas=["거실"],
+            matched_areas=["거실"],
+            unrecorded_areas=[],
+        )
+
+    monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+    monkeypatch.setattr(svc, "judge_extension", fake_judge)
+
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    changes = seen.get("change_history")
+    assert changes, "판정에 변동사항이 전달되어야 한다"
+    assert {c.source for c in changes} == {"exclusive"}
+    reasons = {c.reason for c in changes}
+    assert "신규작성" in reasons  # 전유부 변동은 포함
+    assert "사용승인" not in reasons  # 표제부 변동은 제외(건물/공용부 잡음)
+
+
+def test_official_violation_survives_extension_legal_or_uncertain(monkeypatch) -> None:
+    """공식 위반(노란딱지)은 확장 verdict 가 legal/uncertain 이어도 종합 signal=violation 유지.
+
+    확장 판정은 별개 축이라 공식 위반을 절대 강등(legal)하거나 은폐(uncertain)하지 못한다 —
+    silent-normal 방지의 핵심 불변식.
+    """
+
+    from src.services.home_check_extension import ExtensionJudgment
+
+    for ext_verdict in ("legal", "uncertain"):
+        captured = _capture_updates(monkeypatch)
+        monkeypatch.setenv("EXTENSION_JUDGE_ENABLED", "true")
+        get_settings.cache_clear()
+
+        async def fake_load(_hid):
+            return True, "거실"
+
+        async def fake_judge(_ev=ext_verdict, **_kwargs):
+            return ExtensionJudgment(
+                verdict=_ev,
+                reason="…",
+                reported_areas=["거실"],
+                matched_areas=["거실"] if _ev == "legal" else [],
+                unrecorded_areas=[],
+            )
+
+        monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+        monkeypatch.setattr(svc, "judge_extension", fake_judge)
+
+        hid = uuid.uuid4()
+        monkeypatch.setattr(
+            svc,
+            "_new_client",
+            lambda: _FakeClient(
+                exclusive=_exclusive("위반건축물"), heading=_heading(None)
+            ),
+        )
+        _run(
+            svc.run_home_check(
+                hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+            )
+        )
+        values = captured[str(hid)]
+        assert values["status"] == "completed", ext_verdict
+        # 공식 위반은 확장 verdict 와 무관하게 유지된다.
+        assert values["signal"] == "violation", ext_verdict
+        assert values["violation"] is True, ext_verdict
+        assert values["exclusive_violation"] is True, ext_verdict
 
 
 def test_signal_caution_when_heading_fails(monkeypatch) -> None:
@@ -419,14 +684,60 @@ def test_serialize_completed_report_validates_against_contract() -> None:
         "change_list": [
             {"date": "20200101", "reason": "신규작성", "source": "exclusive"}
         ],
-        "price_list": [{"reference_date": "20230101", "base_price": 500000000}],
         "result_fields": {"caution_reasons": None},
     }
     # documents 발급(외부 호출) 생략.
     job = _run(svc.serialize_job(row, with_documents=False))
     payload = job.model_dump(mode="json")
+    assert payload["schema_version"] == "1.3.0"
     assert payload["report"]["signal"] == "violation"
     assert payload["report"]["disclaimer"].startswith("본 결과는")
+    # 1.2.0: prices 제거, extension_check 미입력 시 null.
+    assert "prices" not in payload["report"]
+    assert payload["report"]["extension_check"] is None
+    ContractHomeCheckJob.model_validate(payload)
+
+
+def test_serialize_completed_report_with_extension_check_validates_against_contract() -> (
+    None
+):
+    """확장 판정이 채워진 completed 리포트를 정본 계약으로 재검증한다."""
+
+    row = {
+        "id": uuid.uuid4(),
+        "status": "completed",
+        "signal": "caution",
+        "created_at": datetime.now(UTC),
+        "updated_at": datetime.now(UTC),
+        "road_addr": "서울특별시 강남구 테헤란로 1",
+        "jibun_addr": None,
+        "addr_dong": "101",
+        "addr_ho": "1001",
+        "violation": False,
+        "exclusive_violation": False,
+        "heading_violation": False,
+        "change_list": [
+            {"date": "20200101", "reason": "신규작성", "source": "exclusive"}
+        ],
+        "result_fields": {
+            "caution_reasons": [
+                "신고하신 확장 내용을 대장 변동사항과 자동으로 대조하지 못했습니다."
+            ],
+            "extension_check": {
+                "verdict": "uncertain",
+                "reason": "대장 변동사항과의 대조 결과가 명확하지 않습니다.",
+                "reported_areas": ["거실"],
+                "matched_areas": [],
+                "unrecorded_areas": [],
+            },
+        },
+    }
+    job = _run(svc.serialize_job(row, with_documents=False))
+    payload = job.model_dump(mode="json")
+    ext = payload["report"]["extension_check"]
+    assert ext["verdict"] == "uncertain"
+    assert ext["reported_areas"] == ["거실"]
+    assert "prices" not in payload["report"]
     ContractHomeCheckJob.model_validate(payload)
 
 
@@ -541,3 +852,229 @@ def test_completed_even_if_pdf_upload_fails(monkeypatch) -> None:
     values = updates[str(hid)]
     assert values["status"] == "completed"
     assert values["signal"] == "normal"
+
+
+# ---------------------------------------------------------------------------
+# 통합 잡(bundle) 경로 — 플래그 on + 클라이언트 지원 시 fetch_bundle 1회.
+# ---------------------------------------------------------------------------
+class _FakeBundleClient:
+    """fetch_bundle 만으로 처리돼야 한다 — 단건 fetch 가 불리면 경로 회귀."""
+
+    def __init__(self, *, result=None, exc=None):
+        self._result = result
+        self._exc = exc
+        self.bundle_calls = 0
+
+    async def fetch_bundle(self, _query):
+        self.bundle_calls += 1
+        if self._exc is not None:
+            raise self._exc
+        return self._result
+
+    async def fetch_exclusive_part(self, _query):
+        raise AssertionError("bundle 경로에서 단건 전유부 fetch 가 호출되면 안 된다")
+
+    async def fetch_building_heading(self, _query):
+        raise AssertionError("bundle 경로에서 단건 표제부 fetch 가 호출되면 안 된다")
+
+
+def _enable_bundle(monkeypatch) -> None:
+    monkeypatch.setenv("SEUMTEO_BUNDLE_ENABLED", "true")
+    get_settings.cache_clear()
+
+
+def test_bundle_path_completes_with_single_call(monkeypatch) -> None:
+    captured = _capture_updates(monkeypatch)
+    _enable_bundle(monkeypatch)
+    hid = uuid.uuid4()
+    fake = _FakeBundleClient(result=(_exclusive(None), _heading(None), False))
+    monkeypatch.setattr(svc, "_new_client", lambda: fake)
+
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    assert fake.bundle_calls == 1
+    values = captured[str(hid)]
+    assert values["status"] == "completed"
+    assert values["signal"] == "normal"
+
+
+def test_bundle_heading_error_becomes_caution(monkeypatch) -> None:
+    captured = _capture_updates(monkeypatch)
+    _enable_bundle(monkeypatch)
+    hid = uuid.uuid4()
+    fake = _FakeBundleClient(result=(_exclusive(None), None, True))
+    monkeypatch.setattr(svc, "_new_client", lambda: fake)
+
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    values = captured[str(hid)]
+    assert values["status"] == "completed"
+    assert values["signal"] == "caution"
+
+
+def test_bundle_needs_input_marks_row(monkeypatch) -> None:
+    captured = _capture_updates(monkeypatch)
+    _enable_bundle(monkeypatch)
+    hid = uuid.uuid4()
+    exc = CodefNeedsUserInput(
+        "dong_ho",
+        "resume-token-1",
+        "동을 선택해 주세요.",
+        field="dong",
+        options=[{"value": "1", "label": "104동", "area": None}],
+    )
+    fake = _FakeBundleClient(exc=exc)
+    monkeypatch.setattr(svc, "_new_client", lambda: fake)
+
+    _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="", ho="1001"))
+
+    values = captured[str(hid)]
+    assert values["status"] == "needs_input"
+
+
+def test_bundle_flag_off_keeps_sequential_path(monkeypatch) -> None:
+    # 기본값(off)에서는 fetch_bundle 이 있어도 기존 순차 경로를 탄다.
+    # autouse _env 픽스처가 테스트마다 settings 캐시를 비우지만, 앞선 bundle-on
+    # 테스트의 잔재(env 는 monkeypatch 가, 캐시는 픽스처가 각각 되돌린다)에 기대지
+    # 않도록 여기서도 명시적으로 비워 자기완결로 만든다.
+    get_settings.cache_clear()
+    captured = _capture_updates(monkeypatch)
+    hid = uuid.uuid4()
+
+    class _SequentialOnly(_FakeClient):
+        async def fetch_bundle(self, _query):
+            raise AssertionError("플래그 off 에서 bundle 이 호출되면 안 된다")
+
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _SequentialOnly(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    values = captured[str(hid)]
+    assert values["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# 진행 phase (schema 1.3.0) — 파이프라인이 순서대로 기록하고, 실패는 잡을 죽이지 않는다.
+# ---------------------------------------------------------------------------
+def _capture_update_sequence(monkeypatch) -> list[tuple[str, dict]]:
+    """dict-merge(_capture_updates)와 달리 중간 phase 쓰기를 순서대로 보존한다."""
+
+    calls: list[tuple[str, dict]] = []
+
+    async def fake_update(home_check_id, values):
+        calls.append((str(home_check_id), dict(values)))
+
+    async def fake_store(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(svc, "_update_row", fake_update)
+    monkeypatch.setattr(svc, "_store_pdfs", fake_store)
+    return calls
+
+
+def test_phase_sequence_on_success(monkeypatch) -> None:
+    calls = _capture_update_sequence(monkeypatch)
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    phases = [v["phase"] for (_id, v) in calls if set(v) == {"phase"}]
+    assert phases == ["issuing_registers", "judging", "saving_report"]
+    # 최종 완료 쓰기는 phase 이후에 온다.
+    assert calls[-1][1]["status"] == "completed"
+
+
+def test_phase_stops_at_issuing_on_needs_input(monkeypatch) -> None:
+    calls = _capture_update_sequence(monkeypatch)
+    hid = uuid.uuid4()
+    exc = CodefNeedsUserInput(
+        "dong_ho", "tok-1", "동을 선택해 주세요.", field="dong", options=None
+    )
+    monkeypatch.setattr(svc, "_new_client", lambda: _FakeClient(exclusive_exc=exc))
+
+    _run(svc.run_home_check(hid, road_addr="addr", jibun_addr=None, dong="", ho="1"))
+
+    phases = [v["phase"] for (_id, v) in calls if set(v) == {"phase"}]
+    assert phases == ["issuing_registers"]
+    assert calls[-1][1]["status"] == "needs_input"
+
+
+def test_phase_write_failure_does_not_kill_job(monkeypatch) -> None:
+    captured = _capture_updates(monkeypatch)
+    hid = uuid.uuid4()
+    real_update = svc._update_row
+
+    async def flaky_update(home_check_id, values):
+        if set(values) == {"phase"}:
+            raise RuntimeError("phase 쓰기 일시 오류")
+        await real_update(home_check_id, values)
+
+    monkeypatch.setattr(svc, "_update_row", flaky_update)
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+
+    assert captured[str(hid)]["status"] == "completed"
+
+
+def test_reset_for_resume_restarts_phase(monkeypatch) -> None:
+    captured = _capture_updates(monkeypatch)
+    hid = uuid.uuid4()
+
+    _run(svc.reset_for_resume(hid))
+
+    assert captured[str(hid)] == {"status": "querying", "phase": "received"}
+
+
+def test_serialize_job_exposes_phase(monkeypatch) -> None:
+    row = {
+        "id": uuid.uuid4(),
+        "status": "querying",
+        "phase": "issuing_registers",
+        "created_at": datetime.now(UTC),
+        "updated_at": datetime.now(UTC),
+    }
+    payload = _run(svc.serialize_job(row)).model_dump(mode="json")
+
+    assert payload["phase"] == "issuing_registers"
+    assert payload["schema_version"] == "1.3.0"
+    ContractHomeCheckJob.model_validate(payload)
+
+    # 구 행(phase 키 부재) — None 으로 관용.
+    old_row = {k: v for k, v in row.items() if k != "phase"}
+    old_payload = _run(svc.serialize_job(old_row)).model_dump(mode="json")
+    assert old_payload["phase"] is None
+    ContractHomeCheckJob.model_validate(old_payload)

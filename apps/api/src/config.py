@@ -90,6 +90,32 @@ class Settings(BaseSettings):
     # 발급 PDF 보관 Supabase Storage 버킷명 (migration 0014 와 정합).
     home_check_doc_bucket: str = Field(default="home-check-docs")
 
+    # 세움터 직결 내재화 (CODEF 대체, ADR-0009). seumteo_enabled=true 면 home-check 가
+    # CODEF 대신 세움터 워커(apps/seumteo-worker, Flycast 사설망)를 호출한다. 워커가
+    # 로그인·발급·CLIP 리포트 추출·PDF 를 수행하고 CODEF 동형 결과를 돌려준다.
+    # 세움터 자격증명(seumter_id/password)은 이 프로세스가 아니라 워커(Fly secrets)에 있다.
+    seumteo_enabled: bool = Field(default=False)
+    # Flycast URL은 scale-to-zero worker를 깨우는 health probe 전용이다. 긴 발급 요청은
+    # ready 확인 후 .internal로 직결해 Flycast 프록시의 요청 상한을 피한다.
+    seumteo_worker_url: str | None = Field(
+        default="http://jippin-seumteo-worker.flycast"
+    )
+    # 미설정이면 기존 SEUMTEO_WORKER_URL로 발급까지 수행해 기존 로컬/비-Fly 환경을 보존한다.
+    # Fly scale-to-zero 운영은 환경변수로 .internal 직결 URL을 명시한다.
+    seumteo_worker_job_url: str | None = Field(default=None)
+    seumteo_worker_token: str | None = Field(default=None)
+    # 워커 잡 상한(콜드스타트+발급). 워커 job_deadline_ms 보다 넉넉히.
+    seumteo_worker_timeout_seconds: int = Field(default=180)
+    # 화면 진입 warm-up과 실제 조회 전 ready 가드의 총 대기 예산/폴링 간격.
+    seumteo_worker_warmup_timeout_seconds: int = Field(default=45)
+    seumteo_worker_warmup_poll_seconds: float = Field(default=2.0)
+    # 전유부+표제부 통합 잡(/jobs/building-register-bundle) 사용 여부. 워커에 bundle
+    # 엔드포인트가 배포된 뒤 수동 검증을 거쳐 켠다(구 워커면 클라이언트가 404 를 보고
+    # 기존 2회 순차 호출로 내부 폴백하므로 켜져 있어도 안전).
+    seumteo_bundle_enabled: bool = Field(default=False)
+    # 통합 잡 HTTP 상한 — 워커 bundle_deadline_ms(180s)보다 넉넉히.
+    seumteo_worker_bundle_timeout_seconds: int = Field(default=240)
+
     # 사전검토 PDF 리포트 보관 Supabase Storage 버킷명. 운영자가 버킷 생성 필요
     # (인프라 선행). 발부된 PDF 는 이 버킷에 service-role 로 업로드되고 단기 서명
     # URL 로만 다운로드된다(브라우저에 직접 노출 안 됨).
@@ -102,10 +128,11 @@ class Settings(BaseSettings):
     # 별도 이슈로 켠다.
     phase_a_skeleton_enabled: bool = Field(default=False)
 
-    # ── 에이전트 세션 (우리집 체크 대화형 에이전트) — CMP-DIRECT ────────────────
-    # deepagents(LangGraph) 런타임. 운영 default 는 False — main.py 에서
-    # phase_a_skeleton_enabled 와 함께 켜져야 agent 라우터가 등록된다. LLM/추적/HF
-    # 시크릿은 Fly secrets 로 주입한다(.env.example 의 agent 섹션 참조).
+    # ── 에이전트 세션 (사전검토 대화형 에이전트) — CMP-DIRECT ────────────────
+    # deepagents(LangGraph) 런타임. 운영 default 는 False — main.py 가
+    # agent_enabled 단독으로 agent 라우터를 등록한다(구 phase_a 선행 요구는
+    # _validate_agent_checkpointer_url 에서 제거됨 — #stale-phase-prereq).
+    # LLM/추적/HF 시크릿은 Fly secrets 로 주입한다(.env.example 의 agent 섹션 참조).
     agent_enabled: bool = Field(default=False)
     agent_model: str = Field(default="openai:gpt-5.4-mini")
     # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
@@ -116,6 +143,12 @@ class Settings(BaseSettings):
     # 단독으로 degrade(VLM_TIMEOUT). 0.6 미만 신뢰도는 ANALYSIS_LOW_CONFIDENCE 로 재업로드 권장.
     vlm_floorplan_enabled: bool = Field(default=True)
     vlm_floorplan_timeout_seconds: int = Field(default=60)
+
+    # 우리집 체크 — 신고 확장 ↔ 대장 변동사항 LLM 대조 판정(home_check_extension). 운영 default
+    # 는 False — 켜지 않으면 판정을 건너뛰어 리포트에 extension_check 가 없고 OpenAI 의존이
+    # 생기지 않는다. 모델/키는 agent 와 공유(agent_model/openai_api_key). 실패는 uncertain degrade.
+    extension_judge_enabled: bool = Field(default=False)
+    extension_judge_timeout_seconds: int = Field(default=20)
 
     openai_api_key: str | None = Field(default=None)
 
@@ -317,7 +350,7 @@ class Settings(BaseSettings):
         if normalized not in ALLOWED_APP_ENVS:
             raise ValueError(
                 f"APP_ENV={v!r} is not one of {sorted(ALLOWED_APP_ENVS)}. "
-                "See AGENTS.md §4.4 and docs/runbooks/neon-branches.md."
+                "See AGENTS.md §4.4 and docs/runbooks/supabase-branching.md."
             )
         return normalized
 

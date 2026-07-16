@@ -13,7 +13,10 @@ PII 정책(ADR-0008 §2.3): 소유자/설계자 성명·주민번호·세움터 
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import re
+import time
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any
@@ -34,12 +37,12 @@ from ..schemas.home_check import (
     DocumentRef,
     ErrorInfo,
     ExclusivePart,
+    ExtensionCheck,
     HomeCheckJob,
     HomeCheckReport,
     MyHomeChecksResponse,
     NeedsInput,
     NeedsInputOption,
-    PriceEntry,
     ReportMeta,
     Violation,
 )
@@ -51,6 +54,7 @@ from ..services.codef import (
     CodefNeedsUserInput,
     ExclusivePartResult,
 )
+from ..services.home_check_extension import judge_extension, offline_extension_judgment
 
 logger = get_logger("zippin.home_check")
 
@@ -60,7 +64,21 @@ DISCLAIMER = (
 )
 
 _VIOLATION_VALUE = "위반건축물"
-_SCHEMA_VERSION = "1.1.0"
+_SCHEMA_VERSION = "1.3.0"
+
+# 진행 phase (정보성 — 대기 화면 표시용, schema 1.3.0). status 가 상태 기계 정본이고
+# phase 는 파이프라인이 남기는 힌트다. 값 추가는 자유(DB CHECK 없음, 계약 open string) —
+# 클라이언트는 미지의 값을 일반 대기 문구로 폴백한다.
+PHASE_RECEIVED = "received"
+PHASE_ISSUING_REGISTERS = "issuing_registers"
+PHASE_JUDGING = "judging"
+PHASE_SAVING_REPORT = "saving_report"
+
+# 확장 verdict=uncertain 일 때 종합 신호에 덧붙이는 🟡 caution 사유(한국어).
+_EXTENSION_UNCERTAIN_CAUTION = (
+    "신고하신 확장 내용을 대장 변동사항과 자동으로 대조하지 못했습니다. "
+    "변동사항 타임라인을 직접 확인해 주세요."
+)
 
 # re-export 로 라우터가 services 경유로 응답 모델을 쓰게 한다(기존 컨벤션 유지).
 __all__ = ["MyHomeChecksResponse"]
@@ -93,6 +111,8 @@ async def create_home_check(
     jibun_addr: str | None,
     dong: str,
     ho: str,
+    reported_extension: bool | None = None,
+    extended_areas: str | None = None,
 ) -> dict[str, Any]:
     """우리집 체크 잡 한 건을 status='querying' 으로 생성한다."""
 
@@ -104,14 +124,18 @@ async def create_home_check(
                     user_id=user_id,
                     is_anonymous=is_anonymous,
                     status="querying",
+                    phase=PHASE_RECEIVED,
                     road_addr=road_addr,
                     jibun_addr=jibun_addr,
                     addr_dong=dong or None,
                     addr_ho=ho,
+                    reported_extension=reported_extension,
+                    extended_areas=extended_areas,
                 )
                 .returning(
                     HomeCheck.id,
                     HomeCheck.status,
+                    HomeCheck.phase,
                     HomeCheck.created_at,
                     HomeCheck.updated_at,
                 )
@@ -215,6 +239,9 @@ async def get_home_check_documents(*, home_check_id: uuid.UUID) -> list[dict[str
 # 공유해야 한다(요청마다 새 클라이언트가 생성되므로). in-process dict 폴백이면 토큰을
 # 저장한 클라이언트가 폐기된 뒤 resume 가 항상 만료로 떨어진다 → 프로세스 공유 Redis 사용.
 _codef_redis: aioredis.Redis | None = None
+_worker_warmup_lock: asyncio.Lock | None = None
+_worker_warmup_last_attempt = 0.0
+_WORKER_WARMUP_COOLDOWN_SECONDS = 45.0
 
 
 def _get_codef_redis() -> aioredis.Redis:
@@ -229,12 +256,66 @@ def _get_codef_redis() -> aioredis.Redis:
 
 
 def _new_client() -> CodefBuildingRegisterClient:
-    """백그라운드 처리용 CODEF 클라이언트 — 공유 Redis(토큰/2-way/서킷)를 주입한다.
+    """백그라운드 처리용 건축물대장 클라이언트 — 공유 Redis(토큰/2-way/서킷)를 주입한다.
+
+    ``seumteo_enabled`` 면 세움터 직결 클라이언트(CODEF 대체, ADR-0009)를, 아니면 CODEF
+    클라이언트를 만든다. 둘은 동형 인터페이스(fetch_exclusive_part/resume_exclusive_part/
+    fetch_building_heading + codef.types 결과)라 호출부·판정·PDF 저장은 무변경이다.
 
     테스트는 ``src.services.home_check._new_client`` 를 monkeypatch 해 외부 호출을 막는다.
     """
 
-    return CodefBuildingRegisterClient(get_settings(), redis_client=_get_codef_redis())
+    settings = get_settings()
+    if getattr(settings, "seumteo_enabled", False):
+        from ..services.seumteo import SeumteoBuildingRegisterClient
+
+        return SeumteoBuildingRegisterClient(  # type: ignore[return-value]
+            settings, redis_client=_get_codef_redis()
+        )
+    return CodefBuildingRegisterClient(settings, redis_client=_get_codef_redis())
+
+
+async def warm_home_check_worker() -> None:
+    """우리집 체크 화면 진입 시 scale-to-zero 세움터 worker를 best-effort로 준비한다.
+
+    실제 발급 경로도 ``SeumteoBuildingRegisterClient._run_job``에서 ready를 다시 확인하므로,
+    이 background warm-up이 아직 끝나지 않은 상태로 사용자가 즉시 제출해도 안전하다.
+    """
+
+    global _worker_warmup_lock, _worker_warmup_last_attempt
+    if _worker_warmup_lock is None:
+        _worker_warmup_lock = asyncio.Lock()
+
+    async with _worker_warmup_lock:
+        now = time.monotonic()
+        if now - _worker_warmup_last_attempt < _WORKER_WARMUP_COOLDOWN_SECONDS:
+            logger.info("home_check_worker_warmup_skipped", reason="cooldown")
+            return
+        _worker_warmup_last_attempt = now
+
+    client = _new_client()
+    warmup = getattr(client, "warmup", None)
+    if not callable(warmup):
+        return
+    try:
+        await warmup()
+        logger.info("home_check_worker_warmed")
+    except CodefError as exc:
+        # 화면 진입 warm-up 실패는 조회 자체를 막지 않는다. 제출 시 ready 가드가 재시도하고,
+        # 그 결과만 잡 상태에 반영한다.
+        logger.info("home_check_worker_warmup_failed", error=type(exc).__name__)
+    except Exception:  # noqa: BLE001 — warm-up은 best-effort.
+        logger.warning("home_check_worker_warmup_unexpected", exc_info=True)
+
+
+def _use_bundle(client: Any) -> bool:
+    """통합 잡(전유부+표제부 1회) 사용 여부 — 플래그 on + 클라이언트가 지원할 때만.
+
+    CODEF 클라이언트는 fetch_bundle 이 없어 자동으로 순차 경로를 탄다."""
+
+    return bool(getattr(get_settings(), "seumteo_bundle_enabled", False)) and callable(
+        getattr(client, "fetch_bundle", None)
+    )
 
 
 async def run_home_check(
@@ -251,6 +332,9 @@ async def run_home_check(
     query = BuildingRegisterQuery(
         road_addr=road_addr, dong=dong, ho=ho, jibun_addr=jibun_addr
     )
+    if _use_bundle(client):
+        await _process(home_check_id, bundle_factory=lambda: client.fetch_bundle(query))
+        return
     await _process(
         home_check_id,
         exclusive_factory=lambda: client.fetch_exclusive_part(query),
@@ -285,6 +369,18 @@ async def resume_home_check(
         ho=other_ho,
         jibun_addr=other_jibun_addr,
     )
+    if _use_bundle(client) and callable(getattr(client, "resume_bundle", None)):
+        await _process(
+            home_check_id,
+            bundle_factory=lambda: client.resume_bundle(
+                resume_token,
+                selection=selection,
+                dong=dong,
+                ho=ho,
+                secure_no=secure_no,
+            ),
+        )
+        return
     await _process(
         home_check_id,
         exclusive_factory=lambda: client.resume_exclusive_part(
@@ -297,15 +393,40 @@ async def resume_home_check(
 async def _process(
     home_check_id: uuid.UUID,
     *,
-    exclusive_factory: Any,
-    heading_factory: Any,
+    exclusive_factory: Any = None,
+    heading_factory: Any = None,
+    bundle_factory: Any = None,
 ) -> None:
     """전유부+표제부 조회를 수행하고 결과/예외를 행에 반영한다.
 
     전유부는 핵심 신호이므로 먼저 await 한다. 전유부가 일찍 종료(needs_input/오류)하면
     표제부 조회는 시작조차 하지 않는다(coroutine 은 factory 로 지연 생성). 표제부 조회
     실패는 치명이 아니라 caution 사유로만 반영한다(ADR-0008 §2.4 신호등).
+
+    ``bundle_factory`` 가 주어지면 두 대장을 워커 통합 잡 1회로 받는다 — 반환
+    ``(exclusive, heading|None, heading_error)`` 는 순차 경로와 동일한 의미이고,
+    needs_input(공유 해석 단계에서 발생)은 전유부와 같은 예외로 온다.
     """
+
+    # 대기 화면 스텝 표시용 phase — 워커 워밍업+전유부+표제부 발급 전 구간을 포괄한다.
+    await _set_phase(home_check_id, PHASE_ISSUING_REGISTERS)
+
+    if bundle_factory is not None:
+        try:
+            exclusive, heading, heading_error = await bundle_factory()
+        except CodefNeedsUserInput as exc:
+            await _mark_needs_input(home_check_id, exc, product="exclusive")
+            return
+        except CodefError as exc:
+            await _mark_failed(home_check_id, exc)
+            return
+        except Exception:  # noqa: BLE001 — 예기치 못한 오류도 안전 메시지로 마감.
+            await _mark_unexpected(home_check_id)
+            return
+        await _mark_completed(
+            home_check_id, exclusive, heading, heading_error=heading_error
+        )
+        return
 
     # 전유부 — needs_input/오류면 즉시 행 반영 후 종료.
     try:
@@ -382,15 +503,6 @@ def _to_float(value: Any) -> float | None:
         return None
     try:
         return float(str(value).replace(",", "").strip())
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(float(str(value).replace(",", "").strip()))
     except (TypeError, ValueError):
         return None
 
@@ -487,16 +599,79 @@ def _merge_change_history(
     return entries
 
 
-def _extract_prices(exclusive: ExclusivePartResult) -> list[PriceEntry]:
-    prices: list[PriceEntry] = []
-    for item in exclusive.price_list:
-        prices.append(
-            PriceEntry(
-                reference_date=_str_or_none(item.get("resReferenceDate")),
-                base_price=_to_int(item.get("resBasePrice")),
-            )
-        )
-    return prices
+# 서식 라벨/필러 골자 — 구 워커가 변동 이력으로 잘못 승격했던 문구(읽기 시점 정화용).
+_CHANGE_LABEL_CORES = (
+    "이하여백",
+    "사용승인일",
+    "허가일",
+    "착공일",
+    "변동내용및원인",
+    "변동내용",
+    "변동원인",
+    "변동일자",
+    "변동일",
+    "변동사항",
+    "그밖의기재사항",
+)
+# 짧아도 실질인 변동 키워드("증축" 단독 행 보존).
+_CHANGE_KEYWORDS = (
+    "신규작성",
+    "신축",
+    "증축",
+    "개축",
+    "재축",
+    "대수선",
+    "용도변경",
+    "행위허가",
+    "사용검사",
+    "직권",
+    "말소",
+    "위반건축물",
+    "표시변경",
+)
+
+
+def _present_change_history(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """저장된 change_list 의 표시 전 정화 — 구 워커가 남긴 절단 중복·필러 행을 걷어낸다.
+
+    새 워커(PDF 텍스트 파싱)는 깨끗한 행을 저장하지만, 이미 저장된 세션(공유 링크로
+    재열람되는 리포트)도 타임라인이 읽혀야 하므로 직렬화 시점에 방어적으로 정리한다.
+    같은 행의 절단본(숫자 보존 키가 한쪽에 포함)은 더 긴 사유로 붕괴한다. DB 원본은 불변.
+    """
+
+    cleaned: list[dict[str, Any]] = []
+    keys: list[str] = []
+    for entry in entries:
+        reason = str(entry.get("reason") or "")
+        # "이하여백"은 셀 끝 표식 — 그 뒤는 이웃 셀 잡음이므로 절단.
+        cut = reason.find("이하여백")
+        if cut >= 0:
+            reason = reason[:cut]
+        reason = re.sub(r"^[\d.,\-)\s]+", "", reason).strip(" ,-")
+        core = re.sub(r"[^가-힣A-Za-z]", "", reason)
+        for label in _CHANGE_LABEL_CORES:
+            core = core.replace(label, "")
+        if len(core) < 4 and not any(kw in core for kw in _CHANGE_KEYWORDS):
+            continue
+        key = re.sub(r"[^가-힣A-Za-z0-9]", "", reason)
+        date_value = entry.get("date")
+        merged = False
+        for i, kept in enumerate(cleaned):
+            if date_value and kept.get("date") and date_value != kept["date"]:
+                continue
+            if key != keys[i] and key not in keys[i] and keys[i] not in key:
+                continue
+            if len(key) > len(keys[i]):
+                kept["reason"] = reason
+                keys[i] = key
+            if not kept.get("date"):
+                kept["date"] = date_value
+            merged = True
+            break
+        if not merged:
+            cleaned.append({**entry, "reason": reason})
+            keys.append(key)
+    return cleaned
 
 
 def _parse_date(value: Any) -> date | None:
@@ -515,6 +690,25 @@ def _parse_date(value: Any) -> date | None:
 # ---------------------------------------------------------------------------
 # 행 갱신 (백그라운드 — 새 연결).
 # ---------------------------------------------------------------------------
+async def _load_extension_input(
+    home_check_id: uuid.UUID,
+) -> tuple[bool | None, str | None]:
+    """확장 판정 입력(reported_extension/extended_areas)만 좁게 읽는다(PII 아님)."""
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(
+                    HomeCheck.reported_extension,
+                    HomeCheck.extended_areas,
+                ).where(HomeCheck.id == home_check_id)
+            )
+        ).first()
+    if row is None:
+        return None, None
+    return row.reported_extension, row.extended_areas
+
+
 async def _mark_completed(
     home_check_id: uuid.UUID,
     exclusive: ExclusivePartResult,
@@ -522,6 +716,8 @@ async def _mark_completed(
     *,
     heading_error: bool,
 ) -> None:
+    # 발급이 끝나고 판정(+확장 LLM 대조) 구간에 들어섰다 — 대기 화면 스텝 갱신.
+    await _set_phase(home_check_id, PHASE_JUDGING)
     (
         exclusive_violation,
         heading_violation,
@@ -533,9 +729,49 @@ async def _mark_completed(
     exclusive_summary = _summarize_exclusive(exclusive)
     heading_summary = _summarize_heading(heading) if heading is not None else None
     change_history = _merge_change_history(exclusive, heading)
-    prices = _extract_prices(exclusive)
+
+    # 확장 신고 ↔ 변동사항 대조(별개 축). 사용자는 기능 게이트와 무관하게 퍼널에서 확장 여부를
+    # 답하므로, 게이트가 꺼져 있어도(default) 그 입력을 버리지 않는다 — 버리면 web 이 '확장 여부를
+    # 입력하지 않아 미대조'(not_checked)로 오표시한다. OpenAI 의존은 reported_extension=True 대조에만
+    # 있어, 게이트 off 면 None/False 는 그대로 채우고 True 만 uncertain(자동 대조 못함)으로 degrade.
+    # 공식 노란딱지 축(exclusive_violation/heading_violation/violation)은 절대 건드리지 않고,
+    # 종합 signal 과 caution_reasons 에만 확장 verdict 를 접는다.
+    extension_check: dict[str, Any] | None = None
+    settings = get_settings()
+    reported_extension, extended_areas = await _load_extension_input(home_check_id)
+    if settings.extension_judge_enabled:
+        # 판정 입력은 **전유부(unit)** 변동사항만 쓴다. 신고 확장은 이 세대(전유부)에 대한 것이고,
+        # 표제부(건물/공용) 변동은 다른 세대·공용부 변동일 수 있어, 섞으면 무관한 표제부 변동을
+        # 이 세대 확장의 '등재'로 오인(→미등재를 legal 로 오판)할 수 있다(#ext-unit-scope).
+        unit_changes = [e for e in change_history if e.source == "exclusive"]
+        judgment = await judge_extension(
+            reported_extension=reported_extension,
+            extended_areas=extended_areas,
+            change_history=unit_changes,
+            settings=settings,
+        )
+    else:
+        judgment = offline_extension_judgment(reported_extension)
+    if judgment is not None:
+        extension_check = {
+            "verdict": judgment.verdict,
+            "reason": judgment.reason,
+            "reported_areas": judgment.reported_areas,
+            "matched_areas": judgment.matched_areas,
+            "unrecorded_areas": judgment.unrecorded_areas,
+        }
+        if judgment.verdict == "uncertain":
+            caution_reasons = [*caution_reasons, _EXTENSION_UNCERTAIN_CAUTION]
+        # 공식 violation 은 불변. signal 만 재계산해 확장 verdict 를 접는다.
+        if violation or judgment.verdict == "violation":
+            signal = "violation"
+        elif caution_reasons or judgment.verdict == "uncertain":
+            signal = "caution"
+        else:
+            signal = "normal"
 
     # PDF 보관(best-effort) — 실패해도 잡은 completed 로 둔다(문서 링크만 생략).
+    await _set_phase(home_check_id, PHASE_SAVING_REPORT)
     await _store_pdfs(home_check_id, exclusive, heading)
 
     values: dict[str, Any] = {
@@ -554,8 +790,10 @@ async def _mark_completed(
         "heading_res_doc_no": heading.res_doc_no if heading else None,
         "res_issue_date": _parse_date(exclusive.issue_date),
         "change_list": [e.model_dump(mode="json") for e in change_history],
-        "price_list": [p.model_dump(mode="json") for p in prices],
-        "result_fields": {"caution_reasons": caution_reasons},
+        "result_fields": {
+            "caution_reasons": caution_reasons,
+            "extension_check": extension_check,
+        },
         "error_code": None,
         "error_message": None,
         "queried_at": datetime.now(timezone.utc),
@@ -649,15 +887,32 @@ async def reset_for_resume(home_check_id: uuid.UUID) -> None:
 
     signal_requires_completed CHECK 때문에 signal 은 항상 null 인 상태이므로 status 만
     바꾼다. resume_token 등 result_fields 는 재개 호출이 끝나며 _mark_* 가 덮어쓴다.
+    phase 도 received 로 되돌려 대기 화면 스텝 표시가 처음부터 다시 진행되게 한다.
     """
 
-    await _update_row(home_check_id, {"status": "querying"})
+    await _update_row(home_check_id, {"status": "querying", "phase": PHASE_RECEIVED})
 
 
 async def _update_row(home_check_id: uuid.UUID, values: dict[str, Any]) -> None:
     async with get_engine().begin() as conn:
         await conn.execute(
             sa.update(HomeCheck).where(HomeCheck.id == home_check_id).values(**values)
+        )
+
+
+async def _set_phase(home_check_id: uuid.UUID, phase: str) -> None:
+    """정보성 phase 기록 — 실패해도 파이프라인을 멈추지 않는다(best-effort).
+
+    phase 는 대기 화면 표시용 힌트일 뿐이라, 이 짧은 UPDATE 의 일시 오류로 실제 조회를
+    실패시키면 본말이 전도된다."""
+
+    try:
+        await _update_row(home_check_id, {"phase": phase})
+    except Exception:  # noqa: BLE001 — phase 는 표시용.
+        logger.warning(
+            "home_check_phase_update_failed",
+            home_check_id=str(home_check_id),
+            phase=phase,
         )
 
 
@@ -837,6 +1092,8 @@ async def serialize_job(
         "schema_version": _SCHEMA_VERSION,
         "id": str(row["id"]),
         "status": status,
+        # 진행 phase(정보성) — 구 행/테스트 fake 행에는 키가 없을 수 있어 .get 으로 관용.
+        "phase": row.get("phase"),
         "created_at": _iso(row.get("created_at")),
         "updated_at": _iso(row.get("updated_at")),
     }
@@ -927,9 +1184,12 @@ async def _build_report(
         )
 
     change_history = [
-        ChangeEntry(**entry) for entry in (row.get("change_list") or [])
+        ChangeEntry(**entry)
+        for entry in _present_change_history(row.get("change_list") or [])
     ] or None
-    prices = [PriceEntry(**entry) for entry in (row.get("price_list") or [])] or None
+
+    raw_extension = fields.get("extension_check")
+    extension_check = ExtensionCheck(**raw_extension) if raw_extension else None
 
     documents = None
     if with_documents:
@@ -949,7 +1209,7 @@ async def _build_report(
         exclusive_part=exclusive_part,
         building=building,
         change_history=change_history,
-        prices=prices,
+        extension_check=extension_check,
         documents=documents,
         caution_reasons=caution_reasons,
         meta=meta,

@@ -94,7 +94,15 @@ REQUIRED_INPUT_FIELDS: tuple[str, ...] = (
     "window_form",
     "fire_zone",
 )
-OPTIONAL_INPUT_FIELDS: tuple[str, ...] = ("balcony_attached", "permit_history_known")
+OPTIONAL_INPUT_FIELDS: tuple[str, ...] = (
+    "balcony_attached",
+    "permit_history_known",
+    # v3 창호 철거 검토 — window_demolition_target 이 True 인 세션에서만 소비되므로
+    # 일반(벽) 플로우에서는 누락이어도 보류가 아니다.
+    "window_demolition_boundary",
+    "wall_demolition_target",
+    "window_demolition_target",
+)
 
 # ---------------------------------------------------------------------------
 # 대표 corpus — 모든 규칙 분기를 덮는다 (FR-RULE-004 수용 기준: 예외 케이스
@@ -171,6 +179,32 @@ CORPUS: dict[str, dict[str, object]] = {
         "has_sprinkler": 1,
         "floor_count": 0,
     },
+    # v3 — 창호-only: 외기 직접 접촉 최외곽 창호 → DENY (R-WINDOW-01).
+    "deny_window_exterior": {
+        "window_demolition_target": True,
+        "window_demolition_boundary": "EXTERIOR",
+    },
+    # v3 — 창호-only: 경계 미상 → HOLD (재확인, 벽 종류 HOLD 는 건너뜀).
+    "hold_window_boundary_unknown": {"window_demolition_target": True},
+    # v3 — 창호-only: 발코니-실 경계 창호 → 발코니 확장 경로(안전 변수 전부 확인됨).
+    "allow_window_balcony_boundary": {
+        "floor_count": 3,
+        "has_sprinkler": False,
+        "has_evacuation_space": True,
+        "stairwell_count": 1,
+        "window_form": "OPENABLE",
+        "window_demolition_target": True,
+        "window_demolition_boundary": "BALCONY_BOUNDARY",
+        "fire_zone": False,
+    },
+    # v3 — 벽(비내력) + 경계 창호 동시 선택 → 발코니 확장 경로.
+    "allow_wall_and_window_boundary": {
+        **_FULL_BASE,
+        "balcony_attached": False,  # 경계 창호 판단이 발코니 확장으로 덮어쓴다.
+        "wall_demolition_target": True,
+        "window_demolition_target": True,
+        "window_demolition_boundary": "BALCONY_BOUNDARY",
+    },
 }
 
 
@@ -236,9 +270,13 @@ def test_fully_populated_contract_payload_evaluates_without_hold():
         "window_form": "SLIDING",
         "balcony_attached": True,
         "permit_history_known": True,
-        # 엔진 컨텍스트 — wall_objects/selected_walls 분석에서 병합되는 키.
+        # v3 창호 철거 검토 — 경계 창호(발코니 확장)로 채운 완전 payload.
+        "window_demolition_boundary": "BALCONY_BOUNDARY",
+        # 엔진 컨텍스트 — wall_objects/selected_walls·selected_windows 에서 병합되는 키.
         "wall_type": "NON_LOAD_BEARING",
         "fire_zone": False,
+        "wall_demolition_target": True,
+        "window_demolition_target": True,
     }
     assert set(payload) == set(JUDGMENT_VALUE_FIELDS) | set(CONTEXT_FIELDS)
 
@@ -322,6 +360,74 @@ def test_interior_wall_in_fire_zone_holds():
     ).to_dict()
     assert result["verdict"] == "HOLD"
     assert HoldReason.RULE_EXCEPTION.value in result["hold_reasons"]
+
+
+def test_window_exterior_denies():
+    # v3 R-WINDOW-01 — 외기 직접 접촉 최외곽 창호 철거는 DENY + 전용 법적 근거.
+    result = evaluate_judgment_values(
+        {"window_demolition_target": True, "window_demolition_boundary": "EXTERIOR"}
+    ).to_dict()
+    assert result["verdict"] == "DENY"
+    assert any(b["rule_id"] == "R-WINDOW-01" for b in result["legal_basis"])
+    assert any("외기" in r for r in result["reasons"])
+
+
+def test_window_only_unknown_boundary_holds_without_wall_question():
+    # 창호만 고른 세션에서 경계 미상 → HOLD. 벽 종류 재확인은 묻지 않는다
+    # (#window-only-target — 벽 판단이 필요 없는 세션에 벽 질문을 던지지 않음).
+    result = evaluate_judgment_values({"window_demolition_target": True}).to_dict()
+    assert result["verdict"] == "HOLD"
+    assert HoldReason.INSUFFICIENT_DATA.value in result["hold_reasons"]
+    assert all("내력벽" not in check for check in result["additional_checks"])
+    assert any("창" in check for check in result["additional_checks"])
+
+
+def test_window_balcony_boundary_runs_extension_path():
+    # 경계 창호 철거 = 발코니 확장 — 확장 화재안전 룰이 산출된다.
+    result = evaluate_judgment_values(
+        {
+            "window_demolition_target": True,
+            "window_demolition_boundary": "BALCONY_BOUNDARY",
+            "floor_count": 3,
+            "has_sprinkler": False,
+            "has_evacuation_space": True,
+            "stairwell_count": 1,
+            "window_form": "OPENABLE",
+            "fire_zone": False,
+        }
+    ).to_dict()
+    assert result["verdict"] == "ALLOW"
+    assert FacilityType.FIRE_DETECTOR.value in _facility_types(result)
+    assert any("경계 창호" in r for r in result["reasons"])
+
+
+def test_window_boundary_overrides_balcony_attached_false():
+    # 경계 창호 판단이 balcony_attached=False(실내 가벽 스킵)보다 우선한다
+    # (#window-boundary-implies-balcony) — 확장 경로로 흘러 방화시설이 산출된다.
+    result = evaluate_judgment_values(
+        {
+            **_FULL_BASE,
+            "balcony_attached": False,
+            "wall_demolition_target": True,
+            "window_demolition_target": True,
+            "window_demolition_boundary": "BALCONY_BOUNDARY",
+        }
+    ).to_dict()
+    assert _facility_types(result)  # 실내 스킵이었다면 빈 목록이었을 것.
+
+
+def test_wall_and_window_selected_unknown_wall_still_holds():
+    # 벽도 함께 골랐는데 벽 종류를 모르면 여전히 HOLD — 창호-only 예외는 벽 미선택
+    # 세션에만 적용된다.
+    result = evaluate_judgment_values(
+        {
+            "wall_demolition_target": True,
+            "window_demolition_target": True,
+            "window_demolition_boundary": "BALCONY_BOUNDARY",
+        }
+    ).to_dict()
+    assert result["verdict"] == "HOLD"
+    assert any("내력벽" in check for check in result["additional_checks"])
 
 
 def test_staircase_two_exempts_evacuation_space():

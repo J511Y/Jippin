@@ -33,6 +33,7 @@ from ..services import main_flow
 from .events import SseEventStream
 from .projection import AssistantMessage, ProjectionWriter, ToolEnd, ToolStart
 from .tools import TOOL_KINDS, RunContext, build_tools
+from .tools.vlm import INTERNAL_LLM_TAG
 
 log = get_logger("zippin.agent.runner")
 
@@ -177,6 +178,23 @@ async def translate_stream(
 
         if mode == "messages":
             chunk = data[0] if isinstance(data, tuple) and data else data
+            # 출처 필터(#vlm-token-leak): messages 모드는 그래프 안 **모든** chat model
+            # 콜백을 싣는다 — 도구 실행(tools 노드) 중의 내부 LLM(vlm.py AI-002)도 config
+            # 전파로 잡혀, 그 구조화 JSON 출력이 채팅 토큰으로 흘러 스트리밍 중 raw JSON
+            # 이 보였다. 채팅 본문 토큰은 에이전트(모델) 노드 것만 흘린다 — tools 노드
+            # 발원이거나 내부 태그가 붙은 청크는 버린다(내용은 tool_step/카드로 전달됨).
+            meta = (
+                data[1]
+                if isinstance(data, tuple)
+                and len(data) > 1
+                and isinstance(data[1], dict)
+                else {}
+            )
+            meta_tags = meta.get("tags")
+            if isinstance(meta_tags, (list, tuple)) and INTERNAL_LLM_TAG in meta_tags:
+                continue
+            if meta.get("langgraph_node") == "tools":
+                continue
             # ToolMessage(도구 *결과*)는 tool_call_id 를 가진다 — content 에 JSON 결과나
             # write_todos 의 "Updated todo list ..." 같은 내부 텍스트가 실려 있어, 토큰으로
             # 흘리면 프론트 채팅 버블에 raw 가 노출된다. 도구 활동은 tool_step 이벤트로

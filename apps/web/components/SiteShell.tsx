@@ -42,17 +42,17 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/faq', label: '자주묻는질문', match: (p) => p.startsWith('/faq') }
 ];
 
-// 목록·상세 중심 페이지(검토/자주묻는질문/마이페이지)는 PC 에서 lg 로 넓게,
-// 메인 컨테이너 폭 규칙(정본: docs/design/DESIGN.md §"레이아웃 컨테이너 폭").
-// 기능 페이지(목록·상세·리포트·우리집 체크 전반)는 헤더와 같은 lg 를 쓴다.
-// sm 은 "단일 입력 폼" 한정 — 좁은 폭이 입력 가독성에 유리한 경우에만 명시적으로 좁힌다.
-const WIDE_ROUTE_PREFIXES = ['/sessions', '/faq', '/mypage', '/home-check'];
+// 메인 컨테이너 폭 규칙(정본: docs/design/DESIGN.md §"레이아웃 컨테이너 폭"):
+// 바깥 컨테이너는 전 페이지 lg(헤더와 동일)로 고정한다 — 페이지 전환 시 배경·헤더
+// 정렬 앵커가 움직이지 않게. 좁아야 하는 콘텐츠(폼·문서·퍼널)는 컨테이너가 아니라
+// 페이지 내부의 PageColumn(prose 720 / form 560 / funnel 460)으로 좁힌다.
+// (이전의 sm/lg 라우트 분기와 등록 누락 시 암묵 sm 낙하는 폐지 — 감사 HIGH)
 
 // 대화형 채팅 경로 — 헤더 아래 남는 viewport 를 풀높이로 쓰도록 컨테이너 세로 패딩을
 // 없애고 100dvh 기반 풀높이 레이아웃을 허용한다. 채팅 진입(/sessions)과 세션 상세
 // (/sessions/[id])가 동일 폭(lg)·풀높이를 갖게 해 compose→대화 전환 시 폭/높이 점프를
 // 막는다. 안내 랜딩(/sessions/landing)·리포트(/sessions/[id]/report)는 일반 문서 레이아웃.
-function isChatRoute(pathname: string): boolean {
+export function isChatRoute(pathname: string): boolean {
   // 공개 안내 랜딩은 일반 문서 레이아웃(스크롤 + 세로 패딩).
   if (pathname === '/sessions/landing') return false;
   // 채팅 진입(/sessions) 과 세션 상세(/sessions/[id]) 가 풀높이 채팅 화면이다.
@@ -61,12 +61,6 @@ function isChatRoute(pathname: string): boolean {
   // 리포트(/sessions/[id]/report)는 일반 문서 레이아웃을 유지한다.
   if (pathname.endsWith('/report')) return false;
   return true;
-}
-
-function mainContainerSize(pathname: string): 'sm' | 'lg' {
-  return WIDE_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))
-    ? 'lg'
-    : 'sm';
 }
 
 /**
@@ -237,12 +231,14 @@ export function SiteShell({ children }: { children: ReactNode }) {
                   로그인
                 </Button>
               )}
+              {/* 터치 타깃 ≥44px (DESIGN.md 반응형 규칙) — 아이콘은 sm 유지, 히트 영역만 확장 */}
               <Burger
                 opened={drawerOpened}
                 onClick={drawer.toggle}
                 size="sm"
                 hiddenFrom="sm"
                 aria-label="메뉴 열기"
+                style={{ width: 44, height: 44 }}
               />
             </Group>
           </Group>
@@ -261,7 +257,8 @@ export function SiteShell({ children }: { children: ReactNode }) {
           // 이래야 모바일 진행계획 sticky·"맨 아래로" 버튼·하단 도크가 ChatGPT 처럼 동작한다.
           // 데스크톱 외부 footer 는 이 풀스크린 채팅 아래에 위치(페이지 스크롤로 노출).
           <Container
-            size={mainContainerSize(pathname)}
+            size="lg"
+            w="100%"
             py={0}
             style={{
               display: 'flex',
@@ -273,7 +270,7 @@ export function SiteShell({ children }: { children: ReactNode }) {
             {children}
           </Container>
         ) : (
-          <Container size={mainContainerSize(pathname)} py="xl">
+          <Container size="lg" w="100%" py="xl">
             {children}
           </Container>
         )}

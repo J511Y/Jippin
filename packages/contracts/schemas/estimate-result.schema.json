@@ -16,8 +16,8 @@
     "schema_version": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "const": "1.0.0",
-      "description": "스키마 버전 (semver)."
+      "const": "1.1.0",
+      "description": "스키마 버전 (semver). 1.1.0: 화면 표시용 items/vat_included/source_url/disclaimer 추가(추가형, 하위호환)."
     },
     "permit_agency_fee_estimate": {
       "$ref": "#/$defs/MoneyRange",
@@ -53,9 +53,59 @@
     "consultation_required": {
       "type": "boolean",
       "description": "상담 권장 여부. PRICING_POLICY_MISSING 또는 ESTIMATE_OUT_OF_RANGE 발생 시 true (SDD §4.9 오류·예외)."
+    },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/EstimateItem" },
+      "description": "화면 표시용 항목 상세 (1.1.0 추가). total_range 산정의 근거 항목을 사람이 읽는 행으로 나열한다 — 미산정 항목(현장 견적)도 포함."
+    },
+    "vat_included": {
+      "type": "boolean",
+      "description": "부가세 포함 여부 (1.1.0 추가)."
+    },
+    "source_url": {
+      "type": "string",
+      "description": "단가표 정본 링크 (1.1.0 추가, 예: '/faq?category=cost')."
+    },
+    "disclaimer": {
+      "type": "string",
+      "description": "변동 가능 안내 문구 (1.1.0 추가). 모든 견적에 첨부한다."
     }
   },
   "$defs": {
+    "EstimateItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "label"],
+      "description": "견적 항목 1건 (1.1.0 추가). amount 필드가 모두 null 이면 현장/별도 견적 안내 항목.",
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "amount_min": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "합산되는 고정 최소액(원)."
+        },
+        "amount_max": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "전제(assumptions) 기반 상한(원). 없으면 상한 미산정."
+        },
+        "unit_amount": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "단가(원/unit). 치수 미확정 항목의 표기용."
+        },
+        "unit": {
+          "type": ["string", "null"],
+          "description": "단가 단위 (예: '원/m')."
+        },
+        "note": {
+          "type": ["string", "null"],
+          "description": "항목 부가 설명 (생활어)."
+        }
+      }
+    },
     "MoneyRange": {
       "type": "object",
       "additionalProperties": false,

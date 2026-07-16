@@ -1,13 +1,15 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Alert, Button, PasswordInput, Stack, Text, TextInput, Title } from '@mantine/core';
+import { Alert, Button, PasswordInput, Stack, TextInput } from '@mantine/core';
+import Link from 'next/link';
 import { useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 
 import { AccountApiError, resetPassword } from '@/lib/auth/account-api';
 import { findPasswordSchema, type FindPasswordValues } from '@/lib/auth/validation';
 import { PhoneVerification } from '@/components/auth/PhoneVerification';
+import { PageHeader } from '@/components/ui';
 
 /**
  * 비밀번호 찾기(재설정) 폼 (CMP-DIRECT).
@@ -55,37 +57,37 @@ export function FindPasswordForm() {
 
   if (done) {
     return (
-      <Stack gap="md">
-        <Title order={1} fz="h2">
-          비밀번호 재설정 완료
-        </Title>
-        <Alert color="teal" variant="light">
-          비밀번호가 변경되었습니다. 새 비밀번호로 로그인해 주세요.
-        </Alert>
-        <Button component="a" href="/login" color="jippin" radius="md" fullWidth>
-          로그인하러 가기
-        </Button>
-      </Stack>
+      <>
+        {/* 타이틀은 PageHeader 표준 블록(h1 은 theme headings SSOT — fz 오버라이드 금지). */}
+        <PageHeader title="비밀번호 재설정 완료" />
+        <Stack gap="md">
+          {/* 상태 표현은 success 토큰 — 브랜드 틸(teal)과 구분(COLOR_SYSTEM 상태색). */}
+          <Alert color="success" variant="light">
+            비밀번호가 변경되었습니다. 새 비밀번호로 로그인해 주세요.
+          </Alert>
+          <Button component={Link} href="/login" color="jippin" size="md" fullWidth>
+            로그인하러 가기
+          </Button>
+        </Stack>
+      </>
     );
   }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} noValidate>
+      {/* 타이틀은 PageHeader 표준 블록(h1 은 theme headings SSOT — fz 오버라이드 금지). */}
+      <PageHeader
+        title="비밀번호 찾기"
+        subtitle="가입 이메일과 휴대폰 인증으로 본인 확인 후 새 비밀번호를 설정합니다."
+      />
       <Stack gap="md">
-        <Stack gap={4}>
-          <Title order={1} fz="h2">
-            비밀번호 찾기
-          </Title>
-          <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-            가입 이메일과 휴대폰 인증으로 본인 확인 후 새 비밀번호를 설정합니다.
-          </Text>
-        </Stack>
-
+        {/* 입력·버튼 모두 md(42px) — 인증 플로우 공통 크기(모바일 터치 타깃). */}
         <TextInput
           label="이메일"
           placeholder="you@example.com"
           inputMode="email"
           autoComplete="email"
+          size="md"
           error={errors.email?.message}
           {...register('email')}
         />
@@ -105,6 +107,7 @@ export function FindPasswordForm() {
           description="6자 이상, 영문과 숫자 포함"
           placeholder="새 비밀번호"
           autoComplete="new-password"
+          size="md"
           error={errors.password?.message}
           {...register('password')}
         />
@@ -112,17 +115,18 @@ export function FindPasswordForm() {
           label="새 비밀번호 확인"
           placeholder="새 비밀번호 재입력"
           autoComplete="new-password"
+          size="md"
           error={errors.confirm?.message}
           {...register('confirm')}
         />
 
         {serverError ? (
-          <Alert color="red" variant="light">
+          <Alert color="danger" variant="light">
             {serverError}
           </Alert>
         ) : null}
 
-        <Button type="submit" color="jippin" radius="md" fullWidth loading={isSubmitting}>
+        <Button type="submit" color="jippin" size="md" fullWidth loading={isSubmitting}>
           비밀번호 재설정
         </Button>
       </Stack>

@@ -22,6 +22,7 @@ from .routers.floorplans import router as floorplans_router
 from .routers.healthz import router as healthz_router
 from .routers.home_check import router as home_check_router
 from .routers.leads import router as leads_router
+from .routers.quiz import router as quiz_router
 from .routers.sessions import router as sessions_router
 from .services.phone_verification import close_phone_verification_store
 
@@ -95,6 +96,9 @@ def create_app() -> FastAPI:
     # 자주묻는질문(FAQ) — 공개 콘텐츠 읽기 전용(GET /faqs). DB-backed 실 기능이므로
     # phase_a 플래그와 무관하게 항상 등록한다(CMP-DIRECT).
     app.include_router(faq_router)
+    # 대기 화면 퀴즈 — 공개 콘텐츠 읽기 전용(GET /quizzes). 우리집 체크 대기 화면이
+    # 소비하는 DB 편집형 콘텐츠(faq 와 동일 정책).
+    app.include_router(quiz_router)
     # 우리집 체크(home-check) — 집합건축물대장 전유부+표제부 CODEF 비동기 조회(ADR-0008).
     # DB-backed 실 기능이므로 phase_a 플래그와 무관하게 항상 등록한다. 비회원(익명
     # Supabase 토큰)도 조회 가능하고, /mine 이력은 로그인 회원만 가능하다.
@@ -106,8 +110,9 @@ def create_app() -> FastAPI:
     app.include_router(sessions_router)
     app.include_router(floorplans_router)
     app.include_router(chat_router)
-    # 에이전트 세션 (우리집 체크 대화형 에이전트) — agent_enabled 환경에만 등록한다
-    # (config validator 가 agent_enabled 시 phase_a_skeleton_enabled·OPENAI 키를 요구).
+    # 에이전트 세션 (사전검토 대화형 에이전트) — agent_enabled 환경에만 등록한다
+    # (config validator 가 agent_enabled 시 direct :5432 DATABASE_URL·OPENAI 키를 요구.
+    #  구 phase_a_skeleton_enabled 선행 요구는 제거됨 — config #stale-phase-prereq).
     if settings.agent_enabled:
         app.include_router(agent_router)
 

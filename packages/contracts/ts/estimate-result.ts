@@ -10,9 +10,9 @@
  */
 export interface EstimateResult {
   /**
-   * 스키마 버전 (semver).
+   * 스키마 버전 (semver). 1.1.0: 화면 표시용 items/vat_included/source_url/disclaimer 추가(추가형, 하위호환).
    */
-  schema_version: "1.0.0";
+  schema_version: "1.1.0";
   permit_agency_fee_estimate?: MoneyRange;
   fire_panel_estimate?: MoneyRange1;
   fire_glass_estimate?: MoneyRange2;
@@ -33,6 +33,22 @@ export interface EstimateResult {
    * 상담 권장 여부. PRICING_POLICY_MISSING 또는 ESTIMATE_OUT_OF_RANGE 발생 시 true (SDD §4.9 오류·예외).
    */
   consultation_required: boolean;
+  /**
+   * 화면 표시용 항목 상세 (1.1.0 추가). total_range 산정의 근거 항목을 사람이 읽는 행으로 나열한다 — 미산정 항목(현장 견적)도 포함.
+   */
+  items?: EstimateItem[];
+  /**
+   * 부가세 포함 여부 (1.1.0 추가).
+   */
+  vat_included?: boolean;
+  /**
+   * 단가표 정본 링크 (1.1.0 추가, 예: '/faq?category=cost').
+   */
+  source_url?: string;
+  /**
+   * 변동 가능 안내 문구 (1.1.0 추가). 모든 견적에 첨부한다.
+   */
+  disclaimer?: string;
 }
 /**
  * 행위허가 대행 비용 범위. 운영 정책 v1 예시 단가 = 33만원.
@@ -117,4 +133,31 @@ export interface MoneyRange3 {
    * 산정 기준 한 줄 요약 (예: '가로 길이 2.4m × 20,000원/m').
    */
   basis?: string | null;
+}
+/**
+ * 견적 항목 1건 (1.1.0 추가). amount 필드가 모두 null 이면 현장/별도 견적 안내 항목.
+ */
+export interface EstimateItem {
+  code: string;
+  label: string;
+  /**
+   * 합산되는 고정 최소액(원).
+   */
+  amount_min?: number | null;
+  /**
+   * 전제(assumptions) 기반 상한(원). 없으면 상한 미산정.
+   */
+  amount_max?: number | null;
+  /**
+   * 단가(원/unit). 치수 미확정 항목의 표기용.
+   */
+  unit_amount?: number | null;
+  /**
+   * 단가 단위 (예: '원/m').
+   */
+  unit?: string | null;
+  /**
+   * 항목 부가 설명 (생활어).
+   */
+  note?: string | null;
 }

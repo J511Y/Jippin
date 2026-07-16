@@ -24,11 +24,13 @@ import {
   IconInbox,
   IconUser
 } from '@tabler/icons-react';
+import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
 import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+import { PageHeader } from '@/components/ui';
 import {
   AccountApiError,
   changePassword,
@@ -39,7 +41,14 @@ import {
 } from '@/lib/auth/account-api';
 import { changePasswordSchema, type ChangePasswordValues } from '@/lib/auth/validation';
 import { type HomeCheckJob } from '@/lib/home-check/api';
-import { jobAddressLabel, SIGNAL_META, STATUS_META } from '@/lib/home-check/display';
+import {
+  jobAddressLabel,
+  resolveVerdict,
+  SIGNAL_META,
+  STATUS_META,
+  VERDICT_META,
+  VERDICT_TONE_COLOR
+} from '@/lib/home-check/display';
 import { parseApiError } from '@/lib/api/error';
 import { createClient } from '@/lib/supabase/client';
 
@@ -132,9 +141,9 @@ export function MyPageClient() {
   };
 
   return (
-    <Stack gap="lg">
+    <>
       {/* 로그아웃은 글로벌 헤더(데스크톱)·드로어(모바일)가 제공한다 — 중복 배치하지 않는다. */}
-      <Title order={1}>마이페이지</Title>
+      <PageHeader title="마이페이지" />
 
       <Tabs value={tab} onChange={handleTab} color="jippin" keepMounted>
         <Tabs.List>
@@ -171,7 +180,7 @@ export function MyPageClient() {
           <HomeChecksSection />
         </Tabs.Panel>
       </Tabs>
-    </Stack>
+    </>
   );
 }
 
@@ -244,11 +253,13 @@ function ConsultationsSection() {
 
   return (
     <Stack gap="sm">
+      {/* 코랄(전환 CTA)은 화면당 1회 — 빈 상태의 '상담 신청하기'에만 남기고,
+          헤더의 '새 상담'은 2차 액션(jippin light)으로 강등한다. */}
       <Group justify="space-between" align="center">
-        <Title order={2} fz="h3">
+        <Title order={2} size="h3">
           상담 현황
         </Title>
-        <LeadCtaButton cta="mypage_header" color="coral" radius="md" size="xs">
+        <LeadCtaButton cta="mypage_header" variant="light" color="jippin" size="sm">
           새 상담
         </LeadCtaButton>
       </Group>
@@ -271,7 +282,7 @@ function ConsultationsSection() {
             <Text size="sm" c="dimmed">
               전문가 상담을 신청하면 여기에서 진행 상태를 확인할 수 있어요.
             </Text>
-            <LeadCtaButton cta="mypage_empty" color="coral" radius="md" mt="xs">
+            <LeadCtaButton cta="mypage_empty" color="coral" fw={700} size="md" mt="xs">
               상담 신청하기
             </LeadCtaButton>
           </Stack>
@@ -329,11 +340,18 @@ function HomeChecksSection() {
 
   return (
     <Stack gap="sm">
+      {/* 코랄은 상담 전환 CTA 전용 — 제품 기능 진입(우리집 체크)은 jippin 계열만 쓴다. */}
       <Group justify="space-between" align="center">
-        <Title order={2} fz="h3">
+        <Title order={2} size="h3">
           우리집 체크
         </Title>
-        <Button component="a" href="/home-check/new" color="coral" radius="md" size="xs">
+        <Button
+          component={Link}
+          href="/home-check/new"
+          variant="light"
+          color="jippin"
+          size="sm"
+        >
           새 체크
         </Button>
       </Group>
@@ -356,7 +374,8 @@ function HomeChecksSection() {
             <Text size="sm" c="dimmed">
               내 집의 건축물대장을 조회해 위반표시·변동 등재 여부를 확인해 보세요.
             </Text>
-            <Button component="a" href="/home-check" color="coral" radius="md" mt="xs">
+            {/* 제품 기능 진입 = 1차 액션(jippin filled) — 전환 CTA(coral)가 아니다. */}
+            <Button component={Link} href="/home-check" color="jippin" size="md" mt="xs">
               우리집 체크 시작
             </Button>
           </Stack>
@@ -365,7 +384,19 @@ function HomeChecksSection() {
         <Stack gap="sm">
           {jobs.map((job) => {
             const status = STATUS_META[job.status] ?? { label: job.status, color: 'gray' };
-            const signal = job.signal ? SIGNAL_META[job.signal] : null;
+            // 확장 축(미등재 확장)이 signal=violation 을 만들 수 있으므로, 리포트가 있으면
+            // 4-상태 Verdict 로 표시한다 — 공식 노란딱지만 있는 게 아닌데 "위반표시 있음"으로
+            // 오표기되는 것을 막는다(상세 뷰와 동일 판정, api 리뷰 P1).
+            const verdictMeta = job.report ? VERDICT_META[resolveVerdict(job.report)] : null;
+            const signal = verdictMeta
+              ? {
+                  emoji: verdictMeta.emoji,
+                  label: verdictMeta.label,
+                  color: VERDICT_TONE_COLOR[verdictMeta.tone]
+                }
+              : job.signal
+                ? SIGNAL_META[job.signal]
+                : null;
             const address = jobAddressLabel(job) ?? '우리집 체크';
             return (
               <Card
@@ -373,7 +404,7 @@ function HomeChecksSection() {
                 withBorder
                 radius="lg"
                 padding="lg"
-                component="a"
+                component={Link}
                 href={`/home-check/${job.id}`}
                 style={{ textDecoration: 'none', color: 'inherit' }}
               >
@@ -443,7 +474,7 @@ function PasswordChangeCard() {
     <Card withBorder padding="lg">
       <form onSubmit={handleSubmit(onSubmit)} noValidate>
         <Stack gap="sm">
-          <Title order={2} fz="h3">
+          <Title order={2} size="h3">
             비밀번호 변경
           </Title>
           {/* lg 컨테이너에서도 입력 줄 길이는 읽기 좋게 480px 로 제한한다. */}
@@ -476,7 +507,7 @@ function PasswordChangeCard() {
             </Alert>
           ) : null}
           {done ? (
-            <Alert color="teal" variant="light" py="xs">
+            <Alert color="success" variant="light" py="xs">
               비밀번호가 변경되었습니다.
             </Alert>
           ) : null}

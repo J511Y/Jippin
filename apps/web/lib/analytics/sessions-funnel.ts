@@ -45,11 +45,19 @@ export function trackPrecheckFloorplanAttach(): void {
   pushToDataLayer({ event: PRECHECK_FLOORPLAN_ATTACH_EVENT });
 }
 
-/** 도면 오버레이 카드 노출(분석 결과 렌더). wall_other_count: 선택 가능한 비내력벽 후보 수. */
-export function trackPrecheckOverlayView(wallOtherCount: number): void {
+/**
+ * 도면 오버레이 카드 노출(분석 결과 렌더).
+ * wall_other_count: 선택 가능한 비내력벽 후보 수(벽만 — 퍼널/실험 지표 정본).
+ * window_count: 선택 가능한 창호 수(별도 집계 — 벽 지표를 오염시키지 않는다).
+ */
+export function trackPrecheckOverlayView(
+  wallOtherCount: number,
+  windowCount = 0
+): void {
   pushToDataLayer({
     event: PRECHECK_OVERLAY_VIEW_EVENT,
-    wall_other_count: wallOtherCount
+    wall_other_count: wallOtherCount,
+    window_count: windowCount
   });
 }
 

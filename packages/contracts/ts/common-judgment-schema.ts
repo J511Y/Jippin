@@ -18,9 +18,9 @@ export interface CommonJudgmentSchema {
    */
   analyzed_at: string;
   /**
-   * 스키마 버전 (semver). 본 ADR-0001 / CMP-527 시점 고정값.
+   * 스키마 버전 (semver). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원).
    */
-  schema_version: "1.0.0";
+  schema_version: "1.1.0";
   building_info: BuildingInfo;
   /**
    * 공간 객체 목록.
@@ -30,11 +30,19 @@ export interface CommonJudgmentSchema {
    * 벽체 객체 목록.
    */
   wall_objects: WallObject[];
+  /**
+   * 창호 객체 목록 (1.1.0 추가). 오버레이의 창호 선택(발코니-실 경계 창호 철거 검토)을 지원한다.
+   */
+  window_objects?: WindowObject[];
   vlm_supplement?: VlmSupplement;
   /**
    * OVERLAY 가 수집한 사용자 선택 철거 대상 벽체 region_id 목록. 기능명세서 §2.5 의 target_wall(단수)를 대체한다 — 복수 벽 동시 선택을 지원하는 정본.
    */
   selected_walls: string[];
+  /**
+   * OVERLAY 가 수집한 사용자 선택 철거 검토 대상 창호 region_id 목록 (1.1.0 추가). 외기 직접 접촉 여부 판단은 JudgmentValues.window_demolition_boundary 로 위임한다.
+   */
+  selected_windows?: string[];
   /**
    * 사용자가 지정한 변경 희망 공간 region_id. 미지정 시 null.
    */
@@ -132,6 +140,20 @@ export interface WallObject {
   source_engine: "MASK2FORMER" | "SAM2" | "VLM" | "HITL";
 }
 /**
+ * 창호 객체 1건 (1.1.0 추가). 외창/내창 구분은 세그멘테이션이 못 하므로 객체에는 두지 않고, 판단은 CHAT(LLM)+사용자 확인으로 위임한다.
+ */
+export interface WindowObject {
+  id: string;
+  confidence: number;
+  /**
+   * 창호 선분/폴리라인 좌표.
+   *
+   * @minItems 2
+   */
+  coords: [MaskCoord, MaskCoord, ...MaskCoord[]];
+  source_engine: "MASK2FORMER" | "SAM2" | "VLM" | "HITL";
+}
+/**
  * VLM 재분류·주석 결과. 분석이 보류된 경우 null 또는 부재.
  */
 export interface VlmSupplement {
@@ -188,4 +210,8 @@ export interface JudgmentValues {
    * 기존 행위허가 이력 존재 여부.
    */
   permit_history_known?: boolean | null;
+  /**
+   * 철거 검토 대상 창호가 접한 경계 (1.1.0 추가). EXTERIOR=외기와 직접 접한 최외곽 창호(철거 불가), BALCONY_BOUNDARY=발코니와 실내(거실 등) 사이 경계 창호(철거 시 발코니 확장으로 검토). 도면 촬영 품질이 흔들려 기하 판정이 어려우므로 CHAT(LLM)이 VLM 관찰·대화로 판단해 채우고, 모르면 null(룰엔진이 HOLD 로 재확인).
+   */
+  window_demolition_boundary?: "EXTERIOR" | "BALCONY_BOUNDARY" | null;
 }

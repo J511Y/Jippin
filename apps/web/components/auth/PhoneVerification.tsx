@@ -125,6 +125,8 @@ export function PhoneVerification({
 
   return (
     <Stack gap="xs">
+      {/* 입력·버튼 모두 md(42px) — 인증 플로우 공통 크기. 행 안에서 높이가 어긋나지
+          않도록 페어인 입력과 버튼은 같은 size 를 쓴다(모바일 터치 타깃). */}
       <Group gap="xs" align="flex-end" wrap="nowrap">
         <TextInput
           label="휴대폰 번호"
@@ -136,15 +138,17 @@ export function PhoneVerification({
           disabled={lockInputs}
           inputMode="tel"
           autoComplete="tel"
+          size="md"
           style={{ flex: 1 }}
           rightSection={
-            verified ? <IconCheck size={18} color="var(--mantine-color-teal-6)" /> : undefined
+            verified ? <IconCheck size={18} color="var(--mantine-color-success-6)" /> : undefined
           }
         />
         <Button
           type="button"
           variant="light"
           color="jippin"
+          size="md"
           onClick={() => void handleSend()}
           loading={sending}
           disabled={lockInputs || cooldown > 0}
@@ -162,11 +166,13 @@ export function PhoneVerification({
             onChange={(e) => setCode(e.currentTarget.value.replace(/[^\d]/g, ''))}
             inputMode="numeric"
             maxLength={6}
+            size="md"
             style={{ flex: 1 }}
           />
           <Button
             type="button"
             color="jippin"
+            size="md"
             onClick={() => void handleVerify()}
             loading={verifying}
             disabled={code.trim().length < 4}
@@ -177,12 +183,12 @@ export function PhoneVerification({
       ) : null}
 
       {error ? (
-        <Text size="sm" c="red">
+        <Text size="sm" c="danger.6">
           {error}
         </Text>
       ) : null}
       {!error && info ? (
-        <Text size="sm" c={verified ? 'teal' : 'dimmed'}>
+        <Text size="sm" c={verified ? 'success.6' : 'dimmed'}>
           {info}
         </Text>
       ) : null}

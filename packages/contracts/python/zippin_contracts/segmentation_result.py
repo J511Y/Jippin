@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class ErrorCode(Enum):
     """
-    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE 등.
+    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE, VLM 이 평면도가 아니라고 판정=NOT_FLOORPLAN 등.
     """
 
     SEGMENTATION_ENDPOINT_UNAVAILABLE = "SEGMENTATION_ENDPOINT_UNAVAILABLE"
@@ -26,6 +26,7 @@ class ErrorCode(Enum):
     SEGMENTATION_BAD_RESPONSE = "SEGMENTATION_BAD_RESPONSE"
     SEGMENTATION_NO_IMAGE = "SEGMENTATION_NO_IMAGE"
     SEGMENTATION_NOT_SCANNED = "SEGMENTATION_NOT_SCANNED"
+    SEGMENTATION_NOT_FLOORPLAN = "SEGMENTATION_NOT_FLOORPLAN"
     NoneType_None = None
 
 
@@ -118,9 +119,9 @@ class SegmentationResult(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.2.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.3.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 1.2.0: image/regions(오버레이 좌표) 추가. 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가.
+    스키마 버전 (semver). 1.3.0: error_code 에 NOT_FLOORPLAN 추가(코드-스키마 드리프트 정리). 1.2.0: image/regions(오버레이 좌표) 추가. 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가.
     """
     ok: bool
     """
@@ -128,7 +129,7 @@ class SegmentationResult(BaseModel):
     """
     error_code: ErrorCode | None = None
     """
-    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE 등.
+    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE, VLM 이 평면도가 아니라고 판정=NOT_FLOORPLAN 등.
     """
     mask_asset_id: UUID | None = None
     """

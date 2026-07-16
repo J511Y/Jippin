@@ -28,7 +28,6 @@ export default function NotFound() {
             href="/"
             color="jippin"
             size="md"
-            radius="md"
             fullWidth
             leftSection={<IconHome size={18} />}
           >
@@ -40,7 +39,6 @@ export default function NotFound() {
             variant="subtle"
             color="jippin"
             size="sm"
-            radius="md"
             fullWidth
             rightSection={<IconArrowRight size={16} />}
           >

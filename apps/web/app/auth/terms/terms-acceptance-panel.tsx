@@ -1,9 +1,11 @@
 'use client';
 
+import { Alert, Button, Card, Checkbox, Stack, Text } from '@mantine/core';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { apiBaseUrl } from '@/lib/api-base-url';
+import { PageColumn, PageHeader } from '@/components/ui';
 
 type AuthMeResponse = {
   signup_complete?: boolean;
@@ -134,59 +136,77 @@ export function TermsAcceptancePanel({ nextPath }: TermsAcceptancePanelProps) {
   }
 
   return (
-    <section className="mx-auto flex max-w-lg flex-col gap-6 px-6 py-16">
-      <header className="space-y-2">
-        <h1 className="text-2xl font-semibold">필수 약관 동의</h1>
-        <p className="text-sm text-slate-600">
-          계정 생성을 완료하려면 아래 필수 약관에 동의해 주세요.
-        </p>
-      </header>
+    // OAuth 온보딩 중간 단계라 SiteShell(헤더) 없이 독립 레이아웃을 유지한다.
+    // 폭·상단 여백은 인증 폼 표준(PageColumn form 560 + 상단 고정)을 따르고,
+    // 헤더가 없어 가로 패딩(px)을 자체 부담한다.
+    <PageColumn width="form" px="md" py={48}>
+      <PageHeader
+        title="필수 약관 동의"
+        subtitle="계정 생성을 완료하려면 아래 필수 약관에 동의해 주세요."
+      />
 
-      {state.kind === 'loading' ? <p className="text-sm text-slate-500">확인 중...</p> : null}
+      {state.kind === 'loading' ? (
+        <Text size="sm" c="dimmed">
+          확인 중...
+        </Text>
+      ) : null}
 
       {state.kind === 'unauthenticated' ? (
-        <div className="grid gap-3 rounded-md border border-slate-200 p-4">
-          <p className="text-sm text-slate-700">로그인 세션이 만료되었습니다.</p>
-          <button
-            type="button"
-            onClick={() => router.replace(`/login?next=${encodeURIComponent(nextPath)}`)}
-            className="self-start rounded-md border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50"
-          >
-            다시 로그인
-          </button>
-        </div>
+        <Card withBorder>
+          <Stack gap="sm" align="flex-start">
+            <Text size="sm">로그인 세션이 만료되었습니다.</Text>
+            <Button
+              type="button"
+              variant="light"
+              color="jippin"
+              size="md"
+              mih={44}
+              onClick={() => router.replace(`/login?next=${encodeURIComponent(nextPath)}`)}
+            >
+              다시 로그인
+            </Button>
+          </Stack>
+        </Card>
       ) : null}
 
       {state.kind === 'error' ? (
-        <div className="grid gap-3 rounded-md border border-red-200 bg-red-50 p-4">
-          <p className="text-sm text-red-700">{state.message}</p>
-          <button
-            type="button"
-            onClick={() => {
-              setState({ kind: 'loading' });
-              void loadTerms();
-            }}
-            className="self-start rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
-          >
-            다시 시도
-          </button>
-        </div>
+        <Alert color="danger" variant="light">
+          <Stack gap="sm" align="flex-start">
+            <Text size="sm" c="danger.8">
+              {state.message}
+            </Text>
+            {/* light 는 Alert 의 danger 틴트 배경과 같은 색이라 버튼이 묻힌다 — outline. */}
+            <Button
+              type="button"
+              variant="outline"
+              color="danger"
+              size="md"
+              mih={44}
+              onClick={() => {
+                setState({ kind: 'loading' });
+                void loadTerms();
+              }}
+            >
+              다시 시도
+            </Button>
+          </Stack>
+        </Alert>
       ) : null}
 
       {state.kind === 'ready' ? (
-        <form
-          className="grid gap-4 rounded-md border border-slate-200 p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submitTerms();
-          }}
-        >
-          <ul className="grid gap-3">
-            {state.missingTerms.map((termId) => (
-              <li key={termId}>
-                <label className="flex items-center gap-3 text-sm text-slate-800">
-                  <input
-                    type="checkbox"
+        <Card withBorder>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitTerms();
+            }}
+          >
+            <Stack gap="md">
+              <Stack gap={4}>
+                {state.missingTerms.map((termId) => (
+                  <Checkbox
+                    key={termId}
+                    size="md"
                     checked={Boolean(checked[termId])}
                     onChange={(event) =>
                       setChecked((current) => ({
@@ -194,23 +214,40 @@ export function TermsAcceptancePanel({ nextPath }: TermsAcceptancePanelProps) {
                         [termId]: event.target.checked
                       }))
                     }
-                    className="size-4 rounded border-slate-300"
+                    label={termLabel(termId)}
+                    // 모바일 터치 타깃 ≥44px — 라벨 행 전체를 히트 영역으로 키운다.
+                    styles={{
+                      body: { alignItems: 'center' },
+                      label: {
+                        display: 'flex',
+                        alignItems: 'center',
+                        minHeight: 44,
+                        cursor: 'pointer'
+                      },
+                      input: { cursor: 'pointer' }
+                    }}
                   />
-                  <span>{termLabel(termId)}</span>
-                </label>
-              </li>
-            ))}
-          </ul>
-          {submitError ? <p className="text-sm text-red-600">{submitError}</p> : null}
-          <button
-            type="submit"
-            disabled={!allChecked || submitting}
-            className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {submitting ? '저장 중...' : '동의하고 계속'}
-          </button>
-        </form>
+                ))}
+              </Stack>
+              {submitError ? (
+                <Text size="sm" c="danger.6">
+                  {submitError}
+                </Text>
+              ) : null}
+              <Button
+                type="submit"
+                color="jippin"
+                size="md"
+                mih={44}
+                fullWidth
+                disabled={!allChecked || submitting}
+              >
+                {submitting ? '저장 중...' : '동의하고 계속'}
+              </Button>
+            </Stack>
+          </form>
+        </Card>
       ) : null}
-    </section>
+    </PageColumn>
   );
 }

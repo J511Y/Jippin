@@ -32,10 +32,12 @@ export const metadata: Metadata = {
   }
 };
 
+// 버튼 위계(DESIGN.md): 제품 진입(사전검토)=jippin filled(1차), 전환(상담 신청)은
+// 추천 플랜 1곳만 coral filled(화면당 1회), 나머지 상담 플랜은 jippin outline(2차).
 type PlanCta = {
   label: string;
   color: 'jippin' | 'coral';
-  variant?: 'filled' | 'default';
+  variant?: 'filled' | 'outline';
 } & (
   | { href: string; leadCta?: never }
   | { href?: never; leadCta: LeadCtaId } // 상담 인입 CTA — 위치 식별자로 추적
@@ -62,7 +64,7 @@ const PLANS: Plan[] = [
       '실시간 질의응답',
       '로그인 없이 즉시 시작'
     ],
-    cta: { href: '/sessions', label: '사전검토 시작', color: 'jippin', variant: 'default' }
+    cta: { href: '/sessions', label: '사전검토 시작', color: 'jippin', variant: 'filled' }
   },
   {
     name: '전문가 단건 상담',
@@ -87,7 +89,7 @@ const PLANS: Plan[] = [
       '현장 실측 방문',
       '행위허가 서류 대행',
     ],
-    cta: { leadCta: 'prices_permit', label: '상담 신청하기', color: 'jippin', variant: 'default' }
+    cta: { leadCta: 'prices_permit', label: '상담 신청하기', color: 'jippin', variant: 'outline' }
   }
 ];
 
@@ -100,25 +102,22 @@ export default function PricesPage() {
         dangerouslySetInnerHTML={{ __html: safeJsonLd(buildPricesJsonLd()) }}
       />
       {/* ── 헤더 ─────────────────────────────────────────────── */}
-      <Box
-        style={{
-          background:
-            'radial-gradient(120% 120% at 50% 0%, #E2F1EF 0%, rgba(248,249,250,0) 60%), linear-gradient(180deg, #FBFDFC 0%, #F8F9FA 100%)',
-          borderBottom: '1px solid var(--jippin-brand-border)'
-        }}
-      >
+      {/* 배경은 투명 — 흰 캔버스의 제도 격자가 그대로 드러난다(옛 회색 그라데이션 밴드 제거,
+          COLOR_SYSTEM 그라데이션 금지). 경계는 보더 한 줄로만 구분한다. */}
+      <Box style={{ borderBottom: '1px solid var(--jippin-brand-border)' }}>
         <Container
           size="lg"
           style={{
-            paddingTop: 'clamp(3rem, 6vw, 5rem)',
-            paddingBottom: 'clamp(2rem, 4vw, 3rem)'
+            paddingTop: 'var(--jippin-section-py)',
+            paddingBottom: 'var(--jippin-section-py)'
           }}
         >
           <Stack gap="sm" align="center" ta="center">
             <Title
               order={1}
               style={{
-                fontSize: 'clamp(1.9rem, 4vw, 2.75rem)',
+                // 랜딩 히어로 전용 타입 토큰 — 페이지별 임의 clamp 발명 금지(TYPOGRAPHY.md §2).
+                fontSize: 'var(--jippin-fz-hero)',
                 lineHeight: 1.15,
                 letterSpacing: '-0.02em'
               }}
@@ -136,8 +135,8 @@ export default function PricesPage() {
       <Container
         size="lg"
         style={{
-          paddingTop: 'clamp(2.5rem, 5vw, 4rem)',
-          paddingBottom: 'clamp(3rem, 6vw, 5rem)'
+          paddingTop: 'var(--jippin-section-py)',
+          paddingBottom: 'var(--jippin-section-py)'
         }}
       >
         <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="lg" verticalSpacing="lg">
@@ -165,13 +164,15 @@ export default function PricesPage() {
                       {plan.name}
                     </Text>
                     {plan.highlighted ? (
-                      <Badge color="coral" variant="filled" radius="sm">
+                      // 코랄은 전환 CTA 전용 — 마커(추천 배지)는 브랜드 틸을 쓴다(BRAND).
+                      <Badge color="jippin" variant="filled" radius="sm">
                         추천
                       </Badge>
                     ) : null}
                   </Group>
                   <Group align="baseline" gap={6}>
-                    <Text fw={800} fz={28} style={{ letterSpacing: '-0.02em' }}>
+                    {/* 가격 숫자는 h2 토큰 수준(xl=20px)·fw 700 상한 — fw 800 금지(TYPOGRAPHY.md). */}
+                    <Text fw={700} fz="xl" style={{ letterSpacing: '-0.02em' }}>
                       {plan.price}
                     </Text>
                     {plan.priceNote ? (
@@ -197,12 +198,14 @@ export default function PricesPage() {
                 </Stack>
 
                 {plan.cta.leadCta ? (
+                  // 상담 전환 CTA — coral filled 는 전환 표준(CtaButton)과 같은 모양이 되도록
+                  // fw 700 을 얹는다(LeadCtaButton 은 추적 때문에 유지, 스타일은 props 로만).
                   <LeadCtaButton
                     cta={plan.cta.leadCta}
                     size="md"
-                    radius="md"
                     color={plan.cta.color}
                     variant={plan.cta.variant ?? 'filled'}
+                    fw={plan.cta.color === 'coral' ? 700 : undefined}
                     fullWidth
                     mt="auto"
                     rightSection={<IconArrowRight size={16} />}
@@ -210,11 +213,12 @@ export default function PricesPage() {
                     {plan.cta.label}
                   </LeadCtaButton>
                 ) : (
+                  // 서버 컴포넌트라 component={Link} 는 SSG prerender 를 깨뜨린다 —
+                  // 네이티브 앵커 유지(app/not-found.tsx 와 동일한 RSC 비호환 회피).
                   <Button
                     component="a"
                     href={plan.cta.href}
                     size="md"
-                    radius="md"
                     color={plan.cta.color}
                     variant={plan.cta.variant ?? 'filled'}
                     fullWidth
@@ -240,7 +244,6 @@ export default function PricesPage() {
             href="/faq?category=cost"
             variant="subtle"
             color="jippin"
-            radius="md"
             rightSection={<IconArrowRight size={16} />}
           >
             비용 관련 자주묻는질문 보기

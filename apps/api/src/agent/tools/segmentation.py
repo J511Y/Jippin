@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 log = get_logger("zippin.agent.tools.segmentation")
 
-SCHEMA_VERSION = "1.2.0"
+SCHEMA_VERSION = "1.3.0"
 
 # segmentation-result 계약의 라벨 enum(검증·요약용).
 _KNOWN_LABELS: frozenset[str] = frozenset(
@@ -204,8 +204,10 @@ def _parse_ok(data: Any) -> dict[str, Any]:
 
     wall_other = counts.get("wall_other", 0)
     rc = counts.get("wall_reinforced_concrete", 0)
+    window_count = counts.get("window", 0)
     summary = (
-        f"세그멘테이션 완료 — 비내력벽 후보 {wall_other}, 내력(RC)벽 후보 {rc}."
+        f"세그멘테이션 완료 — 비내력벽 후보 {wall_other}, 내력(RC)벽 후보 {rc}, "
+        f"창호 {window_count}."
         if instances
         else "세그멘테이션 완료(검출된 영역 없음)."
     )
@@ -418,16 +420,20 @@ def build_overlay_spec(
 def build_judgment_objects(
     regions: list[dict[str, Any]],
     vlm_ids: set[str] | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """regions → (wall_objects, space_objects) 계약 형태. door/window 는 제외(둘 다 아님).
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """regions → (wall_objects, space_objects, window_objects) 계약 형태. door 는 제외.
 
-    좌표가 부족하면(벽 <2점, 공간 <3점) 그 객체는 드롭한다(계약 minItems 준수).
-    region_id 를 객체 id 로 써서 OVERLAY 의 selected_walls(region_id[]) 와 정합시킨다.
-    ``vlm_ids`` 에 든 region 은 VLM(AI-002)이 교정한 것이라 source_engine 을 VLM 으로 둔다.
+    좌표가 부족하면(벽·창호 <2점, 공간 <3점) 그 객체는 드롭한다(계약 minItems 준수).
+    region_id 를 객체 id 로 써서 OVERLAY 의 selected_walls/selected_windows(region_id[])
+    와 정합시킨다. ``vlm_ids`` 에 든 region 은 VLM(AI-002)이 교정한 것이라 source_engine
+    을 VLM 으로 둔다. 창호(window)는 1.1.0 부터 별도 객체로 담는다 — 발코니-실 경계
+    창호 철거(거실 통합) 검토를 오버레이 선택으로 받기 위함. 외창/내창 구분은 세그멘테
+    이션이 못 하므로 객체에 두지 않고 CHAT(LLM) 판단으로 위임한다.
     """
     vlm_ids = vlm_ids or set()
     walls: list[dict[str, Any]] = []
     spaces: list[dict[str, Any]] = []
+    windows: list[dict[str, Any]] = []
     for r in regions:
         cls = r.get("class_name")
         rid = r.get("region_id")
@@ -448,6 +454,17 @@ def build_judgment_objects(
                     "source_engine": engine,
                 }
             )
+        elif cls == "window":
+            if len(pts) < 2:
+                continue
+            windows.append(
+                {
+                    "id": rid,
+                    "confidence": conf,
+                    "coords": pts,
+                    "source_engine": engine,
+                }
+            )
         elif cls in _SPACE_LABEL_BY_CLASS:
             if len(pts) < 3:
                 continue
@@ -461,7 +478,7 @@ def build_judgment_objects(
                     "source_engine": engine,
                 }
             )
-    return walls, spaces
+    return walls, spaces, windows
 
 
 def _merge_overlapping_regions(
@@ -683,8 +700,12 @@ async def segment_session_floorplan(
                 run_context=run_context, run_id=run_id, components=[spec]
             )
 
-    walls, spaces = build_judgment_objects(regions, vlm_ids=vlm_ids)
-    patch: dict[str, Any] = {"wall_objects": walls, "space_objects": spaces}
+    walls, spaces, windows = build_judgment_objects(regions, vlm_ids=vlm_ids)
+    patch: dict[str, Any] = {
+        "wall_objects": walls,
+        "space_objects": spaces,
+        "window_objects": windows,
+    }
     if supplement is not None:
         patch["vlm_supplement"] = supplement
     with contextlib.suppress(Exception):

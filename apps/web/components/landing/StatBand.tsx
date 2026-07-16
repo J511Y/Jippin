@@ -68,18 +68,20 @@ export function StatBand() {
       p="xl"
       style={{
         borderRadius: 'var(--mantine-radius-lg)',
-        background:
-          'linear-gradient(135deg, #0F5F59 0%, #147A73 60%, #2D8F87 100%)'
+        // 단색 딥 틸 — COLOR_SYSTEM 은 그라데이션을 금지한다. 흰 캔버스 위에서
+        // 확실한 구획이 되는 신뢰 앵커 밴드.
+        background: 'var(--mantine-color-jippin-7)'
       }}
     >
-      <SimpleGrid cols={3} spacing="md">
+      {/* 모바일(48em 미만)은 1열 스택 — 3열 고정 시 숫자가 접혀 읽기 어렵다. */}
+      <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md" verticalSpacing="lg">
         {STATS.map((s) => {
           const { num, suffix } = parseStat(s.value);
           return (
             <Stack key={s.label} gap={2} align="center" ta="center">
               <Text
-                fw={800}
-                c="#FFFFFF"
+                fw={700}
+                c="var(--jippin-brand-primary-fg)"
                 {...(num !== null
                   ? { 'data-counter': true, 'data-num': num, 'data-suffix': suffix }
                   : {})}

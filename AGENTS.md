@@ -1,6 +1,6 @@
 # AGENTS.md — Jippin(집핀) 에이전트 작업 가이드
 
-이 문서는 본 모노레포에서 일하는 **Paperclip 에이전트(자율형)** 와 **사람 개발자** 모두를 대상으로 한다. 한 줄 요약: *집핀은 비내력벽 철거 사전검토 AI 서비스이며, 이 레포는 단일 인스턴스 docker-compose 모노레포다. 모든 결정은 `docs/명세서/`(요구·기능·기술·SDD)와 `docs/brief/CEO_PROJECT_BRIEF.md` 에 우선 따른다.*
+이 문서는 본 모노레포에서 일하는 **자동화 에이전트** 와 **사람 개발자** 모두를 대상으로 한다. 한 줄 요약: *집핀은 비내력벽 철거 사전검토 AI 서비스이며, 이 레포는 모노레포다 (로컬 개발 = docker-compose 3-컨테이너, 운영 = ADR-0006 분리형 토폴로지 — 배포 라이브). 모든 결정은 `docs/명세서/`(요구·기능·기술·SDD)와 `docs/brief/CEO_PROJECT_BRIEF.md` 에 우선 따른다.*
 
 > **⚠ DB / Auth SSOT — Supabase (CI/CD cutover 완료, CMP-603 / 2026-06-02 기준)**
 >
@@ -33,37 +33,41 @@
 
 ---
 
-## 2. 모노레포 구조 (목표 상태 — CTO 분해로 확정)
+## 2. 모노레포 구조 (현행)
 
 ```
 jippin/
 ├── apps/
-│   ├── web/           # Presentation (Next.js or 대안 — CTO ADR 결과)
-│   └── api/           # Application (FastAPI or 대안 — CTO ADR 결과)
+│   ├── web/           # Presentation (Next.js 16.2 LTS · React 19) — jippin.ai
+│   ├── api/           # Application (FastAPI 0.115 · Python 3.13) — api.jippin.ai
+│   ├── admin/         # 관리자 콘솔 (별도 Next.js 앱, 포트 4000 — 대시보드·상담·회원·사전검토)
+│   └── seumteo-worker/# 세움터 건축물대장 발급 워커 (Playwright — 별개 Fly 앱, ADR-0009)
 ├── packages/
-│   ├── contracts/     # CommonJudgmentSchema, CompletionDecision, RuleEvalResult, EstimateResult (언어 중립 JSON 스키마 + 생성된 TS/Python 타입)
-│   └── eslint-config/ # (선택)
+│   └── contracts/     # 공통 컨트랙트 JSON 스키마 10종 + 생성된 TS/Python 타입 (판단·룰·견적·에이전트 SSE·우리집 체크·세그멘테이션)
+├── supabase/
+│   └── migrations/    # forward DB schema SSOT (*.sql) — Supabase GitHub Integration 이 적용
 ├── infra/
-│   ├── docker/        # Dockerfile.web / Dockerfile.api / nginx.conf
-│   └── compose/       # docker-compose.yml + override 파일
+│   ├── docker/        # nginx.conf (앱 Dockerfile 은 각 apps/*/Dockerfile)
+│   └── compose/       # docker-compose.yml + override 파일 (로컬 3-컨테이너)
 ├── docs/
 │   ├── 명세서/        # 정본 4종 + 참고 이미지
 │   ├── _extracted/    # 위 정본의 텍스트 캐시 (read-only)
 │   ├── brief/         # CEO 브리프
-│   ├── adr/           # CTO 아키텍처 결정 기록
-│   └── runbooks/      # 운영 런북 (후속)
-└── tooling/           # extract_specs.py 등 1회성 스크립트
+│   ├── adr/           # CTO 아키텍처 결정 기록 (0001–0009)
+│   ├── design/        # 디자인·브랜드 SSOT (§4.8)
+│   └── runbooks/      # 운영 런북 (Supabase·Fly 배포 등)
+├── tools/             # secret-scan · admin 시드 스크립트 등 운영 도구
+└── tooling/           # extract_specs.py · validate_commit_msg.py 등 보조 스크립트
 ```
 
-> 본 이슈(CMP-523) 종료 시점에는 위 트리의 골격만 존재한다. 모듈별 실제 코드는 후속 이슈에서 채워진다.
 >
 > **봉인 ADR**: 본 트리·패키지 매니저·런타임은 [`docs/adr/0001-stack-reevaluation.md`](docs/adr/0001-stack-reevaluation.md) 가 봉인한다. 변경은 새 ADR을 발행해 supersede 해야 한다. 핵심 결정:
 > - `apps/web` = **Next.js 16.2 LTS** · React 19 · Node 22 LTS · **pnpm 9.x**
 > - `apps/api` = **FastAPI 0.115** · Python 3.13 · **uv 0.5+**
 > - DB = **Supabase Postgres** (외부 managed, 로컬 DB 컨테이너 없음). ADR-0004 cutover 완료 (CMP-603). 운영 DB URL 은 Supabase project 가 발급한 connection string. Forward migration SSOT 는 `supabase/migrations/*.sql` + Supabase GitHub Integration. Alembic 은 historical reference 만. 캐시 = **Redis 7.4-alpine** 컨테이너.
-> - 객체 스토리지 = **Cloudflare R2** (S3 호환, zero-egress).
-> - LLM 오케스트레이션 = **LangChain v0.3+**. VLM 기본 = OpenAI `gpt-4.1-mini` / 정밀 = `gpt-4o`.
-> - 클라우드 MVP = **분리형 토폴로지 (제안 중)**: web=**Vercel** · api=**Fly.io 도쿄(`nrt`)** · redis=**Upstash 도쿄** · postgres=Supabase · 도면 추론=**Hugging Face Endpoint**. [`ADR-0006`](docs/adr/0006-deployment-split-topology.md) (Proposed) 가 [`ADR-0002`](docs/adr/0002-deployment-cloud.md) (단일 VM Lightsail Seoul) 를 supersede. 실행: [`docs/runbooks/fly-api-deploy.md`](docs/runbooks/fly-api-deploy.md). **로컬 개발은 `infra/compose/docker-compose.yml` 3-컨테이너 그대로** (production 토폴로지만 분리).
+> - 객체 스토리지 = 파일 업로드/리포트 보관은 **Supabase Storage** 비공개 버킷(`lead-floorplans`·`session-floorplans`·`session-reports`·`home-check-docs` — ADR-0007/0008, `apps/api/src/services/storage.py`). ADR-0001 의 Cloudflare R2 채택은 미사용 잔존 표기 (`floorplan_assets.storage_provider` 기본값 `'r2'` 는 legacy 스키마 흔적).
+> - LLM 오케스트레이션 = **LangChain v0.3 + LangGraph + deepagents** (대화형 사전검토 에이전트 — `apps/api/src/agent/`, langgraph Postgres 체크포인터). 에이전트·VLM 모델 = **OpenAI `gpt-5.4-mini`** (`apps/api/src/config.py::agent_model`). ⚠ ADR-0001 의 "VLM 기본 gpt-4.1-mini / 정밀 gpt-4o" 표기는 코드와 불일치 (supersede ADR 미발행). 도면 세그멘테이션 = **Mask2Former HF Inference Endpoint** (`HF_SEGMENTATION_ENDPOINT_URL`).
+> - 클라우드 MVP = **분리형 토폴로지 (배포 완료 — 라이브)**: web=**Vercel** (`jippin.ai`) · api=**Fly.io 도쿄(`nrt`)** 앱명 `jippin` (`api.jippin.ai`) · redis=**managed Redis 도쿄** · postgres=Supabase 서울 · 도면 추론=**Hugging Face Endpoint** · 세움터 워커=**별개 Fly 앱 `jippin-seumteo-worker`** (ADR-0009, Flycast 사설망). [`ADR-0006`](docs/adr/0006-deployment-split-topology.md) 가 [`ADR-0002`](docs/adr/0002-deployment-cloud.md) (단일 VM Lightsail Seoul) 를 supersede. ⚠ ADR-0006 문서 상태는 Proposed 잔존 + redis 를 Upstash 로 표기 (실운영과 불일치 — 오너 결정 대기). 실행: [`DEPLOYMENT.md`](DEPLOYMENT.md) · [`docs/runbooks/fly-api-deploy.md`](docs/runbooks/fly-api-deploy.md). 배포 실행은 운영자 수동 (Vercel git integration 제외). **로컬 개발은 `infra/compose/docker-compose.yml` 3-컨테이너 그대로** (production 토폴로지만 분리).
 
 ---
 
@@ -217,11 +221,24 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 - 색·폰트의 **의미가 바뀌는 변경**(역할 변경, 새 토큰 도입, 톤 재정의) 은 SSOT 문서를 먼저 갱신하고 PR 본문에 영향 범위(`BRAND` / `DESIGN` / `DOCS` / 필요 시 `WEB`) 를 명시한다. 필요 시 ADR 또는 `docs/design/decisions/` 결정 기록을 함께 남긴다.
 - 리포트·다운로드·공유링크 OG 의 시각/문구 변경은 `§4.6` 법적 고지 누락 금지와 교차 검증한다 (`COLOR_SYSTEM.md §5`, `TYPOGRAPHY.md §4.5` 참조).
 - 디자인 SSOT 의 §1 브랜드 약속·금지 톤·법적 고지는 **CEO 봉인 영역**이며, 변경하려면 새 CEO 브리프 리비전이 필요하다.
-- **레이아웃 컨테이너 폭은 기본 `lg`** 다. 기능/리포트/사용자 대면 페이지는 헤더와 같은 `lg`(= `SiteShell.WIDE_ROUTE_PREFIXES`)를 쓰고, `sm` 은 "단일 입력 폼" 한정 명시적 예외(`NARROW_FORM_PREFIXES`)다 — "폼이니까 sm" 을 기본값으로 적용하지 않는다. 정본: [`docs/design/DESIGN.md §4.5`](docs/design/DESIGN.md).
+
+#### 4.8.1 UI 화면 작업 필수 체크 (2026-07 디자인 시스템 정비 이후)
+
+새 화면을 만들거나 기존 화면을 고칠 때 아래를 지킨다. 상세 정본: [`DESIGN.md §4.5~§4.9`](docs/design/DESIGN.md).
+
+- **레이아웃**: 바깥 `Container` 는 `SiteShell` 이 전 페이지 `lg` 로 일괄 적용한다(라우트 등록 불필요·불가). 좁은 콘텐츠는 `PageColumn`(`prose` 720 / `form` 560 / `funnel` 460)으로 좁힌다. 페이지 타이틀+부제는 `PageHeader`. (구 `WIDE_ROUTE_PREFIXES`/`NARROW_FORM_PREFIXES` 분기는 폐지됨)
+- **타이포**: 크기는 theme headings(`Title order=N`)와 토큰(`--jippin-fz-hero|display|legal`)만 — `fz` 오버라이드로 새 크기를 발명하지 않는다. weight 800 금지. 정본: `TYPOGRAPHY.md §2`.
+- **버튼 위계**: 전환(상담·견적·다운로드) = `CtaButton`(coral, **화면당 1회**) · 기능 진입/제출 = `jippin filled md` · 2차 = `light|outline` · 3차 = `subtle`. coral 을 상태·배지·마커에 쓰지 않는다(상태는 `status.*` 팔레트: `success|warning|danger|info`).
+- **간격·radius**: Mantine spacing 토큰 우선, 랜딩 섹션은 `--jippin-section-py`. radius 는 기본값(컨트롤 md/표면 lg/칩 999)만.
+- **모바일**: 터치 타깃 ≥44px. 하단 고정 요소(채팅·퍼널 도크)는 `env(safe-area-inset-bottom)`. 3열 이상 그리드는 base 1열. 내비게이션은 우상단 햄버거+`Drawer` 단일 패턴(하단 탭바 없음).
+- **격자 캔버스(도면 모티프)**: body 배경은 흰 캔버스+제도 격자(`globals.css body::before`, 가독성 마스크·0.22× 패럴랙스 포함)다. 페이지·컴포넌트에 `#F8F9FA` 류 회색 배경을 하드코딩하면 "격자와 어긋난 회색 섬"이 된다 — 표면은 카드(불투명 흰색)나 `brand.surface` 틴트 토큰으로.
+- **RSC 제약(중요)**: Server Component 에서 Mantine 의 `component={Link}` 는 SSG prerender 를 깨뜨린다. 서버 컴포넌트는 `component="a"` + 왜-주석, 클라이언트 컴포넌트('use client')에서만 `component={Link}`. 기존 사용처(`LeadCtaButton`, `HeroStartCta`) 패턴을 따른다.
 
 ---
 
 ## 5. 자동화 에이전트 작업 프로토콜 (Paperclip)
+
+> **Paperclip 보드 운용은 2026-06-30 중단되었다** (§4.2 — `CMP-###` PR 태그 폐지). 본 절의 wake payload·이슈 디스포지션 프로토콜(#1~#3, §5.8 의 보드 API 호출)은 보드 재가동 시를 위해 보존한다. **§5.7 worktree 격리와 §5.8 한글 인코딩 규칙은 보드와 무관하게 모든 에이전트 작업에 계속 적용된다.**
 
 1. **Wake payload 우선** — `PAPERCLIP_WAKE_PAYLOAD_JSON` 이 가리키는 이슈만 처리한다. 다른 이슈로 분기하지 않는다.
 2. **본 이슈 범위를 벗어나면 자식 이슈를 생성** — `POST /api/issues` 로 자식 이슈를 만들고 본 이슈에 blockedBy 또는 related로 묶는다. 직접 폭주 X.
@@ -377,6 +394,12 @@ cd apps/api && uv sync && uv run uvicorn src.main:app --reload --port 8000
 
 # 프론트엔드 단독 (pnpm 9.x — apps/web engines.pnpm <10)
 cd apps/web && corepack pnpm@9 install && corepack pnpm@9 dev
+
+# 관리자 콘솔 단독 (포트 4000)
+cd apps/admin && corepack pnpm@9 install && corepack pnpm@9 dev
+
+# 세움터 워커 — 로컬 실행·배포는 apps/seumteo-worker/README.md 정본.
+# 코드 수정 시 api 와 별개로 `fly deploy apps/seumteo-worker` 필요 (별개 Fly 앱).
 
 # 헬스체크 (DB SELECT 1 결과 포함)
 curl http://localhost:8000/healthz

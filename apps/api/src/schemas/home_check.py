@@ -29,6 +29,8 @@ Kind = Literal["dong_ho", "secure_no"]
 Field_ = Literal["address", "dong", "ho"]
 Source = Literal["exclusive", "heading"]
 DocKind = Literal["exclusive_part", "building_heading"]
+# 신고 확장 ↔ 대장 변동사항 LLM 대조 판정. 노란딱지(violation.is_violation)와 별개 축.
+Verdict = Literal["violation", "legal", "uncertain"]
 
 
 # ---------------------------------------------------------------------------
@@ -41,12 +43,23 @@ class HomeCheckCreateRequest(BaseModel):
     jibun_addr: str | None = Field(default=None, max_length=_MAX_ADDR_LEN)
     dong: str = Field(default="", max_length=_MAX_DONG_HO_LEN)
     ho: str = Field(min_length=1, max_length=_MAX_DONG_HO_LEN)
+    # 확장 신고(선택) — LLM 확장 대조 입력. None=미응답, True=확장했음, False=확장 없음.
+    reported_extension: bool | None = None
+    # 사용자가 자연어로 적은 확장·개조 부위(예: "거실, 침실2"). PII 아님.
+    extended_areas: str | None = Field(default=None, max_length=500)
 
     @field_validator("road_addr", "ho", mode="before")
     @classmethod
     def _strip_required(cls, value: object) -> object:
         if isinstance(value, str):
             return value.strip()
+        return value
+
+    @field_validator("extended_areas", mode="before")
+    @classmethod
+    def _strip_extended_areas(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
         return value
 
     @field_validator("dong", mode="before")
@@ -152,11 +165,14 @@ class ChangeEntry(BaseModel):
     source: Source
 
 
-class PriceEntry(BaseModel):
+class ExtensionCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    reference_date: str | None = None
-    base_price: int | None = None
+    verdict: Verdict
+    reason: str | None = None
+    reported_areas: list[str] = Field(default_factory=list)
+    matched_areas: list[str] = Field(default_factory=list)
+    unrecorded_areas: list[str] = Field(default_factory=list)
 
 
 class DocumentRef(BaseModel):
@@ -185,7 +201,7 @@ class HomeCheckReport(BaseModel):
     exclusive_part: ExclusivePart | None = None
     building: BuildingHeading | None = None
     change_history: list[ChangeEntry] | None = None
-    prices: list[PriceEntry] | None = None
+    extension_check: ExtensionCheck | None = None
     documents: list[DocumentRef] | None = None
     caution_reasons: list[str] | None = None
     meta: ReportMeta | None = None
@@ -195,11 +211,15 @@ class HomeCheckReport(BaseModel):
 class HomeCheckJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.1.0"] = Field(
-        default="1.1.0", pattern=r"^\d+\.\d+\.\d+$"
+    schema_version: Literal["1.3.0"] = Field(
+        default="1.3.0", pattern=r"^\d+\.\d+\.\d+$"
     )
     id: str
     status: Status
+    # 진행 phase(정보성, open string) — 알려진 값은 services.home_check.PHASE_* 참조.
+    # 미지의 값도 통과시킨다(엄격 Literal 금지 — 새 phase 배포 시 폴링 GET 이 500 나면
+    # 안 된다; 클라이언트는 미지 값을 일반 대기 문구로 폴백).
+    phase: str | None = None
     signal: Signal | None = None
     created_at: str | None = None
     updated_at: str | None = None

@@ -1,0 +1,12 @@
+# 세움터 워커 런타임 의존성.
+# playwright 버전과 `playwright install chromium`(Dockerfile)은 반드시 함께 고정한다 —
+# 버전이 어긋나면 런타임에 "browser not found" 가 난다.
+playwright==1.49.1
+fastapi>=0.115,<0.116
+# 발급 PDF 텍스트 레이어에서 변동사항 파싱(flow._parse_changes_pdf) — CLIP 잡음 채굴 대체.
+pypdf>=6,<7
+uvicorn[standard]>=0.32,<0.33
+pydantic>=2.9,<3.0
+pydantic-settings>=2.5,<3.0
+httpx>=0.28,<0.29
+structlog>=24,<25

@@ -80,6 +80,10 @@
   .v-danger .v-label { color: var(--danger); } .v-info .v-label { color: var(--info); } .v-neutral .v-label { color: var(--neutral); }
   .v-permit { display: inline-block; font-size: 8pt; font-weight: 700; border: 1pt solid var(--line); border-radius: 20pt; padding: 1.5pt 9pt; margin-left: 8pt; color: var(--copy); background: #fff; vertical-align: middle; }
   .v-summary { font-size: 9pt; line-height: 1.5; color: var(--copy); margin-top: 6pt; }
+  .v-checks { margin-top: 7pt; background: rgba(255,255,255,0.55); border-radius: 8pt; padding: 7pt 10pt; }
+  .v-checks-t { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 8.4pt; color: var(--navy); margin-bottom: 3pt; }
+  .v-checks ul { margin: 0; padding-left: 12pt; }
+  .v-checks li { font-size: 8.2pt; color: var(--copy); line-height: 1.5; }
 
   /* ---- floor plan ---- */
   .fp-wrap { background: var(--soft); border: 0.8pt solid var(--line); border-radius: 9pt; padding: 8pt; text-align: center; }
@@ -133,8 +137,14 @@
   .est-total td { border-bottom: none; padding-top: 9pt; }
   .est-total .lbl { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 10.5pt; color: var(--navy); }
   .est-total .amt { color: var(--coral); font-size: 15pt; }
+  .est-assume { margin: 8pt 0 0; padding-left: 12pt; }
+  .est-assume li { font-size: 8pt; color: var(--muted); line-height: 1.5; }
   .est-foot { margin-top: 9pt; background: var(--soft); border-radius: 8pt; padding: 8pt 11pt; font-size: 8pt; color: var(--copy); line-height: 1.5; }
   .est-foot .src { color: var(--info); margin-top: 3pt; }
+  .law-list { margin: 0; padding-left: 12pt; }
+  .law-list li { font-size: 8.6pt; color: var(--copy); line-height: 1.55; margin-bottom: 5pt; }
+  .law-list b { color: var(--navy); font-weight: 800; }
+  .law-list .src { font-size: 7.4pt; color: var(--info); margin-top: 1pt; }
 
   /* ---- schedule stepper ---- */
   .steps { display: flex; gap: 7pt; }
@@ -183,6 +193,12 @@
       </div>
     </div>
     {% if report.verdict.summary %}<p class="v-summary">{{ report.verdict.summary }}</p>{% endif %}
+    {% if report.additional_checks %}
+    <div class="v-checks">
+      <div class="v-checks-t">추가로 확인하면 좋아요</div>
+      <ul>{% for c in report.additional_checks %}<li>{{ c }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
   </div>
 
   {# ── 1. 도면 분석 ── #}
@@ -239,10 +255,13 @@
         <td class="amt">{{ item.amount_text }}</td>
       </tr>
       {% endfor %}
-      {% if report.estimate.fixed_total_text %}
-      <tr class="est-total"><td class="lbl">기본 합계 (최소)</td><td class="amt">{{ report.estimate.fixed_total_text }}</td></tr>
+      {% if report.estimate.total_text %}
+      <tr class="est-total"><td class="lbl">합계 (예상 범위)</td><td class="amt">{{ report.estimate.total_text }}</td></tr>
       {% endif %}
     </table>
+    {% endif %}
+    {% if report.estimate.assumptions %}
+    <ul class="est-assume">{% for a in report.estimate.assumptions %}<li>{{ a }}</li>{% endfor %}</ul>
     {% endif %}
     <div class="est-foot">
       {{ report.estimate.disclaimer }}
@@ -251,10 +270,26 @@
   </div>
   {% endif %}
 
-  {# ── 4. 진행 일정 ── #}
+  {# ── 4. 법적 근거 (FR-REPORT-009 — 모든 화면 노출) ── #}
+  {% if report.legal_basis %}
+  <div class="card">
+    <div class="sec-head"><span class="sec-num">4</span><span class="sec-title">법적 근거</span></div>
+    <ul class="law-list">
+      {% for b in report.legal_basis %}
+      <li>
+        <b>{{ b.statute }}{% if b.article %} {{ b.article }}{% endif %}</b>
+        {% if b.summary %} — {{ b.summary }}{% endif %}
+        {% if b.url %}<div class="src">{{ b.url }}</div>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {# ── 5. 진행 일정 ── #}
   {% if report.schedule %}
   <div class="card">
-    <div class="sec-head"><span class="sec-num">4</span><span class="sec-title">진행 일정</span></div>
+    <div class="sec-head"><span class="sec-num">5</span><span class="sec-title">진행 일정</span></div>
     <div class="steps">
       {% for s in report.schedule %}
       <div class="step">
@@ -286,7 +321,9 @@
   {% endif %}
 
   {% if report.legal_notice %}
-  <div class="legal"><b>법적 고지 · </b>{{ report.legal_notice }}</div>
+  <div class="legal"><b>법적 고지 · </b>{{ report.legal_notice }}
+    {% if report.ruleset_version %}<br/>적용 룰셋 버전 · <b>{{ report.ruleset_version }}</b> (동일 입력에 대해 동일 판정을 보장하는 기준 버전이에요){% endif %}
+  </div>
   {% endif %}
 
 </body>

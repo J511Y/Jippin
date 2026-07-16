@@ -11,6 +11,8 @@
 
 import { ActionIcon, Box, Loader, Stack, Text } from '@mantine/core';
 import { IconArrowDown } from '@tabler/icons-react';
+import Image from 'next/image';
+import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ChatActionsProvider } from '@/components/agent/chat-actions';
@@ -130,8 +132,9 @@ function Conversation({
         <Box className="chat-main">
           {hasReport ? (
             <Box className="chat-report-link">
+              {/* 내부 내비게이션은 next/link — 클라이언트 컴포넌트라 RSC 제약 없음. */}
               <Text
-                component="a"
+                component={Link}
                 href={`/sessions/${sessionId}/report`}
                 size="sm"
                 c="jippin.7"
@@ -206,6 +209,8 @@ function Compose({
       <Box className="chat-compose">
         <Stack className="chat-column" gap="xl" align="center">
           <Stack gap="xs" align="center">
+            {/* 브랜드 마크 — MessageThread 아바타와 같은 로고(public/logo.png)로 통일.
+                '집' 글자 원형은 임시 마크였다. */}
             <Box
               aria-hidden
               style={{
@@ -214,16 +219,22 @@ function Compose({
                 borderRadius: 999,
                 display: 'grid',
                 placeItems: 'center',
-                background: 'var(--jippin-brand-primary)',
-                color: 'var(--jippin-brand-primary-fg)',
+                background: 'var(--jippin-brand-surface-alt, #FFFFFF)',
+                border: '1px solid var(--jippin-brand-border)',
+                boxShadow: '0 1px 2px rgba(13, 27, 42, 0.10)',
+                overflow: 'hidden',
                 marginBottom: 4
               }}
             >
-              <Text fw={700} fz={22} c="inherit">
-                집
-              </Text>
+              <Image src="/logo.png" alt="" width={32} height={32} style={{ display: 'block' }} />
             </Box>
-            <Text fz="1.5rem" fw={700} ta="center" style={{ wordBreak: 'keep-all' }}>
+            {/* 원-퀘스천 헤딩 — display 토큰(판정·대화형 헤딩 전용 단계)만 쓴다. */}
+            <Text
+              fz="var(--jippin-fz-display)"
+              fw={700}
+              ta="center"
+              style={{ wordBreak: 'keep-all' }}
+            >
               {GREETING}
             </Text>
             <Text c="dimmed" ta="center" maw={440} style={{ wordBreak: 'keep-all' }}>

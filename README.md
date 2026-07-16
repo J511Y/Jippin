@@ -9,7 +9,7 @@
 
 ## 1. 프로젝트 상태
 
-현재 단계: **MVP 구현 진행 중**. 웹(`apps/web`)·API(`apps/api`)·공통 컨트랙트(`packages/contracts`)·인프라(`infra/`, `supabase/`)가 구현되어 있고, 인증(Supabase Auth)·상담 리드·자주묻는질문 등은 DB-backed 실 기능이다. 통합 브랜치는 `dev`, 배포 토폴로지는 ADR-0006(분리형) 기준으로 진행한다. 모듈별 로컬 개발·테스트 명령은 각 앱 README 가 정본이다.
+현재 단계: **MVP 운영 중 (배포 라이브)**. 웹(`apps/web` — jippin.ai)·API(`apps/api` — api.jippin.ai)·관리자 콘솔(`apps/admin`)·세움터 발급 워커(`apps/seumteo-worker`)·공통 컨트랙트(`packages/contracts`)·인프라(`infra/`, `supabase/`)가 구현되어 있다. 인증(Supabase Auth)·상담 리드·자주묻는질문·우리집 체크(건축물대장)·사전검토 세션(도면 세그멘테이션 + 대화형 에이전트 + PDF 리포트)은 DB-backed 실 기능이다. 통합 브랜치는 `dev`, 배포 토폴로지는 ADR-0006(분리형 — 배포 완료, [`DEPLOYMENT.md`](DEPLOYMENT.md)) 기준이다. 모듈별 로컬 개발·테스트 명령은 각 앱 README 가 정본이다.
 
 - 요구·기능·기술·SDD 정본: [`docs/명세서/`](docs/명세서/) (Word/Excel)
 - 정본 텍스트 캐시(Office 미설치 환경용): [`docs/_extracted/`](docs/_extracted/)
@@ -29,9 +29,11 @@
 jippin/
 ├── apps/
 │   ├── web/                 # Presentation 레이어 (Next.js 16.2 LTS · React 19 · Node 22 · pnpm 9)
-│   └── api/                 # Application 레이어 (FastAPI 0.115 · Python 3.13 · uv)
+│   ├── api/                 # Application 레이어 (FastAPI 0.115 · Python 3.13 · uv)
+│   ├── admin/               # 관리자 콘솔 (별도 Next.js 앱 — 상담·사전검토·대시보드)
+│   └── seumteo-worker/      # 세움터 건축물대장 발급 워커 (Playwright, 별개 Fly 앱 — ADR-0009)
 ├── packages/
-│   └── contracts/           # CommonJudgmentSchema · CompletionDecision · RuleEvalResult · EstimateResult
+│   └── contracts/           # CommonJudgmentSchema · CompletionDecision · RuleEvalResult · EstimateResult 등
 │                            # (언어 중립 JSON 스키마 + 생성된 TS/Python 타입 — CMP-527)
 ├── supabase/
 │   └── migrations/          # forward schema SSOT (*.sql) — Supabase GitHub Integration 이 적용
@@ -42,7 +44,7 @@ jippin/
 │   ├── 명세서/              # 정본 4종 + 참고 이미지 (read-only)
 │   ├── _extracted/          # 정본 텍스트 캐시 (tooling/extract_specs.py 산출물)
 │   ├── brief/               # CEO 프로젝트 브리프
-│   ├── adr/                 # CTO 아키텍처 결정 기록 (0001–0007)
+│   ├── adr/                 # CTO 아키텍처 결정 기록 (0001–0009)
 │   ├── design/              # 디자인·브랜드 SSOT
 │   └── runbooks/            # 운영 런북 (Supabase·Fly 배포 등)
 ├── tools/                   # secret-scan 등 운영 도구
@@ -61,8 +63,9 @@ jippin/
 | DB · Auth | **Supabase Postgres + Supabase Auth** | `supabase/migrations/*.sql` 이 forward schema SSOT (ADR-0004) |
 | 세션·캐시 | Redis 7.4 (로컬 compose / 운영 managed 도쿄) | ADR-0006 |
 | 로컬 오케스트레이션 | **docker-compose 3-컨테이너** (web + api + redis) | DB 는 외부 Supabase 원격 |
-| AI | Mask2Former + VLM (라인별 ADR) | 도면 인식·판별 — 후속 이슈에서 구현 |
-| 배포 토폴로지 | **분리형 (제안 — ADR-0006)**: web=Vercel · api=Fly.io 도쿄 · redis=managed · DB=Supabase | ADR-0002(단일 VM) supersede |
+| AI | **Mask2Former (HF Inference Endpoint) + VLM(`gpt-5.4-mini`) + 대화형 에이전트(deepagents/LangGraph)** | 도면 세그멘테이션·판별·사전검토 세션 구현 완료 (`apps/api/src/agent/`) |
+| 건축물대장 | **세움터 직결 내재화** (`apps/seumteo-worker`, ADR-0009 — CODEF 대체) | 우리집 체크 (`/home-check`) 데이터 소스 |
+| 배포 토폴로지 | **분리형 (배포 완료 — ADR-0006 / [`DEPLOYMENT.md`](DEPLOYMENT.md))**: web=Vercel(jippin.ai) · api=Fly.io 도쿄(api.jippin.ai) · redis=managed 도쿄 · DB=Supabase | ADR-0002(단일 VM) supersede. ADR 문서 상태는 Proposed 잔존 |
 
 ---
 
@@ -135,8 +138,9 @@ curl http://localhost:8000/healthz       # api
 | [`docs/design/BRAND.md`](docs/design/BRAND.md) | 브랜드 약속·톤앤매너·금지 톤 | Frontend Lead + CEO 봉인(§1·§5·§6) |
 | [`docs/design/COLOR_SYSTEM.md`](docs/design/COLOR_SYSTEM.md) | 컬러 토큰·상태색·법적/오류 색·WCAG 기준 | Frontend Lead |
 | [`docs/design/TYPOGRAPHY.md`](docs/design/TYPOGRAPHY.md) | 폰트 스택·타입스케일·문체 가이드 | Frontend Lead |
-| [`docs/adr/`](docs/adr/) | 기술 채택 결정 기록 (0001–0007) | CTO·라인 리드 |
-| 각 앱 `README.md` ([`apps/web`](apps/web/README.md) · [`apps/api`](apps/api/README.md)) | 모듈별 로컬 개발·테스트 명령 정본 | 해당 모듈 라인 리드 |
+| [`docs/adr/`](docs/adr/) | 기술 채택 결정 기록 (0001–0009) | CTO·라인 리드 |
+| [`DEPLOYMENT.md`](DEPLOYMENT.md) | 배포 토폴로지·마이그레이션 운영 기록 | DevOps·운영자 |
+| 각 앱 `README.md` ([`apps/web`](apps/web/README.md) · [`apps/api`](apps/api/README.md) · [`apps/admin`](apps/admin/README.md) · [`apps/seumteo-worker`](apps/seumteo-worker/README.md)) | 모듈별 로컬 개발·테스트 명령 정본 | 해당 모듈 라인 리드 |
 
 명세 4종 사이에 모순이 있으면 다음 우선순위를 따른다:
 **(이슈 본문) > (CEO 브리프) > (SDD) > (기술명세서) > (기능명세서) > (요구사항)**.
@@ -146,12 +150,14 @@ curl http://localhost:8000/healthz       # api
 
 ## 7. 이슈 트래커 · 자동화 에이전트
 
-본 레포는 **Paperclip 보드**의 `CMP-###` 식별자를 기준으로 이슈를 관리한다. 자동화 에이전트(CEO / CTO / 라인 리드 / 엔지니어 / QA / Security 등)가 Paperclip wake payload 를 통해 작업을 수신·처리하며, 자세한 프로토콜은 [`AGENTS.md §5`](AGENTS.md) 참조.
+**Paperclip 보드 운용은 중단되었다** (2026-06-30 — `CMP-###` PR 태그 폐지, pr-title-lint 미강제). 현재 작업 지시는 운영자가 직접 에이전트에게 전달하며, 관련 이슈 식별자가 있으면 PR 본문에 적는 것은 선택이다.
 
-핵심 원칙:
-- 한 번에 하나의 이슈만 처리한다. (단일 활성 작업)
-- 본 이슈 범위를 벗어나면 자식 이슈를 생성해 위임한다.
-- 모든 작업은 최종 디스포지션(`done` / `in_review` / `blocked` / `in_progress`) 으로 종료한다.
+에이전트 작업 원칙 (보드 유무와 무관하게 유지):
+- 한 번에 하나의 작업만 처리한다. (단일 활성 작업)
+- 작업 범위를 벗어나는 발견은 별도 작업으로 분리해 보고한다.
+- 코드·문서 변경은 이슈/작업별 독립 git worktree 에서 수행한다 ([`AGENTS.md §5.7`](AGENTS.md)).
+
+Paperclip 보드 시절의 wake payload·디스포지션 프로토콜은 [`AGENTS.md §5`](AGENTS.md) 에 보존되어 있다 (보드 재가동 시 참조).
 
 ---
 

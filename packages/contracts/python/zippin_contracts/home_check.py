@@ -101,6 +101,46 @@ class Signal1(Enum):
     normal = "normal"
 
 
+class ExtensionVerdict(Enum):
+    """
+    신고 확장 ↔ 변동사항 대조 판정값. (패키지 루트 export 충돌 방지를 위해 rule-eval 의 Verdict 와 다른 이름을 쓴다.)
+    """
+
+    violation = "violation"
+    legal = "legal"
+    uncertain = "uncertain"
+
+
+class ExtensionCheck(BaseModel):
+    """
+    신고 확장 ↔ 대장 변동사항 대조(LLM). 노란딱지(violation.is_violation)와 별개 축. verdict=violation 이면 종합 signal 을 violation 으로 올리되 violation.is_violation(공식 표시)은 건드리지 않는다.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    verdict: ExtensionVerdict
+    """
+    violation=신고했으나 미등재, legal=등재확인/확장없음, uncertain=대조모호.
+    """
+    reason: str | None = None
+    """
+    한국어 판정 근거(대장 변동사항 기준).
+    """
+    reported_areas: list[str] | None = None
+    """
+    사용자가 신고한 확장 부위.
+    """
+    matched_areas: list[str] | None = None
+    """
+    변동사항에서 등재 확인된 부위.
+    """
+    unrecorded_areas: list[str] | None = None
+    """
+    신고했으나 미등재된 부위(위반 소지).
+    """
+
+
 class Violation(BaseModel):
     """
     노란딱지(위반건축물) 판정. is_violation = 전유부 OR 표제부 resViolationStatus=='위반건축물'.
@@ -224,20 +264,6 @@ class ChangeEntry(BaseModel):
     """
 
 
-class PriceEntry(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    reference_date: str | None = None
-    """
-    기준일자.
-    """
-    base_price: int | None = None
-    """
-    공동주택가격(원, 정수).
-    """
-
-
 class Kind1(Enum):
     """
     PDF 종류.
@@ -335,9 +361,9 @@ class HomeCheckReport(BaseModel):
     """
     전유부+표제부 변동사항(resChangeList) 통합 타임라인. 확장 등재 여부 대조의 핵심.
     """
-    prices: list[PriceEntry] | None = None
+    extension_check: ExtensionCheck | None = None
     """
-    전유부 공동주택가격(resPriceList).
+    사용자가 신고한 확장·개조 부위와 대장 변동사항을 대조한 LLM 판정. 사용자 입력이 있을 때만 채워진다. 노란딱지(violation)와 별개 축.
     """
     documents: list[DocumentRef] | None = None
     """
@@ -365,9 +391,9 @@ class HomeCheckJob(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.1.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.3.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 1.1.0: NeedsInput 에 field/options(주소·동·호 후보) 추가(하위호환 — 추가 선택 필드).
+    스키마 버전 (semver). 1.3.0: phase(진행 단계, 정보성 open string) 추가 — 대기 화면 실시간 스텝 표시용. 1.2.0: report 에 extension_check(신고확장↔변동사항 LLM 대조) 추가 + prices(공동주택가격) 제거 — 우리집 체크는 확장 등재 여부가 목적이라 가격/속성 노이즈 제외.
     """
     id: str
     """
@@ -376,6 +402,10 @@ class HomeCheckJob(BaseModel):
     status: Status
     """
     잡 상태. needs_input = 동·호 자동매칭 실패 또는 보안문자(reqSecureNo) 발생 폴백.
+    """
+    phase: str | None = None
+    """
+    백그라운드 파이프라인 진행 단계(정보성 — status 가 상태 기계 정본). 알려진 값: received → issuing_registers → judging → saving_report. status=pending|querying 일 때만 의미가 있으며 터미널 상태에선 마지막 값이 남는다. 워커 통합/세분화로 값이 추가될 수 있으므로 엄격 enum 이 아니다 — 클라이언트는 미지의 값을 일반 대기 문구로 폴백해야 한다.
     """
     signal: Signal | None = None
     """

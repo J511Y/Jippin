@@ -12,6 +12,7 @@ import {
   Text,
   Title
 } from '@mantine/core';
+import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
@@ -27,15 +28,23 @@ import {
   type SessionReportResponse
 } from '@/lib/sessions/api';
 
+// 판정 색은 전부 상태 토큰 팔레트(success/warning/danger/info) — Mantine 기본색
+// (yellow/red/gray)은 브랜드 팔레트 밖이라 쓰지 않는다. HOLD(데이터 부족)는 경고도
+// 실패도 아니어서 info(중립 안내)로 둔다.
 const VERDICT: Record<string, { label: string; color: string }> = {
   ALLOW: { label: '가능성 있음', color: 'success' },
-  WARN: { label: '조건부 가능', color: 'yellow' },
-  HOLD: { label: '추가 확인 필요', color: 'gray' },
-  DENY: { label: '어려움', color: 'red' }
+  WARN: { label: '조건부 가능', color: 'warning' },
+  HOLD: { label: '추가 확인 필요', color: 'info' },
+  DENY: { label: '어려움', color: 'danger' }
 };
 
 type Facility = { label?: string; measurement_basis?: string };
-type LegalBasis = { statute?: string; article?: string; summary?: string };
+type LegalBasis = {
+  statute?: string;
+  article?: string;
+  summary?: string;
+  url?: string | null;
+};
 
 export default function SessionReportPage() {
   const params = useParams<{ sessionId: string }>();
@@ -104,14 +113,43 @@ export default function SessionReportPage() {
         permit_required?: boolean;
         required_facilities?: Facility[];
         legal_basis?: LegalBasis[];
+        additional_checks?: string[];
+        ruleset_version?: string;
       }
     | undefined;
   const verdict = result?.verdict ? VERDICT[result.verdict] : undefined;
+  const additionalChecks = (result?.additional_checks ?? []).filter(
+    (c): c is string => typeof c === 'string' && c.length > 0
+  );
 
   return (
     <Stack gap="lg">
-      <Stack gap="xs">
-        <Title order={1}>AI 사전검토 리포트</Title>
+      {/* 리포트 헤더 — Blueprint Navy 전문 축(가벼운 표현: 상단 보더 + 네이비 헤딩).
+          판정이 준비되면 '한 줄 판정'을 display 토큰으로 최상단에 크게 보여 준다. */}
+      <Stack
+        gap="xs"
+        style={{
+          borderTop: '3px solid var(--jippin-brand-professional)',
+          paddingTop: 'var(--mantine-spacing-md)'
+        }}
+      >
+        <Title order={1} c="var(--jippin-brand-professional)">
+          AI 사전검토 리포트
+        </Title>
+        {report !== null && result && (
+          <Text
+            component="p"
+            fw={700}
+            style={{
+              margin: 0,
+              fontSize: 'var(--jippin-fz-display)',
+              lineHeight: 1.35,
+              wordBreak: 'keep-all'
+            }}
+          >
+            {verdict?.label ?? result.verdict ?? '판정'}
+          </Text>
+        )}
         <Text c="dimmed" size="sm" style={{ wordBreak: 'keep-all' }}>
           도면과 주소 분석을 바탕으로 정리한 사전 판단 결과입니다. 최종 행위허가는
           관할 기관 판단에 따라 달라질 수 있어요.
@@ -119,7 +157,7 @@ export default function SessionReportPage() {
       </Stack>
 
       {error && (
-        <Alert color="red" variant="light" radius="md">
+        <Alert color="danger" variant="light" radius="md">
           {error}
         </Alert>
       )}
@@ -132,7 +170,7 @@ export default function SessionReportPage() {
               AI 도우미와의 대화를 완료하면 판정 결과가 여기에 표시됩니다.
             </Text>
             <Button
-              component="a"
+              component={Link}
               href={`/sessions/${sessionId}`}
               color="jippin"
               radius="md"
@@ -178,6 +216,20 @@ export default function SessionReportPage() {
             </Stack>
           </Card>
 
+          {/* REPORT-001 '판단 상태' — 보류/보수 가정 시 현장에서 확인할 체크리스트. */}
+          {additionalChecks.length > 0 && (
+            <Card withBorder radius="md" padding="md">
+              <Stack gap="xs">
+                <Text fw={600}>추가로 확인하면 좋아요</Text>
+                <List size="sm" spacing={4}>
+                  {additionalChecks.map((check, i) => (
+                    <List.Item key={i}>{check}</List.Item>
+                  ))}
+                </List>
+              </Stack>
+            </Card>
+          )}
+
           {(result.required_facilities ?? []).length > 0 && (
             <Card withBorder radius="md" padding="md">
               <Stack gap="xs">
@@ -201,11 +253,29 @@ export default function SessionReportPage() {
                 <List size="sm" spacing={4}>
                   {(result.legal_basis ?? []).map((l, i) => (
                     <List.Item key={i}>
-                      {[l.statute, l.article].filter(Boolean).join(' ')}
+                      {l.url ? (
+                        // FR-REPORT-009 — 법령 원문 링크가 있으면 조문 표기를 링크로 연다.
+                        <a
+                          href={l.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: 'var(--jippin-brand-primary)' }}
+                        >
+                          {[l.statute, l.article].filter(Boolean).join(' ')}
+                        </a>
+                      ) : (
+                        [l.statute, l.article].filter(Boolean).join(' ')
+                      )}
                       {l.summary ? ` — ${l.summary}` : ''}
                     </List.Item>
                   ))}
                 </List>
+                {result.ruleset_version && (
+                  // RULE-003 — 판정 결정성 추적 키(적용 룰셋 버전) 노출.
+                  <Text size="xs" c="dimmed">
+                    적용 룰셋 버전 {result.ruleset_version}
+                  </Text>
+                )}
               </Stack>
             </Card>
           )}
@@ -235,7 +305,7 @@ export default function SessionReportPage() {
                 </Button>
               </Group>
               {pdfError && (
-                <Alert color="red" variant="light" radius="md" py="xs">
+                <Alert color="danger" variant="light" radius="md" py="xs">
                   {pdfError}
                 </Alert>
               )}
@@ -259,7 +329,7 @@ export default function SessionReportPage() {
           전문가 상담 신청하기
         </LeadCtaButton>
         <Button
-          component="a"
+          component={Link}
           href="/sessions"
           variant="subtle"
           color="jippin"
@@ -278,10 +348,13 @@ function won(amount: number): string {
   return `${amount.toLocaleString('ko-KR')}원`;
 }
 
-/** 견적 항목 1줄의 금액 문구 — 고정 최소액/단가/별도견적을 구분해 표기. */
-function amountText(item: EstimateResult['items'][number]): string {
+/** 견적 항목 1줄의 금액 문구 — 정액/전제 범위/단가/별도견적을 구분해 표기. */
+function amountText(item: NonNullable<EstimateResult['items']>[number]): string {
   if (typeof item.amount_min === 'number') {
-    return `${won(item.amount_min)}~`;
+    if (typeof item.amount_max === 'number' && item.amount_max > item.amount_min) {
+      return `${won(item.amount_min)}~${won(item.amount_max)}`;
+    }
+    return won(item.amount_min);
   }
   if (typeof item.unit_amount === 'number') {
     return `${won(item.unit_amount)}${item.unit ? ` / ${item.unit.replace(/^원\//, '')}` : ''}~`;
@@ -289,20 +362,25 @@ function amountText(item: EstimateResult['items'][number]): string {
   return '별도 견적';
 }
 
-/** 예상 견적 카드(REPORT-003) — /faq?category=cost 단가표 기반 예비 안내. */
+/** 예상 견적 카드(REPORT-003) — estimate-result 계약(1.1.0) 기반 예비 안내. */
 function EstimateCard({ estimate }: { estimate: EstimateResult }) {
+  const items = estimate.items ?? [];
+  // 배포 스큐 방어: 구(1.0.0) API 응답엔 1.1.0 필드가 없다 — 전부 옵셔널로 접근한다.
+  const assumptions = estimate.assumptions ?? [];
+  const total = estimate.total_range;
+  const hasTotal = total && total.max > 0;
   return (
     <Card withBorder radius="md" padding="md">
       <Stack gap="sm">
         <Group justify="space-between" align="center">
           <Text fw={600}>예상 견적</Text>
           <Badge color="gray" variant="light">
-            참고용 · 부가세 포함
+            참고용{estimate.vat_included ? ' · 부가세 포함' : ''}
           </Badge>
         </Group>
 
         <Stack gap={6}>
-          {estimate.items.map((item) => (
+          {items.map((item) => (
             <Group key={item.code} justify="space-between" align="flex-start" wrap="nowrap">
               <Stack gap={0} style={{ flex: 1 }}>
                 <Text size="sm" fw={500}>
@@ -321,31 +399,50 @@ function EstimateCard({ estimate }: { estimate: EstimateResult }) {
           ))}
         </Stack>
 
-        {typeof estimate.fixed_total_min === 'number' && (
+        {hasTotal && (
           <Group justify="space-between" align="center">
             <Text size="sm" fw={600}>
-              기본 합계 (최소)
+              합계 (예상 범위)
             </Text>
-            <Text size="sm" fw={700} c="coral">
-              {won(estimate.fixed_total_min)}~
-              {estimate.has_variable_items ? ' + 현장 항목' : ''}
+            {/* 금액 강조는 굵기만 — coral 은 전환 CTA 전용이라 금액에 쓰지 않는다. */}
+            <Text size="sm" fw={700}>
+              {total.max > total.min ? `${won(total.min)}~${won(total.max)}` : won(total.min)}
+              {estimate.consultation_required ? ' + 현장 견적 항목' : ''}
             </Text>
           </Group>
         )}
 
-        <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-          {estimate.disclaimer}
-        </Text>
-        <Button
-          component="a"
-          href={estimate.source_url}
-          variant="subtle"
-          color="jippin"
-          size="compact-sm"
-          w="fit-content"
-        >
-          비용 안내 자세히 보기 →
-        </Button>
+        {assumptions.length > 0 && (
+          <List size="xs" spacing={2} c="dimmed">
+            {assumptions.map((assumption, i) => (
+              <List.Item key={i}>{assumption}</List.Item>
+            ))}
+          </List>
+        )}
+
+        {(estimate.variance_notes ?? []).map((note, i) => (
+          <Text key={i} size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+            {note}
+          </Text>
+        ))}
+
+        {estimate.disclaimer && (
+          <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+            {estimate.disclaimer}
+          </Text>
+        )}
+        {estimate.source_url && (
+          <Button
+            component={Link}
+            href={estimate.source_url}
+            variant="subtle"
+            color="jippin"
+            size="compact-sm"
+            w="fit-content"
+          >
+            비용 안내 자세히 보기 →
+          </Button>
+        )}
       </Stack>
     </Card>
   );

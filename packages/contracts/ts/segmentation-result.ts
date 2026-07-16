@@ -33,15 +33,15 @@ export type Label =
  */
 export interface SegmentationResult {
   /**
-   * 스키마 버전 (semver). 1.2.0: image/regions(오버레이 좌표) 추가. 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가.
+   * 스키마 버전 (semver). 1.3.0: error_code 에 NOT_FLOORPLAN 추가(코드-스키마 드리프트 정리). 1.2.0: image/regions(오버레이 좌표) 추가. 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가.
    */
-  schema_version: "1.2.0";
+  schema_version: "1.3.0";
   /**
    * 추론 성공 여부. false 면 error_code 가 채워지고 에이전트는 degrade 한다.
    */
   ok: boolean;
   /**
-   * ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE 등.
+   * ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE, VLM 이 평면도가 아니라고 판정=NOT_FLOORPLAN 등.
    */
   error_code?:
     | "SEGMENTATION_ENDPOINT_UNAVAILABLE"
@@ -52,6 +52,7 @@ export interface SegmentationResult {
     | "SEGMENTATION_BAD_RESPONSE"
     | "SEGMENTATION_NO_IMAGE"
     | "SEGMENTATION_NOT_SCANNED"
+    | "SEGMENTATION_NOT_FLOORPLAN"
     | null;
   /**
    * 저장된 segmentation_mask floorplan_assets.id (있으면). 마스크 이미지는 Storage 에만 두고 여기엔 포인터만.
