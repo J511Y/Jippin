@@ -47,6 +47,18 @@ def _env(monkeypatch):
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_extension_load(monkeypatch):
+    """확장 입력 로드(_load_extension_input)는 DB seam — 완료 경로가 항상 이걸 읽으므로
+    기본은 '미응답'(None,None)으로 중립화해 DB 없이 돈다. 확장 판정을 검증하는 테스트는
+    테스트 본문에서 이 seam 을 재패치한다(later-wins)."""
+
+    async def fake_load(_hid):
+        return None, None
+
+    monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+
+
 def _auth_client(monkeypatch, *, is_anonymous: bool = False):
     pem, jwk = helpers.rsa_keypair()
     helpers.install_jwks(monkeypatch, {"keys": [jwk]})
@@ -292,8 +304,70 @@ def test_signal_normal_when_both_clean(monkeypatch) -> None:
     assert values["building_floors"] == "지하 1층 지상 12층"
     assert len(values["change_list"]) == 2  # 전유부 + 표제부
     assert "price_list" not in values
-    # 확장 판정은 게이트가 꺼져 있으므로(default) extension_check 는 없다.
+    # 확장 미응답(reported_extension=None)이면 게이트 여부와 무관하게 extension_check 는 없다.
     assert values["result_fields"]["extension_check"] is None
+
+
+def test_extension_offline_no_report_is_legal_when_gate_off(monkeypatch) -> None:
+    """게이트 off(default)여도 사용자가 '확장 없음'을 답했으면 LLM 없이 legal 로 채운다.
+
+    게이트가 꺼졌다고 확장 입력을 버리면 web 이 '확장 여부를 입력하지 않아 미대조'(not_checked)로
+    오표시한다(#167 리뷰). None=미포함, False=legal, True=uncertain 을 비-LLM 으로 채운다.
+    """
+
+    captured = _capture_updates(monkeypatch)
+
+    async def fake_load(_hid):
+        return False, None
+
+    monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+    values = captured[str(hid)]
+    ext = values["result_fields"]["extension_check"]
+    assert ext is not None
+    assert ext["verdict"] == "legal"
+    assert values["signal"] == "normal"
+
+
+def test_extension_offline_reported_true_is_uncertain_when_gate_off(
+    monkeypatch,
+) -> None:
+    """게이트 off + 확장 신고(True) → 자동 대조 불가라 uncertain(caution)으로 정직하게 표기."""
+
+    captured = _capture_updates(monkeypatch)
+
+    async def fake_load(_hid):
+        return True, "거실"
+
+    monkeypatch.setattr(svc, "_load_extension_input", fake_load)
+
+    hid = uuid.uuid4()
+    monkeypatch.setattr(
+        svc,
+        "_new_client",
+        lambda: _FakeClient(exclusive=_exclusive(None), heading=_heading(None)),
+    )
+    _run(
+        svc.run_home_check(
+            hid, road_addr="addr", jibun_addr=None, dong="101", ho="1001"
+        )
+    )
+    values = captured[str(hid)]
+    ext = values["result_fields"]["extension_check"]
+    assert ext is not None
+    assert ext["verdict"] == "uncertain"
+    assert values["signal"] == "caution"
 
 
 def test_signal_folds_extension_violation_over_official_normal(monkeypatch) -> None:

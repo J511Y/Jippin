@@ -54,7 +54,7 @@ from ..services.codef import (
     CodefNeedsUserInput,
     ExclusivePartResult,
 )
-from ..services.home_check_extension import judge_extension
+from ..services.home_check_extension import judge_extension, offline_extension_judgment
 
 logger = get_logger("zippin.home_check")
 
@@ -730,14 +730,16 @@ async def _mark_completed(
     heading_summary = _summarize_heading(heading) if heading is not None else None
     change_history = _merge_change_history(exclusive, heading)
 
-    # 확장 신고 ↔ 변동사항 LLM 대조(별개 축). 기능 게이트가 꺼져 있으면(default) 판정을
-    # 건너뛰어 extension_check 는 없고 신호는 공식 축(_judge) 그대로다 — OpenAI 의존 없음.
-    # 공식 노란딱지 축(exclusive_violation/heading_violation/violation)은 절대 건드리지
-    # 않고, 종합 signal 과 caution_reasons 에만 확장 verdict 를 접는다.
+    # 확장 신고 ↔ 변동사항 대조(별개 축). 사용자는 기능 게이트와 무관하게 퍼널에서 확장 여부를
+    # 답하므로, 게이트가 꺼져 있어도(default) 그 입력을 버리지 않는다 — 버리면 web 이 '확장 여부를
+    # 입력하지 않아 미대조'(not_checked)로 오표시한다. OpenAI 의존은 reported_extension=True 대조에만
+    # 있어, 게이트 off 면 None/False 는 그대로 채우고 True 만 uncertain(자동 대조 못함)으로 degrade.
+    # 공식 노란딱지 축(exclusive_violation/heading_violation/violation)은 절대 건드리지 않고,
+    # 종합 signal 과 caution_reasons 에만 확장 verdict 를 접는다.
     extension_check: dict[str, Any] | None = None
     settings = get_settings()
+    reported_extension, extended_areas = await _load_extension_input(home_check_id)
     if settings.extension_judge_enabled:
-        reported_extension, extended_areas = await _load_extension_input(home_check_id)
         # 판정 입력은 **전유부(unit)** 변동사항만 쓴다. 신고 확장은 이 세대(전유부)에 대한 것이고,
         # 표제부(건물/공용) 변동은 다른 세대·공용부 변동일 수 있어, 섞으면 무관한 표제부 변동을
         # 이 세대 확장의 '등재'로 오인(→미등재를 legal 로 오판)할 수 있다(#ext-unit-scope).
@@ -748,23 +750,25 @@ async def _mark_completed(
             change_history=unit_changes,
             settings=settings,
         )
-        if judgment is not None:
-            extension_check = {
-                "verdict": judgment.verdict,
-                "reason": judgment.reason,
-                "reported_areas": judgment.reported_areas,
-                "matched_areas": judgment.matched_areas,
-                "unrecorded_areas": judgment.unrecorded_areas,
-            }
-            if judgment.verdict == "uncertain":
-                caution_reasons = [*caution_reasons, _EXTENSION_UNCERTAIN_CAUTION]
-            # 공식 violation 은 불변. signal 만 재계산해 확장 verdict 를 접는다.
-            if violation or judgment.verdict == "violation":
-                signal = "violation"
-            elif caution_reasons or judgment.verdict == "uncertain":
-                signal = "caution"
-            else:
-                signal = "normal"
+    else:
+        judgment = offline_extension_judgment(reported_extension)
+    if judgment is not None:
+        extension_check = {
+            "verdict": judgment.verdict,
+            "reason": judgment.reason,
+            "reported_areas": judgment.reported_areas,
+            "matched_areas": judgment.matched_areas,
+            "unrecorded_areas": judgment.unrecorded_areas,
+        }
+        if judgment.verdict == "uncertain":
+            caution_reasons = [*caution_reasons, _EXTENSION_UNCERTAIN_CAUTION]
+        # 공식 violation 은 불변. signal 만 재계산해 확장 verdict 를 접는다.
+        if violation or judgment.verdict == "violation":
+            signal = "violation"
+        elif caution_reasons or judgment.verdict == "uncertain":
+            signal = "caution"
+        else:
+            signal = "normal"
 
     # PDF 보관(best-effort) — 실패해도 잡은 completed 로 둔다(문서 링크만 생략).
     await _set_phase(home_check_id, PHASE_SAVING_REPORT)

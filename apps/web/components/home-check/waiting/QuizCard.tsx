@@ -19,7 +19,7 @@ import { isOxQuiz, type QuizItem } from '@/lib/quiz';
 
 type QuizPhase = 'answering' | 'revealed' | 'finished';
 
-/** Fisher-Yates 사본 셔플 — 재방문/다시 풀기마다 문항 순서가 달라진다. */
+/** Fisher-Yates 사본 셔플 — '다시 풀기'마다 문항 순서가 달라진다(클라 이벤트에서만 호출). */
 function shuffle<T>(source: readonly T[]): T[] {
   const out = [...source];
   for (let i = out.length - 1; i > 0; i -= 1) {
@@ -32,7 +32,10 @@ function shuffle<T>(source: readonly T[]): T[] {
 }
 
 export function QuizCard({ items }: { items: QuizItem[] }) {
-  const [order, setOrder] = useState<QuizItem[]>(() => shuffle(items));
+  // 초기 순서는 items 그대로(결정적) — SSR 프리렌더와 하이드레이션 트리가 반드시 일치해야
+  // 한다. 초기화에서 shuffle(Math.random())을 쓰면 서버/클라 첫 렌더가 갈려 hydration
+  // mismatch + 문항이 눈에 띄게 바뀐다. 셔플은 클라 이벤트인 '다시 풀기'(restart)에서만 한다.
+  const [order, setOrder] = useState<QuizItem[]>(items);
   const [cursor, setCursor] = useState(0);
   const [phase, setPhase] = useState<QuizPhase>('answering');
   const [picked, setPicked] = useState<number | null>(null);
