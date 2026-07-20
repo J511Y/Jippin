@@ -19,9 +19,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
+import time
 
 import structlog
 from playwright.async_api import Page
+
+from .timing import log_stage, timed_stage
 
 _log = structlog.get_logger(__name__)
 
@@ -137,7 +140,11 @@ _CLIPDATA_LEN_JS = "() => (window.__clipData||[]).reduce((a,b)=>a+(b?b.length:0)
 
 
 async def extract_report(
-    popup: Page, *, timeout_ms: int, pdf_deadline: float | None = None
+    popup: Page,
+    *,
+    timeout_ms: int,
+    pdf_deadline: float | None = None,
+    register_kind: str | None = None,
 ) -> dict:
     """리포트 팝업에서 **전 쪽** 텍스트 + 위반여부 + PDF(base64)를 추출한다.
 
@@ -146,6 +153,7 @@ async def extract_report(
     """
 
     # 초기 렌더/데이터 도착 대기.
+    initial_started = time.monotonic()
     try:
         await popup.wait_for_function(
             "() => (window.__clipData && window.__clipData.length) || document.querySelector('canvas')",
@@ -156,13 +164,16 @@ async def extract_report(
     # 캔버스만 먼저 뜨고 첫 RPTCAA02R02 캡처가 늦는 경우를 조건 대기로 흡수한다 —
     # 데이터가 이미 도착한 보통의 경우 수백 ms 로 끝나고, cap 은 기존 고정 sleep 과 동일.
     await _wait_clipdata_stable(popup, cap_ms=1800)
+    log_stage(_log, "clip_initial_render", initial_started, register_kind=register_kind)
 
     # 모든 쪽 로드 — 변동사항·위반표시(2쪽)를 반드시 포함시키기 위해.
-    await _load_all_pages(popup)
-    # 마지막 쪽 XHR 리스너 flush 지연을 조건 대기로 흡수(동일 cap).
-    await _wait_clipdata_stable(popup, cap_ms=800)
+    with timed_stage(_log, "clip_all_pages", register_kind=register_kind):
+        await _load_all_pages(popup)
+        # 마지막 쪽 XHR 리스너 flush 지연을 조건 대기로 흡수(동일 cap).
+        await _wait_clipdata_stable(popup, cap_ms=800)
 
     # 팝업의 모든 프레임에서 **엔트리별로** 모든 쪽 텍스트를 수집·병합(레이스 회피).
+    parse_started = time.monotonic()
     paint_parts: list[str] = []
     decoded_parts: list[str] = []
     warnings: list[str] = []
@@ -196,14 +207,16 @@ async def extract_report(
     compact = re.sub(r"[\s+]+", "", full_text)
     violation = _VIOLATION in compact
     violation_source = "report_text" if full_text else None
+    log_stage(_log, "clip_text_parse", parse_started, register_kind=register_kind)
 
     # 텍스트 추출까지 소요한 시간을 뺀 '남은 잡 예산'으로 PDF 를 제한한다(#pdf-budget).
     budget_ms = None
     if pdf_deadline is not None:
         budget_ms = int(max(0, (pdf_deadline - asyncio.get_event_loop().time()) * 1000))
-    pdf_b64, pdf_source = await _capture_pdf(
-        popup, timeout_ms=timeout_ms, budget_ms=budget_ms
-    )
+    with timed_stage(_log, "clip_pdf", register_kind=register_kind):
+        pdf_b64, pdf_source = await _capture_pdf(
+            popup, timeout_ms=timeout_ms, budget_ms=budget_ms
+        )
 
     _log.info(
         "clip.extracted",

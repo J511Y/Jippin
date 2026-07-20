@@ -107,7 +107,9 @@ class Settings(BaseSettings):
     # 워커 잡 상한(콜드스타트+발급). 워커 job_deadline_ms 보다 넉넉히.
     seumteo_worker_timeout_seconds: int = Field(default=180)
     # 화면 진입 warm-up과 실제 조회 전 ready 가드의 총 대기 예산/폴링 간격.
-    seumteo_worker_warmup_timeout_seconds: int = Field(default=45)
+    # Fly cold-start(Chromium) 뒤 실제 세움터 로그인까지 readiness 가 보장하므로, 둘의 합산
+    # 상한을 둔다. 랜딩에서 비동기로 먼저 시작해 정상 UX에서는 이 시간을 기다리지 않는다.
+    seumteo_worker_warmup_timeout_seconds: int = Field(default=120)
     seumteo_worker_warmup_poll_seconds: float = Field(default=2.0)
     # 전유부+표제부 통합 잡(/jobs/building-register-bundle) 사용 여부. 워커에 bundle
     # 엔드포인트가 배포된 뒤 수동 검증을 거쳐 켠다(구 워커면 클라이언트가 404 를 보고

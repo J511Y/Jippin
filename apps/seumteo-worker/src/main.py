@@ -25,6 +25,7 @@ from .models import (
     BuildingRegisterError,
     BuildingRegisterRequest,
 )
+from .timing import bind_job, new_job_id
 
 _log = structlog.get_logger(__name__)
 
@@ -68,23 +69,70 @@ async def healthz():
     return {"ok": True, "browser": True}
 
 
+@app.post("/readyz")
+async def readyz(authorization: str | None = Header(default=None)):
+    """Chromium뿐 아니라 세움터 로그인 세션까지 실제 잡 투입 가능한 상태로 만든다."""
+
+    _require_token(authorization)
+    mgr: BrowserManager = app.state.mgr
+    started = time.monotonic()
+    try:
+        await mgr.prepare_authenticated()
+    except LoginError:
+        _log.warning(
+            "readyz.auth_failed",
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "browser": mgr.is_healthy(),
+                "authenticated": False,
+                "category": "auth",
+            },
+        )
+    except Exception:  # noqa: BLE001 — 준비 경로에는 내부 오류를 노출하지 않는다.
+        _log.warning(
+            "readyz.failed",
+            duration_ms=round((time.monotonic() - started) * 1000),
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "browser": mgr.is_healthy(), "authenticated": False},
+        )
+    _log.info(
+        "readyz.ready",
+        duration_ms=round((time.monotonic() - started) * 1000),
+    )
+    return {"ok": True, "browser": True, "authenticated": True}
+
+
 @app.post("/jobs/building-register")
 async def building_register(
-    req: BuildingRegisterRequest, authorization: str | None = Header(default=None)
+    req: BuildingRegisterRequest,
+    authorization: str | None = Header(default=None),
+    x_jippin_trace_id: str | None = Header(default=None),
 ):
     _require_token(authorization)
     flow: SeumteoFlow = app.state.flow
     settings = get_settings()
     started = time.monotonic()
+    worker_job_id = new_job_id(x_jippin_trace_id)
     # 주소·동·호는 로그에 남기지 않는다. 잡 수명과 대장 종류만 남겨 Flycast/세움터 경계를
     # 구분할 수 있게 한다.
-    _log.info("job.received", register_kind=req.register_kind)
+    _log.info(
+        "job.received", worker_job_id=worker_job_id, register_kind=req.register_kind
+    )
     try:
-        result = await asyncio.wait_for(
-            flow.run(req), timeout=settings.job_deadline_ms / 1000
-        )
+        with bind_job(worker_job_id):
+            result = await asyncio.wait_for(
+                flow.run(req), timeout=settings.job_deadline_ms / 1000
+            )
         _log.info(
             "job.completed",
+            worker_job_id=worker_job_id,
             register_kind=req.register_kind,
             duration_ms=round((time.monotonic() - started) * 1000),
         )
@@ -92,6 +140,7 @@ async def building_register(
     except LoginError as exc:
         _log.warning(
             "job.auth_error",
+            worker_job_id=worker_job_id,
             register_kind=req.register_kind,
             duration_ms=round((time.monotonic() - started) * 1000),
         )
@@ -103,6 +152,7 @@ async def building_register(
     except FlowError as exc:
         _log.warning(
             "job.flow_error",
+            worker_job_id=worker_job_id,
             category=exc.category,
             message=exc.message,
             duration_ms=round((time.monotonic() - started) * 1000),
@@ -118,6 +168,7 @@ async def building_register(
     except asyncio.TimeoutError:
         _log.warning(
             "job.timeout",
+            worker_job_id=worker_job_id,
             register_kind=req.register_kind,
             duration_ms=round((time.monotonic() - started) * 1000),
         )
@@ -129,6 +180,7 @@ async def building_register(
     except Exception:  # noqa: BLE001
         _log.exception(
             "job.unexpected",
+            worker_job_id=worker_job_id,
             register_kind=req.register_kind,
             duration_ms=round((time.monotonic() - started) * 1000),
         )
@@ -160,19 +212,23 @@ def _bundle_error_payload(
 async def building_register_bundle(
     req: BuildingRegisterBundleRequest,
     authorization: str | None = Header(default=None),
+    x_jippin_trace_id: str | None = Header(default=None),
 ):
     _require_token(authorization)
     flow: SeumteoFlow = app.state.flow
     settings = get_settings()
     started = time.monotonic()
+    worker_job_id = new_job_id(x_jippin_trace_id)
     # 주소·동·호는 로그에 남기지 않는다(단건 잡과 동일 정책).
-    _log.info("job.received", register_kind="bundle")
+    _log.info("job.received", worker_job_id=worker_job_id, register_kind="bundle")
     try:
-        result = await asyncio.wait_for(
-            flow.run_bundle(req), timeout=settings.bundle_deadline_ms / 1000
-        )
+        with bind_job(worker_job_id):
+            result = await asyncio.wait_for(
+                flow.run_bundle(req), timeout=settings.bundle_deadline_ms / 1000
+            )
         _log.info(
             "job.completed",
+            worker_job_id=worker_job_id,
             register_kind="bundle",
             exclusive_ok=result.exclusive.ok,
             heading_ok=result.heading.ok,
@@ -182,6 +238,7 @@ async def building_register_bundle(
     except LoginError as exc:
         _log.warning(
             "job.auth_error",
+            worker_job_id=worker_job_id,
             register_kind="bundle",
             duration_ms=round((time.monotonic() - started) * 1000),
         )
@@ -189,6 +246,7 @@ async def building_register_bundle(
     except FlowError as exc:
         _log.warning(
             "job.flow_error",
+            worker_job_id=worker_job_id,
             register_kind="bundle",
             category=exc.category,
             message=exc.message,
@@ -202,6 +260,7 @@ async def building_register_bundle(
     except asyncio.TimeoutError:
         _log.warning(
             "job.timeout",
+            worker_job_id=worker_job_id,
             register_kind="bundle",
             duration_ms=round((time.monotonic() - started) * 1000),
         )
@@ -213,6 +272,7 @@ async def building_register_bundle(
     except Exception:  # noqa: BLE001
         _log.exception(
             "job.unexpected",
+            worker_job_id=worker_job_id,
             register_kind="bundle",
             duration_ms=round((time.monotonic() - started) * 1000),
         )

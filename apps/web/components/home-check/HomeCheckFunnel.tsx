@@ -17,11 +17,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { parseApiError } from '@/lib/api/error';
-import {
-  createHomeCheck,
-  type CreateHomeCheckPayload,
-  warmHomeCheckWorker
-} from '@/lib/home-check/api';
+import { createHomeCheck, type CreateHomeCheckPayload } from '@/lib/home-check/api';
 import {
   searchAddress as searchAddressApi,
   type AddressItem,
@@ -29,6 +25,8 @@ import {
 } from '@/lib/leads/api';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
 import { openJusoAddressPopup } from '@/lib/leads/juso-popup';
+
+import { HomeCheckWorkerWarmup } from './HomeCheckWorkerWarmup';
 
 /**
  * 우리집 체크 입력 퍼널 (CMP-DIRECT, ADR-0008 — 토스/삼쩜삼식 재설계).
@@ -132,27 +130,6 @@ export function HomeCheckFunnel({ searchAddressOverride, onSubmitOverride }: Hom
   const [hoTouched, setHoTouched] = useState(false);
 
   const bodyRef = useRef<HTMLDivElement>(null);
-
-  // 이 화면에 진입한 동안 세움터 worker를 best-effort로 깨운다. scale-to-zero 비용은
-  // 유지하면서 사용자가 주소·동·호를 입력하는 시간에 Chromium cold-start를 숨긴다.
-  // warm-up은 익명 세션을 만들지 않는 공개·cooldown API라, 제출 전 불필요한 anonymous user를
-  // 생성하지 않는다. 미리보기는 백엔드를 쓰지 않으므로 실제 호출을 건너뛴다.
-  useEffect(() => {
-    if (onSubmitOverride) return;
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        if (!cancelled) await warmHomeCheckWorker();
-      } catch {
-        // warm-up은 UX 최적화다. 실패해도 제출 시 서버의 ready 가드가 다시 준비를 시도한다.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [onSubmitOverride]);
 
   // 스텝 전환 시 새 스텝의 포커스 대상으로 포커스를 옮긴다. 입력 스텝(주소 검색·동·호)은
   // 입력칸에 곧장 포커스해 키보드 조작(엔터 진행)이 끊기지 않게 하고, 그 외 스텝은 질문
@@ -284,6 +261,8 @@ export function HomeCheckFunnel({ searchAddressOverride, onSubmitOverride }: Hom
 
   return (
     <div className="hc-funnel">
+      {/* 랜딩을 거치지 않은 직접 진입도 예열한다. 미리보기에서는 실제 API를 호출하지 않는다. */}
+      <HomeCheckWorkerWarmup disabled={Boolean(onSubmitOverride)} />
       {showTopBar ? (
         <div className="hc-funnel__top">
           {/* 모바일 터치 타깃 ≥44px — ActionIcon lg 는 34px 라 xl(44px)을 쓴다. */}
