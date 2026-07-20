@@ -29,6 +29,7 @@ import datetime
 import io
 import json
 import re
+import time
 from urllib.parse import quote
 
 import structlog
@@ -45,6 +46,7 @@ from .models import (
     BuildingRegisterResult,
     ExtractionMeta,
 )
+from .timing import log_stage, timed_stage
 from . import clip
 
 _log = structlog.get_logger(__name__)
@@ -297,7 +299,8 @@ class SeumteoFlow:
         self._appnt: dict | None = None
 
     async def run(self, req: BuildingRegisterRequest) -> BuildingRegisterResult:
-        await self._mgr.ensure_logged_in()
+        with timed_stage(_log, "login", register_kind=req.register_kind):
+            await self._mgr.ensure_logged_in()
         # 잡 전체 데드라인(main.py wait_for=job_deadline_ms)보다 _PDF_RETURN_RESERVE_MS 만큼 일찍
         # PDF 를 끊기 위한 절대 마감시각(monotonic). 판정은 이미 끝났으니 PDF 지연이 잡을 취소
         # (→중복발급)시키지 않게 한다(#pdf-budget).
@@ -344,7 +347,8 @@ class SeumteoFlow:
         # 타임박스가 외부 타임아웃보다 늦게 걸려 전유부 성공 결과째 취소되는 일이 없다.
         loop = asyncio.get_event_loop()
         overall_deadline = loop.time() + self._s.bundle_deadline_ms / 1000
-        await self._mgr.ensure_logged_in()
+        with timed_stage(_log, "login", register_kind="bundle"):
+            await self._mgr.ensure_logged_in()
         async with self._mgr.render_semaphore:
             page = await self._mgr.context.new_page()
             try:
@@ -373,21 +377,24 @@ class SeumteoFlow:
             register_kind="heading",
         )
 
-        await page.goto(
-            self._s.eais_base_url + "/moct/bci/aaa02/BCIAAA02L01",
-            wait_until="domcontentloaded",
-        )
+        with timed_stage(_log, "service_entry", register_kind="bundle"):
+            await page.goto(
+                self._s.eais_base_url + "/moct/bci/aaa02/BCIAAA02L01",
+                wait_until="domcontentloaded",
+            )
         # 공유 해석(총괄PK+동) 1회 → 종류별 해석은 상호 독립이라 동시 실행(같은 페이지의
         # in-page fetch 는 프로토콜상 병렬 안전 — 브라우저 동시 XHR 과 동일).
         # 전유부 해석 실패는 전체 실패(순차 경로 동일)지만, 표제부는 여기부터 전 구간
         # best-effort 다 — R01 이 비거나 일시 오류여도 전유부 성공 결과를 버리지 않고
         # 표제부 봉투에만 담는다(순차 경로의 caution 흡수와 동일 의미).
-        shared = await self._resolve_shared(page, req_ex)
-        t_ex_raw, t_head_raw = await asyncio.gather(
-            self._resolve_kind(page, req_ex, shared),
-            self._resolve_kind(page, req_head, shared),
-            return_exceptions=True,
-        )
+        with timed_stage(_log, "resolve_shared", register_kind="bundle"):
+            shared = await self._resolve_shared(page, req_ex)
+        with timed_stage(_log, "resolve_kinds", register_kind="bundle"):
+            t_ex_raw, t_head_raw = await asyncio.gather(
+                self._resolve_kind(page, req_ex, shared),
+                self._resolve_kind(page, req_head, shared),
+                return_exceptions=True,
+            )
         if isinstance(t_ex_raw, BaseException):
             raise t_ex_raw
         t_ex: dict = t_ex_raw
@@ -405,11 +412,14 @@ class SeumteoFlow:
         else:
             t_head = t_head_raw
 
-        await self._clear_cart(page)  # 잔재 카트 정리(#cart-preclean) — 잡당 1회
-        await self._add_to_cart(page, req_ex, t_ex)
+        with timed_stage(_log, "cart_clear", register_kind="bundle"):
+            await self._clear_cart(page)  # 잔재 카트 정리(#cart-preclean) — 잡당 1회
+        with timed_stage(_log, "cart_add", register_kind="exclusive"):
+            await self._add_to_cart(page, req_ex, t_ex)
         if t_head is not None:
             try:
-                await self._add_to_cart(page, req_head, t_head)
+                with timed_stage(_log, "cart_add", register_kind="heading"):
+                    await self._add_to_cart(page, req_head, t_head)
             except FlowError as exc:
                 _log.warning(
                     "flow.bundle_heading_failed", stage="cart", category=exc.category
@@ -420,9 +430,10 @@ class SeumteoFlow:
         targets_by_kind: dict[str, dict] = {"exclusive": t_ex}
         if t_head is not None:
             targets_by_kind["heading"] = t_head
-        items = await self._isolate_cart_many(
-            page, targets_by_kind, optional_kinds=frozenset({"heading"})
-        )
+        with timed_stage(_log, "cart_isolate", register_kind="bundle"):
+            items = await self._isolate_cart_many(
+                page, targets_by_kind, optional_kinds=frozenset({"heading"})
+            )
         if t_head is not None and "heading" not in items:
             _log.warning("flow.bundle_heading_failed", stage="isolate")
             heading_failure = BuildingRegisterError(
@@ -430,8 +441,9 @@ class SeumteoFlow:
                 message="표제부 발급 예약 항목을 확인하지 못했습니다.",
             )
             t_head = None
-        appnt = await self._appnt_info(page)
-        known_receipts = await self._receipt_snapshot(page)
+        with timed_stage(_log, "application_prepare", register_kind="bundle"):
+            appnt = await self._appnt_info(page)
+            known_receipts = await self._receipt_snapshot(page)
 
         item_list = [items["exclusive"]]
         if t_head is not None:
@@ -442,6 +454,7 @@ class SeumteoFlow:
         # 중복 신청이 생기고 접수 매칭이 ambiguous 로 fail-closed 된다(#no-resubmit).
         # 폴백에서도 전유부 신청은 필수(실패 = 전체 실패), 표제부 신청은 best-effort 다.
         submitted: list[str] = []
+        submit_started = time.monotonic()
         s01_candidates: list[str] | None = None
         if self._s.seumteo_bundle_single_submit or len(item_list) == 1:
             try:
@@ -475,23 +488,24 @@ class SeumteoFlow:
                     )
                     heading_failure = self._heading_error(exc)
                     t_head = None
+        log_stage(_log, "submit", submit_started, register_kind="bundle")
 
         kinds: dict[str, tuple[BuildingRegisterRequest, dict]] = {
             "exclusive": (req_ex, t_ex)
         }
         if t_head is not None:
             kinds["heading"] = (req_head, t_head)
-        recps = await self._find_recp_nos(
-            page, kinds, known_receipts, submitted=submitted
-        )
+        with timed_stage(_log, "receipt_match", register_kind="bundle"):
+            recps = await self._find_recp_nos(
+                page, kinds, known_receipts, submitted=submitted
+            )
 
         # 전유부 먼저(핵심 신호) — 접수 미확인/추출 실패는 예외 전파(양쪽 실패 봉투).
         recp_ex = recps.get("exclusive")
         if recp_ex is None:
             raise FlowError("upstream", "신청한 발급 건을 확인하지 못했습니다.")
         pdf_deadline_ex = (
-            overall_deadline
-            - (_PDF_RETURN_RESERVE_MS + _PER_KIND_RESERVE_MS) / 1000
+            overall_deadline - (_PDF_RETURN_RESERVE_MS + _PER_KIND_RESERVE_MS) / 1000
         )
         exclusive = await self._issue_and_extract(
             page, req_ex, t_ex, recp_ex, pdf_deadline=pdf_deadline_ex
@@ -520,7 +534,10 @@ class SeumteoFlow:
                     raise asyncio.TimeoutError
                 heading = await asyncio.wait_for(
                     self._issue_and_extract(
-                        page, req_head, t_head, recp_head,
+                        page,
+                        req_head,
+                        t_head,
+                        recp_head,
                         pdf_deadline=pdf_deadline_head,
                     ),
                     timeout=remaining_s,
@@ -561,25 +578,35 @@ class SeumteoFlow:
         # 그 플래그가 없어 로그인 게이트로 튕긴다(= 로그아웃처럼 보임). 진입된 탭을 재사용하면
         # 플래그가 유지된다. in-page fetch(1~8)는 same-origin 이라 랜딩 이동 없이도 동작한다.
         if not assume_ready:
-            await page.goto(
-                self._s.eais_base_url + "/moct/bci/aaa02/BCIAAA02L01",
-                wait_until="domcontentloaded",
-            )
-        targets = await self._resolve(page, req)
-        await self._clear_cart(page)  # 잔재 카트 정리(#cart-preclean) — 잡당 1회
-        await self._add_to_cart(page, req, targets)  # 담기(C01)
-        item = await self._isolate_cart(page, targets)  # R05: 내 항목 + 잔여 제거(D01)
-        appnt = await self._appnt_info(page)  # 신청자 정보(세션+사업자)
-        # 신청 전에 이미 존재하던 접수번호를 고정한다. 신청 응답의 pbsvcRecpNo 가 06R01 의
-        # 실제 발급 접수번호와 다르더라도, 이후 새로 생긴 동일 세대 행을 안전하게 식별할 수 있다.
-        known_receipts = await self._receipt_snapshot(page)
-        submitted_recp = await self._submit(
-            page, item, appnt
-        )  # 신청(S01+D02)→ 방금 건 접수번호
+            with timed_stage(_log, "service_entry", register_kind=req.register_kind):
+                await page.goto(
+                    self._s.eais_base_url + "/moct/bci/aaa02/BCIAAA02L01",
+                    wait_until="domcontentloaded",
+                )
+        with timed_stage(_log, "resolve", register_kind=req.register_kind):
+            targets = await self._resolve(page, req)
+        with timed_stage(_log, "cart_clear", register_kind=req.register_kind):
+            await self._clear_cart(page)  # 잔재 카트 정리(#cart-preclean) — 잡당 1회
+        with timed_stage(_log, "cart_add", register_kind=req.register_kind):
+            await self._add_to_cart(page, req, targets)  # 담기(C01)
+        with timed_stage(_log, "cart_isolate", register_kind=req.register_kind):
+            item = await self._isolate_cart(
+                page, targets
+            )  # R05: 내 항목 + 잔여 제거(D01)
+        with timed_stage(_log, "application_prepare", register_kind=req.register_kind):
+            appnt = await self._appnt_info(page)  # 신청자 정보(세션+사업자)
+            # 신청 전에 이미 존재하던 접수번호를 고정한다. 신청 응답의 pbsvcRecpNo 가 06R01 의
+            # 실제 발급 접수번호와 다르더라도, 이후 새로 생긴 동일 세대 행을 안전하게 식별할 수 있다.
+            known_receipts = await self._receipt_snapshot(page)
+        with timed_stage(_log, "submit", register_kind=req.register_kind):
+            submitted_recp = await self._submit(
+                page, item, appnt
+            )  # 신청(S01+D02)→ 방금 건 접수번호
         # 06R01 에서 신청 전 스냅샷에 없던 새 행만 수용(공용계정의 과거 접수 구발급 방지).
-        recp = await self._find_recp_no(
-            page, req, targets, known_receipts, submitted_recp
-        )
+        with timed_stage(_log, "receipt_match", register_kind=req.register_kind):
+            recp = await self._find_recp_no(
+                page, req, targets, known_receipts, submitted_recp
+            )
         return await self._issue_and_extract(
             page, req, targets, recp, pdf_deadline=pdf_deadline
         )
@@ -595,13 +622,18 @@ class SeumteoFlow:
     ) -> BuildingRegisterResult:
         """접수 건 발급 → CLIP 추출 → 완전성 게이트 → 결과 조립(종류별 단계)."""
 
-        popup = await self._open_report(page, req, targets, recp)  # 그 건 발급→리포트
+        with timed_stage(_log, "report_open", register_kind=req.register_kind):
+            popup = await self._open_report(
+                page, req, targets, recp
+            )  # 그 건 발급→리포트
         try:
-            extracted = await clip.extract_report(
-                popup,
-                timeout_ms=self._s.report_render_timeout_ms,
-                pdf_deadline=pdf_deadline,
-            )
+            with timed_stage(_log, "report_extract", register_kind=req.register_kind):
+                extracted = await clip.extract_report(
+                    popup,
+                    timeout_ms=self._s.report_render_timeout_ms,
+                    pdf_deadline=pdf_deadline,
+                    register_kind=req.register_kind,
+                )
         finally:
             await popup.close()
 
@@ -694,9 +726,7 @@ class SeumteoFlow:
         shared = await self._resolve_shared(page, req)
         return await self._resolve_kind(page, req, shared)
 
-    async def _resolve_shared(
-        self, page: Page, req: BuildingRegisterRequest
-    ) -> dict:
+    async def _resolve_shared(self, page: Page, req: BuildingRegisterRequest) -> dict:
         """1~2단계(총괄PK + 표제부PK·동 매칭) — 대장 종류와 무관한 공유 단계.
 
         통합 잡은 이 결과를 전유부·표제부가 함께 재사용한다(ES 검색 중복 제거)."""
@@ -1242,9 +1272,7 @@ class SeumteoFlow:
         # 정확 일치만 강제하면 완료 행을 모두 버리고 중복 발급을 유발했다.
 
         # 최신순 정렬 후, 신청 전 스냅샷에 없던 동일 대상 행만 모은다.
-        rows = sorted(
-            rows, key=lambda r: str(r.get("firstCrtnDt") or ""), reverse=True
-        )
+        rows = sorted(rows, key=lambda r: str(r.get("firstCrtnDt") or ""), reverse=True)
         candidates: list[dict] = []
         for r in rows:
             if str(r.get("regstrKindCd")) != kind:
@@ -1257,11 +1285,7 @@ class SeumteoFlow:
                 continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
             if dong and (dong + "동") not in addr_norm:
                 continue
-            if (
-                req.register_kind == "exclusive"
-                and ho
-                and not _addr_has_ho(addr, ho)
-            ):
+            if req.register_kind == "exclusive" and ho and not _addr_has_ho(addr, ho):
                 continue
             recp = _norm_recp_no(r.get("pbsvcRecpNo"))
             if not recp or recp in known_receipts:

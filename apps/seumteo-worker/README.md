@@ -4,8 +4,9 @@
 Playwright headless Chromium 으로 로그인·발급·CLIP 리포트 추출·PDF 저장을 수행하고,
 CODEF 와 동형(同型)인 결과를 apps/api(jippin)에 돌려준다.
 
-- apps/api 는 화면 진입 시 Flycast(`http://jippin-seumteo-worker.flycast/healthz`)로
-  scale-to-zero worker를 깨우고, ready 확인 뒤 `.internal:8080`으로 발급 잡을 직결한다.
+- apps/api 는 화면 진입 시 Flycast `GET /healthz`로 scale-to-zero worker를 깨운 뒤,
+  토큰 보호 `POST /readyz`로 **세움터 로그인 세션까지** 확인하고 `.internal:8080`으로
+  발급 잡을 직결한다.
 - 세움터 계정은 운영자 합의로 **분리하지 않고 단일 계정**(`<세움터-계정ID>`)만 사용한다. 로그인은
   아이디/비밀번호(인증서·간편인증·보안문자 없음 — 발급 정찰로 확인).
 - 발급된 PDF 는 결과의 `original_pdf_base64` 로 반환되며, apps/api 의 기존
@@ -20,8 +21,8 @@ IP·릴리즈가 완전히 독립이다.
 
 ```
 apps/api (app="jippin")                     apps/seumteo-worker (app="jippin-seumteo-worker")
- home_check → healthz(warm-up) ──flycast──▶  scale-to-zero 기동 + browser ready
- home_check → POST /jobs/building-register ──.internal──▶    로그인 → 발급 → CLIP 추출 → PDF
+ home_check → healthz → readyz ──flycast──▶  scale-to-zero 기동 + browser + login ready
+ home_check → POST /jobs/building-register ──.internal──▶    발급 → CLIP 추출 → PDF
    (services/seumteo/client.py)
    결과 = ExclusivePartResult/BuildingHeadingResult ◀────────  결과(JSON, CODEF 동형) + pdf_base64
 ```
@@ -98,11 +99,11 @@ fly secrets set -a jippin SEUMTEO_ENABLED=true SEUMTEO_WORKER_URL=http://jippin-
 ```
 `SEUMTEO_ENABLED=true` 순간 home-check 가 CODEF 대신 이 워커를 쓴다. 롤백은 `false`.
 
-> **scale-to-zero 유지**: `min_machines_running=0`을 유지한다. `/home-check/new` 진입 시
-> Flycast health probe가 worker를 깨우고, 실제 발급은 browser ready 이후 `.internal`로 보내므로
-> cold-start와 Flycast 프록시 요청 상한을 분리한다. 제출 경로도 ready를 다시 확인해 사용자가
-> 화면 진입 직후 제출해도 안전하다. 워커 `JOB_DEADLINE_MS=120000`은 API 180초 상한보다
-> 짧아 긴 발급이 내부 55초 상한에 잘리는 것을 막는다.
+> **scale-to-zero 유지**: `min_machines_running=0`을 유지한다. `/home-check` 랜딩 진입부터
+> Flycast health probe가 worker를 깨우고, 토큰 보호 `POST /readyz`가 실제 세움터 로그인까지
+> 끝낸다. 발급은 그 뒤 `.internal`로 보내므로 cold-start·로그인 비용을 사용자 입력 시간에
+> 숨긴다. 제출 경로도 readiness를 다시 확인해 사용자가 화면 진입 직후 제출해도 안전하다.
+> 워커 `JOB_DEADLINE_MS=120000`은 API 180초 상한보다 짧게 유지한다.
 
 ## PoC 검증 체크리스트 (실주소로 확인 후 조정)
 
