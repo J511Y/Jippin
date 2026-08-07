@@ -8,7 +8,7 @@ import {
   listLeadAttachmentCards,
   listSessionUploadCards
 } from '@/lib/data/floorplans';
-import { UPLOAD_STATUS_LABELS, formatDateTime } from '@/lib/labels';
+import { SCAN_STATUS_LABELS, formatDateTime } from '@/lib/labels';
 
 export const dynamic = 'force-dynamic';
 
@@ -92,32 +92,50 @@ export default async function FloorplansPage() {
           {sessionUploads.length === 0 ? (
             <Card>
               <CardContent className="text-muted-foreground py-12 text-center text-sm">
-                세션에서 업로드된 도면이 없습니다. 에이전트 파이프라인 가동 후 채워집니다.
+                세션에서 업로드된 도면이 아직 없습니다.
               </CardContent>
             </Card>
           ) : (
-            <ul className="flex flex-col gap-2">
+            <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
               {sessionUploads.map((upload) => (
-                <li
-                  key={upload.id}
-                  className="flex items-center justify-between rounded-md border px-3 py-2"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm">{upload.file_name ?? upload.id}</p>
-                    <Link
-                      href={`/sessions/${upload.session_id}`}
-                      className="text-muted-foreground font-mono text-[11px] hover:underline"
-                    >
-                      세션 {upload.session_id.slice(0, 8)}
-                    </Link>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    <Badge variant="secondary" className="font-normal">
-                      {UPLOAD_STATUS_LABELS[upload.status] ?? upload.status}
-                    </Badge>
-                    <span className="text-muted-foreground text-xs tabular-nums">
-                      {formatDateTime(upload.created_at)}
-                    </span>
+                <li key={upload.id} className="overflow-hidden rounded-lg border">
+                  {upload.signedUrl && upload.content_type?.startsWith('image/') ? (
+                    <a href={upload.signedUrl} target="_blank" rel="noreferrer">
+                      {/* signed URL 1시간 만료 — next/image 최적화 대상 아님 */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={upload.signedUrl}
+                        alt={upload.file_name}
+                        className="bg-muted aspect-square w-full object-cover transition-transform hover:scale-105"
+                        loading="lazy"
+                      />
+                    </a>
+                  ) : (
+                    <div className="bg-muted flex aspect-square items-center justify-center">
+                      <FileImage className="text-muted-foreground size-8" />
+                    </div>
+                  )}
+                  <div className="border-t px-3 py-2">
+                    <p className="truncate text-xs font-medium" title={upload.file_name}>
+                      {upload.file_name}
+                    </p>
+                    <div className="text-muted-foreground mt-1 flex items-center justify-between gap-2 text-[11px]">
+                      <Link
+                        href={`/sessions/${upload.session_id}`}
+                        className="truncate font-mono hover:underline"
+                      >
+                        세션 {upload.session_id.slice(0, 8)}
+                      </Link>
+                      <span className="shrink-0">{formatBytes(upload.byte_size)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                      <Badge variant="secondary" className="font-normal">
+                        {SCAN_STATUS_LABELS[upload.scan_status] ?? upload.scan_status}
+                      </Badge>
+                      <span className="text-muted-foreground text-[11px] tabular-nums">
+                        {formatDateTime(upload.created_at)}
+                      </span>
+                    </div>
                   </div>
                 </li>
               ))}

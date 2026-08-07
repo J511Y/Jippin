@@ -72,15 +72,13 @@ export const USER_STATUS_DOT_CLASS: Record<string, string> = {
   deleted: 'bg-zinc-400'
 };
 
-export const UPLOAD_STATUS_LABELS: Record<string, string> = {
-  uploaded: '업로드됨',
-  scan_pending: '스캔 대기',
-  scan_failed: '스캔 실패',
-  ready_for_processing: '처리 대기',
-  processing: '처리중',
-  processed: '처리 완료',
-  rejected: '거부됨',
-  promoted_to_catalog: '카탈로그 승격'
+/** floorplan_assets.scan_status (0008 check 제약) — pending/clean/infected/failed/not_required. */
+export const SCAN_STATUS_LABELS: Record<string, string> = {
+  pending: '스캔 대기',
+  clean: '정상',
+  infected: '감염 의심',
+  failed: '스캔 실패',
+  not_required: '스캔 불필요'
 };
 
 /** 전역 일시 기본 포맷 — yyyy-MM-dd HH:mm (KST). sv-SE 로케일이 ISO 형태를 보장한다. */

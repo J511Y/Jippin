@@ -19,6 +19,7 @@ from .domain import (
     emit_judgment_summary_impl,
     emit_ui_component_impl,
     evaluate_rules_impl,
+    get_building_register_impl,
     lookup_floorplan_candidates_impl,
     search_address_impl,
     set_completion_decision_impl,
@@ -36,6 +37,7 @@ TOOL_KINDS: dict[str, str] = {
     "lookup_floorplan_candidates": "external_api",
     "segment_floorplan": "ai_model",
     "check_building_register": "external_api",
+    "get_building_register": "external_api",
     "evaluate_rules": "rule_engine",
     "emit_ui_component": "render",
     "emit_floorplan_request": "render",
@@ -132,9 +134,24 @@ def build_tools(
         )
 
     @tool
+    async def get_building_register(home_check_id: str) -> dict[str, Any]:
+        """check_building_register 로 시작한 건축물대장 조회의 **결과를 읽어 온다**.
+        status=completed 면 위반건축물 여부와 변동/행위허가 이력(change_history)을 돌려준다 —
+        이력에 이번 검토와 관련된 내용(예: 발코니 확장, 비내력벽 철거 행위허가)이 있으면
+        판단·리포트 설명에 반드시 반영하라. status=querying 이면 아직 조회 중이니 다음
+        턴에서 다시 확인하라(같은 턴에서 반복 폴링하지 말 것)."""
+        return await get_building_register_impl(
+            owner_user_id=owner_user_id,
+            home_check_id=home_check_id,
+            session_id=session_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
+
+    @tool
     async def evaluate_rules(judgment_values: dict[str, Any]) -> dict[str, Any]:
-        """수집된 판단값(wall_type/floor_count/has_sprinkler 등)으로 리모델링 룰을 평가한다.
-        결과는 세션 리포트에 자동 저장된다."""
+        """수집된 판단값(floor_count/balcony_attached/has_sprinkler 등)으로 리모델링 룰을
+        평가한다. wall_type 은 넘기지 말 것 — 사용자의 도면 선택(selected_walls)에서
+        서버가 유도한다. 결과는 세션 리포트에 자동 저장된다."""
         return await evaluate_rules_impl(
             session_id=session_id,
             judgment_values=judgment_values,
@@ -218,6 +235,7 @@ def build_tools(
         confirm_address,
         segment_floorplan,
         check_building_register,
+        get_building_register,
         evaluate_rules,
         emit_ui_component,
         emit_floorplan_request,

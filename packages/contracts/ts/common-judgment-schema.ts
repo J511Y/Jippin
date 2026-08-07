@@ -18,9 +18,9 @@ export interface CommonJudgmentSchema {
    */
   analyzed_at: string;
   /**
-   * 스키마 버전 (semver). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원).
+   * 스키마 버전 (semver). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영).
    */
-  schema_version: "1.1.0";
+  schema_version: "1.2.0";
   building_info: BuildingInfo;
   /**
    * 공간 객체 목록.
@@ -35,6 +35,7 @@ export interface CommonJudgmentSchema {
    */
   window_objects?: WindowObject[];
   vlm_supplement?: VlmSupplement;
+  register_supplement?: RegisterSupplement;
   /**
    * OVERLAY 가 수집한 사용자 선택 철거 대상 벽체 region_id 목록. 기능명세서 §2.5 의 target_wall(단수)를 대체한다 — 복수 벽 동시 선택을 지원하는 정본.
    */
@@ -177,6 +178,38 @@ export interface VlmSupplement {
     new_label: string;
     reason: string;
   }[];
+}
+/**
+ * 건축물대장 조회(read-back)에서 확인한 리포트 반영용 사실 (1.2.0 추가). 미조회 세션은 부재.
+ */
+export interface RegisterSupplement {
+  /**
+   * 위반건축물 표시 여부.
+   */
+  is_violation?: boolean;
+  /**
+   * 전유부 층 표기 (예: '3층') — floor_count 확인 근거.
+   */
+  unit_floor?: string | null;
+  /**
+   * 행위허가 관련 변동 이력(시간순 최근 일부).
+   */
+  permit_entries?: {
+    date?: string | null;
+    reason?: string | null;
+    /**
+     * 표시 라벨 (전유부/표제부/대장).
+     */
+    source?: string | null;
+  }[];
+  /**
+   * 조회 시점 세션 주소의 내용 기반 지문 — 주소 변경 시 stale supplement 무효화 근거.
+   */
+  address_fingerprint?: string;
+  /**
+   * 조회(read-back) 시점.
+   */
+  checked_at?: string;
 }
 /**
  * CHAT 이 사용자로부터 수집한 RULE 입력 변수 모음. SDD §5.2.

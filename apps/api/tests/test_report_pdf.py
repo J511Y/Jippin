@@ -404,6 +404,91 @@ def test_build_context_empty_facilities_sets_note() -> None:
     assert ctx["estimate"] is None
 
 
+def test_register_check_notes_from_supplement() -> None:
+    # 대화에서 확인한 건축물대장 사실(위반·행위허가 이력)이 리포트 '추가 확인' 문구로
+    # 환산된다(#register-supplement-persist, Codex P1).
+    notes = report_content.register_check_notes(
+        {
+            "register_supplement": {
+                "is_violation": True,
+                "permit_entries": [
+                    {
+                        "date": "2009-03-17",
+                        "reason": "행위허가:거실과(와) 발코니 사이 비내력벽 철거",
+                        "source": "전유부",
+                    }
+                ],
+            }
+        }
+    )
+    assert len(notes) == 2
+    assert "위반건축물" in notes[0]
+    assert "행위허가" in notes[1] and "2009-03-17" in notes[1]
+    assert report_content.register_check_notes({}) == []
+    assert report_content.register_check_notes(None) == []
+
+
+def test_register_check_notes_dropped_on_address_change() -> None:
+    # 주소 지문 불일치(조회 후 주소 변경 → 다른 건물) — 옛 건물의 위반/이력을 새
+    # 리포트에 붙이지 않는다(#register-supplement-address-fingerprint, Codex P1).
+    # 지문은 내용 기반이다: session_addresses.id 는 upsert 가 보존하는 안정 ID 라
+    # 주소를 고쳐도 안 변한다 — id 비교로는 stale 을 못 거른다.
+    old_addr = {"road_address": "서울 강남구 테헤란로 1", "unit_ho": "101호"}
+    supplement = {
+        "register_supplement": {
+            "is_violation": True,
+            "address_fingerprint": report_content.address_fingerprint(old_addr),
+            "permit_entries": [{"reason": "행위허가:비내력벽 철거"}],
+        }
+    }
+    # 지문 일치 → 노출.
+    assert (
+        report_content.register_check_notes(supplement, current_address=old_addr) != []
+    )
+    # 지문 불일치(주소 변경 — row id 가 같아도 내용이 다르면 차단) / 현재 주소 미상 → 차단.
+    new_addr = {"road_address": "부산 해운대구 달맞이길 2", "unit_ho": "101호"}
+    assert (
+        report_content.register_check_notes(supplement, current_address=new_addr) == []
+    )
+    assert report_content.register_check_notes(supplement) == []
+
+
+def test_address_fingerprint_normalizes() -> None:
+    assert report_content.address_fingerprint(None) == ""
+    assert report_content.address_fingerprint({}) == ""
+    a = {"road_address": " 서울 강남구 테헤란로 1 ", "unit_ho": "101호"}
+    b = {"road_address": "서울 강남구 테헤란로 1", "unit_ho": "101호"}
+    assert report_content.address_fingerprint(a) == report_content.address_fingerprint(
+        b
+    )
+
+
+def test_build_context_appends_register_notes() -> None:
+    ctx = report_pdf._build_context(
+        session_id=uuid.uuid4(),
+        rule_eval_result=_rule(),
+        estimate_dict=None,
+        address=None,
+        judgment_schema={
+            "register_supplement": {
+                "is_violation": False,
+                "permit_entries": [
+                    {"date": "2009-03-17", "reason": "행위허가:비내력벽 철거"}
+                ],
+            }
+        },
+        overlay={
+            "available": False,
+            "svg": None,
+            "caption": "",
+            "unavailable_reason": "x",
+        },
+        origin="https://jippin.ai",
+        now=datetime(2026, 6, 29, tzinfo=timezone.utc),
+    )["report"]
+    assert any("행위허가" in c for c in ctx["additional_checks"])
+
+
 def test_render_html_contains_all_sections() -> None:
     html = report_pdf.render_html(_sample_context())
     assert len(html) > 3000

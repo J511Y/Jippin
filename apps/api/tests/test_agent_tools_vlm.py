@@ -77,6 +77,20 @@ def test_normalize_supplement_filters_invalid() -> None:
     assert s["is_floorplan"] is True
 
 
+def test_normalize_supplement_wall_labels_only() -> None:
+    # #vlm-wall-only: 교정 라벨은 벽 3종만 — 창/공간으로의 계약 밖 교정(창호가 '확정
+    # 비내력벽'으로 선택·평가되는 경로)을 정규화에서 차단한다(Codex P1).
+    data = {
+        "reclassifications": [
+            {"object_id": "pred:1", "new_label": "window"},  # 벽→창 금지
+            {"object_id": "pred:1", "new_label": "space_living_room"},  # 벽→공간 금지
+            {"object_id": "pred:1", "new_label": "wall_unknown"},  # 벽→벽 허용
+        ]
+    }
+    s = vlm._normalize_supplement(data, model="m", valid_ids={"pred:1"})
+    assert [r["new_label"] for r in s["reclassifications"]] == ["wall_unknown"]
+
+
 def test_normalize_drops_out_of_range_confidence() -> None:
     s = vlm._normalize_supplement(
         {"confidence": 1.5, "notes": [], "reclassifications": []},

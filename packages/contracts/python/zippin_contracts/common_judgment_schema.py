@@ -227,6 +227,48 @@ class VlmSupplement(BaseModel):
     """
 
 
+class PermitEntry(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    date: str | None = None
+    reason: str | None = None
+    source: str | None = None
+    """
+    표시 라벨 (전유부/표제부/대장).
+    """
+
+
+class RegisterSupplement(BaseModel):
+    """
+    건축물대장 조회에서 확인한 사실 (1.2.0 추가). CHAT 의 get_building_register 가 채우고, 리포트(웹/PDF)는 address_fingerprint 가 현재 세션 주소와 일치할 때만 '추가 확인' 목록으로 노출한다.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    is_violation: bool | None = None
+    """
+    위반건축물 표시 여부.
+    """
+    unit_floor: str | None = None
+    """
+    전유부 층 표기 (예: '3층') — floor_count 확인 근거.
+    """
+    permit_entries: list[PermitEntry] | None = None
+    """
+    행위허가 관련 변동 이력(시간순 최근 일부).
+    """
+    address_fingerprint: str | None = None
+    """
+    조회 시점 세션 주소의 내용 기반 지문 — 주소 변경 시 stale supplement 무효화 근거.
+    """
+    checked_at: datetime | None = None
+    """
+    조회(read-back) 시점.
+    """
+
+
 class WindowForm(Enum):
     """
     창호 형태.
@@ -308,9 +350,9 @@ class CommonJudgmentSchema(BaseModel):
     """
     AI 분석 시점 (ISO-8601).
     """
-    schema_version: Literal["1.1.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.2.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원).
+    스키마 버전 (semver). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영).
     """
     building_info: BuildingInfo
     space_objects: list[SpaceObject]
@@ -328,6 +370,10 @@ class CommonJudgmentSchema(BaseModel):
     vlm_supplement: VlmSupplement | None = None
     """
     VLM 재분류·주석 결과. 분석이 보류된 경우 null 또는 부재.
+    """
+    register_supplement: RegisterSupplement | None = None
+    """
+    건축물대장 조회(read-back)에서 확인한 리포트 반영용 사실 (1.2.0 추가). 미조회 세션은 부재.
     """
     selected_walls: list[SelectedWall]
     """

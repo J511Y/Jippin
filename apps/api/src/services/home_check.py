@@ -663,7 +663,7 @@ _CHANGE_KEYWORDS = (
 )
 
 
-def _present_change_history(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def present_change_history(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """저장된 change_list 의 표시 전 정화 — 구 워커가 남긴 절단 중복·필러 행을 걷어낸다.
 
     새 워커(PDF 텍스트 파싱)는 깨끗한 행을 저장하지만, 이미 저장된 세션(공유 링크로
@@ -1242,7 +1242,7 @@ async def _build_report(
 
     change_history = [
         ChangeEntry(**entry)
-        for entry in _present_change_history(row.get("change_list") or [])
+        for entry in present_change_history(row.get("change_list") or [])
     ] or None
 
     raw_extension = fields.get("extension_check")

@@ -173,6 +173,170 @@ async def test_check_building_register_degrades_on_codef_error(monkeypatch) -> N
     assert res["error_code"] == "UPSTREAM_UNAVAILABLE"
 
 
+async def test_get_building_register_bad_and_missing_id(monkeypatch) -> None:
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(), home_check_id="not-a-uuid"
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "BUILDING_REGISTER_BAD_ID"
+
+    async def none_row(**_: object) -> None:
+        return None
+
+    monkeypatch.setattr(home_check, "get_home_check_row", none_row)
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(), home_check_id=str(uuid.uuid4())
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "BUILDING_REGISTER_NOT_FOUND"
+
+
+async def test_get_building_register_pending_returns_status_only(monkeypatch) -> None:
+    async def querying_row(**_: object) -> dict[str, object]:
+        return {"status": "querying"}
+
+    monkeypatch.setattr(home_check, "get_home_check_row", querying_row)
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(), home_check_id=str(uuid.uuid4())
+    )
+    assert res["ok"] is True
+    assert res["status"] == "querying"
+    assert "change_history" not in res
+
+
+async def test_get_building_register_completed_returns_permit_history(
+    monkeypatch,
+) -> None:
+    # 완료된 잡은 위반 여부 + 변동/행위허가 이력을 돌려준다 — "거실-발코니 비내력벽 철거
+    # 행위허가" 같은 이력이 에이전트 판단 근거로 도달해야 한다(#register-readback).
+    # 저장 순서(전유부 전체→표제부 전체)와 무관하게 날짜 정렬 후 최근 이력을 남기고,
+    # 핵심은 세션 judgment_schema.register_supplement 로 영속한다(Codex P1/P2).
+    async def completed_row(**_: object) -> dict[str, object]:
+        return {
+            "status": "completed",
+            "violation": False,
+            "exclusive_violation": False,
+            "heading_violation": False,
+            "building_floors": "지상 15층",
+            "exclusive_floor": "3층",
+            # 조회 잡이 실행된 주소 — 세션 주소와 동일 세대(접미사 유무 혼재 표기).
+            "road_addr": "서울시 강남구 테헤란로 1",
+            "addr_dong": "802",
+            "addr_ho": "1406",
+            "change_list": [
+                {
+                    "date": "2009-03-17",
+                    "reason": "행위허가:거실과(와) 발코니 사이 비내력벽 철거",
+                    "source": "exclusive",
+                },
+                {
+                    "date": "2018-05-01",
+                    "reason": "표시변경(용도변경)",
+                    "source": "heading",
+                },
+                {"date": "1998-11-02", "reason": "신규작성(신축)", "source": "heading"},
+            ],
+        }
+
+    merged: dict[str, object] = {}
+    address_row = {
+        "road_address": "서울시 강남구 테헤란로 1",
+        "apartment_name": "장미마을",
+        "building_dong": "802동",
+        "unit_ho": "1406호",
+    }
+
+    async def fake_merge(**kwargs: object) -> dict[str, object]:
+        merged.update(kwargs)
+        return {}
+
+    async def fake_address(sid: uuid.UUID) -> dict[str, object]:
+        return address_row
+
+    monkeypatch.setattr(home_check, "get_home_check_row", completed_row)
+    monkeypatch.setattr(main_flow, "merge_judgment_schema", fake_merge)
+    monkeypatch.setattr(main_flow, "get_session_address", fake_address)
+    session_id = uuid.uuid4()
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(),
+        home_check_id=str(uuid.uuid4()),
+        session_id=session_id,
+    )
+    assert res["ok"] is True
+    assert res["status"] == "completed"
+    assert res["violation"]["is_violation"] is False
+    assert res["unit_floor"] == "3층"
+    # 날짜 오름차순 정렬 — 소스(전유부/표제부) 저장 순서가 아니라 시간순.
+    dates = [e["date"] for e in res["change_history"]]
+    assert dates == sorted(dates)
+    reasons = [e["reason"] for e in res["change_history"]]
+    assert any("행위허가" in r and "비내력벽" in r for r in reasons)
+    # 전유부/표제부 라벨로 환산돼 내부 enum(exclusive/heading)이 노출되지 않는다.
+    assert {e["source"] for e in res["change_history"]} <= {"전유부", "표제부", "대장"}
+    assert "행위허가 이력 1건" in res["summary"]
+    # register_supplement 영속 — 리포트(웹/PDF)가 읽는 세션 상태로 전달됐다.
+    assert merged["session_id"] == session_id
+    patch = merged["patch"]
+    assert patch["register_supplement"]["is_violation"] is False
+    assert patch["register_supplement"]["unit_floor"] == "3층"
+    # 내용 기반 주소 지문 — 주소 변경 시 리포트 조립이 stale supplement 를 걸러내는
+    # 근거(session_addresses.id 는 upsert 가 보존해 지문으로 못 쓴다).
+    from src.services import report_content
+
+    assert patch["register_supplement"][
+        "address_fingerprint"
+    ] == report_content.address_fingerprint(address_row)
+    assert patch["register_supplement"]["address_fingerprint"] != ""
+    assert any(
+        "행위허가" in str(e.get("reason"))
+        for e in patch["register_supplement"]["permit_entries"]
+    )
+
+
+async def test_get_building_register_skips_persist_on_address_change(
+    monkeypatch,
+) -> None:
+    # 조회가 도는 사이 세션 주소가 바뀌면(row 주소 ≠ 현재 주소) supplement 를 영속하지
+    # 않는다 — 옛 건물 결과에 새 주소 지문이 찍히는 레이스 차단(Codex 5R P1).
+    async def completed_row(**_: object) -> dict[str, object]:
+        return {
+            "status": "completed",
+            "violation": True,
+            "road_addr": "서울시 강남구 테헤란로 1",
+            "addr_dong": "802",
+            "addr_ho": "1406",
+            "change_list": [],
+        }
+
+    async def fake_merge(**kwargs: object) -> dict[str, object]:
+        raise AssertionError("주소 불일치면 영속까지 가면 안 된다")
+
+    async def changed_address(sid: uuid.UUID) -> dict[str, object]:
+        return {"road_address": "부산 해운대구 달맞이길 2", "unit_ho": "1406호"}
+
+    monkeypatch.setattr(home_check, "get_home_check_row", completed_row)
+    monkeypatch.setattr(main_flow, "merge_judgment_schema", fake_merge)
+    monkeypatch.setattr(main_flow, "get_session_address", changed_address)
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(),
+        home_check_id=str(uuid.uuid4()),
+        session_id=uuid.uuid4(),
+    )
+    # 조회 결과 자체(대화 컨텍스트용)는 그대로 돌려준다 — 리포트 영속만 건너뛴다.
+    assert res["ok"] is True
+    assert res["violation"]["is_violation"] is True
+
+
+def test_change_date_key_handles_unpadded_dates() -> None:
+    # 구 워커의 무패딩 표기("2024.9.30")는 문자열 정렬이 깨진다 — (연,월,일) 파싱 키로
+    # 시간순을 보장한다. 파싱 불가는 가장 오래된 것으로.
+    assert domain._change_date_key("2024.9.30") < domain._change_date_key("2024.10.01")
+    assert domain._change_date_key("2011.5.20") == (2011, 5, 20)
+    assert domain._change_date_key("2009-03-17") == (2009, 3, 17)
+    assert domain._change_date_key(None) == (0, 0, 0)
+    assert domain._change_date_key("이하여백") == (0, 0, 0)
+
+
 async def test_confirm_address_sanitizes_non_domain_exception(monkeypatch) -> None:
     # #sanitize-tool-message: 비-도메인 예외의 str(exc)(주소·SQL·URL 가능)를 노출하지 않고
     # 안정적 문구만 반환한다. message 는 runner 가 output_summary 로 승격해 영속하므로.
@@ -341,6 +505,36 @@ async def test_evaluate_rules_derives_wall_type_from_selection(monkeypatch) -> N
     assert res["ok"] is True
     # wall_type=NON_LOAD_BEARING 으로 채워져 DENY 가 아니라 가능성 계열.
     assert res["result"]["verdict"] in ("ALLOW", "WARN")
+
+
+async def test_evaluate_rules_unknown_selection_discards_model_wall_type(
+    monkeypatch,
+) -> None:
+    # 구조 불확실 벽(UNKNOWN)이 선택에 섞여 유도가 실패하면, 모델이 넘긴
+    # wall_type=NON_LOAD_BEARING 으로 HOLD 를 우회하지 못한다(#wall-unknown-hold,
+    # Codex P1).
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_walls": ["pred:1", "pred:2"],
+        "wall_objects": [
+            {"id": "pred:1", "wall_type": "NON_LOAD_BEARING"},
+            {"id": "pred:2", "wall_type": "UNKNOWN"},
+        ],
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={
+            "wall_type": "NON_LOAD_BEARING",  # 모델의 근거 없는 단정 — 버려야 함
+            "floor_count": 3,
+            "has_sprinkler": True,
+            "has_evacuation_space": True,
+            "stairwell_count": 2,
+            "window_form": "FIXED",
+            "fire_zone": False,
+        },
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] == "HOLD"
 
 
 async def test_evaluate_rules_window_only_boundary_flow(monkeypatch) -> None:

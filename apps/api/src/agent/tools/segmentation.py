@@ -1,7 +1,9 @@
 """평면도 세그멘테이션 도구(HuggingFace Inference Endpoint) — 실패 처리 핵심.
 
-모델: ``youjunhyeok/floorplan-mask2former-cmp180-full`` (Mask2Former, 18클래스 =
+모델: ``youjunhyeok/floorplan-mask2former-confirmed573-ft`` (Mask2Former, 18클래스 =
 STR 5 door/window/wall_reinforced_concrete/wall_other/wall_unknown + SPA 13 공간).
+confirmed573-ft(2026-08) 부터 wall_unknown(구조 불확실 벽)이 실제로 예측된다 —
+라벨 어휘 자체는 cmp180-full 과 동일해 계약(1.3.0) 변경은 없다.
 요청 계약: ``{"inputs": <data URL|base64|HTTP(S) URL>, "parameters": {threshold,
 mask_threshold, max_inference_side}}``. 응답: per-region ``predictions[]``(class_name/
 score/polygon/bbox…) — 여기서 라벨별 count + score 평균으로 집계해 segmentation-result
@@ -204,10 +206,14 @@ def _parse_ok(data: Any) -> dict[str, Any]:
 
     wall_other = counts.get("wall_other", 0)
     rc = counts.get("wall_reinforced_concrete", 0)
+    wall_unknown = counts.get("wall_unknown", 0)
     window_count = counts.get("window", 0)
+    # wall_unknown 은 도면만으로 내력/비내력을 못 가른 벽 — 검출됐을 때만 요약에 노출해
+    # 에이전트가 '확인 필요' 흐름을 타게 한다.
+    unknown_txt = f", 구조 불확실 벽 {wall_unknown}" if wall_unknown else ""
     summary = (
         f"세그멘테이션 완료 — 비내력벽 후보 {wall_other}, 내력(RC)벽 후보 {rc}, "
-        f"창호 {window_count}."
+        f"창호 {window_count}{unknown_txt}."
         if instances
         else "세그멘테이션 완료(검출된 영역 없음)."
     )

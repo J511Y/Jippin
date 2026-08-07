@@ -20,6 +20,7 @@ from typing import Any
 
 import httpx
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from . import main_flow
 from ..config import get_settings
@@ -99,6 +100,93 @@ async def _resolve_precheck_session(
     return session_id, (display[:255] if display else None)
 
 
+def _strip_upload_uuid_prefix(file_name: str) -> str:
+    """업로드 키 규약 ``<uuid>-<원본파일명>`` 에서 표시용 원본 파일명을 복원한다."""
+
+    if len(file_name) > 37 and file_name[36] == "-":
+        try:
+            uuid.UUID(file_name[:36])
+        except ValueError:
+            return file_name
+        return file_name[37:] or file_name
+    return file_name
+
+
+async def _attachment_already_linked(bucket: str, object_path: str) -> bool:
+    """(bucket, object_path)가 이미 어떤 리드에든 첨부돼 있는지 확인한다.
+
+    ``uq_consultation_lead_attachments_bucket_object_path`` 는 리드별이 아니라 **전역**
+    유니크라, 같은 세션에서 상담을 두 번 신청하면 두 번째 자동 첨부가 INSERT 무결성
+    오류로 리드 생성 자체를 롤백시킨다 — 사전 존재 확인으로 회피한다.
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(ConsultationLeadAttachment.id)
+                .where(
+                    ConsultationLeadAttachment.bucket == bucket,
+                    ConsultationLeadAttachment.object_path == object_path,
+                )
+                .limit(1)
+            )
+        ).first()
+    return row is not None
+
+
+async def _session_floorplan_attachment(
+    session_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """세션에 첨부된 도면 asset 을 리드 첨부 row 값으로 환산한다(best-effort).
+
+    사전검토 대화 중 업로드된 도면(sessions.selected_floorplan_asset_id)은 상담 인입
+    폼(QuickPrecheckConsultForm)이 첨부를 싣지 않아 리드에 연결되지 않았다 — 어드민이
+    도면 없이 상담을 받던 문제의 서버측 보정. 첨부 row 는 자산의 원 버킷
+    (session-floorplans)을 그대로 가리키며 복사하지 않는다(어드민 서명은 row 의 bucket
+    기준이라 그대로 동작). 조회/중복확인 실패는 첨부만 생략하고 상담 접수를 막지
+    않는다 — 확인 못 한 채 밀어 넣으면 전역 유니크 위반이 리드 INSERT 를 통째로
+    굴리기(롤백) 때문이다.
+    """
+
+    try:
+        asset = await main_flow._db_select_selected_floorplan_asset(session_id)
+    except Exception:  # noqa: BLE001 - 자동 첨부 실패는 상담 접수를 막지 않는다
+        return None
+    if not asset:
+        return None
+    # 스캔 경계 — 세그멘테이션 분석 게이트(#scan-gate)와 동일한 **허용목록**:
+    # clean/not_required 는 항상, pending 은 설정(agent_allow_unscanned_floorplans,
+    # 스캐너 미가동 환경 기본 허용)이 켜져 있을 때만 인계한다. infected/failed 는 항상
+    # 제외 — 어드민 리드 상세가 첨부를 서명·렌더하므로 거부된 오브젝트가 관리자
+    # 브라우저에 로드되는 걸 막는다. (pending→infected 사후 전이는 어드민이 서명
+    # 시점에 자산 스캔 상태를 재확인해 이중 방어한다.)
+    scan_status = str(asset.get("scan_status") or "")
+    allow_unscanned = bool(
+        getattr(get_settings(), "agent_allow_unscanned_floorplans", False)
+    )
+    if not (
+        scan_status in ("clean", "not_required")
+        or (scan_status == "pending" and allow_unscanned)
+    ):
+        return None
+    object_key = str(asset.get("object_key") or "").strip()
+    bucket = str(asset.get("bucket") or "").strip()
+    if not object_key or not bucket:
+        return None
+    try:
+        if await _attachment_already_linked(bucket, object_key):
+            return None
+    except Exception:  # noqa: BLE001 - 확인 불가면 보수적으로 생략(무결성 롤백 방지)
+        return None
+    return {
+        "bucket": bucket,
+        "object_path": object_key,
+        "file_name": _strip_upload_uuid_prefix(object_key.rsplit("/", 1)[-1]),
+        "content_type": asset.get("content_type"),
+        "byte_size": asset.get("byte_size"),
+    }
+
+
 def _validate_attachments(
     attachments: list[dict[str, Any]],
     *,
@@ -158,8 +246,12 @@ async def _insert_lead(
         ).one()
         lead_id = row.id
         if attachments:
+            # (bucket, object_path) 는 **전역** 유니크다 — 같은 세션의 동시 상담 제출이
+            # 사전 존재 확인(TOCTOU)을 둘 다 통과해도, 충돌 row 만 조용히 건너뛰고
+            # 리드 INSERT 는 살린다(ON CONFLICT DO NOTHING). 첨부 키는 업로드 시점
+            # uuid prefix 라 정상 흐름에서 충돌은 재제출/자동인계 케이스뿐이다.
             await conn.execute(
-                sa.insert(ConsultationLeadAttachment),
+                pg_insert(ConsultationLeadAttachment).on_conflict_do_nothing(),
                 [{"lead_id": lead_id, **att} for att in attachments],
             )
     return {
@@ -205,6 +297,17 @@ async def create_lead(
         user_id=user_id,
         default_bucket=settings.lead_floorplan_bucket,
     )
+    # 세션 귀속 리드는 세션에 선택된 도면을 자동 첨부한다 — 대화 중 업로드한 도면이
+    # 상담/어드민으로 이어지게(#session-floorplan-carryover). 클라이언트가 같은 파일을
+    # 이미 실었으면 중복 첨부하지 않는다.
+    if lead_values.get("session_id") is not None:
+        auto = await _session_floorplan_attachment(lead_values["session_id"])
+        if auto is not None and not any(
+            att["bucket"] == auto["bucket"]
+            and att["object_path"] == auto["object_path"]
+            for att in attachments
+        ):
+            attachments.append(auto)
     row = await _insert_lead(lead_values, attachments)
     # 사전검토 세션에서 온 상담이면 그 세션을 handoff(상담 전환)로 전진(best-effort).
     if lead_values.get("session_id") is not None:
