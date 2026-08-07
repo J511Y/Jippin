@@ -214,9 +214,13 @@ async def test_create_lead_auto_attaches_session_floorplan(monkeypatch) -> None:
             "byte_size": 1234,
         }
 
+    async def not_linked(bucket, object_path):  # type: ignore[no-untyped-def]
+        return False
+
     monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
     monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)
     monkeypatch.setattr(main_flow, "_db_select_selected_floorplan_asset", fake_asset)
+    monkeypatch.setattr(leads, "_attachment_already_linked", not_linked)
 
     await leads.create_lead(
         user_id=owner,
@@ -237,6 +241,51 @@ async def test_create_lead_auto_attaches_session_floorplan(monkeypatch) -> None:
             "byte_size": 1234,
         }
     ]
+
+
+async def test_create_lead_skips_globally_linked_object(monkeypatch) -> None:
+    # 전역 유니크(uq_..._bucket_object_path) 위반 방지: 같은 세션에서 상담을 다시
+    # 신청해도(오브젝트가 이미 다른 리드에 첨부됨) 두 번째 리드 INSERT 가 롤백되지
+    # 않도록 자동 첨부를 생략한다.
+    owner = uuid.uuid4()
+    session_id = uuid.uuid4()
+    captured = _patch_insert_with_attachments(monkeypatch)
+
+    async def fake_select_session(sid):  # type: ignore[no-untyped-def]
+        return {"id": session_id, "user_id": owner}
+
+    async def fake_get_address(sid):  # type: ignore[no-untyped-def]
+        return None
+
+    async def fake_asset(sid):  # type: ignore[no-untyped-def]
+        return {
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/plan.png",
+            "content_type": "image/png",
+            "byte_size": 1,
+        }
+
+    async def already_linked(bucket, object_path):  # type: ignore[no-untyped-def]
+        return True
+
+    monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
+    monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)
+    monkeypatch.setattr(main_flow, "_db_select_selected_floorplan_asset", fake_asset)
+    monkeypatch.setattr(leads, "_attachment_already_linked", already_linked)
+
+    await leads.create_lead(
+        user_id=owner,
+        is_anonymous=False,
+        payload={
+            "source_form": "precheck_session",
+            "applicant_name": "홍길동",
+            "applicant_phone": "010-1234-5678",
+            "road_addr_part1": "주소",
+            "session_id": session_id,
+        },
+    )
+    assert captured["session_id"] == session_id
+    assert captured["attachments"] == []
 
 
 async def test_create_lead_skips_duplicate_session_floorplan(monkeypatch) -> None:
@@ -260,9 +309,13 @@ async def test_create_lead_skips_duplicate_session_floorplan(monkeypatch) -> Non
             "byte_size": 1,
         }
 
+    async def not_linked(bucket, object_path):  # type: ignore[no-untyped-def]
+        return False
+
     monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
     monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)
     monkeypatch.setattr(main_flow, "_db_select_selected_floorplan_asset", fake_asset)
+    monkeypatch.setattr(leads, "_attachment_already_linked", not_linked)
 
     await leads.create_lead(
         user_id=owner,

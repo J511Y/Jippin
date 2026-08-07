@@ -209,6 +209,8 @@ async def test_get_building_register_completed_returns_permit_history(
 ) -> None:
     # 완료된 잡은 위반 여부 + 변동/행위허가 이력을 돌려준다 — "거실-발코니 비내력벽 철거
     # 행위허가" 같은 이력이 에이전트 판단 근거로 도달해야 한다(#register-readback).
+    # 저장 순서(전유부 전체→표제부 전체)와 무관하게 날짜 정렬 후 최근 이력을 남기고,
+    # 핵심은 세션 judgment_schema.register_supplement 로 영속한다(Codex P1/P2).
     async def completed_row(**_: object) -> dict[str, object]:
         return {
             "status": "completed",
@@ -223,23 +225,50 @@ async def test_get_building_register_completed_returns_permit_history(
                     "reason": "행위허가:거실과(와) 발코니 사이 비내력벽 철거",
                     "source": "exclusive",
                 },
+                {
+                    "date": "2018-05-01",
+                    "reason": "표시변경(용도변경)",
+                    "source": "heading",
+                },
                 {"date": "1998-11-02", "reason": "신규작성(신축)", "source": "heading"},
             ],
         }
 
+    merged: dict[str, object] = {}
+
+    async def fake_merge(**kwargs: object) -> dict[str, object]:
+        merged.update(kwargs)
+        return {}
+
     monkeypatch.setattr(home_check, "get_home_check_row", completed_row)
+    monkeypatch.setattr(main_flow, "merge_judgment_schema", fake_merge)
+    session_id = uuid.uuid4()
     res = await domain.get_building_register_impl(
-        owner_user_id=uuid.uuid4(), home_check_id=str(uuid.uuid4())
+        owner_user_id=uuid.uuid4(),
+        home_check_id=str(uuid.uuid4()),
+        session_id=session_id,
     )
     assert res["ok"] is True
     assert res["status"] == "completed"
     assert res["violation"]["is_violation"] is False
     assert res["unit_floor"] == "3층"
+    # 날짜 오름차순 정렬 — 소스(전유부/표제부) 저장 순서가 아니라 시간순.
+    dates = [e["date"] for e in res["change_history"]]
+    assert dates == sorted(dates)
     reasons = [e["reason"] for e in res["change_history"]]
     assert any("행위허가" in r and "비내력벽" in r for r in reasons)
     # 전유부/표제부 라벨로 환산돼 내부 enum(exclusive/heading)이 노출되지 않는다.
     assert {e["source"] for e in res["change_history"]} <= {"전유부", "표제부", "대장"}
     assert "행위허가 이력 1건" in res["summary"]
+    # register_supplement 영속 — 리포트(웹/PDF)가 읽는 세션 상태로 전달됐다.
+    assert merged["session_id"] == session_id
+    patch = merged["patch"]
+    assert patch["register_supplement"]["is_violation"] is False
+    assert patch["register_supplement"]["unit_floor"] == "3층"
+    assert any(
+        "행위허가" in str(e.get("reason"))
+        for e in patch["register_supplement"]["permit_entries"]
+    )
 
 
 async def test_confirm_address_sanitizes_non_domain_exception(monkeypatch) -> None:
@@ -410,6 +439,36 @@ async def test_evaluate_rules_derives_wall_type_from_selection(monkeypatch) -> N
     assert res["ok"] is True
     # wall_type=NON_LOAD_BEARING 으로 채워져 DENY 가 아니라 가능성 계열.
     assert res["result"]["verdict"] in ("ALLOW", "WARN")
+
+
+async def test_evaluate_rules_unknown_selection_discards_model_wall_type(
+    monkeypatch,
+) -> None:
+    # 구조 불확실 벽(UNKNOWN)이 선택에 섞여 유도가 실패하면, 모델이 넘긴
+    # wall_type=NON_LOAD_BEARING 으로 HOLD 를 우회하지 못한다(#wall-unknown-hold,
+    # Codex P1).
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_walls": ["pred:1", "pred:2"],
+        "wall_objects": [
+            {"id": "pred:1", "wall_type": "NON_LOAD_BEARING"},
+            {"id": "pred:2", "wall_type": "UNKNOWN"},
+        ],
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={
+            "wall_type": "NON_LOAD_BEARING",  # 모델의 근거 없는 단정 — 버려야 함
+            "floor_count": 3,
+            "has_sprinkler": True,
+            "has_evacuation_space": True,
+            "stairwell_count": 2,
+            "window_form": "FIXED",
+            "fire_zone": False,
+        },
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] == "HOLD"
 
 
 async def test_evaluate_rules_window_only_boundary_flow(monkeypatch) -> None:

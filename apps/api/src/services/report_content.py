@@ -79,6 +79,45 @@ WALL_CAVEAT = (
 )
 
 
+def register_check_notes(judgment_schema: dict[str, Any] | None) -> list[str]:
+    """세션에 영속된 건축물대장 확인 사실(``register_supplement``)을 리포트의
+    '추가 확인' 목록 문구로 환산한다(#register-supplement-persist).
+
+    대화 중 get_building_register 로 확인한 위반건축물 여부·행위허가 이력이 리포트
+    (웹/PDF 공통 — 둘 다 rule_eval_result 기반)에 도달하는 유일한 경로다. 없으면 빈
+    목록(기존 리포트와 동일).
+    """
+
+    supplement = (
+        judgment_schema.get("register_supplement")
+        if isinstance(judgment_schema, dict)
+        else None
+    )
+    if not isinstance(supplement, dict):
+        return []
+    notes: list[str] = []
+    if supplement.get("is_violation"):
+        notes.append(
+            "건축물대장에 위반건축물 표시가 확인됐어요 — 공사 전 위반 사항 해소 여부를 "
+            "반드시 확인하세요."
+        )
+    for entry in supplement.get("permit_entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        reason = str(entry.get("reason") or "").strip()
+        if not reason:
+            continue
+        date = str(entry.get("date") or "").strip()
+        source = str(entry.get("source") or "").strip()
+        prefix = " ".join(p for p in (date, source) if p)
+        notes.append(
+            f"건축물대장 이력({prefix}): {reason} — 같은 부위 공사라면 판단에 참고하세요."
+            if prefix
+            else f"건축물대장 이력: {reason} — 같은 부위 공사라면 판단에 참고하세요."
+        )
+    return notes
+
+
 # ── 방화·안전시설(required_facilities) 코드별 고정 설명 ─────────────────────────
 # 각 항목: 리포트에 노출할 헤드라인 + 챙겨야 할 포인트(불릿). /faq?category=fireproofing
 # 의 답변(방화판 90cm·스프링클러 면제·자동화재탐지기 등)을 정본으로 한다.

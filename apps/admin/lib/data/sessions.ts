@@ -156,10 +156,15 @@ export async function getSessionUploads(sessionId: string): Promise<SessionUploa
   return Promise.all(
     data.map(async (row) => {
       const record = row as Record<string, unknown>;
-      // 서명 실패는 미리보기 없이 메타데이터만 표시한다.
-      const { data: signed } = await supabase.storage
-        .from(record.bucket as string)
-        .createSignedUrl(record.object_key as string, 60 * 60);
+      const scanStatus = record.scan_status as string;
+      // infected/failed 는 서명하지 않는다 — 거부된 오브젝트를 관리자 브라우저에
+      // 로드하지 않는 API 세그멘테이션과 같은 경계. 서명 실패도 메타데이터만 표시.
+      const { data: signed } =
+        scanStatus === 'infected' || scanStatus === 'failed'
+          ? { data: null }
+          : await supabase.storage
+              .from(record.bucket as string)
+              .createSignedUrl(record.object_key as string, 60 * 60);
       return {
         id: record.id as string,
         kind: record.kind as string,
@@ -167,7 +172,7 @@ export async function getSessionUploads(sessionId: string): Promise<SessionUploa
         object_key: record.object_key as string,
         content_type: (record.content_type as string | null) ?? null,
         byte_size: (record.byte_size as number | null) ?? null,
-        scan_status: record.scan_status as string,
+        scan_status: scanStatus,
         created_at: record.created_at as string,
         file_name: deriveAssetFileName(record.object_key as string),
         signedUrl: signed?.signedUrl ?? null

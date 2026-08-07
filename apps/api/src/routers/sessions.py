@@ -22,7 +22,7 @@ from ..schemas.sessions import (
     SessionReportResponse,
     SessionResponse,
 )
-from ..services import estimate, main_flow, report_pdf
+from ..services import estimate, main_flow, report_content, report_pdf
 
 logger = get_logger("zippin.sessions")
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -113,6 +113,16 @@ async def get_session_report(
     session = data["session"]
     address = data["address"]
     rule_eval_result = session["rule_eval_result"]
+    # 건축물대장 확인 사실(register_supplement)을 응답 시점에 additional_checks 로
+    # 잇는다 — 영속 계약(rule_eval_result)은 그대로 두고 표시만 보강한다
+    # (#register-supplement-persist). PDF(report_pdf._build_context)와 동일 로직.
+    register_notes = report_content.register_check_notes(session.get("judgment_schema"))
+    if register_notes and isinstance(rule_eval_result, dict):
+        rule_eval_result = dict(rule_eval_result)
+        rule_eval_result["additional_checks"] = [
+            *(rule_eval_result.get("additional_checks") or []),
+            *register_notes,
+        ]
     return SessionReportResponse(
         session_id=session["id"],
         status=session["status"],

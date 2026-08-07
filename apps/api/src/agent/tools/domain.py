@@ -385,12 +385,18 @@ async def get_building_register_impl(
     *,
     owner_user_id: uuid.UUID,
     home_check_id: str,
+    session_id: uuid.UUID | None = None,
+    owner_is_anonymous: bool = False,
 ) -> dict[str, Any]:
     """시작해 둔 건축물대장 조회(home_check)의 **결과를 읽어 온다**(read-back).
 
     check_building_register 는 fire-and-forget 이라 위반 여부·변동/행위허가 이력이
     대화 컨텍스트로 돌아오지 않았다 — 대장에 "발코니 비내력벽 철거 행위허가" 같은
     이력이 있으면 사전검토 판단의 직접 근거가 되므로 이 도구로 조회해 반영한다.
+    완료 결과의 핵심(위반 여부·행위허가 이력)은 세션 judgment_schema 의
+    ``register_supplement`` 로도 영속한다 — 리포트(웹/PDF)는 rule_eval_result 만 보는
+    구조라, 영속 없이는 대화에서 확인한 대장 사실이 리포트에 도달하지 못한다
+    (#register-supplement-persist).
     """
 
     try:
@@ -430,9 +436,32 @@ async def get_building_register_impl(
         }
         for entry in home_check.present_change_history(row.get("change_list") or [])
     ]
-    # 최근 이력 우선 — 행위허가/확장 같은 최신 변동이 판단에 더 유효하다.
+    # 저장 순서는 전유부 전체 → 표제부 전체(날짜 무정렬)라 tail 절단이 최신을 보장하지
+    # 않는다 — 날짜(zero-pad ISO, 문자열 정렬 가능)로 먼저 정렬해 최근 이력을 남긴다.
+    # 날짜 미상 행은 가장 오래된 것으로 취급한다.
+    history.sort(key=lambda e: str(e.get("date") or ""))
     history = history[-_REGISTER_HISTORY_LIMIT:]
     permit_entries = [e for e in history if "행위허가" in str(e.get("reason") or "")]
+
+    # 리포트 도달 경로(#register-supplement-persist): 웹/PDF 리포트 조립이 읽는 세션
+    # 상태로 핵심만 영속한다. 실패는 도구 결과를 막지 않는다(best-effort).
+    if session_id is not None:
+        try:
+            await main_flow.merge_judgment_schema(
+                session_id=session_id,
+                owner_user_id=owner_user_id,
+                owner_is_anonymous=owner_is_anonymous,
+                patch={
+                    "register_supplement": {
+                        "is_violation": is_violation,
+                        "unit_floor": row.get("exclusive_floor"),
+                        "permit_entries": permit_entries[-5:],
+                        "checked_at": datetime.now(UTC).isoformat(),
+                    }
+                },
+            )
+        except Exception:  # noqa: BLE001 - 영속 실패는 조회 결과 반환을 막지 않는다
+            log.error("register_supplement_persist_failed", session_id=str(session_id))
 
     violation_txt = "위반건축물로 표시됨" if is_violation else "위반건축물 표시 없음"
     permit_txt = (
@@ -560,11 +589,15 @@ async def evaluate_rules_impl(
     derived = _derive_wall_type(js)
     if derived:
         clean_values["wall_type"] = derived
-    elif window_selected and not wall_selected:
-        # 창호-only 세션(#window-only-target): 벽 선택이 없어 wall_type 유도 근거가 없다.
-        # 모델이 (검토와 무관한 벽의) wall_type=LOAD_BEARING 을 넘겼다면 rule_engine 의
-        # _evaluate_wall 이 창호 경로보다 먼저 돌아 내력벽 철거로 오판·DENY 한다 — 창호
-        # 경로를 window_demolition_boundary 로만 격리하도록 모델 제공 wall_type 을 버린다.
+    elif wall_selected or window_selected:
+        # 선택이 있는데 유도 실패면 **모델 제공 wall_type 도 버린다** — 두 경우 모두
+        # 모델이 넘긴 값이 선택과 무관하거나 근거 없는 단정이기 때문이다.
+        #  - 벽 선택 + 유도 불가(구조 불확실 벽 UNKNOWN 포함/매핑 불가): 모델이
+        #    NON_LOAD_BEARING 을 우겨 넣으면 룰엔진이 불확실 벽을 확정 비내력으로
+        #    판정·영속해 HOLD(확인 필요)를 우회한다(#wall-unknown-hold).
+        #  - 창호-only 세션(#window-only-target): 벽 선택이 없어 유도 근거가 없는데
+        #    모델 wall_type=LOAD_BEARING 이 남으면 _evaluate_wall 이 창호 경로보다
+        #    먼저 돌아 내력벽 철거로 오판·DENY 한다.
         clean_values.pop("wall_type", None)
     # 철거 검토 대상(벽/창호)은 **오버레이 선택이 정본**이다 — 모델 제공값과 무관하게
     # selected_walls/selected_windows 존재 여부로 덮어쓴다(#window-only-target). 창호만

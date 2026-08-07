@@ -111,6 +111,28 @@ def _strip_upload_uuid_prefix(file_name: str) -> str:
     return file_name
 
 
+async def _attachment_already_linked(bucket: str, object_path: str) -> bool:
+    """(bucket, object_path)가 이미 어떤 리드에든 첨부돼 있는지 확인한다.
+
+    ``uq_consultation_lead_attachments_bucket_object_path`` 는 리드별이 아니라 **전역**
+    유니크라, 같은 세션에서 상담을 두 번 신청하면 두 번째 자동 첨부가 INSERT 무결성
+    오류로 리드 생성 자체를 롤백시킨다 — 사전 존재 확인으로 회피한다.
+    """
+
+    async with get_engine().begin() as conn:
+        row = (
+            await conn.execute(
+                sa.select(ConsultationLeadAttachment.id)
+                .where(
+                    ConsultationLeadAttachment.bucket == bucket,
+                    ConsultationLeadAttachment.object_path == object_path,
+                )
+                .limit(1)
+            )
+        ).first()
+    return row is not None
+
+
 async def _session_floorplan_attachment(
     session_id: uuid.UUID,
 ) -> dict[str, Any] | None:
@@ -120,7 +142,9 @@ async def _session_floorplan_attachment(
     폼(QuickPrecheckConsultForm)이 첨부를 싣지 않아 리드에 연결되지 않았다 — 어드민이
     도면 없이 상담을 받던 문제의 서버측 보정. 첨부 row 는 자산의 원 버킷
     (session-floorplans)을 그대로 가리키며 복사하지 않는다(어드민 서명은 row 의 bucket
-    기준이라 그대로 동작). 조회 실패는 첨부만 생략하고 상담 접수를 막지 않는다.
+    기준이라 그대로 동작). 조회/중복확인 실패는 첨부만 생략하고 상담 접수를 막지
+    않는다 — 확인 못 한 채 밀어 넣으면 전역 유니크 위반이 리드 INSERT 를 통째로
+    굴리기(롤백) 때문이다.
     """
 
     try:
@@ -130,10 +154,16 @@ async def _session_floorplan_attachment(
     if not asset:
         return None
     object_key = str(asset.get("object_key") or "").strip()
-    if not object_key:
+    bucket = str(asset.get("bucket") or "").strip()
+    if not object_key or not bucket:
+        return None
+    try:
+        if await _attachment_already_linked(bucket, object_key):
+            return None
+    except Exception:  # noqa: BLE001 - 확인 불가면 보수적으로 생략(무결성 롤백 방지)
         return None
     return {
-        "bucket": asset.get("bucket"),
+        "bucket": bucket,
         "object_path": object_key,
         "file_name": _strip_upload_uuid_prefix(object_key.rsplit("/", 1)[-1]),
         "content_type": asset.get("content_type"),

@@ -195,6 +195,9 @@ def _build_context(
         for c in (rule_eval_result.get("additional_checks") or [])
         if isinstance(c, str) and c
     ]
+    # 건축물대장 확인 사실(위반 여부·행위허가 이력)을 같은 목록에 잇는다 — 대화에서
+    # 확인된 대장 사실이 PDF 에도 도달하게(#register-supplement-persist).
+    additional_checks += report_content.register_check_notes(judgment_schema)
     ruleset_version = rule_eval_result.get("ruleset_version")
     return {
         "report": {

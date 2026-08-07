@@ -141,13 +141,17 @@ def build_tools(
         판단·리포트 설명에 반드시 반영하라. status=querying 이면 아직 조회 중이니 다음
         턴에서 다시 확인하라(같은 턴에서 반복 폴링하지 말 것)."""
         return await get_building_register_impl(
-            owner_user_id=owner_user_id, home_check_id=home_check_id
+            owner_user_id=owner_user_id,
+            home_check_id=home_check_id,
+            session_id=session_id,
+            owner_is_anonymous=owner_is_anonymous,
         )
 
     @tool
     async def evaluate_rules(judgment_values: dict[str, Any]) -> dict[str, Any]:
-        """수집된 판단값(wall_type/floor_count/has_sprinkler 등)으로 리모델링 룰을 평가한다.
-        결과는 세션 리포트에 자동 저장된다."""
+        """수집된 판단값(floor_count/balcony_attached/has_sprinkler 등)으로 리모델링 룰을
+        평가한다. wall_type 은 넘기지 말 것 — 사용자의 도면 선택(selected_walls)에서
+        서버가 유도한다. 결과는 세션 리포트에 자동 저장된다."""
         return await evaluate_rules_impl(
             session_id=session_id,
             judgment_values=judgment_values,

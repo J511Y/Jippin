@@ -404,6 +404,56 @@ def test_build_context_empty_facilities_sets_note() -> None:
     assert ctx["estimate"] is None
 
 
+def test_register_check_notes_from_supplement() -> None:
+    # 대화에서 확인한 건축물대장 사실(위반·행위허가 이력)이 리포트 '추가 확인' 문구로
+    # 환산된다(#register-supplement-persist, Codex P1).
+    notes = report_content.register_check_notes(
+        {
+            "register_supplement": {
+                "is_violation": True,
+                "permit_entries": [
+                    {
+                        "date": "2009-03-17",
+                        "reason": "행위허가:거실과(와) 발코니 사이 비내력벽 철거",
+                        "source": "전유부",
+                    }
+                ],
+            }
+        }
+    )
+    assert len(notes) == 2
+    assert "위반건축물" in notes[0]
+    assert "행위허가" in notes[1] and "2009-03-17" in notes[1]
+    assert report_content.register_check_notes({}) == []
+    assert report_content.register_check_notes(None) == []
+
+
+def test_build_context_appends_register_notes() -> None:
+    ctx = report_pdf._build_context(
+        session_id=uuid.uuid4(),
+        rule_eval_result=_rule(),
+        estimate_dict=None,
+        address=None,
+        judgment_schema={
+            "register_supplement": {
+                "is_violation": False,
+                "permit_entries": [
+                    {"date": "2009-03-17", "reason": "행위허가:비내력벽 철거"}
+                ],
+            }
+        },
+        overlay={
+            "available": False,
+            "svg": None,
+            "caption": "",
+            "unavailable_reason": "x",
+        },
+        origin="https://jippin.ai",
+        now=datetime(2026, 6, 29, tzinfo=timezone.utc),
+    )["report"]
+    assert any("행위허가" in c for c in ctx["additional_checks"])
+
+
 def test_render_html_contains_all_sections() -> None:
     html = report_pdf.render_html(_sample_context())
     assert len(html) > 3000
