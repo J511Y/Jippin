@@ -195,7 +195,9 @@ async def test_create_lead_auto_attaches_session_floorplan(monkeypatch) -> None:
     owner = uuid.uuid4()
     session_id = uuid.uuid4()
     captured = _patch_insert_with_attachments(monkeypatch)
-    object_key = f"{owner}/{session_id}/123e4567-e89b-12d3-a456-426614174000-거실도면.png"
+    object_key = (
+        f"{owner}/{session_id}/123e4567-e89b-12d3-a456-426614174000-거실도면.png"
+    )
 
     async def fake_select_session(sid):  # type: ignore[no-untyped-def]
         return {"id": session_id, "user_id": owner}
@@ -214,9 +216,7 @@ async def test_create_lead_auto_attaches_session_floorplan(monkeypatch) -> None:
 
     monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
     monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)
-    monkeypatch.setattr(
-        main_flow, "_db_select_selected_floorplan_asset", fake_asset
-    )
+    monkeypatch.setattr(main_flow, "_db_select_selected_floorplan_asset", fake_asset)
 
     await leads.create_lead(
         user_id=owner,
@@ -262,9 +262,7 @@ async def test_create_lead_skips_duplicate_session_floorplan(monkeypatch) -> Non
 
     monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
     monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)
-    monkeypatch.setattr(
-        main_flow, "_db_select_selected_floorplan_asset", fake_asset
-    )
+    monkeypatch.setattr(main_flow, "_db_select_selected_floorplan_asset", fake_asset)
 
     await leads.create_lead(
         user_id=owner,
@@ -300,9 +298,7 @@ async def test_create_lead_attach_failure_does_not_block(monkeypatch) -> None:
 
     monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
     monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)
-    monkeypatch.setattr(
-        main_flow, "_db_select_selected_floorplan_asset", boom_asset
-    )
+    monkeypatch.setattr(main_flow, "_db_select_selected_floorplan_asset", boom_asset)
 
     await leads.create_lead(
         user_id=owner,
