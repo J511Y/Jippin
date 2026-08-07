@@ -171,11 +171,35 @@ export async function getLeadAttachments(leadId: string): Promise<LeadAttachment
     .order('created_at', { ascending: true });
   if (error || !data) return [];
 
+  // 세션 도면 인계 첨부(session-floorplans)는 링크 이후 스캔 상태가 pending→infected
+  // 로 바뀔 수 있다 — 서명 **시점**에 floorplan_assets 의 현재 scan_status 를 재확인해
+  // infected/failed 오브젝트를 관리자 브라우저에 로드하지 않는다(세션/갤러리와 같은
+  // 경계). 조회 실패는 기존 동작(서명)으로 폴백한다.
+  const sessionPaths = data
+    .filter((row) => row.bucket === 'session-floorplans')
+    .map((row) => row.object_path as string);
+  const blockedPaths = new Set<string>();
+  if (sessionPaths.length > 0) {
+    const { data: assets } = await supabase
+      .from('floorplan_assets')
+      .select('object_key, scan_status')
+      .in('object_key', sessionPaths);
+    for (const asset of assets ?? []) {
+      if (asset.scan_status === 'infected' || asset.scan_status === 'failed') {
+        blockedPaths.add(asset.object_key as string);
+      }
+    }
+  }
+
   return Promise.all(
     data.map(async (row) => {
-      const { data: signed } = await supabase.storage
-        .from(row.bucket as string)
-        .createSignedUrl(row.object_path as string, 60 * 60);
+      const blocked =
+        row.bucket === 'session-floorplans' && blockedPaths.has(row.object_path as string);
+      const { data: signed } = blocked
+        ? { data: null }
+        : await supabase.storage
+            .from(row.bucket as string)
+            .createSignedUrl(row.object_path as string, 60 * 60);
       return { ...(row as Omit<LeadAttachment, 'signedUrl'>), signedUrl: signed?.signedUrl ?? null };
     })
   );

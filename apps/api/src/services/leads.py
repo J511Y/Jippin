@@ -154,10 +154,20 @@ async def _session_floorplan_attachment(
         return None
     if not asset:
         return None
-    # 스캔 거부(infected/failed) 자산은 인계하지 않는다 — 어드민 리드 상세는 첨부를
-    # 무조건 서명·렌더하므로, 세션/갤러리 쪽 스캔 경계를 우회해 거부된 오브젝트가
-    # 관리자 브라우저에 로드되는 걸 막는다(세그멘테이션과 같은 경계).
-    if str(asset.get("scan_status") or "") in ("infected", "failed"):
+    # 스캔 경계 — 세그멘테이션 분석 게이트(#scan-gate)와 동일한 **허용목록**:
+    # clean/not_required 는 항상, pending 은 설정(agent_allow_unscanned_floorplans,
+    # 스캐너 미가동 환경 기본 허용)이 켜져 있을 때만 인계한다. infected/failed 는 항상
+    # 제외 — 어드민 리드 상세가 첨부를 서명·렌더하므로 거부된 오브젝트가 관리자
+    # 브라우저에 로드되는 걸 막는다. (pending→infected 사후 전이는 어드민이 서명
+    # 시점에 자산 스캔 상태를 재확인해 이중 방어한다.)
+    scan_status = str(asset.get("scan_status") or "")
+    allow_unscanned = bool(
+        getattr(get_settings(), "agent_allow_unscanned_floorplans", False)
+    )
+    if not (
+        scan_status in ("clean", "not_required")
+        or (scan_status == "pending" and allow_unscanned)
+    ):
         return None
     object_key = str(asset.get("object_key") or "").strip()
     bucket = str(asset.get("bucket") or "").strip()

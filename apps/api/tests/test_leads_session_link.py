@@ -212,6 +212,8 @@ async def test_create_lead_auto_attaches_session_floorplan(monkeypatch) -> None:
             "object_key": object_key,
             "content_type": "image/png",
             "byte_size": 1234,
+            # pending 은 agent_allow_unscanned_floorplans(기본 True) 허용 경로.
+            "scan_status": "pending",
         }
 
     async def not_linked(bucket, object_path):  # type: ignore[no-untyped-def]
@@ -309,6 +311,7 @@ async def test_create_lead_skips_globally_linked_object(monkeypatch) -> None:
             "object_key": f"{owner}/{session_id}/plan.png",
             "content_type": "image/png",
             "byte_size": 1,
+            "scan_status": "clean",
         }
 
     async def already_linked(bucket, object_path):  # type: ignore[no-untyped-def]
@@ -353,6 +356,7 @@ async def test_create_lead_skips_duplicate_session_floorplan(monkeypatch) -> Non
             "object_key": object_key,
             "content_type": "image/png",
             "byte_size": 1,
+            "scan_status": "clean",
         }
 
     async def not_linked(bucket, object_path):  # type: ignore[no-untyped-def]

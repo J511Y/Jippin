@@ -122,9 +122,20 @@ def _parse_json(text: Any) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+#: VLM 교정이 허용되는 라벨 — 벽 3종만. 프롬프트가 벽 교정만 지시하지만, 모델이
+#: 계약 밖 교정(창→벽, 벽→공간)을 내면 오버레이/판단객체가 그대로 오염돼 창호가
+#: '확정 비내력벽'으로 선택·평가될 수 있다 — 정규화에서 강제한다(#vlm-wall-only).
+_WALL_LABELS: frozenset[str] = frozenset(
+    label for label in _KNOWN_LABELS if label.startswith("wall_")
+)
+
+
 def _normalize_supplement(
     data: dict[str, Any], *, model: str, valid_ids: set[str]
 ) -> dict[str, Any]:
+    """VLM 출력 정규화. ``valid_ids`` 는 **벽 region 만** 담아야 한다(호출자 책임) —
+    교정의 원본도 벽, 교정 라벨도 벽(_WALL_LABELS)으로 이중 강제한다."""
+
     notes = [
         str(n).strip()
         for n in (data.get("notes") or [])
@@ -136,7 +147,7 @@ def _normalize_supplement(
             continue
         oid = item.get("object_id")
         new_label = item.get("new_label")
-        if oid in valid_ids and new_label in _KNOWN_LABELS:
+        if oid in valid_ids and new_label in _WALL_LABELS:
             reclass.append(
                 {
                     "object_id": str(oid),
@@ -275,7 +286,13 @@ async def interpret_floorplan_impl(
     if not data:
         log.info("vlm_interpret_unparsable")
         return None
-    valid_ids = {str(r.get("region_id")) for r in regions if isinstance(r, dict)}
+    # 교정 대상은 **벽 region 만** — 창/공간 region 을 벽으로 바꾸는 계약 밖 교정을
+    # 원천 차단한다(#vlm-wall-only).
+    valid_ids = {
+        str(r.get("region_id"))
+        for r in regions
+        if isinstance(r, dict) and str(r.get("class_name") or "") in _WALL_LABELS
+    }
     supplement = _normalize_supplement(
         data, model=model_str.split(":", 1)[1], valid_ids=valid_ids
     )
