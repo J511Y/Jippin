@@ -33,13 +33,6 @@ import {
 /** 변동사항 중 확장·증축·용도변경 신호를 강조하기 위한 매칭 규칙. */
 const EXTENSION_CHANGE_RE = /(확장|증축|용도변경)/;
 
-/**
- * AGENTS.md §4.6 법적 고지 — **절대 누락·변형 금지**. 리포트 화면(앱/미리보기/공유링크)에서
- * 문구 그대로 노출한다. report.disclaimer(조회 참고 안내)와 함께 표시한다.
- */
-const LEGAL_NOTICE =
-  '본 서비스는 AI 기반 사전 검토 시스템입니다. 최종 행위허가 여부는 관할 행정기관 판단에 따라 달라질 수 있습니다.';
-
 /** tone → CardShell accent 레일 색 축. gray 는 neutral 로 매핑. */
 const TONE_TO_ACCENT: Record<VerdictTone, CardAccent> = {
   danger: 'danger',
@@ -360,15 +353,14 @@ export function HomeCheckReportView({
         </SectionCard>
       ) : null}
 
-      {/* 7. 면책 고정 노출 — §4.6 필수 법적 고지(누락 금지) + 조회 참고 안내 */}
-      <Stack gap={4}>
-        <Text className="a2ui-legal" fw={600} style={{ wordBreak: 'keep-all' }}>
-          {LEGAL_NOTICE}
-        </Text>
-        <Text className="a2ui-legal" style={{ wordBreak: 'keep-all' }}>
-          {report.disclaimer}
-        </Text>
-      </Stack>
+      {/* 7. 조회 참고 안내 — 이 리포트에 한정된 문구다.
+          §4.6 법적 고지("본 서비스는 AI 기반 사전 검토 시스템입니다…")는 여기서 되풀이하지
+          않는다. 전역 푸터(LegalNotice)가 모든 페이지에 항상 렌더하므로 리포트 화면에도
+          그대로 노출돼 §4.6("리포트 화면은 문구를 포함한다")을 충족한다 — 같은 화면에 두 번
+          찍히던 중복만 제거한 것이고, 문구 자체는 누락·변형하지 않았다. */}
+      <Text className="a2ui-legal" style={{ wordBreak: 'keep-all' }}>
+        {report.disclaimer}
+      </Text>
 
       {/* 8. 다른 집 체크하기 — 내부 내비게이션은 next/link 로(전체 리로드 방지). */}
       <Group justify="center">

@@ -1,7 +1,8 @@
 'use client';
 
-import { Card, Stack, Text, VisuallyHidden } from '@mantine/core';
-import { useEffect, useRef, useState } from 'react';
+import { Card, Collapse, Stack, Text, UnstyledButton, VisuallyHidden } from '@mantine/core';
+import { IconCheck, IconChevronDown } from '@tabler/icons-react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import type { QuizItem } from '@/lib/quiz';
 import {
@@ -36,6 +37,10 @@ export function HomeCheckWaiting({
 }: HomeCheckWaitingProps) {
   const mountedAtRef = useRef(Date.now());
   const [now, setNow] = useState(() => Date.now());
+  // 기본은 현재 단계만 노출(공개형 disclosure) — 스테퍼가 세로를 많이 먹어 아래 퀴즈를
+  // 가리던 문제를 없앤다. 사용자가 원하면 펼쳐 전체 단계를 본다.
+  const [expanded, setExpanded] = useState(false);
+  const stepsId = useId();
   // 단조 가드 — 시간 추정이 앞서간 뒤 늦게 도착한 실제 phase 가 뒤라도 스테퍼를
   // 되돌리지 않는다(역행은 버그로 읽힌다). 이후 실제 phase 가 앞서면 그걸 따른다.
   const maxIndexRef = useRef(0);
@@ -74,7 +79,50 @@ export function HomeCheckWaiting({
               {done ? '리포트를 바로 보여드릴게요.' : reassuranceCopy(elapsedMs)}
             </Text>
           </div>
-          <ProgressStepper steps={WAIT_STEPS} currentIndex={renderedIndex} done={done} />
+          {/* 요약 토글 — 현재 단계만 보여주고, 클릭 시 전체 스텝을 펼친다(공개형 disclosure). */}
+          <div>
+            <UnstyledButton
+              className="hc-wait-summary"
+              onClick={() => setExpanded((prev) => !prev)}
+              aria-expanded={expanded}
+              aria-controls={stepsId}
+            >
+              <span
+                className="hc-wait-summary__bullet"
+                data-state={done ? 'done' : 'current'}
+                aria-hidden="true"
+              >
+                {done ? <IconCheck size={15} stroke={3} /> : renderedIndex + 1}
+              </span>
+              <span className="hc-wait-summary__text">
+                <span className="hc-wait-summary__label">
+                  {done ? '조회 완료' : currentStep.label}
+                </span>
+                <span className="hc-wait-summary__desc">
+                  {done ? '리포트를 준비했어요' : currentStep.description}
+                </span>
+              </span>
+              <span className="hc-wait-summary__right">
+                {!done && (
+                  <span className="hc-wait-summary__count">
+                    {renderedIndex + 1}/{WAIT_STEPS.length}
+                  </span>
+                )}
+                <IconChevronDown
+                  className="hc-wait-summary__chev"
+                  data-open={expanded || undefined}
+                  size={18}
+                  aria-hidden="true"
+                />
+              </span>
+            </UnstyledButton>
+
+            <Collapse expanded={expanded} id={stepsId}>
+              <div style={{ paddingTop: 12 }}>
+                <ProgressStepper steps={WAIT_STEPS} currentIndex={renderedIndex} done={done} />
+              </div>
+            </Collapse>
+          </div>
           {/* 스텝 전환 공지(SR 전용) — 퍼널의 진행 공지 패턴과 동일하게 polite. */}
           <VisuallyHidden aria-live="polite">
             {done ? '조회가 완료됐어요' : `${renderedIndex + 1}단계 · ${currentStep.label}`}
