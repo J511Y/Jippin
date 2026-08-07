@@ -219,6 +219,10 @@ async def test_get_building_register_completed_returns_permit_history(
             "heading_violation": False,
             "building_floors": "지상 15층",
             "exclusive_floor": "3층",
+            # 조회 잡이 실행된 주소 — 세션 주소와 동일 세대(접미사 유무 혼재 표기).
+            "road_addr": "서울시 강남구 테헤란로 1",
+            "addr_dong": "802",
+            "addr_ho": "1406",
             "change_list": [
                 {
                     "date": "2009-03-17",
@@ -287,6 +291,40 @@ async def test_get_building_register_completed_returns_permit_history(
         "행위허가" in str(e.get("reason"))
         for e in patch["register_supplement"]["permit_entries"]
     )
+
+
+async def test_get_building_register_skips_persist_on_address_change(
+    monkeypatch,
+) -> None:
+    # 조회가 도는 사이 세션 주소가 바뀌면(row 주소 ≠ 현재 주소) supplement 를 영속하지
+    # 않는다 — 옛 건물 결과에 새 주소 지문이 찍히는 레이스 차단(Codex 5R P1).
+    async def completed_row(**_: object) -> dict[str, object]:
+        return {
+            "status": "completed",
+            "violation": True,
+            "road_addr": "서울시 강남구 테헤란로 1",
+            "addr_dong": "802",
+            "addr_ho": "1406",
+            "change_list": [],
+        }
+
+    async def fake_merge(**kwargs: object) -> dict[str, object]:
+        raise AssertionError("주소 불일치면 영속까지 가면 안 된다")
+
+    async def changed_address(sid: uuid.UUID) -> dict[str, object]:
+        return {"road_address": "부산 해운대구 달맞이길 2", "unit_ho": "1406호"}
+
+    monkeypatch.setattr(home_check, "get_home_check_row", completed_row)
+    monkeypatch.setattr(main_flow, "merge_judgment_schema", fake_merge)
+    monkeypatch.setattr(main_flow, "get_session_address", changed_address)
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(),
+        home_check_id=str(uuid.uuid4()),
+        session_id=uuid.uuid4(),
+    )
+    # 조회 결과 자체(대화 컨텍스트용)는 그대로 돌려준다 — 리포트 영속만 건너뛴다.
+    assert res["ok"] is True
+    assert res["violation"]["is_violation"] is True
 
 
 def test_change_date_key_handles_unpadded_dates() -> None:

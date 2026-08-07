@@ -386,14 +386,52 @@ def _change_date_key(value: Any) -> tuple[int, int, int]:
 
 
 # 대장 변동 이력의 잡 상태 → 에이전트 안내 문구(내부 용어 노출 금지).
+# needs_input: 추가 인증(two-way) 입력 UI 는 '우리집 체크' 화면에만 있고 이 대화(A2UI)
+# 엔 없다 — 존재하지 않는 화면을 안내하지 말고, 대장 없이 검토를 이어가되 원하면
+# 우리집 체크 메뉴에서 같은 주소로 조회해 인증을 이어갈 수 있다고 안내한다.
 _REGISTER_STATUS_SUMMARY: dict[str, str] = {
     "querying": "건축물대장 조회가 아직 진행 중입니다. 잠시 후 다시 확인하세요.",
     "needs_input": (
-        "건축물대장 조회에 추가 인증이 필요합니다. 사용자에게 화면의 인증 안내를 "
-        "따라 달라고 요청하세요."
+        "건축물대장 조회에 추가 본인 인증이 필요해 이 대화에서는 결과를 받을 수 "
+        "없습니다. 대장 확인 없이 검토를 계속 진행하고, 사용자에게는 '우리집 체크' "
+        "메뉴에서 같은 주소로 조회하면 인증을 이어가 위반 여부를 확인할 수 있다고 "
+        "안내하세요. 이 조회를 다시 폴링하지 마세요."
     ),
     "failed": "건축물대장 조회가 실패했습니다. 대장 없이 검토를 이어가세요.",
 }
+
+
+def _norm_addr_part(value: Any, suffix: str) -> str:
+    """동/호 표기 정규화 — "101동"/"101" 혼재를 같은 값으로 비교한다."""
+
+    text = str(value or "").strip()
+    return text[: -len(suffix)] if suffix and text.endswith(suffix) else text
+
+
+def _register_matches_session_address(
+    row: dict[str, Any], address: dict[str, Any] | None
+) -> bool:
+    """대장 조회 잡이 실행된 주소(row)와 현재 세션 주소가 같은 세대인지 검사.
+
+    조회가 백그라운드로 도는 사이 사용자가 세션 주소를 바꾸면, 완료된 row 는 **옛
+    주소**의 결과다 — 이때 현재 주소로 지문을 찍어 영속하면 다른 건물의 위반/이력이
+    새 주소 리포트에 귀속된다(#register-supplement-address-fingerprint). 도로명이 서로
+    있으면 도로명으로, 그 외엔 동·호 표기로 대조한다.
+    """
+
+    if not isinstance(address, dict):
+        return False
+    row_road = str(row.get("road_addr") or "").strip()
+    ses_road = str(address.get("road_address") or "").strip()
+    if row_road and ses_road and row_road != ses_road:
+        return False
+    if _norm_addr_part(row.get("addr_dong"), "동") != _norm_addr_part(
+        address.get("building_dong"), "동"
+    ):
+        return False
+    return _norm_addr_part(row.get("addr_ho"), "호") == _norm_addr_part(
+        address.get("unit_ho"), "호"
+    )
 
 
 async def get_building_register_impl(
@@ -469,22 +507,30 @@ async def get_building_register_impl(
     if session_id is not None:
         try:
             current_address = await main_flow.get_session_address(session_id)
-            await main_flow.merge_judgment_schema(
-                session_id=session_id,
-                owner_user_id=owner_user_id,
-                owner_is_anonymous=owner_is_anonymous,
-                patch={
-                    "register_supplement": {
-                        "is_violation": is_violation,
-                        "unit_floor": row.get("exclusive_floor"),
-                        "permit_entries": permit_entries[-5:],
-                        "address_fingerprint": report_content.address_fingerprint(
-                            current_address
-                        ),
-                        "checked_at": datetime.now(UTC).isoformat(),
-                    }
-                },
-            )
+            # 조회 잡의 주소(row)와 현재 세션 주소가 다르면(조회 도중 주소 변경) 영속을
+            # 건너뛴다 — 옛 건물 결과에 새 주소 지문이 찍히는 레이스 차단.
+            if _register_matches_session_address(row, current_address):
+                await main_flow.merge_judgment_schema(
+                    session_id=session_id,
+                    owner_user_id=owner_user_id,
+                    owner_is_anonymous=owner_is_anonymous,
+                    patch={
+                        "register_supplement": {
+                            "is_violation": is_violation,
+                            "unit_floor": row.get("exclusive_floor"),
+                            "permit_entries": permit_entries[-5:],
+                            "address_fingerprint": report_content.address_fingerprint(
+                                current_address
+                            ),
+                            "checked_at": datetime.now(UTC).isoformat(),
+                        }
+                    },
+                )
+            else:
+                log.info(
+                    "register_supplement_skipped_address_mismatch",
+                    session_id=str(session_id),
+                )
         except Exception:  # noqa: BLE001 - 영속 실패는 조회 결과 반환을 막지 않는다
             log.error("register_supplement_persist_failed", session_id=str(session_id))
 

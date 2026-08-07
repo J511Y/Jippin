@@ -37,6 +37,32 @@ export interface SessionUploadCard {
   signedUrl: string | null;
 }
 
+/**
+ * 세션 도면 인계 첨부(session-floorplans)의 **현재** 스캔 상태를 재확인해 서명을
+ * 막을 object_path 집합을 만든다 — 링크 이후 pending→infected 전이 방어(리드 상세
+ * getLeadAttachments 와 같은 경계). 조회 실패는 빈 집합(기존 동작 폴백).
+ */
+async function blockedSessionObjectPaths(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  rows: Array<Record<string, unknown>>
+): Promise<Set<string>> {
+  const sessionPaths = rows
+    .filter((row) => row.bucket === 'session-floorplans')
+    .map((row) => row.object_path as string);
+  const blocked = new Set<string>();
+  if (sessionPaths.length === 0) return blocked;
+  const { data: assets } = await supabase
+    .from('floorplan_assets')
+    .select('object_key, scan_status')
+    .in('object_key', sessionPaths);
+  for (const asset of assets ?? []) {
+    if (PREVIEW_BLOCKED_SCAN_STATUSES.has(asset.scan_status as string)) {
+      blocked.add(asset.object_key as string);
+    }
+  }
+  return blocked;
+}
+
 export async function listLeadAttachmentCards(limit = 60): Promise<LeadAttachmentCard[]> {
   const supabase = createServiceRoleClient();
   const { data, error } = await supabase
@@ -46,6 +72,10 @@ export async function listLeadAttachmentCards(limit = 60): Promise<LeadAttachmen
     .limit(limit);
   if (error || !data) return [];
 
+  const blockedPaths = await blockedSessionObjectPaths(
+    supabase,
+    data as Array<Record<string, unknown>>
+  );
   return Promise.all(
     data.map(async (row) => {
       const record = row as Record<string, unknown>;
@@ -53,9 +83,14 @@ export async function listLeadAttachmentCards(limit = 60): Promise<LeadAttachmen
       const applicantName = Array.isArray(lead)
         ? (lead[0]?.applicant_name ?? null)
         : (lead?.applicant_name ?? null);
-      const { data: signed } = await supabase.storage
-        .from(record.bucket as string)
-        .createSignedUrl(record.object_path as string, 60 * 60);
+      const blocked =
+        record.bucket === 'session-floorplans' &&
+        blockedPaths.has(record.object_path as string);
+      const { data: signed } = blocked
+        ? { data: null }
+        : await supabase.storage
+            .from(record.bucket as string)
+            .createSignedUrl(record.object_path as string, 60 * 60);
       return {
         id: record.id as string,
         lead_id: record.lead_id as string,
