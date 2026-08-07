@@ -147,6 +147,44 @@ async def test_200_aggregates_predictions() -> None:
     assert "비내력벽 후보 3" in res["summary"]
 
 
+async def test_200_wall_unknown_counts_and_summary() -> None:
+    # wall_unknown(구조 불확실 벽)은 드롭되지 않고 집계되며, 검출됐을 때만 요약에
+    # "구조 불확실 벽 N" 으로 노출된다(에이전트가 '확인 필요' 흐름을 타는 신호).
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "predictions": [
+                    {"class_name": "wall_other", "score": 0.9},
+                    {"class_name": "wall_unknown", "score": 0.4},
+                    {"class_name": "wall_unknown", "score": 0.5},
+                ]
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url=_IMG, settings=_settings(), client=client
+        )
+    assert res["ok"] is True
+    by_label = {i["label"]: i for i in res["instances"]}
+    assert by_label["wall_unknown"]["count"] == 2
+    assert "구조 불확실 벽 2" in res["summary"]
+
+
+async def test_200_no_wall_unknown_omits_summary_segment() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"predictions": [{"class_name": "wall_other", "score": 0.9}]}
+        )
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url=_IMG, settings=_settings(), client=client
+        )
+    assert "구조 불확실" not in res["summary"]
+
+
 async def test_200_missing_predictions_is_bad_response() -> None:
     # predictions 키가 없으면(포맷 불일치) ok=false 로 degrade.
     async with _client(lambda req: httpx.Response(200, json={"foo": 1})) as client:
@@ -442,6 +480,31 @@ async def test_session_floorplan_emits_overlay_and_persists_objects(
         "LOAD_BEARING",
     }
     assert {s["id"] for s in js["space_objects"]} == {"pred:3"}
+
+
+def test_build_judgment_objects_maps_wall_unknown() -> None:
+    # wall_unknown 은 wall_objects 로 담기되 wall_type=UNKNOWN — 선택 시 룰엔진 HOLD
+    # (확인 필요) 경로를 탄다.
+    from src.agent.tools.segmentation import build_judgment_objects
+
+    walls, _spaces, _windows = build_judgment_objects(
+        [
+            {
+                "region_id": "pred:1",
+                "class_name": "wall_unknown",
+                "score": 0.4,
+                "polygon": [0, 0, 10, 0, 10, 2, 0, 2],
+            },
+            {
+                "region_id": "pred:2",
+                "class_name": "wall_other",
+                "score": 0.8,
+                "polygon": [0, 0, 10, 0, 10, 2, 0, 2],
+            },
+        ]
+    )
+    by_id = {w["id"]: w["wall_type"] for w in walls}
+    assert by_id == {"pred:1": "UNKNOWN", "pred:2": "NON_LOAD_BEARING"}
 
 
 def test_compute_crop_box_pads_and_clamps() -> None:

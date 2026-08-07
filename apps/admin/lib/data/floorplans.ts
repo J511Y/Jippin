@@ -4,13 +4,14 @@
  * 도면이 들어오는 곳은 두 갈래다:
  *  1) 상담 신청 첨부 — Supabase Storage `lead-floorplans` 버킷
  *     (consultation_lead_attachments, ADR-0007). signed URL 미리보기 가능.
- *  2) 사전검토 세션 업로드 — floorplan_uploads/floorplan_assets (R2/S3 메타데이터,
- *     0008). 코어 파이프라인 가동 전이라 비어 있을 수 있고, R2 자격증명이 없으므로
- *     메타데이터만 표시한다.
+ *  2) 사전검토 세션 업로드 — floorplan_assets (0008). 정본 버킷은 Supabase Storage
+ *     `session-floorplans` 로, 상담 첨부와 같은 signed URL 패턴으로 미리보기한다.
+ *     (floorplan_uploads 는 클라이언트가 쓰지 않는 dead 테이블 — 읽지 않는다.)
  */
 
 import 'server-only';
 
+import { deriveAssetFileName } from '@/lib/data/sessions';
 import { createServiceRoleClient } from '@/lib/supabase/service-role';
 
 export interface LeadAttachmentCard {
@@ -27,9 +28,13 @@ export interface LeadAttachmentCard {
 export interface SessionUploadCard {
   id: string;
   session_id: string;
-  status: string;
-  file_name: string | null;
+  scan_status: string;
+  /** object_key 에서 유도한 표시용 파일명. */
+  file_name: string;
+  content_type: string | null;
+  byte_size: number | null;
   created_at: string;
+  signedUrl: string | null;
 }
 
 export async function listLeadAttachmentCards(limit = 60): Promise<LeadAttachmentCard[]> {
@@ -68,10 +73,29 @@ export async function listLeadAttachmentCards(limit = 60): Promise<LeadAttachmen
 export async function listSessionUploadCards(limit = 60): Promise<SessionUploadCard[]> {
   const supabase = createServiceRoleClient();
   const { data, error } = await supabase
-    .from('floorplan_uploads')
-    .select('id, session_id, status, file_name, created_at')
+    .from('floorplan_assets')
+    .select('id, session_id, bucket, object_key, content_type, byte_size, scan_status, created_at')
     .order('created_at', { ascending: false })
     .limit(limit);
-  if (error) return [];
-  return (data ?? []) as SessionUploadCard[];
+  if (error || !data) return [];
+
+  return Promise.all(
+    data.map(async (row) => {
+      const record = row as Record<string, unknown>;
+      // 버킷은 행 메타데이터를 따른다(session-floorplans) — 서명 실패 시 미리보기 없이 렌더.
+      const { data: signed } = await supabase.storage
+        .from(record.bucket as string)
+        .createSignedUrl(record.object_key as string, 60 * 60);
+      return {
+        id: record.id as string,
+        session_id: record.session_id as string,
+        scan_status: record.scan_status as string,
+        file_name: deriveAssetFileName(record.object_key as string),
+        content_type: (record.content_type as string | null) ?? null,
+        byte_size: (record.byte_size as number | null) ?? null,
+        created_at: record.created_at as string,
+        signedUrl: signed?.signedUrl ?? null
+      };
+    })
+  );
 }

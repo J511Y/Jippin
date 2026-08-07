@@ -37,6 +37,8 @@ export interface LeadListRow {
 
 export interface LeadDetail extends LeadListRow {
   user_id: string | null;
+  /** 사전검토(precheck) 유래 리드의 출처 세션 — 세션 상세로 역이동용. */
+  session_id: string | null;
   is_anonymous: boolean;
   road_addr_part2: string | null;
   road_addr_detail: string | null;

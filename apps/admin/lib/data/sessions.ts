@@ -47,9 +47,30 @@ export interface ChatMessageRow {
 
 export interface SessionUploadRow {
   id: string;
-  status: string;
-  file_name: string | null;
+  kind: string;
+  bucket: string;
+  object_key: string;
+  content_type: string | null;
+  byte_size: number | null;
+  scan_status: string;
   created_at: string;
+  /** object_key 에서 유도한 표시용 파일명. */
+  file_name: string;
+  /** 이미지 미리보기용 signed URL — 서명 실패 시 null (메타데이터만 표시). */
+  signedUrl: string | null;
+}
+
+/**
+ * 업로드 키 규약 `<uid>/<sessionId>/<uuid>-<safeName>` — basename 에서
+ * 앞의 36자 UUID 접두어를 벗겨 원래 파일명을 복원한다.
+ */
+export function deriveAssetFileName(objectKey: string): string {
+  const basename = objectKey.split('/').pop() ?? objectKey;
+  const stripped = basename.replace(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i,
+    ''
+  );
+  return stripped || basename;
 }
 
 /** PostgREST 1:1 embed 가 배열/객체 어느 쪽으로 와도 단일 객체로 정규화. */
@@ -124,11 +145,33 @@ export async function getSessionMessages(sessionId: string): Promise<ChatMessage
 
 export async function getSessionUploads(sessionId: string): Promise<SessionUploadRow[]> {
   const supabase = createServiceRoleClient();
+  // 세션 업로드 정본은 floorplan_assets (floorplan_uploads 는 클라이언트가 쓰지 않는 dead 테이블).
   const { data, error } = await supabase
-    .from('floorplan_uploads')
-    .select('id, status, file_name, created_at')
+    .from('floorplan_assets')
+    .select('id, kind, bucket, object_key, content_type, byte_size, scan_status, created_at')
     .eq('session_id', sessionId)
     .order('created_at', { ascending: false });
-  if (error) return [];
-  return (data ?? []) as SessionUploadRow[];
+  if (error || !data) return [];
+
+  return Promise.all(
+    data.map(async (row) => {
+      const record = row as Record<string, unknown>;
+      // 서명 실패는 미리보기 없이 메타데이터만 표시한다.
+      const { data: signed } = await supabase.storage
+        .from(record.bucket as string)
+        .createSignedUrl(record.object_key as string, 60 * 60);
+      return {
+        id: record.id as string,
+        kind: record.kind as string,
+        bucket: record.bucket as string,
+        object_key: record.object_key as string,
+        content_type: (record.content_type as string | null) ?? null,
+        byte_size: (record.byte_size as number | null) ?? null,
+        scan_status: record.scan_status as string,
+        created_at: record.created_at as string,
+        file_name: deriveAssetFileName(record.object_key as string),
+        signedUrl: signed?.signedUrl ?? null
+      };
+    })
+  );
 }

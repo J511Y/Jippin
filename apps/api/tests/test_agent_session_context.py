@@ -48,6 +48,41 @@ def test_floorplan_analyzed_counts_and_priority() -> None:
     assert "도면을 다시" in ctx and "도면 기준으로 진행" in ctx
 
 
+def test_floorplan_unknown_wall_counts_and_guidance() -> None:
+    # 구조 불확실 벽(UNKNOWN)은 스냅샷에 별도 카운트 + 단정 금지 지침으로 노출된다.
+    session = {
+        "selected_floorplan_asset_id": "asset-1",
+        "judgment_schema": {
+            "wall_objects": [
+                {"id": "pred:1", "wall_type": "NON_LOAD_BEARING"},
+                {"id": "pred:2", "wall_type": "UNKNOWN"},
+            ]
+        },
+    }
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "구조 불확실 벽 1곳" in ctx
+    assert "단정하지 말고" in ctx
+
+
+def test_selected_unknown_wall_flags_confirmation() -> None:
+    # 선택에 UNKNOWN 이 섞이면 '모두 비내력벽 후보' 대신 확인 필요 노트가 붙는다.
+    session = {
+        "selected_floorplan_asset_id": "asset-1",
+        "judgment_schema": {
+            "wall_objects": [
+                {"id": "pred:5", "wall_type": "NON_LOAD_BEARING"},
+                {"id": "pred:9", "wall_type": "UNKNOWN"},
+            ],
+            "selected_walls": ["pred:5", "pred:9"],
+        },
+    }
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "모두 비내력벽 후보" not in ctx
+    assert "구조 불확실 벽 포함" in ctx and "단정 금지" in ctx
+
+
 def test_selected_walls_surface_to_agent() -> None:
     session = {
         "selected_floorplan_asset_id": "asset-1",

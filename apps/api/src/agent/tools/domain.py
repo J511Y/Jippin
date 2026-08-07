@@ -367,6 +367,98 @@ async def check_building_register_impl(
     )
 
 
+# 에이전트 컨텍스트 보호 — 변동/행위허가 이력은 최근 것부터 이 개수만 넘긴다.
+_REGISTER_HISTORY_LIMIT = 20
+
+# 대장 변동 이력의 잡 상태 → 에이전트 안내 문구(내부 용어 노출 금지).
+_REGISTER_STATUS_SUMMARY: dict[str, str] = {
+    "querying": "건축물대장 조회가 아직 진행 중입니다. 잠시 후 다시 확인하세요.",
+    "needs_input": (
+        "건축물대장 조회에 추가 인증이 필요합니다. 사용자에게 화면의 인증 안내를 "
+        "따라 달라고 요청하세요."
+    ),
+    "failed": "건축물대장 조회가 실패했습니다. 대장 없이 검토를 이어가세요.",
+}
+
+
+async def get_building_register_impl(
+    *,
+    owner_user_id: uuid.UUID,
+    home_check_id: str,
+) -> dict[str, Any]:
+    """시작해 둔 건축물대장 조회(home_check)의 **결과를 읽어 온다**(read-back).
+
+    check_building_register 는 fire-and-forget 이라 위반 여부·변동/행위허가 이력이
+    대화 컨텍스트로 돌아오지 않았다 — 대장에 "발코니 비내력벽 철거 행위허가" 같은
+    이력이 있으면 사전검토 판단의 직접 근거가 되므로 이 도구로 조회해 반영한다.
+    """
+
+    try:
+        job_id = uuid.UUID(str(home_check_id))
+    except ValueError:
+        return _err("BUILDING_REGISTER_BAD_ID", "잘못된 건축물대장 조회 ID 입니다.")
+    try:
+        row = await home_check.get_home_check_row(
+            home_check_id=job_id, user_id=owner_user_id
+        )
+    except Exception as exc:  # noqa: BLE001 - 구조화 에러로 degrade
+        return _safe_error(
+            exc, "BUILDING_REGISTER_FAILED", tool="get_building_register"
+        )
+    if row is None:
+        return _err(
+            "BUILDING_REGISTER_NOT_FOUND", "해당 건축물대장 조회를 찾을 수 없습니다."
+        )
+
+    status = str(row.get("status") or "querying")
+    if status != "completed":
+        return _ok(
+            home_check_id=str(job_id),
+            status=status,
+            summary=_REGISTER_STATUS_SUMMARY.get(
+                status, _REGISTER_STATUS_SUMMARY["querying"]
+            ),
+        )
+
+    is_violation = bool(row.get("violation"))
+    source_labels = {"exclusive": "전유부", "heading": "표제부"}
+    history = [
+        {
+            "date": entry.get("date"),
+            "reason": entry.get("reason"),
+            "source": source_labels.get(str(entry.get("source")), "대장"),
+        }
+        for entry in home_check.present_change_history(row.get("change_list") or [])
+    ]
+    # 최근 이력 우선 — 행위허가/확장 같은 최신 변동이 판단에 더 유효하다.
+    history = history[-_REGISTER_HISTORY_LIMIT:]
+    permit_entries = [e for e in history if "행위허가" in str(e.get("reason") or "")]
+
+    violation_txt = "위반건축물로 표시됨" if is_violation else "위반건축물 표시 없음"
+    permit_txt = (
+        f", 행위허가 이력 {len(permit_entries)}건(내용을 판단에 반영할 것)"
+        if permit_entries
+        else ""
+    )
+    return _ok(
+        home_check_id=str(job_id),
+        status=status,
+        violation={
+            "is_violation": is_violation,
+            "exclusive": row.get("exclusive_violation"),
+            "heading": row.get("heading_violation"),
+        },
+        building_floors=row.get("building_floors"),
+        # 전유부 층 표기(예: "3층") — 세대 층수(floor_count) 확인의 근거로 쓸 수 있다.
+        unit_floor=row.get("exclusive_floor"),
+        change_history=history,
+        summary=(
+            f"건축물대장 조회 완료 — {violation_txt}, 변동 이력 "
+            f"{len(history)}건{permit_txt}."
+        ),
+    )
+
+
 def _derive_wall_type(judgment_schema: dict[str, Any]) -> str | None:
     """selected_walls + wall_objects 에서 철거 대상 벽 종류를 유도한다.
 

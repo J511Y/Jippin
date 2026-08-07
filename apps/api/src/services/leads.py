@@ -99,6 +99,48 @@ async def _resolve_precheck_session(
     return session_id, (display[:255] if display else None)
 
 
+def _strip_upload_uuid_prefix(file_name: str) -> str:
+    """업로드 키 규약 ``<uuid>-<원본파일명>`` 에서 표시용 원본 파일명을 복원한다."""
+
+    if len(file_name) > 37 and file_name[36] == "-":
+        try:
+            uuid.UUID(file_name[:36])
+        except ValueError:
+            return file_name
+        return file_name[37:] or file_name
+    return file_name
+
+
+async def _session_floorplan_attachment(
+    session_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """세션에 첨부된 도면 asset 을 리드 첨부 row 값으로 환산한다(best-effort).
+
+    사전검토 대화 중 업로드된 도면(sessions.selected_floorplan_asset_id)은 상담 인입
+    폼(QuickPrecheckConsultForm)이 첨부를 싣지 않아 리드에 연결되지 않았다 — 어드민이
+    도면 없이 상담을 받던 문제의 서버측 보정. 첨부 row 는 자산의 원 버킷
+    (session-floorplans)을 그대로 가리키며 복사하지 않는다(어드민 서명은 row 의 bucket
+    기준이라 그대로 동작). 조회 실패는 첨부만 생략하고 상담 접수를 막지 않는다.
+    """
+
+    try:
+        asset = await main_flow._db_select_selected_floorplan_asset(session_id)
+    except Exception:  # noqa: BLE001 - 자동 첨부 실패는 상담 접수를 막지 않는다
+        return None
+    if not asset:
+        return None
+    object_key = str(asset.get("object_key") or "").strip()
+    if not object_key:
+        return None
+    return {
+        "bucket": asset.get("bucket"),
+        "object_path": object_key,
+        "file_name": _strip_upload_uuid_prefix(object_key.rsplit("/", 1)[-1]),
+        "content_type": asset.get("content_type"),
+        "byte_size": asset.get("byte_size"),
+    }
+
+
 def _validate_attachments(
     attachments: list[dict[str, Any]],
     *,
@@ -205,6 +247,17 @@ async def create_lead(
         user_id=user_id,
         default_bucket=settings.lead_floorplan_bucket,
     )
+    # 세션 귀속 리드는 세션에 선택된 도면을 자동 첨부한다 — 대화 중 업로드한 도면이
+    # 상담/어드민으로 이어지게(#session-floorplan-carryover). 클라이언트가 같은 파일을
+    # 이미 실었으면 중복 첨부하지 않는다.
+    if lead_values.get("session_id") is not None:
+        auto = await _session_floorplan_attachment(lead_values["session_id"])
+        if auto is not None and not any(
+            att["bucket"] == auto["bucket"]
+            and att["object_path"] == auto["object_path"]
+            for att in attachments
+        ):
+            attachments.append(auto)
     row = await _insert_lead(lead_values, attachments)
     # 사전검토 세션에서 온 상담이면 그 세션을 handoff(상담 전환)로 전진(best-effort).
     if lead_values.get("session_id") is not None:

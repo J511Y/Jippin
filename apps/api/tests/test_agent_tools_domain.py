@@ -173,6 +173,75 @@ async def test_check_building_register_degrades_on_codef_error(monkeypatch) -> N
     assert res["error_code"] == "UPSTREAM_UNAVAILABLE"
 
 
+async def test_get_building_register_bad_and_missing_id(monkeypatch) -> None:
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(), home_check_id="not-a-uuid"
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "BUILDING_REGISTER_BAD_ID"
+
+    async def none_row(**_: object) -> None:
+        return None
+
+    monkeypatch.setattr(home_check, "get_home_check_row", none_row)
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(), home_check_id=str(uuid.uuid4())
+    )
+    assert res["ok"] is False
+    assert res["error_code"] == "BUILDING_REGISTER_NOT_FOUND"
+
+
+async def test_get_building_register_pending_returns_status_only(monkeypatch) -> None:
+    async def querying_row(**_: object) -> dict[str, object]:
+        return {"status": "querying"}
+
+    monkeypatch.setattr(home_check, "get_home_check_row", querying_row)
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(), home_check_id=str(uuid.uuid4())
+    )
+    assert res["ok"] is True
+    assert res["status"] == "querying"
+    assert "change_history" not in res
+
+
+async def test_get_building_register_completed_returns_permit_history(
+    monkeypatch,
+) -> None:
+    # 완료된 잡은 위반 여부 + 변동/행위허가 이력을 돌려준다 — "거실-발코니 비내력벽 철거
+    # 행위허가" 같은 이력이 에이전트 판단 근거로 도달해야 한다(#register-readback).
+    async def completed_row(**_: object) -> dict[str, object]:
+        return {
+            "status": "completed",
+            "violation": False,
+            "exclusive_violation": False,
+            "heading_violation": False,
+            "building_floors": "지상 15층",
+            "exclusive_floor": "3층",
+            "change_list": [
+                {
+                    "date": "2009-03-17",
+                    "reason": "행위허가:거실과(와) 발코니 사이 비내력벽 철거",
+                    "source": "exclusive",
+                },
+                {"date": "1998-11-02", "reason": "신규작성(신축)", "source": "heading"},
+            ],
+        }
+
+    monkeypatch.setattr(home_check, "get_home_check_row", completed_row)
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(), home_check_id=str(uuid.uuid4())
+    )
+    assert res["ok"] is True
+    assert res["status"] == "completed"
+    assert res["violation"]["is_violation"] is False
+    assert res["unit_floor"] == "3층"
+    reasons = [e["reason"] for e in res["change_history"]]
+    assert any("행위허가" in r and "비내력벽" in r for r in reasons)
+    # 전유부/표제부 라벨로 환산돼 내부 enum(exclusive/heading)이 노출되지 않는다.
+    assert {e["source"] for e in res["change_history"]} <= {"전유부", "표제부", "대장"}
+    assert "행위허가 이력 1건" in res["summary"]
+
+
 async def test_confirm_address_sanitizes_non_domain_exception(monkeypatch) -> None:
     # #sanitize-tool-message: 비-도메인 예외의 str(exc)(주소·SQL·URL 가능)를 노출하지 않고
     # 안정적 문구만 반환한다. message 는 runner 가 output_summary 로 승격해 영속하므로.
