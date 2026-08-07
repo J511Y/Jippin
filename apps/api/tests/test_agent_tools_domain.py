@@ -235,13 +235,18 @@ async def test_get_building_register_completed_returns_permit_history(
         }
 
     merged: dict[str, object] = {}
+    address_id = uuid.uuid4()
 
     async def fake_merge(**kwargs: object) -> dict[str, object]:
         merged.update(kwargs)
         return {}
 
+    async def fake_inputs(sid: uuid.UUID) -> tuple[object, object]:
+        return (None, address_id)
+
     monkeypatch.setattr(home_check, "get_home_check_row", completed_row)
     monkeypatch.setattr(main_flow, "merge_judgment_schema", fake_merge)
+    monkeypatch.setattr(main_flow, "get_session_inputs", fake_inputs)
     session_id = uuid.uuid4()
     res = await domain.get_building_register_impl(
         owner_user_id=uuid.uuid4(),
@@ -265,6 +270,8 @@ async def test_get_building_register_completed_returns_permit_history(
     patch = merged["patch"]
     assert patch["register_supplement"]["is_violation"] is False
     assert patch["register_supplement"]["unit_floor"] == "3층"
+    # 주소 지문 — 주소 변경 시 리포트 조립이 stale supplement 를 걸러내는 근거.
+    assert patch["register_supplement"]["address_id"] == str(address_id)
     assert any(
         "행위허가" in str(e.get("reason"))
         for e in patch["register_supplement"]["permit_entries"]

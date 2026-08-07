@@ -445,8 +445,13 @@ async def get_building_register_impl(
 
     # 리포트 도달 경로(#register-supplement-persist): 웹/PDF 리포트 조립이 읽는 세션
     # 상태로 핵심만 영속한다. 실패는 도구 결과를 막지 않는다(best-effort).
+    # 주소 지문(address_id)을 함께 저장한다 — 이후 사용자가 주소를 바꾸면(다른 건물)
+    # 리포트 조립이 지문 불일치로 이 supplement 를 무시해, 옛 주소 건물의 위반/이력이
+    # 새 주소 리포트에 붙는 것을 막는다(#register-supplement-address-fingerprint).
     if session_id is not None:
         try:
+            inputs = await main_flow.get_session_inputs(session_id)
+            current_address_id = inputs[1] if inputs is not None else None
             await main_flow.merge_judgment_schema(
                 session_id=session_id,
                 owner_user_id=owner_user_id,
@@ -456,6 +461,9 @@ async def get_building_register_impl(
                         "is_violation": is_violation,
                         "unit_floor": row.get("exclusive_floor"),
                         "permit_entries": permit_entries[-5:],
+                        "address_id": (
+                            str(current_address_id) if current_address_id else None
+                        ),
                         "checked_at": datetime.now(UTC).isoformat(),
                     }
                 },

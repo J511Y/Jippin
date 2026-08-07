@@ -428,6 +428,35 @@ def test_register_check_notes_from_supplement() -> None:
     assert report_content.register_check_notes(None) == []
 
 
+def test_register_check_notes_dropped_on_address_change() -> None:
+    # 주소 지문 불일치(조회 후 주소 변경 → 다른 건물) — 옛 건물의 위반/이력을 새
+    # 리포트에 붙이지 않는다(#register-supplement-address-fingerprint, Codex P1).
+    supplement = {
+        "register_supplement": {
+            "is_violation": True,
+            "address_id": "11111111-1111-4111-8111-111111111111",
+            "permit_entries": [{"reason": "행위허가:비내력벽 철거"}],
+        }
+    }
+    # 지문 일치 → 노출.
+    assert (
+        report_content.register_check_notes(
+            supplement,
+            current_address_id="11111111-1111-4111-8111-111111111111",
+        )
+        != []
+    )
+    # 지문 불일치(주소 변경) / 현재 주소 미상 → 차단.
+    assert (
+        report_content.register_check_notes(
+            supplement,
+            current_address_id="22222222-2222-4222-8222-222222222222",
+        )
+        == []
+    )
+    assert report_content.register_check_notes(supplement) == []
+
+
 def test_build_context_appends_register_notes() -> None:
     ctx = report_pdf._build_context(
         session_id=uuid.uuid4(),

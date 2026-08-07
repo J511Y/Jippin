@@ -243,6 +243,52 @@ async def test_create_lead_auto_attaches_session_floorplan(monkeypatch) -> None:
     ]
 
 
+async def test_create_lead_skips_rejected_scan_asset(monkeypatch) -> None:
+    # 스캔 거부(infected/failed) 자산은 리드로 인계하지 않는다 — 어드민 리드 상세가
+    # 첨부를 무조건 서명·렌더하므로 스캔 경계를 우회하게 두면 안 된다(Codex P2).
+    owner = uuid.uuid4()
+    session_id = uuid.uuid4()
+    captured = _patch_insert_with_attachments(monkeypatch)
+
+    async def fake_select_session(sid):  # type: ignore[no-untyped-def]
+        return {"id": session_id, "user_id": owner}
+
+    async def fake_get_address(sid):  # type: ignore[no-untyped-def]
+        return None
+
+    async def infected_asset(sid):  # type: ignore[no-untyped-def]
+        return {
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/plan.png",
+            "content_type": "image/png",
+            "byte_size": 1,
+            "scan_status": "infected",
+        }
+
+    async def boom_linked(bucket, object_path):  # type: ignore[no-untyped-def]
+        raise AssertionError("거부 자산은 중복 확인까지 가면 안 된다")
+
+    monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
+    monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)
+    monkeypatch.setattr(
+        main_flow, "_db_select_selected_floorplan_asset", infected_asset
+    )
+    monkeypatch.setattr(leads, "_attachment_already_linked", boom_linked)
+
+    await leads.create_lead(
+        user_id=owner,
+        is_anonymous=False,
+        payload={
+            "source_form": "precheck_session",
+            "applicant_name": "홍길동",
+            "applicant_phone": "010-1234-5678",
+            "road_addr_part1": "주소",
+            "session_id": session_id,
+        },
+    )
+    assert captured["attachments"] == []
+
+
 async def test_create_lead_skips_globally_linked_object(monkeypatch) -> None:
     # 전역 유니크(uq_..._bucket_object_path) 위반 방지: 같은 세션에서 상담을 다시
     # 신청해도(오브젝트가 이미 다른 리드에 첨부됨) 두 번째 리드 INSERT 가 롤백되지

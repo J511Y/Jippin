@@ -116,7 +116,11 @@ async def get_session_report(
     # 건축물대장 확인 사실(register_supplement)을 응답 시점에 additional_checks 로
     # 잇는다 — 영속 계약(rule_eval_result)은 그대로 두고 표시만 보강한다
     # (#register-supplement-persist). PDF(report_pdf._build_context)와 동일 로직.
-    register_notes = report_content.register_check_notes(session.get("judgment_schema"))
+    # 주소 지문이 다르면(조회 후 주소 변경) 옛 건물 이력은 붙이지 않는다.
+    register_notes = report_content.register_check_notes(
+        session.get("judgment_schema"),
+        current_address_id=session.get("address_id"),
+    )
     if register_notes and isinstance(rule_eval_result, dict):
         rule_eval_result = dict(rule_eval_result)
         rule_eval_result["additional_checks"] = [

@@ -20,6 +20,7 @@ from typing import Any
 
 import httpx
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from . import main_flow
 from ..config import get_settings
@@ -153,6 +154,11 @@ async def _session_floorplan_attachment(
         return None
     if not asset:
         return None
+    # 스캔 거부(infected/failed) 자산은 인계하지 않는다 — 어드민 리드 상세는 첨부를
+    # 무조건 서명·렌더하므로, 세션/갤러리 쪽 스캔 경계를 우회해 거부된 오브젝트가
+    # 관리자 브라우저에 로드되는 걸 막는다(세그멘테이션과 같은 경계).
+    if str(asset.get("scan_status") or "") in ("infected", "failed"):
+        return None
     object_key = str(asset.get("object_key") or "").strip()
     bucket = str(asset.get("bucket") or "").strip()
     if not object_key or not bucket:
@@ -230,8 +236,12 @@ async def _insert_lead(
         ).one()
         lead_id = row.id
         if attachments:
+            # (bucket, object_path) 는 **전역** 유니크다 — 같은 세션의 동시 상담 제출이
+            # 사전 존재 확인(TOCTOU)을 둘 다 통과해도, 충돌 row 만 조용히 건너뛰고
+            # 리드 INSERT 는 살린다(ON CONFLICT DO NOTHING). 첨부 키는 업로드 시점
+            # uuid prefix 라 정상 흐름에서 충돌은 재제출/자동인계 케이스뿐이다.
             await conn.execute(
-                sa.insert(ConsultationLeadAttachment),
+                pg_insert(ConsultationLeadAttachment).on_conflict_do_nothing(),
                 [{"lead_id": lead_id, **att} for att in attachments],
             )
     return {

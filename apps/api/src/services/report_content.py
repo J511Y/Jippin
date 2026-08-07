@@ -79,13 +79,22 @@ WALL_CAVEAT = (
 )
 
 
-def register_check_notes(judgment_schema: dict[str, Any] | None) -> list[str]:
+def register_check_notes(
+    judgment_schema: dict[str, Any] | None,
+    *,
+    current_address_id: Any = None,
+) -> list[str]:
     """세션에 영속된 건축물대장 확인 사실(``register_supplement``)을 리포트의
     '추가 확인' 목록 문구로 환산한다(#register-supplement-persist).
 
     대화 중 get_building_register 로 확인한 위반건축물 여부·행위허가 이력이 리포트
     (웹/PDF 공통 — 둘 다 rule_eval_result 기반)에 도달하는 유일한 경로다. 없으면 빈
     목록(기존 리포트와 동일).
+
+    ``current_address_id`` 는 주소 지문 검증(#register-supplement-address-fingerprint):
+    supplement 에 저장된 조회 시점 address_id 와 현재 세션 address_id 가 다르면
+    (사용자가 주소를 바꿔 다른 건물이 됨) 옛 건물의 위반/이력을 새 리포트에 붙이지
+    않도록 빈 목록을 돌린다.
     """
 
     supplement = (
@@ -94,6 +103,8 @@ def register_check_notes(judgment_schema: dict[str, Any] | None) -> list[str]:
         else None
     )
     if not isinstance(supplement, dict):
+        return []
+    if str(supplement.get("address_id") or "") != str(current_address_id or ""):
         return []
     notes: list[str] = []
     if supplement.get("is_violation"):
