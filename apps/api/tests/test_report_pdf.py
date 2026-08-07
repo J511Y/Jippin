@@ -431,30 +431,36 @@ def test_register_check_notes_from_supplement() -> None:
 def test_register_check_notes_dropped_on_address_change() -> None:
     # 주소 지문 불일치(조회 후 주소 변경 → 다른 건물) — 옛 건물의 위반/이력을 새
     # 리포트에 붙이지 않는다(#register-supplement-address-fingerprint, Codex P1).
+    # 지문은 내용 기반이다: session_addresses.id 는 upsert 가 보존하는 안정 ID 라
+    # 주소를 고쳐도 안 변한다 — id 비교로는 stale 을 못 거른다.
+    old_addr = {"road_address": "서울 강남구 테헤란로 1", "unit_ho": "101호"}
     supplement = {
         "register_supplement": {
             "is_violation": True,
-            "address_id": "11111111-1111-4111-8111-111111111111",
+            "address_fingerprint": report_content.address_fingerprint(old_addr),
             "permit_entries": [{"reason": "행위허가:비내력벽 철거"}],
         }
     }
     # 지문 일치 → 노출.
     assert (
-        report_content.register_check_notes(
-            supplement,
-            current_address_id="11111111-1111-4111-8111-111111111111",
-        )
-        != []
+        report_content.register_check_notes(supplement, current_address=old_addr) != []
     )
-    # 지문 불일치(주소 변경) / 현재 주소 미상 → 차단.
+    # 지문 불일치(주소 변경 — row id 가 같아도 내용이 다르면 차단) / 현재 주소 미상 → 차단.
+    new_addr = {"road_address": "부산 해운대구 달맞이길 2", "unit_ho": "101호"}
     assert (
-        report_content.register_check_notes(
-            supplement,
-            current_address_id="22222222-2222-4222-8222-222222222222",
-        )
-        == []
+        report_content.register_check_notes(supplement, current_address=new_addr) == []
     )
     assert report_content.register_check_notes(supplement) == []
+
+
+def test_address_fingerprint_normalizes() -> None:
+    assert report_content.address_fingerprint(None) == ""
+    assert report_content.address_fingerprint({}) == ""
+    a = {"road_address": " 서울 강남구 테헤란로 1 ", "unit_ho": "101호"}
+    b = {"road_address": "서울 강남구 테헤란로 1", "unit_ho": "101호"}
+    assert report_content.address_fingerprint(a) == report_content.address_fingerprint(
+        b
+    )
 
 
 def test_build_context_appends_register_notes() -> None:

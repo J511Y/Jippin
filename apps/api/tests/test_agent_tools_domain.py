@@ -235,18 +235,23 @@ async def test_get_building_register_completed_returns_permit_history(
         }
 
     merged: dict[str, object] = {}
-    address_id = uuid.uuid4()
+    address_row = {
+        "road_address": "서울시 강남구 테헤란로 1",
+        "apartment_name": "장미마을",
+        "building_dong": "802동",
+        "unit_ho": "1406호",
+    }
 
     async def fake_merge(**kwargs: object) -> dict[str, object]:
         merged.update(kwargs)
         return {}
 
-    async def fake_inputs(sid: uuid.UUID) -> tuple[object, object]:
-        return (None, address_id)
+    async def fake_address(sid: uuid.UUID) -> dict[str, object]:
+        return address_row
 
     monkeypatch.setattr(home_check, "get_home_check_row", completed_row)
     monkeypatch.setattr(main_flow, "merge_judgment_schema", fake_merge)
-    monkeypatch.setattr(main_flow, "get_session_inputs", fake_inputs)
+    monkeypatch.setattr(main_flow, "get_session_address", fake_address)
     session_id = uuid.uuid4()
     res = await domain.get_building_register_impl(
         owner_user_id=uuid.uuid4(),
@@ -270,12 +275,28 @@ async def test_get_building_register_completed_returns_permit_history(
     patch = merged["patch"]
     assert patch["register_supplement"]["is_violation"] is False
     assert patch["register_supplement"]["unit_floor"] == "3층"
-    # 주소 지문 — 주소 변경 시 리포트 조립이 stale supplement 를 걸러내는 근거.
-    assert patch["register_supplement"]["address_id"] == str(address_id)
+    # 내용 기반 주소 지문 — 주소 변경 시 리포트 조립이 stale supplement 를 걸러내는
+    # 근거(session_addresses.id 는 upsert 가 보존해 지문으로 못 쓴다).
+    from src.services import report_content
+
+    assert patch["register_supplement"][
+        "address_fingerprint"
+    ] == report_content.address_fingerprint(address_row)
+    assert patch["register_supplement"]["address_fingerprint"] != ""
     assert any(
         "행위허가" in str(e.get("reason"))
         for e in patch["register_supplement"]["permit_entries"]
     )
+
+
+def test_change_date_key_handles_unpadded_dates() -> None:
+    # 구 워커의 무패딩 표기("2024.9.30")는 문자열 정렬이 깨진다 — (연,월,일) 파싱 키로
+    # 시간순을 보장한다. 파싱 불가는 가장 오래된 것으로.
+    assert domain._change_date_key("2024.9.30") < domain._change_date_key("2024.10.01")
+    assert domain._change_date_key("2011.5.20") == (2011, 5, 20)
+    assert domain._change_date_key("2009-03-17") == (2009, 3, 17)
+    assert domain._change_date_key(None) == (0, 0, 0)
+    assert domain._change_date_key("이하여백") == (0, 0, 0)
 
 
 async def test_confirm_address_sanitizes_non_domain_exception(monkeypatch) -> None:

@@ -179,7 +179,6 @@ def _build_context(
     overlay: dict[str, Any],
     origin: str,
     now: datetime,
-    current_address_id: Any = None,
 ) -> dict[str, Any]:
     """템플릿 ``report`` 컨텍스트 조립 — 모든 섹션 데이터를 한 객체로."""
 
@@ -197,10 +196,10 @@ def _build_context(
         if isinstance(c, str) and c
     ]
     # 건축물대장 확인 사실(위반 여부·행위허가 이력)을 같은 목록에 잇는다 — 대화에서
-    # 확인된 대장 사실이 PDF 에도 도달하게(#register-supplement-persist). 주소 지문이
-    # 다르면(주소 변경) 옛 건물 이력은 붙이지 않는다.
+    # 확인된 대장 사실이 PDF 에도 도달하게(#register-supplement-persist). 주소 지문
+    # (내용 기반)이 다르면(주소 변경) 옛 건물 이력은 붙이지 않는다.
     additional_checks += report_content.register_check_notes(
-        judgment_schema, current_address_id=current_address_id
+        judgment_schema, current_address=address
     )
     ruleset_version = rule_eval_result.get("ruleset_version")
     return {
@@ -337,7 +336,6 @@ async def generate_session_report_pdf(
         overlay=overlay,
         origin=origin,
         now=now,
-        current_address_id=session.get("address_id"),
     )
     try:
         # 동기·블로킹 렌더(Jinja+WeasyPrint)는 워커 스레드로 — 이벤트 루프 head-of-line

@@ -79,10 +79,33 @@ WALL_CAVEAT = (
 )
 
 
+def address_fingerprint(address: dict[str, Any] | None) -> str:
+    """세션 주소 row 의 **내용 기반** 지문(#register-supplement-address-fingerprint).
+
+    ``session_addresses.id`` 는 upsert 가 session_id 충돌 시 기존 row 를 갱신하며
+    **보존**하는 안정 ID 라 주소 변경을 식별하지 못한다 — 실제 주소 필드를 정규화해
+    이어붙인 문자열로 버전을 가른다.
+    """
+
+    if not isinstance(address, dict):
+        return ""
+    parts = [
+        str(address.get(key) or "").strip()
+        for key in (
+            "road_address",
+            "jibun_address",
+            "apartment_name",
+            "building_dong",
+            "unit_ho",
+        )
+    ]
+    return "|".join(parts).strip("|")
+
+
 def register_check_notes(
     judgment_schema: dict[str, Any] | None,
     *,
-    current_address_id: Any = None,
+    current_address: dict[str, Any] | None = None,
 ) -> list[str]:
     """세션에 영속된 건축물대장 확인 사실(``register_supplement``)을 리포트의
     '추가 확인' 목록 문구로 환산한다(#register-supplement-persist).
@@ -91,10 +114,9 @@ def register_check_notes(
     (웹/PDF 공통 — 둘 다 rule_eval_result 기반)에 도달하는 유일한 경로다. 없으면 빈
     목록(기존 리포트와 동일).
 
-    ``current_address_id`` 는 주소 지문 검증(#register-supplement-address-fingerprint):
-    supplement 에 저장된 조회 시점 address_id 와 현재 세션 address_id 가 다르면
-    (사용자가 주소를 바꿔 다른 건물이 됨) 옛 건물의 위반/이력을 새 리포트에 붙이지
-    않도록 빈 목록을 돌린다.
+    ``current_address`` 는 주소 지문 검증: supplement 에 저장된 조회 시점 주소 지문
+    (``address_fingerprint``)과 현재 세션 주소의 지문이 다르면(사용자가 주소를 바꿔
+    다른 건물이 됨) 옛 건물의 위반/이력을 새 리포트에 붙이지 않도록 빈 목록을 돌린다.
     """
 
     supplement = (
@@ -104,7 +126,9 @@ def register_check_notes(
     )
     if not isinstance(supplement, dict):
         return []
-    if str(supplement.get("address_id") or "") != str(current_address_id or ""):
+    if str(supplement.get("address_fingerprint") or "") != address_fingerprint(
+        current_address
+    ):
         return []
     notes: list[str] = []
     if supplement.get("is_violation"):

@@ -11,13 +11,14 @@ uncaught raise 하지 않고 {ok, error_code} 구조화 결과를 돌려 에이�
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from ...errors import ZippinException
 from ...logging import get_logger
-from ...services import home_check, leads, main_flow, rule_engine
+from ...services import home_check, leads, main_flow, report_content, rule_engine
 
 log = get_logger("zippin.agent.tools.domain")
 
@@ -370,6 +371,20 @@ async def check_building_register_impl(
 # 에이전트 컨텍스트 보호 — 변동/행위허가 이력은 최근 것부터 이 개수만 넘긴다.
 _REGISTER_HISTORY_LIMIT = 20
 
+# 대장 변동일 파싱 — 신 워커는 "2009-03-17"(zero-pad ISO), 구 워커는 "2011.5.20" 등
+# 무패딩·비 ISO 표기가 섞여 있어 문자열 정렬이 시간순이 아니다.
+_CHANGE_DATE_RE = re.compile(r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})")
+
+
+def _change_date_key(value: Any) -> tuple[int, int, int]:
+    """변동일 문자열 → (연, 월, 일) 정렬 키. 파싱 불가는 (0,0,0)=가장 오래된 것."""
+
+    match = _CHANGE_DATE_RE.search(str(value or ""))
+    if match is None:
+        return (0, 0, 0)
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
 # 대장 변동 이력의 잡 상태 → 에이전트 안내 문구(내부 용어 노출 금지).
 _REGISTER_STATUS_SUMMARY: dict[str, str] = {
     "querying": "건축물대장 조회가 아직 진행 중입니다. 잠시 후 다시 확인하세요.",
@@ -437,21 +452,23 @@ async def get_building_register_impl(
         for entry in home_check.present_change_history(row.get("change_list") or [])
     ]
     # 저장 순서는 전유부 전체 → 표제부 전체(날짜 무정렬)라 tail 절단이 최신을 보장하지
-    # 않는다 — 날짜(zero-pad ISO, 문자열 정렬 가능)로 먼저 정렬해 최근 이력을 남긴다.
-    # 날짜 미상 행은 가장 오래된 것으로 취급한다.
-    history.sort(key=lambda e: str(e.get("date") or ""))
+    # 않는다 — 날짜를 (연,월,일) 정수로 파싱해 시간순 정렬 후 최근 이력을 남긴다.
+    # 구 워커 행은 zero-pad 없는 "2011.5.20" 형태라 문자열 정렬이 깨진다("2024.10.01"
+    # < "2024.9.30"). 날짜 미상 행은 가장 오래된 것으로 취급한다.
+    history.sort(key=lambda e: _change_date_key(e.get("date")))
     history = history[-_REGISTER_HISTORY_LIMIT:]
     permit_entries = [e for e in history if "행위허가" in str(e.get("reason") or "")]
 
     # 리포트 도달 경로(#register-supplement-persist): 웹/PDF 리포트 조립이 읽는 세션
     # 상태로 핵심만 영속한다. 실패는 도구 결과를 막지 않는다(best-effort).
-    # 주소 지문(address_id)을 함께 저장한다 — 이후 사용자가 주소를 바꾸면(다른 건물)
-    # 리포트 조립이 지문 불일치로 이 supplement 를 무시해, 옛 주소 건물의 위반/이력이
-    # 새 주소 리포트에 붙는 것을 막는다(#register-supplement-address-fingerprint).
+    # **내용 기반** 주소 지문을 함께 저장한다 — session_addresses.id 는 upsert 가
+    # 보존하는 안정 ID 라 주소 변경을 못 가른다. 이후 사용자가 주소를 바꾸면(다른
+    # 건물) 리포트 조립이 지문 불일치로 이 supplement 를 무시해, 옛 주소 건물의
+    # 위반/이력이 새 주소 리포트에 붙는 것을 막는다
+    # (#register-supplement-address-fingerprint).
     if session_id is not None:
         try:
-            inputs = await main_flow.get_session_inputs(session_id)
-            current_address_id = inputs[1] if inputs is not None else None
+            current_address = await main_flow.get_session_address(session_id)
             await main_flow.merge_judgment_schema(
                 session_id=session_id,
                 owner_user_id=owner_user_id,
@@ -461,8 +478,8 @@ async def get_building_register_impl(
                         "is_violation": is_violation,
                         "unit_floor": row.get("exclusive_floor"),
                         "permit_entries": permit_entries[-5:],
-                        "address_id": (
-                            str(current_address_id) if current_address_id else None
+                        "address_fingerprint": report_content.address_fingerprint(
+                            current_address
                         ),
                         "checked_at": datetime.now(UTC).isoformat(),
                     }
