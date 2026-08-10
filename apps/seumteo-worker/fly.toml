@@ -35,8 +35,11 @@ swap_size_mb = 1024             # Chromium 메모리 스파이크 OOM-kill 방�
 
   [http_service.concurrency]
     type = "requests"
-    soft_limit = 1              # 렌더 1건씩 직렬 처리(메모리 보호)
-    hard_limit = 2
+    # 실제 브라우저 렌더는 SEUMTEO_MAX_CONCURRENCY=1 + render_semaphore 가 직렬화한다.
+    # HTTP 입구는 랜딩 warm-up, 제출 직전 readyz, 장시간 job, Fly healthz가 겹칠 수 있으므로
+    # hard limit에 별도 여유를 둔다. 이 값은 세움터 잡 병렬도를 늘리지 않는다.
+    soft_limit = 1
+    hard_limit = 4
 
   # 헬스체크 — /healthz 는 브라우저 기동 여부까지 확인한다.
   [[http_service.checks]]

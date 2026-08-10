@@ -54,11 +54,14 @@ class _FakeHttp:
         self,
         responses: list[_FakeResponse],
         health_responses: list[_FakeResponse] | None = None,
+        ready_responses: list[_FakeResponse] | None = None,
     ) -> None:
         self._responses = list(responses)
         self._health_responses = list(health_responses or [])
+        self._ready_responses = list(ready_responses or [])
         self.calls: list[dict] = []
         self.health_calls: list[dict] = []
+        self.ready_calls: list[dict] = []
 
     async def get(self, url, *, headers=None, timeout=None):
         self.health_calls.append({"url": url, "headers": headers, "timeout": timeout})
@@ -66,13 +69,22 @@ class _FakeHttp:
             return self._health_responses.pop(0)
         return _FakeResponse(200, {"ok": True, "browser": True})
 
-    async def post(self, url, *, json=None, headers=None):  # noqa: A002
+    async def post(self, url, *, json=None, headers=None, timeout=None):  # noqa: A002
+        if url.endswith("/readyz"):
+            self.ready_calls.append(
+                {"url": url, "json": json, "headers": headers, "timeout": timeout}
+            )
+            if self._ready_responses:
+                return self._ready_responses.pop(0)
+            return _FakeResponse(
+                200, {"ok": True, "browser": True, "authenticated": True}
+            )
         self.calls.append({"url": url, "json": json, "headers": headers})
         return self._responses.pop(0)
 
 
-def _client(responses, *, health_responses=None):
-    http = _FakeHttp(responses, health_responses)
+def _client(responses, *, health_responses=None, ready_responses=None):
+    http = _FakeHttp(responses, health_responses, ready_responses)
     client = SeumteoBuildingRegisterClient(
         _Settings(), redis_client=None, http_client=http
     )
@@ -129,7 +141,11 @@ async def test_fetch_exclusive_maps_result():
     assert call["json"]["dong"] == "104동"
     assert call["json"]["ho"] == "504호"
     assert call["headers"]["Authorization"] == "Bearer t0ken"
+    assert len(call["headers"]["X-Jippin-Trace-Id"]) == 16
+    assert int(call["headers"]["X-Jippin-Trace-Id"], 16) >= 0
     assert http.health_calls[0]["url"] == "http://worker.flycast/healthz"
+    assert http.ready_calls[0]["url"] == "http://worker.flycast/readyz"
+    assert http.ready_calls[0]["headers"]["Authorization"] == "Bearer t0ken"
 
 
 async def test_fetch_heading_maps_result():
@@ -237,6 +253,62 @@ async def test_warmup_retries_flycast_until_browser_is_ready():
     assert all(
         call["url"] == "http://worker.flycast/healthz" for call in http.health_calls
     )
+    assert len(http.ready_calls) == 1
+    assert http.ready_calls[0]["url"] == "http://worker.flycast/readyz"
+
+
+async def test_warmup_retries_until_login_session_is_ready():
+    client, http = _client(
+        [],
+        ready_responses=[
+            _FakeResponse(503, {"ok": False, "browser": True, "authenticated": False}),
+            _FakeResponse(200, {"ok": True, "browser": True, "authenticated": True}),
+        ],
+    )
+
+    await client.warmup()
+
+    assert len(http.health_calls) == 1
+    assert len(http.ready_calls) == 2
+
+
+async def test_warmup_allows_legacy_worker_during_worker_first_rollout():
+    client, http = _client([], ready_responses=[_FakeResponse(404, {})])
+
+    await client.warmup()
+
+    assert len(http.ready_calls) == 1
+
+
+async def test_warmup_worker_token_401_fails_without_retry():
+    client, http = _client([], ready_responses=[_FakeResponse(401, {})])
+
+    with pytest.raises(CodefUpstreamError):
+        await client.warmup()
+
+    assert len(http.ready_calls) == 1
+
+
+async def test_warmup_login_failure_stops_to_protect_account():
+    client, http = _client(
+        [],
+        ready_responses=[
+            _FakeResponse(
+                503,
+                {
+                    "ok": False,
+                    "browser": True,
+                    "authenticated": False,
+                    "category": "auth",
+                },
+            )
+        ],
+    )
+
+    with pytest.raises(CodefAuthError):
+        await client.warmup()
+
+    assert len(http.ready_calls) == 1
 
 
 # ---------------------------------------------------------------------------

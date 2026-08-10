@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import time
 from typing import Any
 
 import httpx
@@ -42,6 +43,7 @@ _log = structlog.get_logger(__name__)
 _JOB_PATH = "/jobs/building-register"
 _BUNDLE_PATH = "/jobs/building-register-bundle"
 _HEALTH_PATH = "/healthz"
+_READY_PATH = "/readyz"
 _RESUME_PREFIX = "seumteo:resume:"
 _RESUME_TTL = 600
 
@@ -240,7 +242,7 @@ class SeumteoBuildingRegisterClient:
     # 워커 호출
     # ------------------------------------------------------------------
     async def warmup(self) -> None:
-        """scale-to-zero worker를 깨우고 Chromium 준비까지 기다린다.
+        """scale-to-zero worker를 깨우고 로그인 세션 준비까지 기다린다.
 
         Flycast URL은 stopped machine을 autostart하지만 긴 발급 요청은 프록시 시간 제한에
         걸릴 수 있다. 따라서 화면 진입 warm-up과 실제 조회 직전 모두 이 가드를 거친 뒤,
@@ -306,8 +308,12 @@ class SeumteoBuildingRegisterClient:
         deadline = loop.time() + max(1.0, self._warmup_timeout)
         attempt = 0
         last_error = "not_ready"
+        started = loop.time()
         _log.info("seumteo.warmup_started")
 
+        # 1단계: 짧은 GET 폴링으로 Fly machine + FastAPI + Chromium 을 깨운다. stopped
+        # machine을 향한 최초 연결을 길게 물지 않아 proxy cold-start 실패를 빠르게 회복한다.
+        browser_ready = False
         while loop.time() < deadline:
             attempt += 1
             remaining = max(0.1, deadline - loop.time())
@@ -315,10 +321,18 @@ class SeumteoBuildingRegisterClient:
             request_timeout = min(8.0, remaining)
             try:
                 response = await self._health_probe(request_timeout)
-                body = response.json() if response.is_success else {}
+                try:
+                    body = response.json()
+                except ValueError:
+                    body = {}
                 if response.is_success and body.get("ok") and body.get("browser"):
-                    _log.info("seumteo.warmup_ready", attempt=attempt)
-                    return
+                    browser_ready = True
+                    _log.info(
+                        "seumteo.warmup_browser_ready",
+                        attempts=attempt,
+                        duration_ms=round((loop.time() - started) * 1000),
+                    )
+                    break
                 last_error = f"http_{response.status_code}"
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc.__class__.__name__
@@ -327,8 +341,70 @@ class SeumteoBuildingRegisterClient:
             if delay:
                 await asyncio.sleep(delay)
 
-        _log.warning("seumteo.warmup_timeout", attempts=attempt, error=last_error)
-        raise CodefUpstreamError("세움터 조회 준비 시간이 초과되었습니다.")
+        if not browser_ready:
+            _log.warning(
+                "seumteo.warmup_timeout",
+                phase="browser",
+                attempts=attempt,
+                error=last_error,
+                duration_ms=round((loop.time() - started) * 1000),
+            )
+            raise CodefUpstreamError("세움터 조회 준비 시간이 초과되었습니다.")
+
+        # 2단계: 토큰 보호 readiness가 실제 세움터 세션을 검증하고 필요하면 로그인한다.
+        # 첫 발급 요청이 이 비용을 떠안지 않게, 남은 warm-up 예산을 한 요청에 부여한다.
+        auth_attempt = 0
+        while loop.time() < deadline:
+            auth_attempt += 1
+            remaining = max(0.1, deadline - loop.time())
+            try:
+                response = await self._ready_probe(remaining)
+                if response.status_code in (404, 405):
+                    # worker-first 배포가 정석이지만, 롤링 중 구 worker와 잠깐 겹쳐도 발급을
+                    # 전면 차단하지 않는다. 새 worker가 배포되면 authenticated readiness로 전환된다.
+                    _log.info("seumteo.warmup_legacy_worker", attempt=auth_attempt)
+                    return
+                try:
+                    body = response.json()
+                except ValueError:
+                    body = {}
+                if response.status_code == 401:
+                    raise CodefUpstreamError("세움터 워커 인증 실패(토큰 확인).")
+                if response.status_code == 503 and body.get("category") == "auth":
+                    # 잘못된 자격증명으로 로그인 폼을 반복 제출하면 계정 잠금 위험이 있다.
+                    # 한 번에 중단하고 기존 서킷브레이커의 auth 실패로 기록한다.
+                    await self._breaker.record_auth_failure()
+                    raise CodefAuthError("세움터 로그인 준비에 실패했습니다.")
+                if (
+                    response.is_success
+                    and body.get("ok")
+                    and body.get("browser")
+                    and body.get("authenticated")
+                ):
+                    _log.info(
+                        "seumteo.warmup_ready",
+                        browser_attempts=attempt,
+                        auth_attempts=auth_attempt,
+                        duration_ms=round((loop.time() - started) * 1000),
+                    )
+                    return
+                last_error = f"ready_http_{response.status_code}"
+            except (httpx.HTTPError, ValueError) as exc:
+                last_error = exc.__class__.__name__
+
+            delay = min(max(0.1, self._warmup_poll), max(0.0, deadline - loop.time()))
+            if delay:
+                await asyncio.sleep(delay)
+
+        _log.warning(
+            "seumteo.warmup_timeout",
+            phase="authenticated",
+            browser_attempts=attempt,
+            auth_attempts=auth_attempt,
+            error=last_error,
+            duration_ms=round((loop.time() - started) * 1000),
+        )
+        raise CodefUpstreamError("세움터 로그인 준비 시간이 초과되었습니다.")
 
     async def _health_probe(self, timeout: float) -> httpx.Response:
         url = f"{self._wake_url}{_HEALTH_PATH}"
@@ -337,6 +413,14 @@ class SeumteoBuildingRegisterClient:
             return await self._http.get(url, headers=headers, timeout=timeout)
         async with httpx.AsyncClient(timeout=timeout) as client:
             return await client.get(url, headers=headers)
+
+    async def _ready_probe(self, timeout: float) -> httpx.Response:
+        url = f"{self._wake_url}{_READY_PATH}"
+        headers = self._worker_headers()
+        if self._http is not None:
+            return await self._http.post(url, json={}, headers=headers, timeout=timeout)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await client.post(url, json={}, headers=headers)
 
     async def _post(
         self, payload: dict[str, Any], headers: dict[str, str]
@@ -352,17 +436,45 @@ class SeumteoBuildingRegisterClient:
         timeout: float,
     ) -> httpx.Response:
         url = f"{self._job_url}{path}"
+        worker_job_id = secrets.token_hex(8)
+        headers["X-Jippin-Trace-Id"] = worker_job_id
 
+        started = time.monotonic()
         try:
             if self._http is not None:
                 # 주입된 클라이언트(테스트/공유 풀)는 자체 타임아웃을 따른다.
-                return await self._http.post(url, json=payload, headers=headers)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                return await client.post(url, json=payload, headers=headers)
+                response = await self._http.post(url, json=payload, headers=headers)
+            else:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(url, json=payload, headers=headers)
         except httpx.TimeoutException as exc:
+            _log.info(
+                "seumteo.worker_http",
+                worker_job_id=worker_job_id,
+                operation=path,
+                outcome="timeout",
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
             raise CodefUpstreamError("세움터 워커 응답 시간 초과.") from exc
         except httpx.HTTPError as exc:
+            _log.info(
+                "seumteo.worker_http",
+                worker_job_id=worker_job_id,
+                operation=path,
+                outcome="error",
+                error_type=type(exc).__name__,
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
             raise CodefUpstreamError("세움터 워커 호출에 실패했습니다.") from exc
+        _log.info(
+            "seumteo.worker_http",
+            worker_job_id=worker_job_id,
+            operation=path,
+            outcome="ok",
+            status_code=response.status_code,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        return response
 
     def _parse_worker_response(self, resp: httpx.Response) -> dict[str, Any]:
         if resp.status_code == 401:

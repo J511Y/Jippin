@@ -1192,6 +1192,90 @@ a[data-faq-row]:focus-visible {
   display: block;
 }
 
+/* 공개형 disclosure 요약 토글 — 기본은 현재 단계만, 클릭 시 전체 스테퍼를 펼친다.
+   불릿 스타일은 스테퍼(.hc-wait-step__bullet)와 동일 토큰으로 맞춘다. */
+.hc-wait-summary {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  column-gap: 12px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--jippin-brand-border);
+  border-radius: var(--mantine-radius-md);
+  background: var(--jippin-brand-surface-alt, #ffffff);
+  text-align: left;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+.hc-wait-summary:hover {
+  background: var(--mantine-color-jippin-0);
+  border-color: var(--jippin-brand-primary);
+}
+.hc-wait-summary__bullet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid var(--jippin-brand-primary);
+  background: var(--mantine-color-jippin-0);
+  color: var(--jippin-brand-primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.hc-wait-summary__bullet[data-state='done'] {
+  background: var(--jippin-brand-primary);
+  color: #fff;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hc-wait-summary__bullet[data-state='current'] {
+    animation: hc-wait-pulse 1.8s ease-in-out infinite;
+  }
+}
+.hc-wait-summary__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.hc-wait-summary__label {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--jippin-brand-ink);
+  word-break: keep-all;
+}
+.hc-wait-summary__desc {
+  margin-top: 2px;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--jippin-brand-copy);
+  word-break: keep-all;
+}
+.hc-wait-summary__right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--jippin-brand-copy);
+}
+.hc-wait-summary__count {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.hc-wait-summary__chev {
+  transition: transform 0.2s ease;
+}
+.hc-wait-summary__chev[data-open] {
+  transform: rotate(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .hc-wait-summary__chev {
+    transition: none;
+  }
+}
+
 /* 퀴즈 카드 — eyebrow(틸) + 질문 + 선택지(O/X 원형 또는 세로 리스트) + 해설. */
 .hc-quiz__eyebrow {
   display: inline-block;

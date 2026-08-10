@@ -16,6 +16,7 @@ import {
 } from '@tabler/icons-react';
 import type { Metadata } from 'next';
 
+import { HomeCheckWorkerWarmup } from '@/components/home-check/HomeCheckWorkerWarmup';
 import { PageColumn, PageHeader } from '@/components/ui';
 import { buildHomeCheckJsonLd, safeJsonLd } from '@/lib/site';
 
@@ -41,6 +42,8 @@ export default function HomeCheckLandingPage() {
     // 컨테이너가 전 페이지 lg(1140px)로 통일돼, 읽기 중심인 이 페이지는 PageColumn
     // (prose 720px)으로 내부 폭을 좁힌다 — 안 그러면 CTA·본문이 1140px 로 늘어난다.
     <PageColumn width="prose">
+      {/* 안내를 읽는 시간부터 Fly cold-start + 세움터 로그인을 미리 진행한다. */}
+      <HomeCheckWorkerWarmup />
       {/* JSON-LD: WebPage · Service · BreadcrumbList (SEO 리치결과 + GEO) */}
       <script
         type="application/ld+json"

@@ -84,6 +84,17 @@ export default async function LeadDetailPage({
         </div>
         <p className="text-muted-foreground mt-1 text-xs">
           {formatDateTime(lead.created_at)} 신청 · {SOURCE_FORM_LABELS[lead.source_form] ?? lead.source_form}
+          {lead.session_id ? (
+            <>
+              {' · '}
+              <Link
+                href={`/sessions/${lead.session_id}`}
+                className="hover:text-foreground underline underline-offset-2"
+              >
+                사전검토 세션 보기
+              </Link>
+            </>
+          ) : null}
         </p>
       </div>
 

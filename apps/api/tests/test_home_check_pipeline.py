@@ -158,7 +158,7 @@ def test_summary_rich_when_report_parsed():
 def test_present_change_history_cleans_legacy_garbage():
     # 세션 903c0c36 실측: 구 워커(CLIP 창 채굴)가 저장한 change_list 그대로.
     # 읽기 시점 정화가 절단 중복을 붕괴하고 필러/라벨 행을 걷어내야 한다(DB 원본 불변).
-    from src.services.home_check import _present_change_history
+    from src.services.home_check import present_change_history
 
     stored = [
         {
@@ -199,7 +199,7 @@ def test_present_change_history_cleans_legacy_garbage():
         {"date": None, "reason": ", 사용승인일 ,,", "source": "heading"},
     ]
 
-    cleaned = _present_change_history(stored)
+    cleaned = present_change_history(stored)
 
     reasons = [e["reason"] for e in cleaned]
     # 필러(이하여백)·라벨(사용승인일) 행 제거 + 절단 중복 붕괴 → 8행이 3행으로.
@@ -212,7 +212,7 @@ def test_present_change_history_cleans_legacy_garbage():
 
 def test_present_change_history_keeps_clean_rows_intact():
     # 새 워커(PDF 파싱) 출력 형태는 그대로 통과한다.
-    from src.services.home_check import _present_change_history
+    from src.services.home_check import present_change_history
 
     stored = [
         {
@@ -227,4 +227,4 @@ def test_present_change_history_keeps_clean_rows_intact():
         },
     ]
 
-    assert _present_change_history(stored) == stored
+    assert present_change_history(stored) == stored

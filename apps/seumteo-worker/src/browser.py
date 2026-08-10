@@ -37,6 +37,7 @@ _LAUNCH_ARGS = [
     "--font-render-hinting=none",
 ]
 
+
 class LoginError(RuntimeError):
     """세움터 로그인 실패(자격증명/계정잠금 등). api 는 auth 로 매핑."""
 
@@ -165,6 +166,21 @@ class BrowserManager:
                 await self._login(page)
             finally:
                 await page.close()
+
+    async def prepare_authenticated(self) -> None:
+        """readiness용 로그인 보장 — 유효 세션은 즉시 통과, 재로그인은 유휴 시에만 한다.
+
+        랜딩 warm-up은 발급 잡과 동시에 들어올 수 있다. 유효성 GET은 읽기 전용이라 겹쳐도
+        안전하지만, 세션이 끊긴 상태에서 공용 컨텍스트를 재로그인하면 진행 중 잡을 깨뜨릴 수
+        있다. 그래서 미인증일 때만 render semaphore를 잡고 다시 확인·로그인한다.
+        """
+
+        if self.is_healthy() and await self._is_authenticated():
+            _log.info("login.session_valid")
+            return
+        async with self.render_semaphore:
+            # semaphore를 기다리는 동안 다른 잡이 세션을 복구했을 수 있으므로 재검증한다.
+            await self.ensure_logged_in()
 
     async def _restart(self) -> None:
         # 브라우저만 재기동한다 — keepalive supervisor 태스크는 건드리지 않는다(keepalive 가

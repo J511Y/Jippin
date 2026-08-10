@@ -46,7 +46,12 @@ _SYSTEM_PROMPT = (
     " (예: 'pred:7 은 거실-발코니 경계 창호로 추정').\n"
     "4) reclassifications: 명백히 잘못 분류된 벽이 있으면 교정 목록. 각 항목은 "
     "{object_id, new_label, reason}. object_id 는 아래 제공된 region_id 만, new_label 은 "
-    "제공된 클래스 어휘만 사용. 확신이 없으면 비웁니다(빈 배열).\n"
+    "다음 벽 클래스 어휘만 사용: wall_reinforced_concrete(철근콘크리트 내력벽 후보), "
+    "wall_other(비내력벽 후보), wall_unknown(도면만으로 구조를 가르기 어려운 벽). "
+    "wall_unknown 으로 분류된 벽이 도면 표기(해칭/두께/구조 기호)로 내력·비내력이 "
+    "명백하면 wall_reinforced_concrete/wall_other 로 교정하고, 반대로 다른 벽이라도 "
+    "구조를 확신할 수 없으면 wall_unknown 으로 교정할 수 있습니다. 확신이 없으면 "
+    "비웁니다(빈 배열).\n"
     "5) judgment_hints: 도면에서 **직접 읽을 수 있는 것만** 채우고, 안 보이거나 확신이 "
     "없으면 각 항목을 null 로 두세요(절대 추측 금지). 이 값들은 리모델링 규정 판단의 입력이 "
     "되므로 정확해야 합니다. 각 항목:\n"
@@ -117,9 +122,20 @@ def _parse_json(text: Any) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+#: VLM 교정이 허용되는 라벨 — 벽 3종만. 프롬프트가 벽 교정만 지시하지만, 모델이
+#: 계약 밖 교정(창→벽, 벽→공간)을 내면 오버레이/판단객체가 그대로 오염돼 창호가
+#: '확정 비내력벽'으로 선택·평가될 수 있다 — 정규화에서 강제한다(#vlm-wall-only).
+_WALL_LABELS: frozenset[str] = frozenset(
+    label for label in _KNOWN_LABELS if label.startswith("wall_")
+)
+
+
 def _normalize_supplement(
     data: dict[str, Any], *, model: str, valid_ids: set[str]
 ) -> dict[str, Any]:
+    """VLM 출력 정규화. ``valid_ids`` 는 **벽 region 만** 담아야 한다(호출자 책임) —
+    교정의 원본도 벽, 교정 라벨도 벽(_WALL_LABELS)으로 이중 강제한다."""
+
     notes = [
         str(n).strip()
         for n in (data.get("notes") or [])
@@ -131,7 +147,7 @@ def _normalize_supplement(
             continue
         oid = item.get("object_id")
         new_label = item.get("new_label")
-        if oid in valid_ids and new_label in _KNOWN_LABELS:
+        if oid in valid_ids and new_label in _WALL_LABELS:
             reclass.append(
                 {
                     "object_id": str(oid),
@@ -270,7 +286,13 @@ async def interpret_floorplan_impl(
     if not data:
         log.info("vlm_interpret_unparsable")
         return None
-    valid_ids = {str(r.get("region_id")) for r in regions if isinstance(r, dict)}
+    # 교정 대상은 **벽 region 만** — 창/공간 region 을 벽으로 바꾸는 계약 밖 교정을
+    # 원천 차단한다(#vlm-wall-only).
+    valid_ids = {
+        str(r.get("region_id"))
+        for r in regions
+        if isinstance(r, dict) and str(r.get("class_name") or "") in _WALL_LABELS
+    }
     supplement = _normalize_supplement(
         data, model=model_str.split(":", 1)[1], valid_ids=valid_ids
     )

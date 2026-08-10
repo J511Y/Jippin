@@ -30,8 +30,8 @@
     "schema_version": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "const": "1.1.0",
-      "description": "스키마 버전 (semver). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원)."
+      "const": "1.2.0",
+      "description": "스키마 버전 (semver). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영)."
     },
     "building_info": {
       "$ref": "#/$defs/BuildingInfo"
@@ -54,6 +54,10 @@
     "vlm_supplement": {
       "$ref": "#/$defs/VlmSupplement",
       "description": "VLM 재분류·주석 결과. 분석이 보류된 경우 null 또는 부재."
+    },
+    "register_supplement": {
+      "$ref": "#/$defs/RegisterSupplement",
+      "description": "건축물대장 조회(read-back)에서 확인한 리포트 반영용 사실 (1.2.0 추가). 미조회 세션은 부재."
     },
     "selected_walls": {
       "type": "array",
@@ -257,6 +261,46 @@
             }
           },
           "description": "Mask2Former 라벨을 VLM 이 교정한 결과."
+        }
+      }
+    },
+    "RegisterSupplement": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "건축물대장 조회에서 확인한 사실 (1.2.0 추가). CHAT 의 get_building_register 가 채우고, 리포트(웹/PDF)는 address_fingerprint 가 현재 세션 주소와 일치할 때만 '추가 확인' 목록으로 노출한다.",
+      "properties": {
+        "is_violation": {
+          "type": "boolean",
+          "description": "위반건축물 표시 여부."
+        },
+        "unit_floor": {
+          "type": ["string", "null"],
+          "description": "전유부 층 표기 (예: '3층') — floor_count 확인 근거."
+        },
+        "permit_entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "date": { "type": ["string", "null"] },
+              "reason": { "type": ["string", "null"] },
+              "source": {
+                "type": ["string", "null"],
+                "description": "표시 라벨 (전유부/표제부/대장)."
+              }
+            }
+          },
+          "description": "행위허가 관련 변동 이력(시간순 최근 일부)."
+        },
+        "address_fingerprint": {
+          "type": "string",
+          "description": "조회 시점 세션 주소의 내용 기반 지문 — 주소 변경 시 stale supplement 무효화 근거."
+        },
+        "checked_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "조회(read-back) 시점."
         }
       }
     },

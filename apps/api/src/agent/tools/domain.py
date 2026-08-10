@@ -11,13 +11,14 @@ uncaught raise 하지 않고 {ok, error_code} 구조화 결과를 돌려 에이�
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from ...errors import ZippinException
 from ...logging import get_logger
-from ...services import home_check, leads, main_flow, rule_engine
+from ...services import home_check, leads, main_flow, report_content, rule_engine
 
 log = get_logger("zippin.agent.tools.domain")
 
@@ -367,6 +368,197 @@ async def check_building_register_impl(
     )
 
 
+# 에이전트 컨텍스트 보호 — 변동/행위허가 이력은 최근 것부터 이 개수만 넘긴다.
+_REGISTER_HISTORY_LIMIT = 20
+
+# 대장 변동일 파싱 — 신 워커는 "2009-03-17"(zero-pad ISO), 구 워커는 "2011.5.20" 등
+# 무패딩·비 ISO 표기가 섞여 있어 문자열 정렬이 시간순이 아니다.
+_CHANGE_DATE_RE = re.compile(r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})")
+
+
+def _change_date_key(value: Any) -> tuple[int, int, int]:
+    """변동일 문자열 → (연, 월, 일) 정렬 키. 파싱 불가는 (0,0,0)=가장 오래된 것."""
+
+    match = _CHANGE_DATE_RE.search(str(value or ""))
+    if match is None:
+        return (0, 0, 0)
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+# 대장 변동 이력의 잡 상태 → 에이전트 안내 문구(내부 용어 노출 금지).
+# needs_input: 추가 인증(two-way) 입력 UI 는 '우리집 체크' 화면에만 있고 이 대화(A2UI)
+# 엔 없다 — 존재하지 않는 화면을 안내하지 말고, 대장 없이 검토를 이어가되 원하면
+# 우리집 체크 메뉴에서 같은 주소로 조회해 인증을 이어갈 수 있다고 안내한다.
+_REGISTER_STATUS_SUMMARY: dict[str, str] = {
+    "querying": "건축물대장 조회가 아직 진행 중입니다. 잠시 후 다시 확인하세요.",
+    "needs_input": (
+        "건축물대장 조회에 추가 본인 인증이 필요해 이 대화에서는 결과를 받을 수 "
+        "없습니다. 대장 확인 없이 검토를 계속 진행하고, 사용자에게는 '우리집 체크' "
+        "메뉴에서 같은 주소로 조회하면 인증을 이어가 위반 여부를 확인할 수 있다고 "
+        "안내하세요. 이 조회를 다시 폴링하지 마세요."
+    ),
+    "failed": "건축물대장 조회가 실패했습니다. 대장 없이 검토를 이어가세요.",
+}
+
+
+def _norm_addr_part(value: Any, suffix: str) -> str:
+    """동/호 표기 정규화 — "101동"/"101" 혼재를 같은 값으로 비교한다."""
+
+    text = str(value or "").strip()
+    return text[: -len(suffix)] if suffix and text.endswith(suffix) else text
+
+
+def _register_matches_session_address(
+    row: dict[str, Any], address: dict[str, Any] | None
+) -> bool:
+    """대장 조회 잡이 실행된 주소(row)와 현재 세션 주소가 같은 세대인지 검사.
+
+    조회가 백그라운드로 도는 사이 사용자가 세션 주소를 바꾸면, 완료된 row 는 **옛
+    주소**의 결과다 — 이때 현재 주소로 지문을 찍어 영속하면 다른 건물의 위반/이력이
+    새 주소 리포트에 귀속된다(#register-supplement-address-fingerprint). 도로명이 서로
+    있으면 도로명으로, 그 외엔 동·호 표기로 대조한다.
+    """
+
+    if not isinstance(address, dict):
+        return False
+    row_road = str(row.get("road_addr") or "").strip()
+    ses_road = str(address.get("road_address") or "").strip()
+    if row_road and ses_road and row_road != ses_road:
+        return False
+    if _norm_addr_part(row.get("addr_dong"), "동") != _norm_addr_part(
+        address.get("building_dong"), "동"
+    ):
+        return False
+    return _norm_addr_part(row.get("addr_ho"), "호") == _norm_addr_part(
+        address.get("unit_ho"), "호"
+    )
+
+
+async def get_building_register_impl(
+    *,
+    owner_user_id: uuid.UUID,
+    home_check_id: str,
+    session_id: uuid.UUID | None = None,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """시작해 둔 건축물대장 조회(home_check)의 **결과를 읽어 온다**(read-back).
+
+    check_building_register 는 fire-and-forget 이라 위반 여부·변동/행위허가 이력이
+    대화 컨텍스트로 돌아오지 않았다 — 대장에 "발코니 비내력벽 철거 행위허가" 같은
+    이력이 있으면 사전검토 판단의 직접 근거가 되므로 이 도구로 조회해 반영한다.
+    완료 결과의 핵심(위반 여부·행위허가 이력)은 세션 judgment_schema 의
+    ``register_supplement`` 로도 영속한다 — 리포트(웹/PDF)는 rule_eval_result 만 보는
+    구조라, 영속 없이는 대화에서 확인한 대장 사실이 리포트에 도달하지 못한다
+    (#register-supplement-persist).
+    """
+
+    try:
+        job_id = uuid.UUID(str(home_check_id))
+    except ValueError:
+        return _err("BUILDING_REGISTER_BAD_ID", "잘못된 건축물대장 조회 ID 입니다.")
+    try:
+        row = await home_check.get_home_check_row(
+            home_check_id=job_id, user_id=owner_user_id
+        )
+    except Exception as exc:  # noqa: BLE001 - 구조화 에러로 degrade
+        return _safe_error(
+            exc, "BUILDING_REGISTER_FAILED", tool="get_building_register"
+        )
+    if row is None:
+        return _err(
+            "BUILDING_REGISTER_NOT_FOUND", "해당 건축물대장 조회를 찾을 수 없습니다."
+        )
+
+    status = str(row.get("status") or "querying")
+    if status != "completed":
+        return _ok(
+            home_check_id=str(job_id),
+            status=status,
+            summary=_REGISTER_STATUS_SUMMARY.get(
+                status, _REGISTER_STATUS_SUMMARY["querying"]
+            ),
+        )
+
+    is_violation = bool(row.get("violation"))
+    source_labels = {"exclusive": "전유부", "heading": "표제부"}
+    history = [
+        {
+            "date": entry.get("date"),
+            "reason": entry.get("reason"),
+            "source": source_labels.get(str(entry.get("source")), "대장"),
+        }
+        for entry in home_check.present_change_history(row.get("change_list") or [])
+    ]
+    # 저장 순서는 전유부 전체 → 표제부 전체(날짜 무정렬)라 tail 절단이 최신을 보장하지
+    # 않는다 — 날짜를 (연,월,일) 정수로 파싱해 시간순 정렬 후 최근 이력을 남긴다.
+    # 구 워커 행은 zero-pad 없는 "2011.5.20" 형태라 문자열 정렬이 깨진다("2024.10.01"
+    # < "2024.9.30"). 날짜 미상 행은 가장 오래된 것으로 취급한다.
+    history.sort(key=lambda e: _change_date_key(e.get("date")))
+    history = history[-_REGISTER_HISTORY_LIMIT:]
+    permit_entries = [e for e in history if "행위허가" in str(e.get("reason") or "")]
+
+    # 리포트 도달 경로(#register-supplement-persist): 웹/PDF 리포트 조립이 읽는 세션
+    # 상태로 핵심만 영속한다. 실패는 도구 결과를 막지 않는다(best-effort).
+    # **내용 기반** 주소 지문을 함께 저장한다 — session_addresses.id 는 upsert 가
+    # 보존하는 안정 ID 라 주소 변경을 못 가른다. 이후 사용자가 주소를 바꾸면(다른
+    # 건물) 리포트 조립이 지문 불일치로 이 supplement 를 무시해, 옛 주소 건물의
+    # 위반/이력이 새 주소 리포트에 붙는 것을 막는다
+    # (#register-supplement-address-fingerprint).
+    if session_id is not None:
+        try:
+            current_address = await main_flow.get_session_address(session_id)
+            # 조회 잡의 주소(row)와 현재 세션 주소가 다르면(조회 도중 주소 변경) 영속을
+            # 건너뛴다 — 옛 건물 결과에 새 주소 지문이 찍히는 레이스 차단.
+            if _register_matches_session_address(row, current_address):
+                await main_flow.merge_judgment_schema(
+                    session_id=session_id,
+                    owner_user_id=owner_user_id,
+                    owner_is_anonymous=owner_is_anonymous,
+                    patch={
+                        "register_supplement": {
+                            "is_violation": is_violation,
+                            "unit_floor": row.get("exclusive_floor"),
+                            "permit_entries": permit_entries[-5:],
+                            "address_fingerprint": report_content.address_fingerprint(
+                                current_address
+                            ),
+                            "checked_at": datetime.now(UTC).isoformat(),
+                        }
+                    },
+                )
+            else:
+                log.info(
+                    "register_supplement_skipped_address_mismatch",
+                    session_id=str(session_id),
+                )
+        except Exception:  # noqa: BLE001 - 영속 실패는 조회 결과 반환을 막지 않는다
+            log.error("register_supplement_persist_failed", session_id=str(session_id))
+
+    violation_txt = "위반건축물로 표시됨" if is_violation else "위반건축물 표시 없음"
+    permit_txt = (
+        f", 행위허가 이력 {len(permit_entries)}건(내용을 판단에 반영할 것)"
+        if permit_entries
+        else ""
+    )
+    return _ok(
+        home_check_id=str(job_id),
+        status=status,
+        violation={
+            "is_violation": is_violation,
+            "exclusive": row.get("exclusive_violation"),
+            "heading": row.get("heading_violation"),
+        },
+        building_floors=row.get("building_floors"),
+        # 전유부 층 표기(예: "3층") — 세대 층수(floor_count) 확인의 근거로 쓸 수 있다.
+        unit_floor=row.get("exclusive_floor"),
+        change_history=history,
+        summary=(
+            f"건축물대장 조회 완료 — {violation_txt}, 변동 이력 "
+            f"{len(history)}건{permit_txt}."
+        ),
+    )
+
+
 def _derive_wall_type(judgment_schema: dict[str, Any]) -> str | None:
     """selected_walls + wall_objects 에서 철거 대상 벽 종류를 유도한다.
 
@@ -468,11 +660,15 @@ async def evaluate_rules_impl(
     derived = _derive_wall_type(js)
     if derived:
         clean_values["wall_type"] = derived
-    elif window_selected and not wall_selected:
-        # 창호-only 세션(#window-only-target): 벽 선택이 없어 wall_type 유도 근거가 없다.
-        # 모델이 (검토와 무관한 벽의) wall_type=LOAD_BEARING 을 넘겼다면 rule_engine 의
-        # _evaluate_wall 이 창호 경로보다 먼저 돌아 내력벽 철거로 오판·DENY 한다 — 창호
-        # 경로를 window_demolition_boundary 로만 격리하도록 모델 제공 wall_type 을 버린다.
+    elif wall_selected or window_selected:
+        # 선택이 있는데 유도 실패면 **모델 제공 wall_type 도 버린다** — 두 경우 모두
+        # 모델이 넘긴 값이 선택과 무관하거나 근거 없는 단정이기 때문이다.
+        #  - 벽 선택 + 유도 불가(구조 불확실 벽 UNKNOWN 포함/매핑 불가): 모델이
+        #    NON_LOAD_BEARING 을 우겨 넣으면 룰엔진이 불확실 벽을 확정 비내력으로
+        #    판정·영속해 HOLD(확인 필요)를 우회한다(#wall-unknown-hold).
+        #  - 창호-only 세션(#window-only-target): 벽 선택이 없어 유도 근거가 없는데
+        #    모델 wall_type=LOAD_BEARING 이 남으면 _evaluate_wall 이 창호 경로보다
+        #    먼저 돌아 내력벽 철거로 오판·DENY 한다.
         clean_values.pop("wall_type", None)
     # 철거 검토 대상(벽/창호)은 **오버레이 선택이 정본**이다 — 모델 제공값과 무관하게
     # selected_walls/selected_windows 존재 여부로 덮어쓴다(#window-only-target). 창호만

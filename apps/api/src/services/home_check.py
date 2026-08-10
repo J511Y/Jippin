@@ -413,7 +413,9 @@ async def _process(
 
     if bundle_factory is not None:
         try:
-            exclusive, heading, heading_error = await bundle_factory()
+            exclusive, heading, heading_error = await _run_timed_stage(
+                home_check_id, "worker_bundle", bundle_factory
+            )
         except CodefNeedsUserInput as exc:
             await _mark_needs_input(home_check_id, exc, product="exclusive")
             return
@@ -430,7 +432,9 @@ async def _process(
 
     # 전유부 — needs_input/오류면 즉시 행 반영 후 종료.
     try:
-        exclusive = await exclusive_factory()
+        exclusive = await _run_timed_stage(
+            home_check_id, "worker_exclusive", exclusive_factory
+        )
     except CodefNeedsUserInput as exc:
         await _mark_needs_input(home_check_id, exc, product="exclusive")
         return
@@ -449,7 +453,9 @@ async def _process(
     heading: BuildingHeadingResult | None = None
     heading_error = False
     try:
-        heading = await heading_factory()
+        heading = await _run_timed_stage(
+            home_check_id, "worker_heading", heading_factory
+        )
     except CodefError:  # CodefNeedsUserInput(서브클래스) 포함.
         heading_error = True
     except Exception:  # noqa: BLE001
@@ -458,6 +464,32 @@ async def _process(
     await _mark_completed(
         home_check_id, exclusive, heading, heading_error=heading_error
     )
+
+
+async def _run_timed_stage(home_check_id: uuid.UUID, stage: str, factory: Any) -> Any:
+    """API↔worker 및 CODEF 경계를 home_check_id로 묶어 PII 없이 계측한다."""
+
+    started = time.monotonic()
+    try:
+        result = await factory()
+    except BaseException as exc:
+        logger.info(
+            "home_check_stage",
+            home_check_id=str(home_check_id),
+            stage=stage,
+            outcome="error",
+            error_type=type(exc).__name__,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        raise
+    logger.info(
+        "home_check_stage",
+        home_check_id=str(home_check_id),
+        stage=stage,
+        outcome="ok",
+        duration_ms=round((time.monotonic() - started) * 1000),
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -631,7 +663,7 @@ _CHANGE_KEYWORDS = (
 )
 
 
-def _present_change_history(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def present_change_history(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """저장된 change_list 의 표시 전 정화 — 구 워커가 남긴 절단 중복·필러 행을 걷어낸다.
 
     새 워커(PDF 텍스트 파싱)는 깨끗한 행을 저장하지만, 이미 저장된 세션(공유 링크로
@@ -718,6 +750,7 @@ async def _mark_completed(
 ) -> None:
     # 발급이 끝나고 판정(+확장 LLM 대조) 구간에 들어섰다 — 대기 화면 스텝 갱신.
     await _set_phase(home_check_id, PHASE_JUDGING)
+    judge_started = time.monotonic()
     (
         exclusive_violation,
         heading_violation,
@@ -770,9 +803,25 @@ async def _mark_completed(
         else:
             signal = "normal"
 
+    logger.info(
+        "home_check_stage",
+        home_check_id=str(home_check_id),
+        stage="judge",
+        outcome="ok",
+        duration_ms=round((time.monotonic() - judge_started) * 1000),
+    )
+
     # PDF 보관(best-effort) — 실패해도 잡은 completed 로 둔다(문서 링크만 생략).
     await _set_phase(home_check_id, PHASE_SAVING_REPORT)
+    storage_started = time.monotonic()
     await _store_pdfs(home_check_id, exclusive, heading)
+    logger.info(
+        "home_check_stage",
+        home_check_id=str(home_check_id),
+        stage="store_pdfs",
+        outcome="ok",
+        duration_ms=round((time.monotonic() - storage_started) * 1000),
+    )
 
     values: dict[str, Any] = {
         "status": "completed",
@@ -804,7 +853,15 @@ async def _mark_completed(
         values["building_approval_date"] = _parse_date(heading_summary.approval_date)
         values["building_permit_date"] = _parse_date(heading_summary.permit_date)
 
+    persist_started = time.monotonic()
     await _update_row(home_check_id, values)
+    logger.info(
+        "home_check_stage",
+        home_check_id=str(home_check_id),
+        stage="persist_result",
+        outcome="ok",
+        duration_ms=round((time.monotonic() - persist_started) * 1000),
+    )
     logger.info(
         "home_check_completed",
         home_check_id=str(home_check_id),
@@ -1185,7 +1242,7 @@ async def _build_report(
 
     change_history = [
         ChangeEntry(**entry)
-        for entry in _present_change_history(row.get("change_list") or [])
+        for entry in present_change_history(row.get("change_list") or [])
     ] or None
 
     raw_extension = fields.get("extension_check")

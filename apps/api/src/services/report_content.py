@@ -79,6 +79,80 @@ WALL_CAVEAT = (
 )
 
 
+def address_fingerprint(address: dict[str, Any] | None) -> str:
+    """세션 주소 row 의 **내용 기반** 지문(#register-supplement-address-fingerprint).
+
+    ``session_addresses.id`` 는 upsert 가 session_id 충돌 시 기존 row 를 갱신하며
+    **보존**하는 안정 ID 라 주소 변경을 식별하지 못한다 — 실제 주소 필드를 정규화해
+    이어붙인 문자열로 버전을 가른다.
+    """
+
+    if not isinstance(address, dict):
+        return ""
+    parts = [
+        str(address.get(key) or "").strip()
+        for key in (
+            "road_address",
+            "jibun_address",
+            "apartment_name",
+            "building_dong",
+            "unit_ho",
+        )
+    ]
+    return "|".join(parts).strip("|")
+
+
+def register_check_notes(
+    judgment_schema: dict[str, Any] | None,
+    *,
+    current_address: dict[str, Any] | None = None,
+) -> list[str]:
+    """세션에 영속된 건축물대장 확인 사실(``register_supplement``)을 리포트의
+    '추가 확인' 목록 문구로 환산한다(#register-supplement-persist).
+
+    대화 중 get_building_register 로 확인한 위반건축물 여부·행위허가 이력이 리포트
+    (웹/PDF 공통 — 둘 다 rule_eval_result 기반)에 도달하는 유일한 경로다. 없으면 빈
+    목록(기존 리포트와 동일).
+
+    ``current_address`` 는 주소 지문 검증: supplement 에 저장된 조회 시점 주소 지문
+    (``address_fingerprint``)과 현재 세션 주소의 지문이 다르면(사용자가 주소를 바꿔
+    다른 건물이 됨) 옛 건물의 위반/이력을 새 리포트에 붙이지 않도록 빈 목록을 돌린다.
+    """
+
+    supplement = (
+        judgment_schema.get("register_supplement")
+        if isinstance(judgment_schema, dict)
+        else None
+    )
+    if not isinstance(supplement, dict):
+        return []
+    if str(supplement.get("address_fingerprint") or "") != address_fingerprint(
+        current_address
+    ):
+        return []
+    notes: list[str] = []
+    if supplement.get("is_violation"):
+        notes.append(
+            "건축물대장에 위반건축물 표시가 확인됐어요 — 공사 전 위반 사항 해소 여부를 "
+            "반드시 확인하세요."
+        )
+    for entry in supplement.get("permit_entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        reason = str(entry.get("reason") or "").strip()
+        if not reason:
+            continue
+        date = str(entry.get("date") or "").strip()
+        source = str(entry.get("source") or "").strip()
+        prefix = " ".join(p for p in (date, source) if p)
+        notes.append(
+            f"건축물대장 이력({prefix}): {reason} — 같은 부위 공사라면 판단에 참고하세요."
+            if prefix
+            else f"건축물대장 이력: {reason} — 같은 부위 공사라면 판단에 참고하세요."
+        )
+    return notes
+
+
 # ── 방화·안전시설(required_facilities) 코드별 고정 설명 ─────────────────────────
 # 각 항목: 리포트에 노출할 헤드라인 + 챙겨야 할 포인트(불릿). /faq?category=fireproofing
 # 의 답변(방화판 90cm·스프링클러 면제·자동화재탐지기 등)을 정본으로 한다.

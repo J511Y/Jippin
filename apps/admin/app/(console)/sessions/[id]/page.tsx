@@ -9,7 +9,7 @@ import {
   getSessionMessages,
   getSessionUploads
 } from '@/lib/data/sessions';
-import { SESSION_STATUS_LABELS, UPLOAD_STATUS_LABELS, formatDateTime } from '@/lib/labels';
+import { SCAN_STATUS_LABELS, SESSION_STATUS_LABELS, formatDateTime } from '@/lib/labels';
 import { cn } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
@@ -21,6 +21,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div className="mt-0.5 text-sm">{children ?? '—'}</div>
     </div>
   );
+}
+
+function formatBytes(size: number | null): string {
+  if (size === null) return '';
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)}KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -121,20 +127,42 @@ export default async function SessionDetailPage({
               {uploads.length === 0 ? (
                 <p className="text-muted-foreground text-sm">업로드된 도면이 없습니다.</p>
               ) : (
-                <ul className="flex flex-col gap-2">
+                <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   {uploads.map((upload) => (
-                    <li
-                      key={upload.id}
-                      className="flex items-center justify-between rounded-md border px-3 py-2"
-                    >
-                      <p className="truncate text-sm">{upload.file_name ?? upload.id}</p>
-                      <div className="flex items-center gap-3">
-                        <Badge variant="secondary" className="font-normal">
-                          {UPLOAD_STATUS_LABELS[upload.status] ?? upload.status}
-                        </Badge>
-                        <span className="text-muted-foreground text-xs tabular-nums">
-                          {formatDateTime(upload.created_at)}
-                        </span>
+                    <li key={upload.id} className="overflow-hidden rounded-md border">
+                      {upload.signedUrl && upload.content_type?.startsWith('image/') ? (
+                        <a href={upload.signedUrl} target="_blank" rel="noreferrer">
+                          {/* signed URL 은 1시간 만료 — 정적 최적화 대상이 아니므로 img 사용 */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={upload.signedUrl}
+                            alt={upload.file_name}
+                            className="bg-muted aspect-square w-full object-cover transition-transform hover:scale-105"
+                            loading="lazy"
+                          />
+                        </a>
+                      ) : (
+                        <div className="bg-muted flex aspect-square items-center justify-center">
+                          <FileImage className="text-muted-foreground size-8" />
+                        </div>
+                      )}
+                      <div className="border-t px-2 py-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="truncate text-xs" title={upload.file_name}>
+                            {upload.file_name}
+                          </p>
+                          <span className="text-muted-foreground shrink-0 text-[11px]">
+                            {formatBytes(upload.byte_size)}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between gap-2">
+                          <Badge variant="secondary" className="font-normal">
+                            {SCAN_STATUS_LABELS[upload.scan_status] ?? upload.scan_status}
+                          </Badge>
+                          <span className="text-muted-foreground text-[11px] tabular-nums">
+                            {formatDateTime(upload.created_at)}
+                          </span>
+                        </div>
                       </div>
                     </li>
                   ))}

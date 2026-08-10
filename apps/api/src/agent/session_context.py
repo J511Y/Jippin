@@ -91,15 +91,27 @@ def build_session_state_context(
                 for w in walls
                 if isinstance(w, dict) and w.get("wall_type") == "LOAD_BEARING"
             )
+            unknown = sum(
+                1
+                for w in walls
+                if isinstance(w, dict) and w.get("wall_type") == "UNKNOWN"
+            )
             windows = judgment.get("window_objects")
             window_count = len(windows) if isinstance(windows, list) else 0
             window_txt = f", 창호 {window_count}곳" if window_count else ""
+            unknown_txt = f", 구조 불확실 벽 {unknown}곳" if unknown else ""
             lines.append(
                 f"- 평면도: 첨부 + 분석 완료 (비내력벽 후보 {nonload}곳, 내력벽 후보 "
-                f"{load}곳{window_txt}). 도면이 이미 있으니 **도면 기준으로 진행**하고 "
-                f"도면을 다시 요청하지 말 것. 주소는 도면 후보 탐색용일 뿐이라, 도면이 "
-                f"있으면 주소가 없어도 분석/검토를 이어갈 수 있다."
+                f"{load}곳{unknown_txt}{window_txt}). 도면이 이미 있으니 **도면 기준으로 "
+                f"진행**하고 도면을 다시 요청하지 말 것. 주소는 도면 후보 탐색용일 뿐이라, "
+                f"도면이 있으면 주소가 없어도 분석/검토를 이어갈 수 있다."
             )
+            if unknown:
+                lines.append(
+                    "  (구조 불확실 벽 = 도면만으로 내력/비내력을 가르지 못한 벽. 철거 "
+                    "대상에 포함되면 내력 여부를 단정하지 말고 추가 확인(현장/전문가)이 "
+                    "필요하다고 안내할 것.)"
+                )
         else:
             lines.append(
                 "- 평면도: 첨부됨(분석 진행/대기). 도면을 다시 요청하지 말 것."
@@ -111,7 +123,16 @@ def build_session_state_context(
         ids = [s for s in selected if isinstance(s, str)]
         wt = _wall_type_by_id(judgment)
         all_nonload = bool(ids) and all(wt.get(i) == "NON_LOAD_BEARING" for i in ids)
-        note = " (모두 비내력벽 후보)" if all_nonload else ""
+        any_unknown = any(wt.get(i) == "UNKNOWN" for i in ids)
+        note = (
+            " (모두 비내력벽 후보)"
+            if all_nonload
+            else (
+                " (구조 불확실 벽 포함 — 내력 여부 단정 금지, 추가 확인 필요)"
+                if any_unknown
+                else ""
+            )
+        )
         shown = ", ".join(ids[:10])
         lines.append(
             f"- 사용자가 도면에서 철거 대상으로 직접 선택한 벽: {len(ids)}곳{note}. "
