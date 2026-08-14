@@ -117,12 +117,20 @@ def _resolve_threshold(settings: "Settings") -> float:
     return _THRESHOLD_BY_VOCAB[_expected_vocab_version(settings)]
 
 
-def _detect_vocab_version(data: dict[str, Any], raw_predictions: list[Any]) -> int:
+def _detect_vocab_version(
+    data: dict[str, Any], raw_predictions: list[Any], *, fallback: int
+) -> int:
     """응답이 v4(19클래스) 어휘인지 v3 인지 판별한다.
 
     1순위는 핸들러가 싣는 ``model.num_classes``, 2순위는 ``model.source_run`` 표기,
-    마지막은 v4 에만 있는 ``wall_nonbearing`` 의 실제 등장이다. 모두 없으면 v3 로 본다
-    (보수적 — 옛 엔드포인트를 새 의미로 읽어 기능이 멈추는 쪽을 피한다).
+    3순위는 v4 에만 있는 ``wall_nonbearing`` 의 실제 등장이다(있으면 v4 확정 — 다만
+    **없다고 v3 인 건 아니다**: v4 도 확정 비내력벽이 하나도 없는 도면을 낼 수 있다).
+
+    메타데이터가 전혀 없으면 ``fallback``(설정의 expected_vocab_version)을 따른다.
+    여기서 무조건 v3 으로 떨어뜨리면, 메타데이터 없는 **v4** 응답이 wall_other 만 담았을 때
+    미확정 벽이 전부 wall_nonbearing 으로 승격돼 초록으로 그려지고 NON_LOAD_BEARING 으로
+    영속된다 — HOLD 를 우회하는, 이 마이그레이션이 없애려던 바로 그 반전이다
+    (#metadata-free-fallback).
     """
 
     model = data.get("model")
@@ -138,7 +146,8 @@ def _detect_vocab_version(data: dict[str, Any], raw_predictions: list[Any]) -> i
         for p in raw_predictions
     ):
         return 4
-    return 3
+    log.warning("segmentation_vocab_metadata_missing", fallback=fallback)
+    return fallback
 
 
 def _normalize_v3_predictions(raw_predictions: list[Any]) -> list[Any]:
@@ -271,7 +280,10 @@ def _parse_ok(data: Any, *, expected_vocab: int = 4) -> dict[str, Any]:
         )
 
     # 배포된 모델의 어휘로 해석한다 — 앱 배포와 엔드포인트 모델 교체는 별개 작업이다.
-    vocab_version = _detect_vocab_version(data, raw_predictions)
+    # 응답에 단서가 없으면 설정값(expected_vocab)을 따른다.
+    vocab_version = _detect_vocab_version(
+        data, raw_predictions, fallback=expected_vocab
+    )
     if vocab_version < 4:
         raw_predictions = _normalize_v3_predictions(raw_predictions)
 

@@ -350,6 +350,50 @@ async def test_200_detects_v4_from_predictions_without_model_block() -> None:
     assert by_label == {"wall_nonbearing": 1, "wall_other": 1}  # 재매핑 없음
 
 
+async def test_metadata_free_response_follows_configured_generation() -> None:
+    # 단서가 하나도 없는 응답(model 블록 없음 + wall_nonbearing 없음)은 설정 세대를 따른다.
+    # 무조건 v3 으로 떨어뜨리면, 메타데이터 없는 **v4** 응답이 wall_other 만 담았을 때
+    # 미확정 벽이 전부 비내력으로 승격돼 초록으로 그려지고 NON_LOAD_BEARING 으로
+    # 영속된다 — HOLD 를 우회하는, 이 마이그레이션이 없애려던 반전이다.
+    # (wall_nonbearing 부재는 v3 의 증거가 아니다: v4 도 확정 비내력이 0곳일 수 있다.)
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_other",
+                        "score": 0.4,
+                        "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                    }
+                ]
+            },
+        )
+
+    # 교체 완료(설정 4) → 미확정 벽 그대로 → 룰엔진 HOLD 경로.
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url=_IMG,
+            settings=_settings(hf_segmentation_expected_vocab_version=4),
+            client=client,
+        )
+    assert {i["label"] for i in res["instances"]} == {"wall_other"}
+    walls, _s, _w = seg_module.build_judgment_objects(res["regions"])
+    assert walls[0]["wall_type"] == "UNKNOWN"
+
+    # 교체 전(설정 3) → 옛 역할(선택 가능한 비내력 후보) 유지.
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url=_IMG,
+            settings=_settings(hf_segmentation_expected_vocab_version=3),
+            client=client,
+        )
+    assert {i["label"] for i in res["instances"]} == {"wall_nonbearing"}
+    walls, _s, _w = seg_module.build_judgment_objects(res["regions"])
+    assert walls[0]["wall_type"] == "NON_LOAD_BEARING"
+
+
 async def test_200_missing_predictions_is_bad_response() -> None:
     # predictions 키가 없으면(포맷 불일치) ok=false 로 degrade.
     async with _client(lambda req: httpx.Response(200, json={"foo": 1})) as client:
