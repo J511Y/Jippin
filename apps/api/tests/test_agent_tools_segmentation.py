@@ -797,6 +797,58 @@ def test_merge_preserves_vlm_provenance_and_custom_id_prefix() -> None:
     assert merged[0]["source_engine"] == "VLM"
 
 
+def test_merge_requires_both_sides_to_be_border_fragments() -> None:
+    # 한쪽만 경계 조각이면 잇지 않는다 — 경계 조각을 부풀려 판정하면 경계와 무관한
+    # 이웃 벽이 딸려 들어와 서로 다른 벽이 하나의 선택 대상이 된다(#both-sides-border).
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+            "touches_tile_border": True,
+        },
+        {
+            "region_id": "pred:2",  # 평범한 벽(경계 조각 아님)이 2px 옆에 있다
+            "class_name": "wall_nonbearing",
+            "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
+            "touches_tile_border": False,
+        },
+    ]
+    merged = _merge_overlapping_regions(regions)
+    assert {r["region_id"] for r in merged} == {"pred:1", "pred:2"}
+
+
+def test_merge_skips_border_fragments_from_the_same_tile() -> None:
+    # 같은 타일에서 나온 두 경계 조각은 경계로 갈라진 한 벽이 아니라 원래 다른 벽이다.
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+            "touches_tile_border": True,
+            "tile_index": 2,
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
+            "touches_tile_border": True,
+            "tile_index": 2,
+        },
+    ]
+    merged = _merge_overlapping_regions(regions)
+    assert {r["region_id"] for r in merged} == {"pred:1", "pred:2"}
+
+    # 서로 다른 타일이면 같은 좌표라도 이어 붙인다(경계로 갈린 한 벽).
+    regions[1]["tile_index"] = 3
+    joined = _merge_overlapping_regions(regions)
+    assert len(joined) == 1
+
+
 def test_merge_ignores_border_gap_for_non_border_fragments() -> None:
     # touches_tile_border 가 아니면 미세한 틈이어도 잇지 않는다 — 타일 경계에서
     # 쪼개진 조각에만 적용되는 보정이다.

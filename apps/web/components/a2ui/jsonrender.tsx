@@ -97,10 +97,14 @@ export const a2uiCatalog = defineCatalog(schema, {
         crop: z
           .object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
           .optional(),
-        regions: z.array(overlayRegion).default([])
+        regions: z.array(overlayRegion).default([]),
+        // 벽 어휘 버전(서버 주입). **카탈로그에 선언해 검증을 통과시켜야 한다** — 이 값이
+        // 카드에 닿지 않으면 모든 v4 카드가 v3 저장분으로 오인돼 wall_other(미확정 벽)가
+        // 초록 '비내력벽 후보'로 뒤집혀 그려진다. 없으면 v3(저장된 옛 카드)로 본다.
+        vocab_version: z.number().optional()
       }),
       description:
-        '도면 위에 AI 분석 영역(벽/공간)을 폴리곤 오버레이로 표시하고 비내력벽 후보를 선택받는 카드(OVERLAY).'
+        '도면 위에 AI 분석 영역(벽/공간)을 폴리곤 오버레이로 표시하고 비내력벽 후보를 선택받는 카드(OVERLAY). vocab_version=벽 어휘 버전(없으면 v3 저장분).'
     },
     ConsultationHandoff: {
       props: z.object({

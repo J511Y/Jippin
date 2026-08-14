@@ -162,6 +162,10 @@ services:
       HF_SEGMENTATION_TOKEN: "${HF_SEGMENTATION_TOKEN:-}"
       # 세그멘테이션 이미지 URL 허용 호스트(콤마 구분). 비우면 SSRF 가드만 적용.
       HF_SEGMENTATION_ALLOWED_IMAGE_HOSTS: "${HF_SEGMENTATION_ALLOWED_IMAGE_HOSTS:-}"
+      # 벽 수집 threshold(비내력 계열은 점수가 낮아 0.5 에서 걸러진다) + 도면당 타일 수
+      # 상한. 상한 초과는 추론 전 거절이라, 초고해상도 도면이 반복 거절되면 올린다.
+      HF_SEGMENTATION_THRESHOLD: "${HF_SEGMENTATION_THRESHOLD:-0.35}"
+      HF_SEGMENTATION_MAX_TILES: "${HF_SEGMENTATION_MAX_TILES:-80}"
     ports:
       - "8000:8000"
     depends_on:

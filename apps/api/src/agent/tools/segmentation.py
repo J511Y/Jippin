@@ -594,11 +594,47 @@ def build_judgment_objects(
 # 딱 맞아떨어지게 잘린 조각은 미세한 틈을 두고 떨어져 있을 수 있다. 양쪽 모두
 # touches_tile_border 인 경우에만 이 만큼의 틈을 메워 하나로 본다.
 _TILE_BORDER_JOIN_PX = 3.0
-# 실제 팽창 반지름은 **허용 틈의 절반**이다 — 양쪽 조각을 각각 부풀리므로 서로 닿는
-# 시점의 틈이 2×반지름이 된다. 반지름에 _TILE_BORDER_JOIN_PX 를 그대로 쓰면 6px 떨어진
-# 남남 벽까지 한 덩어리로 묶인다(#join-gap-doubling). closing(팽창→수축)도 같은 이유로
-# 2×반지름 만큼의 틈을 메우므로 동일한 반지름을 쓴다.
+# 틈을 메울 때 쓰는 closing(팽창→수축) 반지름 — closing 은 2×반지름 만큼의 틈을 메우므로
+# 허용 틈의 절반이어야 한다(#join-gap-doubling).
 _TILE_BORDER_JOIN_RADIUS_PX = _TILE_BORDER_JOIN_PX / 2
+
+
+def _uf_find(parent: list[int], i: int) -> int:
+    """union-find 루트 찾기(경로 압축)."""
+    while parent[i] != i:
+        parent[i] = parent[parent[i]]
+        i = parent[i]
+    return i
+
+
+def _border_tiles(members: list[dict[str, Any]]) -> set[int]:
+    """경계 조각들이 나온 타일 번호 집합(없으면 빈 집합)."""
+    return {
+        m["tile_index"]
+        for m in members
+        if m.get("touches_tile_border") and isinstance(m.get("tile_index"), int)
+    }
+
+
+def _joinable_border_components(
+    a_members: list[dict[str, Any]], b_members: list[dict[str, Any]]
+) -> bool:
+    """두 연결 성분을 '타일 경계에서 갈라진 한 벽'으로 볼 수 있으면 True.
+
+    조건은 **양쪽 모두** 경계 조각을 품고 있을 것 — 한쪽만 경계 조각인데 이어 붙이면
+    경계와 무관한 이웃 벽이 딸려 들어온다(#both-sides-border). 타일 번호를 알 수 있으면
+    **서로 다른 타일**에서 왔는지도 본다: 같은 타일 안의 두 벽은 경계로 갈라진 조각이
+    아니라 원래 다른 벽이다.
+    """
+
+    if not any(m.get("touches_tile_border") for m in a_members):
+        return False
+    if not any(m.get("touches_tile_border") for m in b_members):
+        return False
+    a_tiles, b_tiles = _border_tiles(a_members), _border_tiles(b_members)
+    if a_tiles and b_tiles and a_tiles == b_tiles:
+        return False  # 같은 타일에서 나온 남남 벽.
+    return True
 
 
 def _merge_overlapping_regions(
@@ -619,10 +655,10 @@ def _merge_overlapping_regions(
 
     v4(원본 해상도 타일 추론)부터는 **긴 벽이 타일 경계에서 조각으로 나뉘어** 반환된다.
     핸들러의 mask-IoU dedup 은 겹침 구간의 중복만 지우고, 경계를 걸친 좌/우 조각은 서로
-    다른 부분이라 남긴다(``touches_tile_border=true`` 가 그 신호). 그래서 연결 판정에만
-    경계 조각을 ``_TILE_BORDER_JOIN_PX`` 만큼 부풀려 미세한 틈을 이어 주고, 최종 좌표는
-    **원본 폴리곤의 합집합**으로 만든다(부풀린 만큼 벽이 두꺼워지지 않게). 합집합이 여전히
-    끊겨 있으면 closing(팽창→수축)으로 틈만 메우고, 그래도 안 되면 병합을 포기한다.
+    다른 부분이라 남긴다(``touches_tile_border=true`` 가 그 신호). 그래서 2단계로 묶는다:
+    ① 실제로 겹치는 것들을 연결 성분으로 만들고, ② **양쪽 모두 경계 조각인** 성분 쌍만
+    원본 도형 사이 거리가 ``_TILE_BORDER_JOIN_PX`` 이내일 때 잇는다. 최종 좌표는 원본
+    폴리곤의 합집합이고, 그래도 끊겨 있으면 closing(팽창→수축)으로 틈만 메운다.
     """
 
     if not regions:
@@ -642,8 +678,7 @@ def _merge_overlapping_regions(
     out: list[dict[str, Any]] = []
     counter = 0
     for cls, group in by_class.items():
-        # (원본 도형, 연결 판정용 도형, region). 경계 조각만 연결 판정용을 부풀린다.
-        shaped: list[tuple[Any, Any, dict[str, Any]]] = []
+        shaped: list[tuple[Any, dict[str, Any]]] = []
         for r in group:
             poly = r.get("polygon") or []
             pts = [(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)]
@@ -654,28 +689,48 @@ def _merge_overlapping_regions(
                 if g.is_empty or g.area <= 0:
                     out.append(r)  # 폴리곤화 불가 → 원본 유지
                     continue
-                link = (
-                    g.buffer(_TILE_BORDER_JOIN_RADIUS_PX)
-                    if r.get("touches_tile_border")
-                    else g
-                )
-                shaped.append((g, link, r))
+                shaped.append((g, r))
             except Exception:  # noqa: BLE001
                 out.append(r)
         if not shaped:
             continue
-        merged = unary_union([link for _, link, _ in shaped])
+
+        # 1단계 — 실제로 겹치는 것들만 연결 성분으로 묶는다(팽창 없음).
+        merged = unary_union([g for g, _ in shaped])
         parts = list(merged.geoms) if merged.geom_type == "MultiPolygon" else [merged]
+        comps: list[tuple[Any, list[dict[str, Any]]]] = []
         for part in parts:
             if part.is_empty or part.geom_type != "Polygon":
                 continue
-            members = [r for _, link, r in shaped if part.intersects(link)]
+            part_members = [r for g, r in shaped if part.intersects(g)]
+            if part_members:
+                comps.append((part, part_members))
+
+        # 2단계 — 타일 경계 조각끼리만 허용 틈 이내에서 잇는다. 도형을 부풀려 판정하면
+        # 경계 조각 하나가 옆의 평범한 벽까지 끌어당기므로, **원본 도형 사이의 실제
+        # 거리**를 재고 양쪽 모두 경계 조각인 쌍에만 적용한다(#both-sides-border).
+        parent = list(range(len(comps)))
+        for i in range(len(comps)):
+            for j in range(i + 1, len(comps)):
+                if not _joinable_border_components(comps[i][1], comps[j][1]):
+                    continue
+                if comps[i][0].distance(comps[j][0]) <= _TILE_BORDER_JOIN_PX:
+                    root_i, root_j = _uf_find(parent, i), _uf_find(parent, j)
+                    if root_i != root_j:
+                        parent[root_j] = root_i
+
+        grouped: dict[int, list[int]] = {}
+        for i in range(len(comps)):
+            grouped.setdefault(_uf_find(parent, i), []).append(i)
+
+        for idxs in grouped.values():
+            members = [m for i in idxs for m in comps[i][1]]
             if len(members) <= 1:
                 # 겹친 게 없음 → 원본 region 그대로(id·좌표 보존, 불필요한 변형 방지).
                 out.extend(members)
                 continue
             member_ids = {id(r) for r in members}
-            body = unary_union([g for g, _, r in shaped if id(r) in member_ids])
+            body = unary_union([g for g, r in shaped if id(r) in member_ids])
             if body.geom_type == "MultiPolygon":
                 # 경계 틈으로만 이어진 조각들 — 틈만 메우고(closing) 도형 두께는 보존.
                 body = body.buffer(_TILE_BORDER_JOIN_RADIUS_PX).buffer(

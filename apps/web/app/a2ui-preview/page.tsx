@@ -48,6 +48,24 @@ const NATIVE_SPECS: { label: string; component: Record<string, unknown> }[] = [
     }
   },
   {
+    // 하위호환 확인용 — vocab_version 이 없는 v3 저장분은 wall_other 를 초록 비내력
+    // 후보로 되돌려 그린다(옛 세션을 다시 열었을 때 사용자가 본 의미 그대로).
+    label: 'FloorplanOverlay (v3 저장분) — vocab_version 없음 → 옛 어휘로 렌더',
+    component: {
+      root: 'ov3',
+      elements: {
+        ov3: {
+          type: 'FloorplanOverlay',
+          props: {
+            asset_id: '',
+            image: { width: 1000, height: 800 },
+            regions: OVERLAY_REGIONS
+          }
+        }
+      }
+    }
+  },
+  {
     label: 'FloorplanRequest (native spec)',
     component: {
       root: 'fp',
