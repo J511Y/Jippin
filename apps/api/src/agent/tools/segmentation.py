@@ -1,13 +1,28 @@
 """평면도 세그멘테이션 도구(HuggingFace Inference Endpoint) — 실패 처리 핵심.
 
-모델: ``youjunhyeok/floorplan-mask2former-confirmed573-ft`` (Mask2Former, 18클래스 =
-STR 5 door/window/wall_reinforced_concrete/wall_other/wall_unknown + SPA 13 공간).
-confirmed573-ft(2026-08) 부터 wall_unknown(구조 불확실 벽)이 실제로 예측된다 —
-라벨 어휘 자체는 cmp180-full 과 동일해 계약(1.3.0) 변경은 없다.
+모델: ``confirmed573v4_ft_tile_19c`` (Mask2Former, **19클래스** = STR 6 door/window/
+wall_reinforced_concrete/wall_nonbearing/wall_other/wall_unknown + SPA 13 공간).
+
+v4(2026-08-12)에서 두 가지가 바뀌었다:
+
+1. **벽 어휘 3종의 의미가 갈렸다.** ``wall_nonbearing`` 은 라벨 작업자가 *확정한*
+   비내력벽, ``wall_other`` 는 도면만으로 판단을 *보류한* 미확정 벽이다(v3 까지는
+   비내력벽이 매핑 누락으로 wall_unknown 에 조용히 폴백돼, 오히려 wall_other 를
+   비내력으로 읽던 반전이 있었다). ``wall_unknown`` 은 과거 데이터 호환용으로만
+   남는다 — v4 확정 라벨 경로에서는 산출되지 않는다.
+2. **입력을 축소하면 성능이 붕괴한다.** 핸들러가 원본 픽셀을 1536 타일/256 겹침으로
+   잘라 각각 추론한 뒤 전체 좌표로 합친다. 앱은 도면을 **원본 해상도 그대로** 보내야
+   하며(리사이즈 파라미터 금지), 입력이 작으면 응답 ``notes`` 에
+   ``input_long_side_below_expected`` 가 실려 온다(경고 로깅 대상).
+
 요청 계약: ``{"inputs": <data URL|base64|HTTP(S) URL>, "parameters": {threshold,
-mask_threshold, max_inference_side}}``. 응답: per-region ``predictions[]``(class_name/
-score/polygon/bbox…) — 여기서 라벨별 count + score 평균으로 집계해 segmentation-result
-계약(instances)으로 환원한다(좌표는 계약상 미포함).
+mask_threshold}}``. tile_size/tile_overlap 은 학습값이라 넘기지 않고 핸들러 기본값을
+쓴다. 벽 후보(특히 비내력 계열)는 점수가 낮게 나와 threshold 0.5 에서 상당수가 걸러지
+므로 운영 기본은 0.35 다(모델 평가 축과 동일).
+
+응답: per-region ``predictions[]``(class_name/score/polygon/bbox/tile_index/
+touches_tile_border…) — 여기서 라벨별 count + score 평균으로 집계해
+segmentation-result 계약(instances)으로 환원한다(좌표는 계약상 미포함).
 
 엔드포인트는 CPU + scale-to-zero(15분)라 유휴 후 첫 요청은 **503 으로 스케일업**되며
 수 분 걸릴 수 있다 — 폴링 재시도로 흡수한다. 어떤 실패도 **절대 uncaught raise 하지
@@ -33,7 +48,7 @@ if TYPE_CHECKING:
 
 log = get_logger("zippin.agent.tools.segmentation")
 
-SCHEMA_VERSION = "1.3.0"
+SCHEMA_VERSION = "1.4.0"
 
 # segmentation-result 계약의 라벨 enum(검증·요약용).
 _KNOWN_LABELS: frozenset[str] = frozenset(
@@ -41,6 +56,7 @@ _KNOWN_LABELS: frozenset[str] = frozenset(
         "door",
         "window",
         "wall_reinforced_concrete",
+        "wall_nonbearing",
         "wall_other",
         "wall_unknown",
         "space_multipurpose",
@@ -59,8 +75,16 @@ _KNOWN_LABELS: frozenset[str] = frozenset(
     }
 )
 
+# 미확정 벽 라벨 — 비내력 후보군에는 들되(커버리지) 신뢰 등급이 낮아 HITL 우선순위가
+# 높은 벽들. wall_other 는 v4 의 '판단 보류' 벽, wall_unknown 은 v3 이하 과거 데이터.
+_UNCERTAIN_WALL_LABELS: frozenset[str] = frozenset({"wall_other", "wall_unknown"})
+
 # 콜드스타트(503) 재시도 대기 상한(초). Retry-After 가 더 커도 이 값으로 캡한다.
 _MAX_RETRY_DELAY_SECONDS = 30.0
+
+# 핸들러가 "입력이 학습 해상도보다 작다"고 알리는 note 키. 이 값이 오면 앱이 도면을
+# 축소해 보내고 있다는 뜻이고, v4 는 축소 입력에서 성능이 붕괴하므로 경고로 남긴다.
+_NOTE_INPUT_TOO_SMALL = "input_long_side_below_expected"
 
 
 def _result(
@@ -204,19 +228,20 @@ def _parse_ok(data: Any) -> dict[str, Any]:
             entry["mean_confidence"] = round(score_sum[label] / score_n[label], 4)
         instances.append(entry)
 
-    wall_other = counts.get("wall_other", 0)
+    nonbearing = counts.get("wall_nonbearing", 0)
     rc = counts.get("wall_reinforced_concrete", 0)
-    wall_unknown = counts.get("wall_unknown", 0)
+    uncertain = sum(counts.get(label, 0) for label in _UNCERTAIN_WALL_LABELS)
     window_count = counts.get("window", 0)
-    # wall_unknown 은 도면만으로 내력/비내력을 못 가른 벽 — 검출됐을 때만 요약에 노출해
-    # 에이전트가 '확인 필요' 흐름을 타게 한다.
-    unknown_txt = f", 구조 불확실 벽 {wall_unknown}" if wall_unknown else ""
+    # 미확정 벽(wall_other/wall_unknown)은 도면만으로 내력/비내력을 가르지 못한 벽 —
+    # 검출됐을 때만 요약에 노출해 에이전트가 '확인 필요' 흐름을 타게 한다.
+    uncertain_txt = f", 미확정 벽 {uncertain}" if uncertain else ""
     summary = (
-        f"세그멘테이션 완료 — 비내력벽 후보 {wall_other}, 내력(RC)벽 후보 {rc}, "
-        f"창호 {window_count}{unknown_txt}."
+        f"세그멘테이션 완료 — 비내력벽 후보 {nonbearing}, 내력(RC)벽 후보 {rc}, "
+        f"창호 {window_count}{uncertain_txt}."
         if instances
         else "세그멘테이션 완료(검출된 영역 없음)."
     )
+    _log_tiling_notes(data)
     # 현재 모델 응답엔 저장된 마스크 자산이 없다(폴리곤만). 다만 핸들러가 향후
     # mask_asset_id(UUID)를 줄 수 있으니 방어적으로 보존한다.
     mask = _valid_uuid(data.get("mask_asset_id"))
@@ -229,6 +254,31 @@ def _parse_ok(data: Any) -> dict[str, Any]:
         mask_asset_id=mask,
         image=image,
         regions=regions,
+    )
+
+
+def _log_tiling_notes(data: dict[str, Any]) -> None:
+    """응답의 ``notes``/``tiling``/``timing`` 을 로그로 남긴다(계약엔 싣지 않음).
+
+    핵심은 ``input_long_side_below_expected`` 다 — 앱이 도면을 축소해 보내고 있다는
+    신호이고, v4 는 축소 입력에서 성능이 붕괴하므로(structure mean IoU 0.67 → 0.0007)
+    운영에서 알림 대상으로 잡아야 한다. 나머지는 타일 수·지연 추적용 info.
+    """
+
+    notes = data.get("notes")
+    notes = [n for n in notes if isinstance(n, str)] if isinstance(notes, list) else []
+    if any(_NOTE_INPUT_TOO_SMALL in n for n in notes):
+        log.warning("segmentation_input_downscaled", notes=notes)
+    tiling = data.get("tiling") if isinstance(data.get("tiling"), dict) else {}
+    timing = data.get("timing") if isinstance(data.get("timing"), dict) else {}
+    log.info(
+        "segmentation_tiling",
+        windows=tiling.get("windows"),
+        raw_predictions=tiling.get("raw_predictions"),
+        deduplicated_predictions=tiling.get("deduplicated_predictions"),
+        returned_predictions=tiling.get("returned_predictions"),
+        seconds=timing.get("seconds"),
+        notes=notes or None,
     )
 
 
@@ -247,7 +297,9 @@ def _parse_regions(raw_predictions: list[Any]) -> list[dict[str, Any]]:
     """per-region predictions 를 오버레이 계약(Region)으로 환원.
 
     좌표(polygon/bbox)는 원본 픽셀 그대로 보존한다(오버레이가 표시 크기로 스케일).
-    polygon 이 비었거나(짝수 좌표 < 6=삼각형 미만) 라벨이 18클래스 밖이면 드롭한다.
+    polygon 이 비었거나(짝수 좌표 < 6=삼각형 미만) 라벨이 19클래스 밖이면 드롭한다.
+    ``tile_index``/``touches_tile_border`` 는 타일 경계에서 쪼개진 조각을 뒤에서 병합
+    (``_merge_overlapping_regions``)하기 위해 함께 보존한다.
     """
     out: list[dict[str, Any]] = []
     for idx, item in enumerate(raw_predictions):
@@ -269,7 +321,11 @@ def _parse_regions(raw_predictions: list[Any]) -> list[dict[str, Any]]:
             "polygon": [float(v) for v in polygon],
             "requires_hitl": bool(item.get("requires_hitl"))
             or str(label).startswith("wall_"),
+            "touches_tile_border": bool(item.get("touches_tile_border")),
         }
+        tile_index = item.get("tile_index")
+        if isinstance(tile_index, int) and not isinstance(tile_index, bool):
+            region["tile_index"] = tile_index
         score = item.get("score")
         if (
             isinstance(score, (int, float))
@@ -292,9 +348,16 @@ def _parse_regions(raw_predictions: list[Any]) -> list[dict[str, Any]]:
 
 # class_name → 계약 WallObject.wall_type (common-judgment-schema). 모델 출력은 후보일
 # 뿐 확정 아님 — UI 어휘는 '후보/검토 필요'로 표시한다.
+#
+# v4 어휘 반영(#wall-vocab-v4): 비내력 후보군 = wall_nonbearing ∪ wall_other 이지만
+# **신뢰 등급을 나누는 것이 이 분리의 목적**이다. wall_nonbearing 만 NON_LOAD_BEARING
+# 으로 승격하고, 판단 보류 벽(wall_other)과 과거 데이터(wall_unknown)는 UNKNOWN 으로
+# 둬 룰엔진의 HOLD(추가 확인 필요) 경로를 타게 한다 — v3 까지는 wall_other 를 비내력으로
+# 읽어 미확정 벽에 철거 가능성 판단이 붙던 반전이 있었다.
 _WALL_TYPE_BY_CLASS: dict[str, str] = {
-    "wall_other": "NON_LOAD_BEARING",
+    "wall_nonbearing": "NON_LOAD_BEARING",
     "wall_reinforced_concrete": "LOAD_BEARING",
+    "wall_other": "UNKNOWN",
     "wall_unknown": "UNKNOWN",
 }
 # class_name → 계약 SpaceObject.type. 매핑 없는 공간은 ETC.
@@ -487,15 +550,29 @@ def build_judgment_objects(
     return walls, spaces, windows
 
 
+# 타일 경계에서 갈라진 조각을 이어 붙일 때 허용하는 최대 틈(원본 픽셀). 겹침(256px)
+# 구간에서 나온 조각들은 보통 실제로 겹쳐 unary_union 이 그대로 합치지만, 경계에서
+# 딱 맞아떨어지게 잘린 조각은 미세한 틈을 두고 떨어져 있을 수 있다. 양쪽 모두
+# touches_tile_border 인 경우에만 이 만큼의 틈을 메워 하나로 본다.
+_TILE_BORDER_JOIN_PX = 3.0
+
+
 def _merge_overlapping_regions(
     regions: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """겹치는(intersect) 같은-클래스 region 을 하나의 엔티티로 병합(후처리).
+    """겹치거나(intersect) 타일 경계에서 갈라진 같은-클래스 region 을 하나로 병합(후처리).
 
     세그멘테이션이 한 벽을 여러 인스턴스로 쪼개 내보내 오버레이가 서로 겹쳐 보이던 문제를
     정리한다 — shapely unary_union 으로 클래스별 폴리곤을 합쳐 연결된 영역을 단일 region 으로
     만든다. region_id 는 ``merged:N`` 으로 새로 부여(선택은 이 id 기준). shapely 부재/실패는
     원본을 그대로 돌려 degrade 한다.
+
+    v4(원본 해상도 타일 추론)부터는 **긴 벽이 타일 경계에서 조각으로 나뉘어** 반환된다.
+    핸들러의 mask-IoU dedup 은 겹침 구간의 중복만 지우고, 경계를 걸친 좌/우 조각은 서로
+    다른 부분이라 남긴다(``touches_tile_border=true`` 가 그 신호). 그래서 연결 판정에만
+    경계 조각을 ``_TILE_BORDER_JOIN_PX`` 만큼 부풀려 미세한 틈을 이어 주고, 최종 좌표는
+    **원본 폴리곤의 합집합**으로 만든다(부풀린 만큼 벽이 두꺼워지지 않게). 합집합이 여전히
+    끊겨 있으면 closing(팽창→수축)으로 틈만 메우고, 그래도 안 되면 병합을 포기한다.
     """
 
     if not regions:
@@ -515,7 +592,8 @@ def _merge_overlapping_regions(
     out: list[dict[str, Any]] = []
     counter = 0
     for cls, group in by_class.items():
-        shaped: list[tuple[Any, dict[str, Any]]] = []
+        # (원본 도형, 연결 판정용 도형, region). 경계 조각만 연결 판정용을 부풀린다.
+        shaped: list[tuple[Any, Any, dict[str, Any]]] = []
         for r in group:
             poly = r.get("polygon") or []
             pts = [(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)]
@@ -526,24 +604,37 @@ def _merge_overlapping_regions(
                 if g.is_empty or g.area <= 0:
                     out.append(r)  # 폴리곤화 불가 → 원본 유지
                     continue
-                shaped.append((g, r))
+                link = (
+                    g.buffer(_TILE_BORDER_JOIN_PX)
+                    if r.get("touches_tile_border")
+                    else g
+                )
+                shaped.append((g, link, r))
             except Exception:  # noqa: BLE001
                 out.append(r)
         if not shaped:
             continue
-        merged = unary_union([g for g, _ in shaped])
+        merged = unary_union([link for _, link, _ in shaped])
         parts = list(merged.geoms) if merged.geom_type == "MultiPolygon" else [merged]
         for part in parts:
             if part.is_empty or part.geom_type != "Polygon":
                 continue
-            members = [r for g, r in shaped if part.intersects(g)]
+            members = [r for _, link, r in shaped if part.intersects(link)]
             if len(members) <= 1:
                 # 겹친 게 없음 → 원본 region 그대로(id·좌표 보존, 불필요한 변형 방지).
                 out.extend(members)
                 continue
+            member_ids = {id(r) for r in members}
+            body = unary_union([g for g, _, r in shaped if id(r) in member_ids])
+            if body.geom_type == "MultiPolygon":
+                # 경계 틈으로만 이어진 조각들 — 틈만 메우고(closing) 도형 두께는 보존.
+                body = body.buffer(_TILE_BORDER_JOIN_PX).buffer(-_TILE_BORDER_JOIN_PX)
+            if body.is_empty or body.geom_type != "Polygon":
+                out.extend(members)  # 끝내 하나로 못 이으면 병합 포기(원본 유지).
+                continue
             counter += 1
             flat: list[float] = []
-            for x, y in part.exterior.coords:
+            for x, y in body.exterior.coords:
                 flat += [float(x), float(y)]
             scores = [
                 m["score"] for m in members if isinstance(m.get("score"), (int, float))
@@ -556,6 +647,9 @@ def _merge_overlapping_regions(
                     "score": (sum(scores) / len(scores)) if scores else None,
                     "requires_hitl": any(bool(m.get("requires_hitl")) for m in members)
                     or cls.startswith("wall_"),
+                    "touches_tile_border": any(
+                        bool(m.get("touches_tile_border")) for m in members
+                    ),
                 }
             )
     return out
@@ -786,9 +880,14 @@ async def segment_floorplan_impl(
         attempt = 0
         while True:
             try:
-                # 모델 카드(cmp180_full) 계약: inputs 는 data URL/base64/HTTP(S) URL 중
-                # 하나. 우리는 스토리지 서명 URL(1h TTL)을 그대로 inputs 로 넘긴다 — 핸들러가
-                # HTTP(S) URL 을 디코드한다(백엔드에서 별도 다운로드/base64 불필요).
+                # 모델 카드 계약: inputs 는 data URL/base64/HTTP(S) URL 중 하나. 우리는
+                # 스토리지 서명 URL(1h TTL)을 그대로 inputs 로 넘긴다 — 핸들러가 HTTP(S)
+                # URL 을 디코드한다(백엔드에서 별도 다운로드/base64 불필요).
+                #
+                # 리사이즈 파라미터는 **절대 넘기지 않는다**(#v4-original-resolution).
+                # v4 는 원본 픽셀을 타일로 잘라 추론하는 전제라, 입력을 축소하면 성능이
+                # 붕괴한다(structure mean IoU 0.672 → 0.0007). tile_size/tile_overlap 도
+                # 학습값이라 건드리지 않고 핸들러 기본값(1536/256)을 쓴다.
                 resp = await client.post(
                     endpoint,
                     json={
@@ -796,9 +895,6 @@ async def segment_floorplan_impl(
                         "parameters": {
                             "threshold": settings.hf_segmentation_threshold,
                             "mask_threshold": settings.hf_segmentation_mask_threshold,
-                            "max_inference_side": (
-                                settings.hf_segmentation_max_inference_side
-                            ),
                         },
                     },
                     headers=headers,

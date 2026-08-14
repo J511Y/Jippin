@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import httpx
 
+from src.agent.tools import segmentation as seg_module
 from src.agent.tools.segmentation import (
     segment_floorplan_impl,
     segment_session_floorplan,
@@ -31,9 +32,8 @@ def _settings(**override: object) -> SimpleNamespace:
         "hf_segmentation_timeout_seconds": 5,
         "hf_segmentation_cold_start_max_retries": 0,
         "hf_segmentation_cold_start_poll_seconds": 10,
-        "hf_segmentation_threshold": 0.5,
+        "hf_segmentation_threshold": 0.35,
         "hf_segmentation_mask_threshold": 0.5,
-        "hf_segmentation_max_inference_side": 1536,
         "hf_segmentation_allowed_image_hosts": [],
         # VLM(AI-002) — 테스트에선 interpret 를 모킹하므로 기본 비활성으로 둔다.
         "vlm_floorplan_enabled": False,
@@ -117,17 +117,19 @@ async def test_422_is_bad_request() -> None:
 async def test_200_aggregates_predictions() -> None:
     # 모델 카드 응답: per-region predictions[]. 라벨별 count(=region 수) + score 평균으로 집계.
     def handler(req: httpx.Request) -> httpx.Response:
-        # 요청 본문이 모델 계약(inputs + parameters)인지 함께 확인한다.
+        # 요청 본문이 모델 계약(inputs + parameters)인지 함께 확인한다. v4 는 원본 픽셀
+        # 타일 추론이 전제라 **리사이즈 파라미터를 보내면 안 된다**(성능 붕괴).
         body = json.loads(req.content)
         assert body["inputs"] == _IMG
-        assert body["parameters"]["max_inference_side"] == 1536
+        assert body["parameters"] == {"threshold": 0.35, "mask_threshold": 0.5}
+        assert "max_inference_side" not in body["parameters"]
         return httpx.Response(
             200,
             json={
                 "predictions": [
-                    {"class_name": "wall_other", "score": 0.9},
-                    {"class_name": "wall_other", "score": 0.7},
-                    {"class_name": "wall_other", "score": 0.8},
+                    {"class_name": "wall_nonbearing", "score": 0.9},
+                    {"class_name": "wall_nonbearing", "score": 0.7},
+                    {"class_name": "wall_nonbearing", "score": 0.8},
                     {"class_name": "wall_reinforced_concrete", "score": 0.6},
                     {"class_name": "bogus", "score": 0.99},
                 ]
@@ -140,23 +142,24 @@ async def test_200_aggregates_predictions() -> None:
         )
     assert res["ok"] is True
     by_label = {i["label"]: i for i in res["instances"]}
-    assert by_label["wall_other"]["count"] == 3
-    assert by_label["wall_other"]["mean_confidence"] == 0.8  # (0.9+0.7+0.8)/3
+    assert by_label["wall_nonbearing"]["count"] == 3
+    assert by_label["wall_nonbearing"]["mean_confidence"] == 0.8  # (0.9+0.7+0.8)/3
     assert by_label["wall_reinforced_concrete"]["count"] == 1
-    assert "bogus" not in by_label  # 18 클래스 밖은 드롭
+    assert "bogus" not in by_label  # 19 클래스 밖은 드롭
     assert "비내력벽 후보 3" in res["summary"]
 
 
-async def test_200_wall_unknown_counts_and_summary() -> None:
-    # wall_unknown(구조 불확실 벽)은 드롭되지 않고 집계되며, 검출됐을 때만 요약에
-    # "구조 불확실 벽 N" 으로 노출된다(에이전트가 '확인 필요' 흐름을 타는 신호).
+async def test_200_uncertain_walls_count_and_summary() -> None:
+    # 미확정 벽(wall_other = v4 판단 보류, wall_unknown = v3 이하 과거 데이터)은 드롭되지
+    # 않고 집계되며, 검출됐을 때만 요약에 "미확정 벽 N" 으로 합산 노출된다(에이전트가
+    # '확인 필요' 흐름을 타는 신호).
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
                 "predictions": [
-                    {"class_name": "wall_other", "score": 0.9},
-                    {"class_name": "wall_unknown", "score": 0.4},
+                    {"class_name": "wall_nonbearing", "score": 0.9},
+                    {"class_name": "wall_other", "score": 0.4},
                     {"class_name": "wall_unknown", "score": 0.5},
                 ]
             },
@@ -168,21 +171,23 @@ async def test_200_wall_unknown_counts_and_summary() -> None:
         )
     assert res["ok"] is True
     by_label = {i["label"]: i for i in res["instances"]}
-    assert by_label["wall_unknown"]["count"] == 2
-    assert "구조 불확실 벽 2" in res["summary"]
+    assert by_label["wall_other"]["count"] == 1
+    assert by_label["wall_unknown"]["count"] == 1
+    assert "비내력벽 후보 1" in res["summary"]
+    assert "미확정 벽 2" in res["summary"]
 
 
-async def test_200_no_wall_unknown_omits_summary_segment() -> None:
+async def test_200_no_uncertain_wall_omits_summary_segment() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            200, json={"predictions": [{"class_name": "wall_other", "score": 0.9}]}
+            200, json={"predictions": [{"class_name": "wall_nonbearing", "score": 0.9}]}
         )
 
     async with _client(handler) as client:
         res = await segment_floorplan_impl(
             image_url=_IMG, settings=_settings(), client=client
         )
-    assert "구조 불확실" not in res["summary"]
+    assert "미확정" not in res["summary"]
 
 
 async def test_200_missing_predictions_is_bad_response() -> None:
@@ -376,8 +381,8 @@ async def test_session_floorplan_signs_and_segments(monkeypatch) -> None:
             200,
             json={
                 "predictions": [
-                    {"class_name": "wall_other", "score": 0.8},
-                    {"class_name": "wall_other", "score": 0.6},
+                    {"class_name": "wall_nonbearing", "score": 0.8},
+                    {"class_name": "wall_nonbearing", "score": 0.6},
                 ]
             },
         )
@@ -391,7 +396,7 @@ async def test_session_floorplan_signs_and_segments(monkeypatch) -> None:
             client=client,
         )
     assert res["ok"] is True
-    assert {i["label"]: i["count"] for i in res["instances"]} == {"wall_other": 2}
+    assert {i["label"]: i["count"] for i in res["instances"]} == {"wall_nonbearing": 2}
 
 
 async def test_session_floorplan_emits_overlay_and_persists_objects(
@@ -419,7 +424,7 @@ async def test_session_floorplan_emits_overlay_and_persists_objects(
                 "predictions": [
                     {
                         "region_id": "pred:1",
-                        "class_name": "wall_other",
+                        "class_name": "wall_nonbearing",
                         "score": 0.9,
                         "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
                         "requires_hitl": True,
@@ -482,9 +487,10 @@ async def test_session_floorplan_emits_overlay_and_persists_objects(
     assert {s["id"] for s in js["space_objects"]} == {"pred:3"}
 
 
-def test_build_judgment_objects_maps_wall_unknown() -> None:
-    # wall_unknown 은 wall_objects 로 담기되 wall_type=UNKNOWN — 선택 시 룰엔진 HOLD
-    # (확인 필요) 경로를 탄다.
+def test_build_judgment_objects_maps_wall_vocabulary() -> None:
+    # v4 어휘: 확정 비내력(wall_nonbearing)만 NON_LOAD_BEARING 으로 승격하고, 판단 보류
+    # (wall_other)·과거 데이터(wall_unknown)는 UNKNOWN 으로 둬 룰엔진 HOLD(확인 필요)
+    # 경로를 타게 한다 — v3 까지 wall_other 를 비내력으로 읽던 반전을 바로잡는다.
     from src.agent.tools.segmentation import build_judgment_objects
 
     walls, _spaces, _windows = build_judgment_objects(
@@ -501,10 +507,27 @@ def test_build_judgment_objects_maps_wall_unknown() -> None:
                 "score": 0.8,
                 "polygon": [0, 0, 10, 0, 10, 2, 0, 2],
             },
+            {
+                "region_id": "pred:3",
+                "class_name": "wall_nonbearing",
+                "score": 0.6,
+                "polygon": [0, 0, 10, 0, 10, 2, 0, 2],
+            },
+            {
+                "region_id": "pred:4",
+                "class_name": "wall_reinforced_concrete",
+                "score": 0.7,
+                "polygon": [0, 0, 10, 0, 10, 2, 0, 2],
+            },
         ]
     )
     by_id = {w["id"]: w["wall_type"] for w in walls}
-    assert by_id == {"pred:1": "UNKNOWN", "pred:2": "NON_LOAD_BEARING"}
+    assert by_id == {
+        "pred:1": "UNKNOWN",
+        "pred:2": "UNKNOWN",
+        "pred:3": "NON_LOAD_BEARING",
+        "pred:4": "LOAD_BEARING",
+    }
 
 
 def test_compute_crop_box_pads_and_clamps() -> None:
@@ -583,6 +606,101 @@ def test_merge_overlapping_regions() -> None:
     ids = {r["region_id"] for r in walls}
     assert "pred:3" in ids  # 안 겹친 건 원본 id 보존
     assert any(i.startswith("merged:") for i in ids)  # 겹친 건 병합 id
+
+
+def test_merge_joins_tile_border_fragments() -> None:
+    # v4 타일 추론: 긴 벽이 타일 경계에서 조각으로 나뉘어 온다. 양쪽 모두
+    # touches_tile_border 이고 틈이 미세하면(≤3px) 하나의 벽으로 이어 붙인다.
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+            "score": 0.6,
+            "touches_tile_border": True,
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
+            "score": 0.4,
+            "touches_tile_border": True,
+        },
+    ]
+    merged = _merge_overlapping_regions(regions)
+    assert len(merged) == 1
+    joined = merged[0]
+    assert joined["region_id"].startswith("merged:")
+    assert joined["touches_tile_border"] is True
+    xs = joined["polygon"][0::2]
+    ys = joined["polygon"][1::2]
+    # 좌표는 원본 조각의 합집합 — 연결용 팽창분(3px)만큼 부풀지 않는다.
+    assert min(xs) == 0.0 and max(xs) == 200.0
+    assert min(ys) == 0.0 and max(ys) == 10.0
+
+
+def test_merge_keeps_distant_border_fragments_apart() -> None:
+    # 경계 조각이라도 틈이 병합 허용치보다 크면 서로 다른 벽 — 붙이지 않는다.
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+            "touches_tile_border": True,
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [140, 0, 200, 0, 200, 10, 140, 10],
+            "touches_tile_border": True,
+        },
+    ]
+    merged = _merge_overlapping_regions(regions)
+    assert {r["region_id"] for r in merged} == {"pred:1", "pred:2"}
+
+
+async def test_200_carries_tile_metadata_and_warns_on_downscaled_input(
+    monkeypatch,
+) -> None:
+    # tile_index/touches_tile_border 는 region 으로 보존되고, 핸들러가 입력이 작다고
+    # 알리면(notes) 경고로 남긴다 — v4 는 축소 입력에서 성능이 붕괴한다.
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 800, "height": 600},
+                "notes": ["input_long_side_below_expected: 800 < 1536"],
+                "tiling": {"windows": 1, "returned_predictions": 1},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.5,
+                        "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                        "tile_index": 3,
+                        "touches_tile_border": True,
+                    }
+                ],
+            },
+        )
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        seg_module.log, "warning", lambda event, **kw: warnings.append(event)
+    )
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url=_IMG, settings=_settings(), client=client
+        )
+    assert res["ok"] is True
+    region = res["regions"][0]
+    assert region["tile_index"] == 3
+    assert region["touches_tile_border"] is True
+    assert "segmentation_input_downscaled" in warnings
 
 
 async def test_session_floorplan_merges_vlm_reclassification(monkeypatch) -> None:

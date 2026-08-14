@@ -32,12 +32,13 @@ class ErrorCode(Enum):
 
 class Label(Enum):
     """
-    모델 클래스 라벨. STR 5 + SPA 13 (floor-plan-model-train / cmp180_full 정합).
+    모델 클래스 라벨. STR 6 + SPA 13 = 19 (confirmed573v4_ft_tile_19c 정합). 벽 어휘 3종의 의미가 다르다 — wall_reinforced_concrete=내력(RC) 후보, wall_nonbearing=작업자가 **확정한** 비내력벽 후보, wall_other=도면만으로 판단을 보류한 **미확정** 벽(HITL 우선순위 높음). wall_unknown 은 v3 이하 과거 데이터 호환용으로만 남긴다(v4 확정 라벨 경로에서는 산출되지 않음).
     """
 
     door = "door"
     window = "window"
     wall_reinforced_concrete = "wall_reinforced_concrete"
+    wall_nonbearing = "wall_nonbearing"
     wall_other = "wall_other"
     wall_unknown = "wall_unknown"
     space_multipurpose = "space_multipurpose"
@@ -109,19 +110,27 @@ class Region(BaseModel):
     """
     사람 검토 필요 여부(벽 클래스=true). 확정 판정 아님 — '후보/검토 필요'로만 표시.
     """
+    tile_index: int | None = Field(None, ge=0)
+    """
+    이 인스턴스를 낸 타일 번호(원본 해상도 타일 추론). 진단·병합용.
+    """
+    touches_tile_border: bool | None = None
+    """
+    타일 경계에 닿은 인스턴스. 긴 벽은 경계에서 조각으로 나뉘어 나오므로, 면적·길이 집계나 '벽 하나'로 보여 줄 때 인접 조각 병합 대상 신호다.
+    """
 
 
 class SegmentationResult(BaseModel):
     """
-    평면도 세그멘테이션 도구(HuggingFace Inference Endpoint) 의 구조화 결과. 도구는 절대 raise 하지 않고 본 형태를 반환한다 — 엔드포인트 미배포/콜드스타트/타임아웃도 ok=false 로 표현된다. 1.2.0: 오버레이 렌더용 image + regions(좌표) 추가(추가형, 하위호환).
+    평면도 세그멘테이션 도구(HuggingFace Inference Endpoint) 의 구조화 결과. 도구는 절대 raise 하지 않고 본 형태를 반환한다 — 엔드포인트 미배포/콜드스타트/타임아웃도 ok=false 로 표현된다. 1.4.0: v4(원본 해상도 타일) 모델의 19클래스 어휘 + 타일 메타(tile_index/touches_tile_border). 1.2.0: 오버레이 렌더용 image + regions(좌표) 추가(추가형, 하위호환).
     """
 
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.3.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.4.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 1.3.0: error_code 에 NOT_FLOORPLAN 추가(코드-스키마 드리프트 정리). 1.2.0: image/regions(오버레이 좌표) 추가. 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가.
+    스키마 버전 (semver). 1.4.0: Label 에 wall_nonbearing(확정 비내력벽) 추가 + Region 에 tile_index/touches_tile_border(원본 해상도 타일 추론 메타) 추가. 1.3.0: error_code 에 NOT_FLOORPLAN 추가(코드-스키마 드리프트 정리). 1.2.0: image/regions(오버레이 좌표) 추가. 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가.
     """
     ok: bool
     """

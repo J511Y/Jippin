@@ -138,7 +138,9 @@ class Settings(BaseSettings):
     agent_enabled: bool = Field(default=False)
     agent_model: str = Field(default="openai:gpt-5.4-mini")
     # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
-    agent_run_wallclock_timeout_seconds: int = Field(default=600)
+    # 도면 분석 런은 세그멘테이션(콜드스타트 200s + 타일 추론 최대 600s)이 지배한다 —
+    # v4 원본 해상도 타일 추론이 CPU 에서 도면당 수 분이라 900s 로 잡았다(#v4-latency).
+    agent_run_wallclock_timeout_seconds: int = Field(default=900)
 
     # AI-002 VLM 도면 문맥 해석(SDD §4.4). Mask2Former 레이블을 OpenAI Vision 으로 보완·
     # 정합성 검증한다. 모델/키는 agent 와 공유(gpt-5.4-mini). 비활성/실패 시 세그멘테이션
@@ -182,19 +184,24 @@ class Settings(BaseSettings):
     # 배포가 CPU(intel-spr) + scale-to-zero(15분) 라, 유휴 후 첫 요청은 콜드스타트로
     # TTFB 가 수십 초~수 분이다(모델 카드: "long request timeout"). 전용 엔드포인트는
     # 보통 503 재시도가 아니라 연결을 잡고 늘어지므로 per-request timeout 을 넉넉히 잡는다
-    # (run wall-clock 600s 이내). 503 재시도는 폴백으로 둔다.
-    hf_segmentation_timeout_seconds: int = Field(default=300)
+    # (run wall-clock 이내). 503 재시도는 폴백으로 둔다.
+    #
+    # v4(원본 해상도 타일)부터는 **추론 자체가** 도면당 타일 수만큼 forward 를 돈다
+    # (4963×3509 기준 약 12회). CPU 인스턴스에서 도면당 수 분이 될 수 있어 상한을 올렸다.
+    # 근본 해법은 비동기 처리(작업 큐 + 완료 알림) 또는 GPU 전환이다(#v4-latency).
+    hf_segmentation_timeout_seconds: int = Field(default=600)
     # 이 전용 엔드포인트는 scale-to-zero 에서 깨어나는 동안 **503** 을 즉시 돌려준다
     # (Retry-After/estimated_time 힌트 없음). CPU 스케일업이 수 분 걸릴 수 있어, 고정
-    # 폴링 간격으로 준비될 때까지 재시도한다 — max_retries × poll 이 run wall-clock(600s)
-    # 안에 들도록 잡는다(30 × 10s = 300s).
-    hf_segmentation_cold_start_max_retries: int = Field(default=30)
+    # 폴링 간격으로 준비될 때까지 재시도한다 — max_retries × poll(20 × 10s = 200s) 과
+    # 추론 상한(600s)의 합이 run wall-clock(900s) 안에 들도록 잡는다.
+    hf_segmentation_cold_start_max_retries: int = Field(default=20)
     hf_segmentation_cold_start_poll_seconds: int = Field(default=10)
-    # 추론 파라미터(모델 카드 cmp180_full). 학습은 1536 square resize. CPU 지연이 크면
-    # max_inference_side 를 1280/1024 로 낮춰 절충할 수 있다(디테일 ↔ 지연).
-    hf_segmentation_threshold: float = Field(default=0.5)
+    # 추론 파라미터. 리사이즈 파라미터는 두지 않는다 — v4 는 원본 픽셀 타일 추론이 전제라
+    # 입력을 축소하면 성능이 붕괴한다(도구가 threshold/mask_threshold 만 넘긴다).
+    # 비내력 계열 벽은 점수가 낮게 나와 0.5 에서 상당수가 걸러지므로 0.35 를 기본으로 둔다
+    # (모델 평가도 0.35 축에서 수행).
+    hf_segmentation_threshold: float = Field(default=0.35)
     hf_segmentation_mask_threshold: float = Field(default=0.5)
-    hf_segmentation_max_inference_side: int = Field(default=1536)
     # 세그멘테이션에 넘길 이미지 URL 의 허용 호스트(스토리지 서명 URL 호스트). 비우면
     # SSRF 가드(https + 사설/로컬/메타데이터 차단)만 적용하고 공개 https 는 허용한다.
     # 운영에서는 스토리지 호스트로 채워 세션 경계를 강제하길 권장한다. (콤마 구분)

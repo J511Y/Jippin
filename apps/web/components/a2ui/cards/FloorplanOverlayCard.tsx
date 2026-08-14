@@ -7,9 +7,9 @@
  * - OVERLAY-001: AI 분석 결과(폴리곤/클래스)를 평면도 위에 반투명 색상 + 레이블 + 범례로
  *   오버레이. SVG 기반(폴리곤=DOM 요소 → 클릭/키보드/접근성 용이, 의존성 0). 핀치/휠 줌·
  *   드래그/스와이프 팬. stroke 는 non-scaling 이라 줌 무관 일정 두께(149개에서도 안 뭉갬).
- * - OVERLAY-002: 비내력벽 후보(wall_other)와 창호(window)를 클릭/키보드로 단일·복수 선택
- *   → selected_walls/selected_windows 로 판단스키마에 기록. 창호는 거실-발코니 통합(경계
- *   창호 철거) 검토용 — 외기 접촉 여부 판정은 에이전트(LLM)가 대화·도면 관찰로 내린다.
+ * - OVERLAY-002: 비내력벽 후보(wall_nonbearing)와 창호(window)를 클릭/키보드로 단일·복수
+ *   선택 → selected_walls/selected_windows 로 판단스키마에 기록. 창호는 거실-발코니 통합
+ *   (경계 창호 철거) 검토용 — 외기 접촉 여부 판정은 에이전트(LLM)가 대화·도면 관찰로 내린다.
  *
  * 색·접근성: 클래스 색은 전부 CSS 토큰(`--floorplan-*`). "선택 가능/불가"를 색만이 아니라
  * **선 모양**(선택가능=점선 → 선택=흰 실선)과 **범례 라벨**(선택 가능/불가)로도 인코딩해
@@ -171,18 +171,27 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     return { x: 0, y: 0, w: imgDims.w, h: imgDims.h };
   }, [payload.crop, imgDims]);
 
-  // 선택 대상은 비내력벽 후보(wall_other) + 구조 불확실 벽(wall_unknown) + 창호(window)
-  // — 나머지 벽/공간은 도면 이미지에 이미 보이므로 겹치지 않는다(선택 대상이 한눈에
-  // 또렷해진다). 구조 불확실 벽도 철거 희망 대상일 수 있어 선택은 허용하되, 선택 시
+  // 선택 대상은 비내력벽 후보(wall_nonbearing) + 미확정 벽(wall_other/wall_unknown) +
+  // 창호(window) — 나머지 벽/공간은 도면 이미지에 이미 보이므로 겹치지 않는다(선택 대상이
+  // 한눈에 또렷해진다). 미확정 벽도 철거 희망 대상일 수 있어 선택은 허용하되, 선택 시
   // 에이전트가 '확인 필요' 흐름을 탄다(내력 단정 금지). 창호는 거실-발코니 사이 경계
   // 창호 철거(공간 통합) 검토용으로 함께 노출한다 — 외창/내창 구분은 여기서 하지 않고
   // 에이전트가 판단한다(#window-boundary-llm).
+  //
+  // 비내력 후보군 = wall_nonbearing ∪ wall_other 지만 **신뢰 등급이 다르다**(모델 v4):
+  // wall_nonbearing 은 전문가가 확정한 비내력 패턴, wall_other 는 도면만으로 판단을
+  // 보류한 벽이다. 확정분만 초록(선택 권장)으로 두고 보류분은 회색으로 분리해, 사용자가
+  // 무엇이 확실하고 무엇이 확인 대상인지 색으로 구분하게 한다. wall_unknown 은 v3 이하
+  // 과거 세션 데이터 호환용으로 같은 회색에 묶는다.
   const wallRegions = useMemo(
-    () => regions.filter((r) => r.class_name === 'wall_other'),
+    () => regions.filter((r) => r.class_name === 'wall_nonbearing'),
     [regions]
   );
-  const unknownWallRegions = useMemo(
-    () => regions.filter((r) => r.class_name === 'wall_unknown'),
+  const uncertainWallRegions = useMemo(
+    () =>
+      regions.filter(
+        (r) => r.class_name === 'wall_other' || r.class_name === 'wall_unknown'
+      ),
     [regions]
   );
   const windowRegions = useMemo(
@@ -190,16 +199,16 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     [regions]
   );
   const selectableRegions = useMemo(
-    () => [...wallRegions, ...unknownWallRegions, ...windowRegions],
-    [wallRegions, unknownWallRegions, windowRegions]
+    () => [...wallRegions, ...uncertainWallRegions, ...windowRegions],
+    [wallRegions, uncertainWallRegions, windowRegions]
   );
   const windowIds = useMemo(
     () => new Set(windowRegions.map((r) => r.region_id)),
     [windowRegions]
   );
-  const unknownWallIds = useMemo(
-    () => new Set(unknownWallRegions.map((r) => r.region_id)),
-    [unknownWallRegions]
+  const uncertainWallIds = useMemo(
+    () => new Set(uncertainWallRegions.map((r) => r.region_id)),
+    [uncertainWallRegions]
   );
 
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -212,7 +221,7 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
   const interactive = actions !== null;
   const streaming = actions?.busy ?? false;
 
-  // 노출 분석 이벤트 — 카드가 처음 렌더될 때 1회. wall_other_count 는 비내력벽 지표
+  // 노출 분석 이벤트 — 카드가 처음 렌더될 때 1회. wall_nonbearing_count 는 비내력벽 지표
   // 정본이라 창호를 섞지 않고 window_count 로 따로 집계한다(#wall-metric-purity).
   const viewedRef = useRef(false);
   useEffect(() => {
@@ -221,9 +230,9 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     trackPrecheckOverlayView(
       wallRegions.length,
       windowRegions.length,
-      unknownWallRegions.length
+      uncertainWallRegions.length
     );
-  }, [wallRegions.length, windowRegions.length, unknownWallRegions.length]);
+  }, [wallRegions.length, windowRegions.length, uncertainWallRegions.length]);
 
   // 표시용 서명 URL 발급 + 기존 선택 복원(judgment_schema.selected_walls/windows).
   useEffect(() => {
@@ -297,14 +306,14 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
       trackPrecheckWallSelect(selected.size);
       setSubmitted(true);
       // 선택 구성에 맞는 자연어 발화 — 창호가 섞이면 에이전트가 경계(외기/발코니-실)
-      // 판단 플로우를 타도록 창호를, 구조 불확실 벽이 섞이면 '확인 필요' 흐름을 타도록
-      // 불확실 벽을 각각 명시한다(전부 '비내력벽'으로 뭉뚱그리지 않는다).
-      const nonloadIds = wallIds.filter((id) => !unknownWallIds.has(id));
-      const unknownIds = wallIds.filter((id) => unknownWallIds.has(id));
+      // 판단 플로우를 타도록 창호를, 미확정 벽이 섞이면 '확인 필요' 흐름을 타도록
+      // 미확정 벽을 각각 명시한다(전부 '비내력벽'으로 뭉뚱그리지 않는다).
+      const nonloadIds = wallIds.filter((id) => !uncertainWallIds.has(id));
+      const uncertainIds = wallIds.filter((id) => uncertainWallIds.has(id));
       const parts: string[] = [];
       if (nonloadIds.length > 0) parts.push(`비내력벽 ${nonloadIds.length}곳`);
-      if (unknownIds.length > 0)
-        parts.push(`구조가 불확실한 벽 ${unknownIds.length}곳`);
+      if (uncertainIds.length > 0)
+        parts.push(`구조가 아직 확인되지 않은 벽 ${uncertainIds.length}곳`);
       if (winIds.length > 0) parts.push(`창호 ${winIds.length}곳`);
       await actions.sendMessage(
         `도면에서 ${parts.join('과 ')}을 철거 검토 대상으로 골랐어요. 철거할 수 있는지 검토해 주세요.`
@@ -312,7 +321,7 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     } finally {
       setSubmitting(false);
     }
-  }, [actions, sessionId, selected, windowIds, unknownWallIds, submitting, streaming]);
+  }, [actions, sessionId, selected, windowIds, uncertainWallIds, submitting, streaming]);
 
   const hasSelectable = selectableRegions.length > 0;
   const submitDisabled =
@@ -339,10 +348,10 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
         {/* 창호 안내는 실제로 창호가 검출된 도면에서만 — 없는 파란 영역을 찾게 하지 않는다. */}
         <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.55 }}>
           철거가 가능한 건 <b>비내력벽(초록)</b>이에요.{' '}
-          {unknownWallRegions.length > 0 ? (
+          {uncertainWallRegions.length > 0 ? (
             <>
-              <b>회색 벽</b>은 도면만으로는 구조가 확실하지 않은 벽이에요 — 골라 주시면
-              추가 확인이 필요한 부분을 함께 안내해 드려요.{' '}
+              <b>회색 벽</b>은 도면만으로는 아직 구조를 확인하지 못한 벽이에요 — 골라
+              주시면 추가 확인이 필요한 부분을 함께 안내해 드려요.{' '}
             </>
           ) : null}
           {windowRegions.length > 0 ? (
@@ -381,8 +390,8 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
             {hasSelectable
               ? [
                   wallRegions.length > 0 ? `비내력벽 후보 ${wallRegions.length}곳` : null,
-                  unknownWallRegions.length > 0
-                    ? `구조 불확실 ${unknownWallRegions.length}곳`
+                  uncertainWallRegions.length > 0
+                    ? `미확정 벽 ${uncertainWallRegions.length}곳`
                     : null,
                   windowRegions.length > 0 ? `창호 ${windowRegions.length}곳` : null,
                   `선택 ${selected.size}곳`
@@ -626,20 +635,21 @@ function OverlayCanvas({
         ) : null}
 
         {regions.map((r) => {
-          // 부모가 선택 가능 영역(wall_other 비내력벽 후보 + wall_unknown 구조 불확실 벽
-          // + window 창호)만 넘긴다.
+          // 부모가 선택 가능 영역(wall_nonbearing 비내력벽 후보 + wall_other/wall_unknown
+          // 미확정 벽 + window 창호)만 넘긴다.
           const isSel = selected.has(r.region_id);
           const isWindow = r.class_name === 'window';
-          const isUnknownWall = r.class_name === 'wall_unknown';
+          const isUncertainWall =
+            r.class_name === 'wall_other' || r.class_name === 'wall_unknown';
           const color = isWindow
             ? 'var(--floorplan-window)'
-            : isUnknownWall
-              ? 'var(--floorplan-wall-unknown)'
+            : isUncertainWall
+              ? 'var(--floorplan-wall-uncertain)'
               : 'var(--floorplan-wall-nonload)';
           const kindLabel = isWindow
             ? '창호'
-            : isUnknownWall
-              ? '구조 불확실 벽'
+            : isUncertainWall
+              ? '미확정 벽'
               : '비내력벽 후보';
           return (
             <polygon
@@ -772,10 +782,12 @@ function OverlayCanvas({
           <Text size="11px" c="var(--jippin-brand-copy)">
             {/* 실제 검출된 클래스만 안내 — 없는 파란 창/회색 벽을 찾게 하지 않는다. */}
             {[
-              regions.some((r) => r.class_name === 'wall_other')
+              regions.some((r) => r.class_name === 'wall_nonbearing')
                 ? '초록 점선 벽'
                 : null,
-              regions.some((r) => r.class_name === 'wall_unknown')
+              regions.some(
+                (r) => r.class_name === 'wall_other' || r.class_name === 'wall_unknown'
+              )
                 ? '회색 점선 벽'
                 : null,
               regions.some((r) => r.class_name === 'window') ? '파란 점선 창' : null

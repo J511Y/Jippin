@@ -49,7 +49,7 @@ def test_floorplan_analyzed_counts_and_priority() -> None:
 
 
 def test_floorplan_unknown_wall_counts_and_guidance() -> None:
-    # 구조 불확실 벽(UNKNOWN)은 스냅샷에 별도 카운트 + 단정 금지 지침으로 노출된다.
+    # 미확정 벽(UNKNOWN)은 스냅샷에 별도 카운트 + 단정 금지 지침으로 노출된다.
     session = {
         "selected_floorplan_asset_id": "asset-1",
         "judgment_schema": {
@@ -61,7 +61,7 @@ def test_floorplan_unknown_wall_counts_and_guidance() -> None:
     }
     ctx = build_session_state_context(session, None)
     assert ctx is not None
-    assert "구조 불확실 벽 1곳" in ctx
+    assert "미확정 벽 1곳" in ctx
     assert "단정하지 말고" in ctx
 
 
@@ -80,7 +80,7 @@ def test_selected_unknown_wall_flags_confirmation() -> None:
     ctx = build_session_state_context(session, None)
     assert ctx is not None
     assert "모두 비내력벽 후보" not in ctx
-    assert "구조 불확실 벽 포함" in ctx and "단정 금지" in ctx
+    assert "미확정 벽 포함" in ctx and "단정 금지" in ctx
 
 
 def test_selected_walls_surface_to_agent() -> None:

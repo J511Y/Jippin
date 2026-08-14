@@ -90,7 +90,7 @@ def _tone_stroke(wall_type: str) -> str:
         return "#C0392B"  # danger
     if wall_type == "WINDOW":
         return "#3C8896"  # 창호 — 웹 카드 --floorplan-window 와 동일 톤(파랑)
-    return "#8A929B"  # 종류 미상 — 웹 --floorplan-wall-unknown 과 동일(회색)
+    return "#8A929B"  # 미확정 벽 — 웹 --floorplan-wall-uncertain 과 동일(회색)
 
 
 def _points_attr(pts: list[tuple[float, float]]) -> str:
@@ -118,7 +118,7 @@ def build_overlay(
     # 색 의미는 웹 오버레이 카드와 동일하게 유지한다(파랑=창호, #color-semantics).
     caption = (
         "주황 강조 = 선택한 철거 검토 대상 · 초록 = 비내력벽 후보 · "
-        "빨강 = 내력벽 후보(선택 불가) · 파랑 = 창호 · 회색 = 종류 미상"
+        "빨강 = 내력벽 후보(선택 불가) · 파랑 = 창호 · 회색 = 미확정 벽"
     )
 
     if not image_bytes:

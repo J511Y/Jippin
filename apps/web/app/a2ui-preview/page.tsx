@@ -19,9 +19,9 @@ const OVERLAY_REGIONS = [
   { region_id: 'w2', class_name: 'wall_reinforced_concrete', polygon: [40, 740, 960, 740, 960, 760, 40, 760], score: 0.68, requires_hitl: true },
   { region_id: 'w3', class_name: 'wall_reinforced_concrete', polygon: [40, 40, 60, 40, 60, 760, 40, 760], score: 0.66, requires_hitl: true },
   { region_id: 'w4', class_name: 'wall_reinforced_concrete', polygon: [940, 40, 960, 40, 960, 760, 940, 760], score: 0.69, requires_hitl: true },
-  { region_id: 'w5', class_name: 'wall_other', polygon: [500, 60, 520, 60, 520, 400, 500, 400], score: 0.62, requires_hitl: true },
-  { region_id: 'w6', class_name: 'wall_other', polygon: [60, 400, 500, 400, 500, 420, 60, 420], score: 0.6, requires_hitl: true },
-  { region_id: 'w7', class_name: 'wall_unknown', polygon: [520, 400, 740, 400, 740, 420, 520, 420], score: 0.44, requires_hitl: true },
+  { region_id: 'w5', class_name: 'wall_nonbearing', polygon: [500, 60, 520, 60, 520, 400, 500, 400], score: 0.62, requires_hitl: true },
+  { region_id: 'w6', class_name: 'wall_nonbearing', polygon: [60, 400, 500, 400, 500, 420, 60, 420], score: 0.6, requires_hitl: true },
+  { region_id: 'w7', class_name: 'wall_other', polygon: [520, 400, 740, 400, 740, 420, 520, 420], score: 0.44, requires_hitl: true },
   { region_id: 'd1', class_name: 'door', polygon: [240, 400, 300, 400, 300, 420, 240, 420], score: 0.8 },
   { region_id: 'g1', class_name: 'window', polygon: [740, 740, 860, 740, 860, 760, 740, 760], score: 0.75 }
 ];
@@ -29,7 +29,7 @@ const OVERLAY_REGIONS = [
 // (1) json-render 네이티브 스펙 — 백엔드가 새로 방출할 포맷.
 const NATIVE_SPECS: { label: string; component: Record<string, unknown> }[] = [
   {
-    label: 'FloorplanOverlay (native spec) — 폴리곤 오버레이 + 비내력벽·구조 불확실 벽 선택',
+    label: 'FloorplanOverlay (native spec) — 폴리곤 오버레이 + 비내력벽·미확정 벽 선택',
     component: {
       root: 'ov',
       elements: {

@@ -47,20 +47,24 @@ export function trackPrecheckFloorplanAttach(): void {
 
 /**
  * 도면 오버레이 카드 노출(분석 결과 렌더).
- * wall_other_count: 선택 가능한 비내력벽 후보 수(벽만 — 퍼널/실험 지표 정본).
+ * wall_nonbearing_count: 선택 가능한 비내력벽 후보 수(벽만 — 퍼널/실험 지표 정본).
  * window_count: 선택 가능한 창호 수(별도 집계 — 벽 지표를 오염시키지 않는다).
- * wall_unknown_count: 구조 불확실 벽 수(별도 집계 — 모델 불확실성 모니터링용).
+ * wall_uncertain_count: 미확정 벽 수(별도 집계 — 모델 불확실성 모니터링용).
+ *
+ * ⚠ 세그멘테이션 v4 에서 키가 바뀌었다(구 wall_other_count/wall_unknown_count). 벽 어휘
+ * 자체의 의미가 갈려(확정 비내력 vs 판단 보류) 옛 키를 그대로 쓰면 지표가 뒤집힌다 —
+ * GTM/대시보드의 해당 변수도 함께 갱신해야 한다.
  */
 export function trackPrecheckOverlayView(
-  wallOtherCount: number,
+  wallNonbearingCount: number,
   windowCount = 0,
-  wallUnknownCount = 0
+  wallUncertainCount = 0
 ): void {
   pushToDataLayer({
     event: PRECHECK_OVERLAY_VIEW_EVENT,
-    wall_other_count: wallOtherCount,
+    wall_nonbearing_count: wallNonbearingCount,
     window_count: windowCount,
-    wall_unknown_count: wallUnknownCount
+    wall_uncertain_count: wallUncertainCount
   });
 }
 
