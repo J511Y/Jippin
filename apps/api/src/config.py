@@ -138,9 +138,10 @@ class Settings(BaseSettings):
     agent_enabled: bool = Field(default=False)
     agent_model: str = Field(default="openai:gpt-5.4-mini")
     # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
-    # 도면 분석 런은 세그멘테이션(콜드스타트 200s + 타일 추론 최대 600s)이 지배한다 —
-    # v4 원본 해상도 타일 추론이 CPU 에서 도면당 수 분이라 900s 로 잡았다(#v4-latency).
-    agent_run_wallclock_timeout_seconds: int = Field(default=900)
+    # 도면 분석 런은 세그멘테이션이 지배한다: 콜드스타트 폴링 300s + 타일 추론 최대 600s.
+    # 여기에 VLM(60s)·에이전트 왕복 여유를 더해 1200s 로 잡는다 — 바깥 예산이 이보다 짧으면
+    # 안쪽에서 아직 기다릴 수 있는 콜드스타트/추론을 런너가 먼저 끊는다(#v4-latency).
+    agent_run_wallclock_timeout_seconds: int = Field(default=1200)
 
     # AI-002 VLM 도면 문맥 해석(SDD §4.4). Mask2Former 레이블을 OpenAI Vision 으로 보완·
     # 정합성 검증한다. 모델/키는 agent 와 공유(gpt-5.4-mini). 비활성/실패 시 세그멘테이션
@@ -192,9 +193,10 @@ class Settings(BaseSettings):
     hf_segmentation_timeout_seconds: int = Field(default=600)
     # 이 전용 엔드포인트는 scale-to-zero 에서 깨어나는 동안 **503** 을 즉시 돌려준다
     # (Retry-After/estimated_time 힌트 없음). CPU 스케일업이 수 분 걸릴 수 있어, 고정
-    # 폴링 간격으로 준비될 때까지 재시도한다 — max_retries × poll(20 × 10s = 200s) 과
-    # 추론 상한(600s)의 합이 run wall-clock(900s) 안에 들도록 잡는다.
-    hf_segmentation_cold_start_max_retries: int = Field(default=20)
+    # 폴링 간격으로 준비될 때까지 재시도한다 — max_retries × poll = 30 × 10s = **300s**.
+    # 이 창은 v4 이전부터 지원하던 값이라 줄이지 않는다(200~300s 만에 깨어나던 콜드스타트가
+    # 갑자기 COLD_START_TIMEOUT 이 된다). 대신 바깥 예산(run wall-clock)을 늘려 맞춘다.
+    hf_segmentation_cold_start_max_retries: int = Field(default=30)
     hf_segmentation_cold_start_poll_seconds: int = Field(default=10)
     # 배포된 엔드포인트가 서빙하는 모델의 어휘 세대(3|4). **요청 파라미터는 응답을 보기
     # 전에 정해야 하므로**, 응답으로 어휘를 판별하는 것만으로는 threshold 를 맞출 수 없다

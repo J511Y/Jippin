@@ -600,6 +600,30 @@ def _compute_crop_box(
 OVERLAY_VOCAB_VERSION = 4
 
 
+def _overlay_safe_regions(regions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """오버레이 payload 전용 — 미확정 벽을 ``wall_unknown`` 으로 통일한다.
+
+    web(Vercel)과 api(Fly)는 **따로 배포된다**(ADR-0006). 그래서 새 payload 를 옛 번들이
+    받는 구간이 생기고, 이미 열려 있던 탭은 배포 후에도 옛 번들로 남는다. 옛 카드는
+    ``wall_other`` 를 초록 '비내력벽 후보'로 그리므로, v4 의 미확정 벽을 그대로 실어 보내면
+    **철거할 수 없을지 모르는 벽이 철거 가능 후보로 보인다** — 이 마이그레이션이 없애려던
+    반전이 클라이언트 쪽에서 되살아난다(#deploy-skew).
+
+    ``wall_unknown`` 은 옛 카드·새 카드 **양쪽 모두 회색 '확인 필요'**로 읽으므로 안전한
+    공통 어휘다. 확정 비내력(``wall_nonbearing``)은 옛 카드가 선택 대상에서 빼 버리지만
+    (덜 보일 뿐 틀리지는 않음), 새 카드는 정상적으로 초록으로 그린다 — 안전한 방향의 degrade.
+
+    판단객체·룰 입력은 이 변환과 무관하게 **원본 regions** 로 만든다(여기서 복사본을 낸다).
+    """
+
+    out: list[dict[str, Any]] = []
+    for r in regions:
+        if isinstance(r, dict) and r.get("class_name") in _UNCERTAIN_WALL_LABELS:
+            r = {**r, "class_name": "wall_unknown"}
+        out.append(r)
+    return out
+
+
 def build_overlay_spec(
     *, asset_id: Any, image: dict[str, Any] | None, regions: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -615,7 +639,7 @@ def build_overlay_spec(
     props: dict[str, Any] = {
         "asset_id": str(asset_id),
         "image": image or {},
-        "regions": regions,
+        "regions": _overlay_safe_regions(regions),
         "vocab_version": OVERLAY_VOCAB_VERSION,
     }
     crop = _compute_crop_box(regions, image)
@@ -709,12 +733,19 @@ def _uf_find(parent: list[int], i: int) -> int:
     return i
 
 
-def _border_tiles(members: list[dict[str, Any]]) -> set[int]:
-    """경계 조각들이 나온 타일 번호 집합(없으면 빈 집합)."""
+def _member_tiles(members: list[dict[str, Any]]) -> set[int]:
+    """성분이 걸쳐 있는 타일 번호 집합 — **경계 조각 여부와 무관하게 모든 멤버**를 센다.
+
+    경계 조각만 세면 성분의 타일 점유를 과소 보고한다: 타일 1 경계 조각 + 타일 2 평범한
+    예측이 한 성분이어도 집합이 ``{1}`` 로 잡혀, 타일 2 의 다른 벽과 '타일이 안 겹친다'며
+    이어 붙는다(#component-tile-coverage). '각 성분이 경계 조각을 품을 것'은 별도 조건으로
+    남기고, 겹침 판정만 전체 멤버 기준으로 본다.
+    """
     return {
         m["tile_index"]
         for m in members
-        if m.get("touches_tile_border") and isinstance(m.get("tile_index"), int)
+        if isinstance(m.get("tile_index"), int)
+        and not isinstance(m.get("tile_index"), bool)
     }
 
 
@@ -740,7 +771,7 @@ def _joinable_border_components(
         return False
     if not any(m.get("touches_tile_border") for m in b_members):
         return False
-    a_tiles, b_tiles = _border_tiles(a_members), _border_tiles(b_members)
+    a_tiles, b_tiles = _member_tiles(a_members), _member_tiles(b_members)
     if not a_tiles or not b_tiles:
         return False  # 출처 불명 → 보수적으로 병합하지 않는다.
     return a_tiles.isdisjoint(b_tiles)
@@ -828,7 +859,7 @@ def _merge_overlapping_regions(
         # 막지 못한다 — 타일 1·2·1 이 사슬로 이어지면 1→2, 2→1 이 각각 통과해 결국 타일 1
         # 두 조각이 한 덩어리가 된다. 실제로 합치기 직전에 **루트의 누적 집합**으로 다시
         # 확인한다(#transitive-tile-union).
-        root_tiles = [_border_tiles(members) for _, members in comps]
+        root_tiles = [_member_tiles(members) for _, members in comps]
         for i in range(len(comps)):
             for j in range(i + 1, len(comps)):
                 if not _joinable_border_components(comps[i][1], comps[j][1]):

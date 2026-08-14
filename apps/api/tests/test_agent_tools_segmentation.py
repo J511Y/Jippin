@@ -1041,6 +1041,72 @@ def test_parse_regions_rejects_malformed_tile_metadata() -> None:
     assert regions[1]["tile_index"] == 0
 
 
+def test_overlay_payload_is_safe_for_old_web_bundles() -> None:
+    # web(Vercel)/api(Fly) 는 따로 배포되고 열려 있던 탭은 옛 번들로 남는다. 옛 카드는
+    # wall_other 를 초록 '비내력벽 후보'로 그리므로, v4 미확정 벽을 그대로 실으면 철거
+    # 불가일 수 있는 벽이 철거 가능 후보로 보인다(#deploy-skew). 미확정은 옛·새 카드가
+    # 모두 회색으로 읽는 wall_unknown 으로 통일해 내보낸다.
+    from src.agent.tools.segmentation import build_overlay_spec
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_other",
+            "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [20, 20, 30, 20, 30, 30, 20, 30],
+        },
+    ]
+    spec = build_overlay_spec(
+        asset_id="a1", image={"width": 100, "height": 100}, regions=regions
+    )
+    props = spec["elements"]["ov"]["props"]
+    assert props["vocab_version"] == 4
+    by_id = {r["region_id"]: r["class_name"] for r in props["regions"]}
+    assert by_id == {"pred:1": "wall_unknown", "pred:2": "wall_nonbearing"}
+    # 원본은 건드리지 않는다 — 판단객체·룰 입력은 v4 어휘 그대로 쓴다.
+    assert regions[0]["class_name"] == "wall_other"
+
+
+def test_merge_component_tile_set_counts_all_members() -> None:
+    # 성분의 타일 점유는 **모든 멤버** 기준이어야 한다. 경계 조각만 세면 타일 1 경계 조각 +
+    # 타일 2 평범한 예측으로 이뤄진 성분이 {1} 로 잡혀, 타일 2 의 다른 벽과 '안 겹친다'며
+    # 이어 붙는다(#component-tile-coverage).
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        # 겹쳐서 한 성분이 되는 둘: 타일 1 경계 조각 + 타일 2 비경계 예측.
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 60, 0, 60, 10, 0, 10],
+            "touches_tile_border": True,
+            "tile_index": 1,
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [50, 0, 100, 0, 100, 10, 50, 10],
+            "touches_tile_border": False,
+            "tile_index": 2,
+        },
+        # 2px 옆의 타일 2 경계 조각 — 위 성분이 이미 타일 2 를 점유하므로 붙이면 안 된다.
+        {
+            "region_id": "pred:3",
+            "class_name": "wall_nonbearing",
+            "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
+            "touches_tile_border": True,
+            "tile_index": 2,
+        },
+    ]
+    merged = _merge_overlapping_regions(regions)
+    assert "pred:3" in {r["region_id"] for r in merged}
+    assert len(merged) == 2  # (겹친 1+2) + pred:3
+
+
 def test_merge_does_not_duplicate_point_touching_walls() -> None:
     # 모서리(꼭짓점) 한 점만 맞닿은 두 벽. unary_union 은 이를 2개 part 로 두는데,
     # intersects 로 소속을 정하면 점 접촉도 True 라 **양쪽 part 가 두 벽을 모두** 멤버로
