@@ -390,6 +390,16 @@ class Settings(BaseSettings):
             return cls.model_fields[info.field_name].default
         return v
 
+    @field_validator("hf_segmentation_threshold", mode="before")
+    @classmethod
+    def _blank_threshold_to_none(cls, v: object) -> object:
+        # 빈 문자열은 '미지정'(=어휘 세대 기본값)으로 취급한다. compose 는 미설정 변수를
+        # `${VAR:-}` 로 빈 문자열 주입하는데, float | None 은 ""를 파싱하지 못해
+        # **기본 `docker compose up` 이 부팅 단계에서 죽는다**(#blank-threshold-env).
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     @field_validator("auth_oauth_state_ttl_seconds")
     @classmethod
     def _validate_oauth_state_ttl(cls, v: int) -> int:

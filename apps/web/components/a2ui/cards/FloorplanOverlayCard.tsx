@@ -375,14 +375,28 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
       <CardRule />
 
       <Stack gap="sm">
-        {/* 창호 안내는 실제로 창호가 검출된 도면에서만 — 없는 파란 영역을 찾게 하지 않는다. */}
+        {/* 안내 문구는 **실제로 검출된 것만** 가리킨다 — 화면에 없는 색(초록 벽·파란 창)을
+            찾게 하면 사용자가 헤매다 선택 흐름이 멈춘다. 비내력 후보가 하나도 없고 미확정
+            벽만 잡히는 도면이 실제로 나온다(v4는 판단 보류를 별도 클래스로 낸다). */}
         <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.55 }}>
-          철거가 가능한 건 <b>비내력벽(초록)</b>이에요.{' '}
-          {uncertainWallRegions.length > 0 ? (
+          {wallRegions.length > 0 ? (
             <>
-              <b>회색 벽</b>은 도면만으로는 아직 구조를 확인하지 못한 벽이에요 — 골라
-              주시면 추가 확인이 필요한 부분을 함께 안내해 드려요.{' '}
+              철거가 가능한 건 <b>비내력벽(초록)</b>이에요.{' '}
             </>
+          ) : null}
+          {uncertainWallRegions.length > 0 ? (
+            wallRegions.length > 0 ? (
+              <>
+                <b>회색 벽</b>은 도면만으로는 아직 구조를 확인하지 못한 벽이에요 — 골라
+                주시면 추가 확인이 필요한 부분을 함께 안내해 드려요.{' '}
+              </>
+            ) : (
+              <>
+                이 도면에서는 도면만으로 구조를 확인하지 못한 <b>회색 벽</b>만 잡혔어요 —
+                철거를 검토하고 싶은 벽을 골라 주시면 확인이 필요한 부분을 함께 안내해
+                드려요.{' '}
+              </>
+            )
           ) : null}
           {windowRegions.length > 0 ? (
             <>

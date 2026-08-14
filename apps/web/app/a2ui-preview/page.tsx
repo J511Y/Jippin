@@ -66,6 +66,25 @@ const NATIVE_SPECS: { label: string; component: Record<string, unknown> }[] = [
     }
   },
   {
+    // 비내력 후보가 0곳인 도면 — v4 는 판단 보류를 별도 클래스로 내므로 실제로 나온다.
+    // 안내 문구가 없는 초록색을 가리키지 않고 회색 벽으로 유도하는지 확인하는 케이스.
+    label: 'FloorplanOverlay (미확정 벽만) — 초록 후보 0곳일 때 안내 문구',
+    component: {
+      root: 'ovu',
+      elements: {
+        ovu: {
+          type: 'FloorplanOverlay',
+          props: {
+            asset_id: '',
+            image: { width: 1000, height: 800 },
+            vocab_version: 4,
+            regions: OVERLAY_REGIONS.filter((r) => r.class_name !== 'wall_nonbearing')
+          }
+        }
+      }
+    }
+  },
+  {
     label: 'FloorplanRequest (native spec)',
     component: {
       root: 'fp',
