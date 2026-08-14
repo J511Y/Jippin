@@ -531,6 +531,7 @@ async def test_session_summary_counts_merged_walls_not_tile_fragments(
                         "score": 0.6,
                         "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
                         "touches_tile_border": True,
+                        "tile_index": 1,
                     },
                     {
                         "region_id": "pred:2",
@@ -538,6 +539,7 @@ async def test_session_summary_counts_merged_walls_not_tile_fragments(
                         "score": 0.5,
                         "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
                         "touches_tile_border": True,
+                        "tile_index": 2,
                     },
                     {
                         "region_id": "pred:3",
@@ -545,6 +547,7 @@ async def test_session_summary_counts_merged_walls_not_tile_fragments(
                         "score": 0.4,
                         "polygon": [202, 0, 300, 0, 300, 10, 202, 10],
                         "touches_tile_border": True,
+                        "tile_index": 3,
                     },
                 ],
             },
@@ -783,7 +786,8 @@ def test_merge_overlapping_regions() -> None:
 
 def test_merge_joins_tile_border_fragments() -> None:
     # v4 타일 추론: 긴 벽이 타일 경계에서 조각으로 나뉘어 온다. 양쪽 모두
-    # touches_tile_border 이고 틈이 미세하면(≤3px) 하나의 벽으로 이어 붙인다.
+    # touches_tile_border 이고 서로 다른 타일에서 왔으며 틈이 미세하면(≤3px)
+    # 하나의 벽으로 이어 붙인다.
     from src.agent.tools.segmentation import _merge_overlapping_regions
 
     regions = [
@@ -793,6 +797,7 @@ def test_merge_joins_tile_border_fragments() -> None:
             "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
             "score": 0.6,
             "touches_tile_border": True,
+            "tile_index": 1,
         },
         {
             "region_id": "pred:2",
@@ -800,6 +805,7 @@ def test_merge_joins_tile_border_fragments() -> None:
             "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
             "score": 0.4,
             "touches_tile_border": True,
+            "tile_index": 2,
         },
     ]
     merged = _merge_overlapping_regions(regions)
@@ -826,16 +832,77 @@ def test_merge_keeps_distant_border_fragments_apart() -> None:
             "class_name": "wall_nonbearing",
             "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
             "touches_tile_border": True,
+            "tile_index": 1,
         },
         {
             "region_id": "pred:2",
             "class_name": "wall_nonbearing",
             "polygon": [104, 0, 200, 0, 200, 10, 104, 10],
             "touches_tile_border": True,
+            "tile_index": 2,
         },
     ]
     merged = _merge_overlapping_regions(regions)
     assert {r["region_id"] for r in merged} == {"pred:1", "pred:2"}
+
+
+def test_merge_refuses_gap_join_without_tile_provenance() -> None:
+    # 타일 번호가 없으면 '경계로 갈린 한 벽'인지 '가까운 남남 벽'인지 구분할 근거가 없다 —
+    # 과소 병합(조각으로 남김)을 택한다(#unknown-tile-provenance). 1차 병합 결과가 타일
+    # 번호를 잃으므로, 2차(VLM 후) 병합에서 이 규칙이 안전망이 된다.
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        {
+            "region_id": "merged:1",  # 1차 병합본 — tile_index 없음
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+            "touches_tile_border": True,
+        },
+        {
+            "region_id": "pred:9",
+            "class_name": "wall_nonbearing",
+            "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
+            "touches_tile_border": True,
+            "tile_index": 2,
+        },
+    ]
+    merged = _merge_overlapping_regions(regions, id_prefix="vlm-merged")
+    assert {r["region_id"] for r in merged} == {"merged:1", "pred:9"}
+
+
+def test_merge_blocks_transitive_union_across_shared_tile() -> None:
+    # 사슬 결합 차단: 타일 1 — 타일 2 — 타일 1 이 나란히 놓이면 쌍 단위로는 1↔2, 2↔1 이
+    # 각각 통과하지만, 다 합치면 **타일 1 조각 둘**이 한 덩어리가 된다. 합치기 직전에
+    # 루트의 누적 타일 집합으로 다시 확인한다(#transitive-tile-union).
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+            "touches_tile_border": True,
+            "tile_index": 1,
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
+            "touches_tile_border": True,
+            "tile_index": 2,
+        },
+        {
+            "region_id": "pred:3",
+            "class_name": "wall_nonbearing",
+            "polygon": [202, 0, 300, 0, 300, 10, 202, 10],
+            "touches_tile_border": True,
+            "tile_index": 1,  # 첫 조각과 같은 타일 — 한 덩어리가 되면 안 된다
+        },
+    ]
+    merged = _merge_overlapping_regions(regions)
+    assert len(merged) == 2  # 1+2 만 결합, 3 은 남는다
+    assert "pred:3" in {r["region_id"] for r in merged}
 
 
 def test_parse_regions_rejects_malformed_tile_metadata() -> None:

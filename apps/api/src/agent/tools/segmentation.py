@@ -681,10 +681,16 @@ def _joinable_border_components(
     """두 연결 성분을 '타일 경계에서 갈라진 한 벽'으로 볼 수 있으면 True.
 
     조건은 **양쪽 모두** 경계 조각을 품고 있을 것 — 한쪽만 경계 조각인데 이어 붙이면
-    경계와 무관한 이웃 벽이 딸려 들어온다(#both-sides-border). 타일 번호를 알 수 있으면
-    두 타일 집합이 **겹치지 않을 것**도 요구한다: 한 타일 안에서 서로 떨어져 나온 두
-    인스턴스는 경계로 갈라진 조각이 아니라 원래 다른 벽이다. 집합이 '같을 때'만 막으면
-    ``{1,2}`` 와 ``{2}`` 처럼 일부만 겹치는 쌍이 빠져나간다(#tile-overlap-not-equality).
+    경계와 무관한 이웃 벽이 딸려 들어온다(#both-sides-border). 그리고 두 타일 집합이
+    **양쪽 모두 알려져 있고 겹치지 않을 것**: 한 타일 안에서 서로 떨어져 나온 두 인스턴스는
+    경계로 갈라진 조각이 아니라 원래 다른 벽이다. 집합이 '같을 때'만 막으면 ``{1,2}`` 와
+    ``{2}`` 처럼 일부만 겹치는 쌍이 빠져나간다(#tile-overlap-not-equality).
+
+    **출처를 모르면 잇지 않는다.** 타일 번호가 없으면 '경계로 갈린 한 벽'인지 '가까운 남남
+    벽'인지 구분할 근거가 없다 — 이때 이어 붙이면 서로 다른 벽이 하나의 선택 대상·판단
+    객체가 되므로, 조각으로 남겨 두는 쪽(과소 병합)을 택한다(#unknown-tile-provenance).
+    1차 병합 결과는 타일 번호를 갖지 않으므로 2차(VLM 후) 병합에서 자동으로 이 규칙에
+    걸린다 — 겹치는 조각은 그대로 합쳐지고, 틈을 사이에 둔 결합만 보류된다.
     """
 
     if not any(m.get("touches_tile_border") for m in a_members):
@@ -692,9 +698,9 @@ def _joinable_border_components(
     if not any(m.get("touches_tile_border") for m in b_members):
         return False
     a_tiles, b_tiles = _border_tiles(a_members), _border_tiles(b_members)
-    if a_tiles and b_tiles and not a_tiles.isdisjoint(b_tiles):
-        return False  # 한 타일을 공유 → 경계로 갈린 조각이 아니라 남남 벽.
-    return True
+    if not a_tiles or not b_tiles:
+        return False  # 출처 불명 → 보수적으로 병합하지 않는다.
+    return a_tiles.isdisjoint(b_tiles)
 
 
 def _merge_overlapping_regions(
@@ -770,14 +776,25 @@ def _merge_overlapping_regions(
         # 경계 조각 하나가 옆의 평범한 벽까지 끌어당기므로, **원본 도형 사이의 실제
         # 거리**를 재고 양쪽 모두 경계 조각인 쌍에만 적용한다(#both-sides-border).
         parent = list(range(len(comps)))
+        # 합쳐진 그룹이 지금까지 품은 타일 집합. 쌍 단위 검사만으로는 **전이적 결합**을
+        # 막지 못한다 — 타일 1·2·1 이 사슬로 이어지면 1→2, 2→1 이 각각 통과해 결국 타일 1
+        # 두 조각이 한 덩어리가 된다. 실제로 합치기 직전에 **루트의 누적 집합**으로 다시
+        # 확인한다(#transitive-tile-union).
+        root_tiles = [_border_tiles(members) for _, members in comps]
         for i in range(len(comps)):
             for j in range(i + 1, len(comps)):
                 if not _joinable_border_components(comps[i][1], comps[j][1]):
                     continue
-                if comps[i][0].distance(comps[j][0]) <= _TILE_BORDER_JOIN_PX:
-                    root_i, root_j = _uf_find(parent, i), _uf_find(parent, j)
-                    if root_i != root_j:
-                        parent[root_j] = root_i
+                if comps[i][0].distance(comps[j][0]) > _TILE_BORDER_JOIN_PX:
+                    continue
+                root_i, root_j = _uf_find(parent, i), _uf_find(parent, j)
+                if root_i == root_j:
+                    continue
+                tiles_i, tiles_j = root_tiles[root_i], root_tiles[root_j]
+                if not tiles_i.isdisjoint(tiles_j):
+                    continue  # 누적 기준으로 타일이 겹침 → 남남 벽이 섞인다.
+                parent[root_j] = root_i
+                root_tiles[root_i] = tiles_i | tiles_j
 
         grouped: dict[int, list[int]] = {}
         for i in range(len(comps)):
