@@ -195,6 +195,99 @@ async def test_200_no_uncertain_wall_omits_summary_segment() -> None:
     assert "미확정" not in res["summary"]
 
 
+async def test_200_v3_endpoint_keeps_legacy_wall_roles() -> None:
+    # 엔드포인트 모델 교체는 앱 배포와 별개의 수동 작업이다. 앱이 먼저 나가 v3 응답에
+    # v4 의미를 씌우면 **초록 후보가 하나도 안 남아 모든 세션이 HOLD** 로 떨어진다.
+    # 응답 어휘를 판별해 v3 이면 옛 역할(wall_other = 선택 가능한 비내력 후보)을 지킨다.
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": {"num_classes": 18, "source_run": "confirmed573_ft"},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_other",
+                        "score": 0.8,
+                        "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                    },
+                    {
+                        "region_id": "pred:2",
+                        "class_name": "wall_unknown",
+                        "score": 0.4,
+                        "polygon": [20, 20, 30, 20, 30, 30, 20, 30],
+                    },
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url=_IMG, settings=_settings(), client=client
+        )
+    assert res["ok"] is True
+    by_label = {i["label"]: i["count"] for i in res["instances"]}
+    # v3 의 wall_other 는 비내력 후보 역할이었으므로 v4 어휘의 wall_nonbearing 으로 옮긴다.
+    assert by_label == {"wall_nonbearing": 1, "wall_unknown": 1}
+    assert "비내력벽 후보 1" in res["summary"]
+
+    walls, _s, _w = seg_module.build_judgment_objects(res["regions"])
+    by_id = {w["id"]: w["wall_type"] for w in walls}
+    assert by_id == {"pred:1": "NON_LOAD_BEARING", "pred:2": "UNKNOWN"}
+
+
+async def test_200_v4_endpoint_uses_new_wall_semantics() -> None:
+    # 19클래스를 서빙하기 시작하면 자동으로 v4 의미로 넘어간다 — wall_other 는 미확정 벽.
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": {
+                    "num_classes": 19,
+                    "source_run": "confirmed573v4_ft_tile_19c",
+                },
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_other",
+                        "score": 0.4,
+                        "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                    }
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url=_IMG, settings=_settings(), client=client
+        )
+    assert {i["label"] for i in res["instances"]} == {"wall_other"}
+    assert "미확정 벽 1" in res["summary"]
+    walls, _s, _w = seg_module.build_judgment_objects(res["regions"])
+    assert walls[0]["wall_type"] == "UNKNOWN"
+
+
+async def test_200_detects_v4_from_predictions_without_model_block() -> None:
+    # model 블록이 없어도 v4 에만 있는 wall_nonbearing 이 보이면 v4 로 본다.
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "predictions": [
+                    {"class_name": "wall_nonbearing", "score": 0.6},
+                    {"class_name": "wall_other", "score": 0.4},
+                ]
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url=_IMG, settings=_settings(), client=client
+        )
+    by_label = {i["label"]: i["count"] for i in res["instances"]}
+    assert by_label == {"wall_nonbearing": 1, "wall_other": 1}  # 재매핑 없음
+
+
 async def test_200_missing_predictions_is_bad_response() -> None:
     # predictions 키가 없으면(포맷 불일치) ok=false 로 degrade.
     async with _client(lambda req: httpx.Response(200, json={"foo": 1})) as client:
@@ -279,16 +372,19 @@ async def test_200_drops_non_uuid_mask_asset_id() -> None:
 
 async def test_200_skips_malformed_regions() -> None:
     # dict 아닌 항목·class_name 누락 region 은 건너뛰고 정상 region 만 집계한다.
+    # model 블록으로 v4 어휘를 명시한다 — 없으면 v3 로 판별돼 wall_other 가 옛 역할
+    # (wall_nonbearing)로 옮겨지므로, 이 테스트의 관심사(형식 방어)가 흐려진다.
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
+                "model": {"num_classes": 19},
                 "predictions": [
                     "not-a-dict",
                     {"score": 0.9},  # class_name 없음
                     {"class_name": "wall_other", "score": 0.5},
                     {"class_name": "wall_other"},  # score 없음 → count 만
-                ]
+                ],
             },
         )
 
@@ -847,6 +943,43 @@ def test_merge_skips_border_fragments_from_the_same_tile() -> None:
     regions[1]["tile_index"] = 3
     joined = _merge_overlapping_regions(regions)
     assert len(joined) == 1
+
+
+def test_merge_rejects_partially_overlapping_tile_sets() -> None:
+    # 성분이 여러 타일 조각을 품을 수 있다. {1,2} 와 {2} 처럼 **일부만** 겹쳐도 한 타일을
+    # 공유하므로 경계로 갈린 조각이 아니다 — '집합이 같을 때만' 막으면 새어 나간다
+    # (#tile-overlap-not-equality).
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        # 겹쳐서 한 성분이 되는 두 조각(타일 1, 2).
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 60, 0, 60, 10, 0, 10],
+            "touches_tile_border": True,
+            "tile_index": 1,
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [50, 0, 100, 0, 100, 10, 50, 10],
+            "touches_tile_border": True,
+            "tile_index": 2,
+        },
+        # 2px 떨어진 별개 벽 — 타일 2 를 공유하므로 이어 붙이면 안 된다.
+        {
+            "region_id": "pred:3",
+            "class_name": "wall_nonbearing",
+            "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
+            "touches_tile_border": True,
+            "tile_index": 2,
+        },
+    ]
+    merged = _merge_overlapping_regions(regions)
+    ids = {r["region_id"] for r in merged}
+    assert "pred:3" in ids  # 남남 벽은 따로 남는다
+    assert len(merged) == 2  # (겹친 1+2 병합) + pred:3
 
 
 def test_merge_ignores_border_gap_for_non_border_fragments() -> None:

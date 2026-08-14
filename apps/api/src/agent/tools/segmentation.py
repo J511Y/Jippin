@@ -86,6 +86,56 @@ _MAX_RETRY_DELAY_SECONDS = 30.0
 # 축소해 보내고 있다는 뜻이고, v4 는 축소 입력에서 성능이 붕괴하므로 경고로 남긴다.
 _NOTE_INPUT_TOO_SMALL = "input_long_side_below_expected"
 
+# v4 클래스 수. 응답이 이 어휘인지 판별하는 1차 기준.
+_V4_NUM_CLASSES = 19
+# v3 → v4 라벨 대응. **엔드포인트 모델 교체는 앱 배포와 별개의 수동 작업**이라, 앱이 먼저
+# 나가면 v3 응답에 v4 의미를 씌우게 된다. 그러면 v3 이 비내력벽을 흘려보내던 wall_unknown
+# 은 여전히 UNKNOWN 이고 wall_other 마저 UNKNOWN 으로 강등돼 **초록 후보가 하나도 남지 않아
+# 모든 세션이 HOLD 로 떨어진다**(기능 정지). 그래서 응답 어휘를 판별해 v3 이면 옛 역할대로
+# (wall_other = 선택 가능한 비내력 후보) 되돌려 놓는다 — 교체 전까지는 오늘과 동일하게
+# 동작하고, 엔드포인트가 19클래스를 서빙하는 순간 자동으로 v4 의미로 넘어간다.
+_V3_TO_V4_LABEL: dict[str, str] = {"wall_other": "wall_nonbearing"}
+
+
+def _detect_vocab_version(data: dict[str, Any], raw_predictions: list[Any]) -> int:
+    """응답이 v4(19클래스) 어휘인지 v3 인지 판별한다.
+
+    1순위는 핸들러가 싣는 ``model.num_classes``, 2순위는 ``model.source_run`` 표기,
+    마지막은 v4 에만 있는 ``wall_nonbearing`` 의 실제 등장이다. 모두 없으면 v3 로 본다
+    (보수적 — 옛 엔드포인트를 새 의미로 읽어 기능이 멈추는 쪽을 피한다).
+    """
+
+    model = data.get("model")
+    model = model if isinstance(model, dict) else {}
+    num_classes = model.get("num_classes")
+    if isinstance(num_classes, int) and not isinstance(num_classes, bool):
+        return 4 if num_classes >= _V4_NUM_CLASSES else 3
+    source_run = model.get("source_run")
+    if isinstance(source_run, str) and f"{_V4_NUM_CLASSES}c" in source_run:
+        return 4
+    if any(
+        isinstance(p, dict) and p.get("class_name") == "wall_nonbearing"
+        for p in raw_predictions
+    ):
+        return 4
+    return 3
+
+
+def _normalize_v3_predictions(raw_predictions: list[Any]) -> list[Any]:
+    """v3 응답의 라벨을 v4 어휘로 옮긴다(역할 보존).
+
+    ``wall_other``(v3 의 '선택 가능한 비내력 후보' 역할)만 ``wall_nonbearing`` 으로 바꾼다.
+    ``wall_unknown`` 은 v3 에서도 회색 '확인 필요'였으므로 그대로 두면 v4 의 미확정 벽과
+    같은 취급을 받는다. 이후 파이프라인(매핑·오버레이·판단객체·요약)은 v4 어휘 하나만 안다.
+    """
+
+    out: list[Any] = []
+    for item in raw_predictions:
+        if isinstance(item, dict) and item.get("class_name") in _V3_TO_V4_LABEL:
+            item = {**item, "class_name": _V3_TO_V4_LABEL[item["class_name"]]}
+        out.append(item)
+    return out
+
 
 def _result(
     ok: bool,
@@ -200,6 +250,11 @@ def _parse_ok(data: Any) -> dict[str, Any]:
             summary="응답에 predictions 가 없습니다.",
         )
 
+    # 배포된 모델의 어휘로 해석한다 — 앱 배포와 엔드포인트 모델 교체는 별개 작업이다.
+    vocab_version = _detect_vocab_version(data, raw_predictions)
+    if vocab_version < 4:
+        raw_predictions = _normalize_v3_predictions(raw_predictions)
+
     counts: dict[str, int] = {}
     score_sum: dict[str, float] = {}
     score_n: dict[str, int] = {}
@@ -229,7 +284,7 @@ def _parse_ok(data: Any) -> dict[str, Any]:
         instances.append(entry)
 
     summary = summarize_counts(counts)
-    _log_tiling_notes(data)
+    _log_tiling_notes(data, vocab_version=vocab_version)
     # 현재 모델 응답엔 저장된 마스크 자산이 없다(폴리곤만). 다만 핸들러가 향후
     # mask_asset_id(UUID)를 줄 수 있으니 방어적으로 보존한다.
     mask = _valid_uuid(data.get("mask_asset_id"))
@@ -279,7 +334,7 @@ def _counts_by_class(regions: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
-def _log_tiling_notes(data: dict[str, Any]) -> None:
+def _log_tiling_notes(data: dict[str, Any], *, vocab_version: int = 4) -> None:
     """응답의 ``notes``/``tiling``/``timing`` 을 로그로 남긴다(계약엔 싣지 않음).
 
     핵심은 ``input_long_side_below_expected`` 다 — 앱이 도면을 축소해 보내고 있다는
@@ -293,8 +348,12 @@ def _log_tiling_notes(data: dict[str, Any]) -> None:
         log.warning("segmentation_input_downscaled", notes=notes)
     tiling = data.get("tiling") if isinstance(data.get("tiling"), dict) else {}
     timing = data.get("timing") if isinstance(data.get("timing"), dict) else {}
+    if vocab_version < 4:
+        # 엔드포인트가 아직 옛 모델을 서빙 중 — 교체 완료 시 이 경고가 멈춘다.
+        log.warning("segmentation_legacy_vocab", vocab_version=vocab_version)
     log.info(
         "segmentation_tiling",
+        vocab_version=vocab_version,
         windows=tiling.get("windows"),
         raw_predictions=tiling.get("raw_predictions"),
         deduplicated_predictions=tiling.get("deduplicated_predictions"),
@@ -623,8 +682,9 @@ def _joinable_border_components(
 
     조건은 **양쪽 모두** 경계 조각을 품고 있을 것 — 한쪽만 경계 조각인데 이어 붙이면
     경계와 무관한 이웃 벽이 딸려 들어온다(#both-sides-border). 타일 번호를 알 수 있으면
-    **서로 다른 타일**에서 왔는지도 본다: 같은 타일 안의 두 벽은 경계로 갈라진 조각이
-    아니라 원래 다른 벽이다.
+    두 타일 집합이 **겹치지 않을 것**도 요구한다: 한 타일 안에서 서로 떨어져 나온 두
+    인스턴스는 경계로 갈라진 조각이 아니라 원래 다른 벽이다. 집합이 '같을 때'만 막으면
+    ``{1,2}`` 와 ``{2}`` 처럼 일부만 겹치는 쌍이 빠져나간다(#tile-overlap-not-equality).
     """
 
     if not any(m.get("touches_tile_border") for m in a_members):
@@ -632,8 +692,8 @@ def _joinable_border_components(
     if not any(m.get("touches_tile_border") for m in b_members):
         return False
     a_tiles, b_tiles = _border_tiles(a_members), _border_tiles(b_members)
-    if a_tiles and b_tiles and a_tiles == b_tiles:
-        return False  # 같은 타일에서 나온 남남 벽.
+    if a_tiles and b_tiles and not a_tiles.isdisjoint(b_tiles):
+        return False  # 한 타일을 공유 → 경계로 갈린 조각이 아니라 남남 벽.
     return True
 
 
