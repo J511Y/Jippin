@@ -228,19 +228,7 @@ def _parse_ok(data: Any) -> dict[str, Any]:
             entry["mean_confidence"] = round(score_sum[label] / score_n[label], 4)
         instances.append(entry)
 
-    nonbearing = counts.get("wall_nonbearing", 0)
-    rc = counts.get("wall_reinforced_concrete", 0)
-    uncertain = sum(counts.get(label, 0) for label in _UNCERTAIN_WALL_LABELS)
-    window_count = counts.get("window", 0)
-    # 미확정 벽(wall_other/wall_unknown)은 도면만으로 내력/비내력을 가르지 못한 벽 —
-    # 검출됐을 때만 요약에 노출해 에이전트가 '확인 필요' 흐름을 타게 한다.
-    uncertain_txt = f", 미확정 벽 {uncertain}" if uncertain else ""
-    summary = (
-        f"세그멘테이션 완료 — 비내력벽 후보 {nonbearing}, 내력(RC)벽 후보 {rc}, "
-        f"창호 {window_count}{uncertain_txt}."
-        if instances
-        else "세그멘테이션 완료(검출된 영역 없음)."
-    )
+    summary = summarize_counts(counts)
     _log_tiling_notes(data)
     # 현재 모델 응답엔 저장된 마스크 자산이 없다(폴리곤만). 다만 핸들러가 향후
     # mask_asset_id(UUID)를 줄 수 있으니 방어적으로 보존한다.
@@ -255,6 +243,40 @@ def _parse_ok(data: Any) -> dict[str, Any]:
         image=image,
         regions=regions,
     )
+
+
+def summarize_counts(counts: dict[str, int]) -> str:
+    """라벨별 count → 사용자·에이전트가 읽는 한 줄 요약.
+
+    타일 병합 전/후 어느 시점에서든 같은 문장을 만들 수 있게 분리했다 —
+    ``segment_session_floorplan`` 은 조각 병합·VLM 교정이 끝난 뒤 이 함수로 요약을
+    **다시** 만든다(#summary-after-merge). 그러지 않으면 "비내력벽 후보 5"라고
+    말해 놓고 실제 선택 가능한 벽은 2곳인 불일치가 난다.
+    """
+
+    if not counts:
+        return "세그멘테이션 완료(검출된 영역 없음)."
+    nonbearing = counts.get("wall_nonbearing", 0)
+    rc = counts.get("wall_reinforced_concrete", 0)
+    uncertain = sum(counts.get(label, 0) for label in _UNCERTAIN_WALL_LABELS)
+    window_count = counts.get("window", 0)
+    # 미확정 벽(wall_other/wall_unknown)은 도면만으로 내력/비내력을 가르지 못한 벽 —
+    # 검출됐을 때만 요약에 노출해 에이전트가 '확인 필요' 흐름을 타게 한다.
+    uncertain_txt = f", 미확정 벽 {uncertain}" if uncertain else ""
+    return (
+        f"세그멘테이션 완료 — 비내력벽 후보 {nonbearing}, 내력(RC)벽 후보 {rc}, "
+        f"창호 {window_count}{uncertain_txt}."
+    )
+
+
+def _counts_by_class(regions: list[dict[str, Any]]) -> dict[str, int]:
+    """region 목록 → 클래스별 개수(요약 재계산용)."""
+    counts: dict[str, int] = {}
+    for r in regions:
+        cls = r.get("class_name") if isinstance(r, dict) else None
+        if isinstance(cls, str):
+            counts[cls] = counts.get(cls, 0) + 1
+    return counts
 
 
 def _log_tiling_notes(data: dict[str, Any]) -> None:
@@ -555,6 +577,11 @@ def build_judgment_objects(
 # 딱 맞아떨어지게 잘린 조각은 미세한 틈을 두고 떨어져 있을 수 있다. 양쪽 모두
 # touches_tile_border 인 경우에만 이 만큼의 틈을 메워 하나로 본다.
 _TILE_BORDER_JOIN_PX = 3.0
+# 실제 팽창 반지름은 **허용 틈의 절반**이다 — 양쪽 조각을 각각 부풀리므로 서로 닿는
+# 시점의 틈이 2×반지름이 된다. 반지름에 _TILE_BORDER_JOIN_PX 를 그대로 쓰면 6px 떨어진
+# 남남 벽까지 한 덩어리로 묶인다(#join-gap-doubling). closing(팽창→수축)도 같은 이유로
+# 2×반지름 만큼의 틈을 메우므로 동일한 반지름을 쓴다.
+_TILE_BORDER_JOIN_RADIUS_PX = _TILE_BORDER_JOIN_PX / 2
 
 
 def _merge_overlapping_regions(
@@ -605,7 +632,7 @@ def _merge_overlapping_regions(
                     out.append(r)  # 폴리곤화 불가 → 원본 유지
                     continue
                 link = (
-                    g.buffer(_TILE_BORDER_JOIN_PX)
+                    g.buffer(_TILE_BORDER_JOIN_RADIUS_PX)
                     if r.get("touches_tile_border")
                     else g
                 )
@@ -628,7 +655,9 @@ def _merge_overlapping_regions(
             body = unary_union([g for g, _, r in shaped if id(r) in member_ids])
             if body.geom_type == "MultiPolygon":
                 # 경계 틈으로만 이어진 조각들 — 틈만 메우고(closing) 도형 두께는 보존.
-                body = body.buffer(_TILE_BORDER_JOIN_PX).buffer(-_TILE_BORDER_JOIN_PX)
+                body = body.buffer(_TILE_BORDER_JOIN_RADIUS_PX).buffer(
+                    -_TILE_BORDER_JOIN_RADIUS_PX
+                )
             if body.is_empty or body.geom_type != "Polygon":
                 out.extend(members)  # 끝내 하나로 못 이으면 병합 포기(원본 유지).
                 continue
@@ -817,7 +846,13 @@ async def segment_session_floorplan(
         )
 
     # 요약 — 세그멘테이션 + VLM 보완. ANALYSIS_LOW_CONFIDENCE(0.6 미만)면 재확인 권장.
-    summary = result.get("summary")
+    #
+    # 요약은 **병합·VLM 교정이 끝난 최종 regions 로 다시 만든다**(#summary-after-merge).
+    # segment_floorplan_impl 이 낸 요약은 원시 predictions 기준이라, v4 타일 추론에서
+    # 한 벽이 경계로 쪼개져 온 조각들이 그대로 세어진다 — 그 값을 그대로 쓰면 에이전트가
+    # "비내력벽 후보 5곳"이라 말하는데 오버레이엔 선택 가능한 벽이 2곳만 보이는 불일치가
+    # 난다. VLM 교정으로 클래스가 바뀐 것도 여기서 함께 반영된다.
+    summary = summarize_counts(_counts_by_class(regions))
     low_conf = bool(
         supplement
         and supplement.get("confidence") is not None
@@ -888,6 +923,12 @@ async def segment_floorplan_impl(
                 # v4 는 원본 픽셀을 타일로 잘라 추론하는 전제라, 입력을 축소하면 성능이
                 # 붕괴한다(structure mean IoU 0.672 → 0.0007). tile_size/tile_overlap 도
                 # 학습값이라 건드리지 않고 핸들러 기본값(1536/256)을 쓴다.
+                #
+                # 대신 max_tiles 로 **작업량 상한을 명시**한다(#tile-budget). 원본을 그대로
+                # 보내는 이상 픽셀 수가 곧 비용인데, 업로드 게이트는 인코딩 크기(50MiB)만
+                # 보므로 고압축 이미지가 디코드 후 거대한 캔버스로 펼쳐지면 타일 루프가
+                # 폭주한다. 초과 시 핸들러가 추론 전에 거절(400 → BAD_REQUEST)해 에이전트가
+                # 곧바로 degrade 한다 — 긴 타임아웃을 끝까지 태우지 않는다.
                 resp = await client.post(
                     endpoint,
                     json={
@@ -895,6 +936,7 @@ async def segment_floorplan_impl(
                         "parameters": {
                             "threshold": settings.hf_segmentation_threshold,
                             "mask_threshold": settings.hf_segmentation_mask_threshold,
+                            "max_tiles": settings.hf_segmentation_max_tiles,
                         },
                     },
                     headers=headers,

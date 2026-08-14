@@ -34,6 +34,7 @@ def _settings(**override: object) -> SimpleNamespace:
         "hf_segmentation_cold_start_poll_seconds": 10,
         "hf_segmentation_threshold": 0.35,
         "hf_segmentation_mask_threshold": 0.5,
+        "hf_segmentation_max_tiles": 80,
         "hf_segmentation_allowed_image_hosts": [],
         # VLM(AI-002) — 테스트에선 interpret 를 모킹하므로 기본 비활성으로 둔다.
         "vlm_floorplan_enabled": False,
@@ -121,7 +122,11 @@ async def test_200_aggregates_predictions() -> None:
         # 타일 추론이 전제라 **리사이즈 파라미터를 보내면 안 된다**(성능 붕괴).
         body = json.loads(req.content)
         assert body["inputs"] == _IMG
-        assert body["parameters"] == {"threshold": 0.35, "mask_threshold": 0.5}
+        assert body["parameters"] == {
+            "threshold": 0.35,
+            "mask_threshold": 0.5,
+            "max_tiles": 80,  # 작업량 상한 명시(decompression bomb 방어)
+        }
         assert "max_inference_side" not in body["parameters"]
         return httpx.Response(
             200,
@@ -399,6 +404,78 @@ async def test_session_floorplan_signs_and_segments(monkeypatch) -> None:
     assert {i["label"]: i["count"] for i in res["instances"]} == {"wall_nonbearing": 2}
 
 
+async def test_session_summary_counts_merged_walls_not_tile_fragments(
+    monkeypatch,
+) -> None:
+    # v4 타일 추론에서 한 벽이 경계로 쪼개져 오면, 요약은 **병합 후** 기준이어야 한다 —
+    # 원시 조각 수(3)를 그대로 말하면 에이전트가 "비내력벽 후보 3곳"이라 안내하는데
+    # 오버레이엔 선택 가능한 벽이 1곳만 보이는 불일치가 난다(#summary-after-merge).
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        # 같은 벽이 타일 경계에서 3조각으로 잘려 온 응답.
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 300, "height": 100},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+                        "touches_tile_border": True,
+                    },
+                    {
+                        "region_id": "pred:2",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.5,
+                        "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
+                        "touches_tile_border": True,
+                    },
+                    {
+                        "region_id": "pred:3",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.4,
+                        "polygon": [202, 0, 300, 0, 300, 10, 202, 10],
+                        "touches_tile_border": True,
+                    },
+                ],
+            },
+        )
+
+    ctx = RunContext()
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    assert res["ok"] is True
+    assert res["region_count"] == 1  # 3조각 → 벽 1개
+    assert "비내력벽 후보 1" in res["summary"]
+
+    # 판단스키마의 벽 객체도 병합본 1개 — 요약·오버레이·선택 대상이 모두 같은 수다.
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    assert len(session["judgment_schema"]["wall_objects"]) == 1
+
+
 async def test_session_floorplan_emits_overlay_and_persists_objects(
     monkeypatch,
 ) -> None:
@@ -642,7 +719,9 @@ def test_merge_joins_tile_border_fragments() -> None:
 
 
 def test_merge_keeps_distant_border_fragments_apart() -> None:
-    # 경계 조각이라도 틈이 병합 허용치보다 크면 서로 다른 벽 — 붙이지 않는다.
+    # 경계 조각이라도 틈이 병합 허용치(3px)보다 크면 서로 다른 벽 — 붙이지 않는다.
+    # 4px 는 허용치 바로 밖이다. 양쪽을 각각 허용치만큼 부풀리면 6px 까지 묶여
+    # 남남 벽이 한 덩어리가 된다(#join-gap-doubling) — 반지름은 허용치의 절반이어야 한다.
     from src.agent.tools.segmentation import _merge_overlapping_regions
 
     regions = [
@@ -655,8 +734,29 @@ def test_merge_keeps_distant_border_fragments_apart() -> None:
         {
             "region_id": "pred:2",
             "class_name": "wall_nonbearing",
-            "polygon": [140, 0, 200, 0, 200, 10, 140, 10],
+            "polygon": [104, 0, 200, 0, 200, 10, 104, 10],
             "touches_tile_border": True,
+        },
+    ]
+    merged = _merge_overlapping_regions(regions)
+    assert {r["region_id"] for r in merged} == {"pred:1", "pred:2"}
+
+
+def test_merge_ignores_border_gap_for_non_border_fragments() -> None:
+    # touches_tile_border 가 아니면 미세한 틈이어도 잇지 않는다 — 타일 경계에서
+    # 쪼개진 조각에만 적용되는 보정이다.
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [102, 0, 200, 0, 200, 10, 102, 10],
         },
     ]
     merged = _merge_overlapping_regions(regions)

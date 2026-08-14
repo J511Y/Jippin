@@ -202,6 +202,12 @@ class Settings(BaseSettings):
     # (모델 평가도 0.35 축에서 수행).
     hf_segmentation_threshold: float = Field(default=0.35)
     hf_segmentation_mask_threshold: float = Field(default=0.5)
+    # 타일 수 상한 — 원본 해상도를 그대로 보내는 만큼 **작업량 상한을 우리가 명시**한다.
+    # 업로드 게이트는 content-type(image/*) + 인코딩 크기(50MiB)만 보므로, 고압축 이미지가
+    # 디코드 후 거대한 픽셀로 펼쳐지면(decompression bomb) 타일 루프가 무한정 늘어난다.
+    # 이 값을 넘으면 핸들러가 추론 전에 400 으로 거절해 CPU/메모리 소모를 끊는다
+    # (#tile-budget). 4963×3509 기준 약 12타일이라 80 은 정상 도면에 충분한 여유다.
+    hf_segmentation_max_tiles: int = Field(default=80)
     # 세그멘테이션에 넘길 이미지 URL 의 허용 호스트(스토리지 서명 URL 호스트). 비우면
     # SSRF 가드(https + 사설/로컬/메타데이터 차단)만 적용하고 공개 https 는 허용한다.
     # 운영에서는 스토리지 호스트로 채워 세션 경계를 강제하길 권장한다. (콤마 구분)
