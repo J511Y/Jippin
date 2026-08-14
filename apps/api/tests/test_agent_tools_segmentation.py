@@ -742,6 +742,61 @@ def test_merge_keeps_distant_border_fragments_apart() -> None:
     assert {r["region_id"] for r in merged} == {"pred:1", "pred:2"}
 
 
+def test_parse_regions_rejects_malformed_tile_metadata() -> None:
+    # 핸들러가 계약(1.4.0)을 어긴 값을 보내도 그대로 믿지 않는다. 문자열 "false" 를
+    # bool() 로 넘기면 truthy → True 가 되고, 그 region 이 병합 단계에서 부풀려져
+    # 남남 벽까지 묶인다(#tile-meta-validation). 음수 tile_index 도 계약 위반이라 뺀다.
+    from src.agent.tools.segmentation import _parse_regions
+
+    regions = _parse_regions(
+        [
+            {
+                "region_id": "pred:1",
+                "class_name": "wall_nonbearing",
+                "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                "touches_tile_border": "false",  # 문자열 — bool 아님
+                "tile_index": -1,  # 계약 minimum=0 위반
+            },
+            {
+                "region_id": "pred:2",
+                "class_name": "wall_nonbearing",
+                "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                "touches_tile_border": True,
+                "tile_index": 0,
+            },
+        ]
+    )
+    assert regions[0]["touches_tile_border"] is False
+    assert "tile_index" not in regions[0]
+    assert regions[1]["touches_tile_border"] is True
+    assert regions[1]["tile_index"] == 0
+
+
+def test_merge_preserves_vlm_provenance_and_custom_id_prefix() -> None:
+    # VLM 이 교정한 조각이 섞이면 병합본도 VLM 출처를 유지한다 — 잃으면 판단객체의
+    # source_engine 이 MASK2FORMER 로 되돌아가 교정 이력이 사라진다. id 접두사는
+    # 2차 병합이 1차 병합 id(merged:N)와 충돌하지 않도록 갈아 끼울 수 있어야 한다.
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        {
+            "region_id": "merged:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+            "source_engine": "VLM",
+        },
+        {
+            "region_id": "pred:9",
+            "class_name": "wall_nonbearing",
+            "polygon": [5, 0, 15, 0, 15, 10, 5, 10],
+        },
+    ]
+    merged = _merge_overlapping_regions(regions, id_prefix="vlm-merged")
+    assert len(merged) == 1
+    assert merged[0]["region_id"] == "vlm-merged:1"  # 1차 id 와 충돌 없음
+    assert merged[0]["source_engine"] == "VLM"
+
+
 def test_merge_ignores_border_gap_for_non_border_fragments() -> None:
     # touches_tile_border 가 아니면 미세한 틈이어도 잇지 않는다 — 타일 경계에서
     # 쪼개진 조각에만 적용되는 보정이다.
@@ -880,6 +935,91 @@ async def test_session_floorplan_merges_vlm_reclassification(monkeypatch) -> Non
     assert wall["source_engine"] == "VLM"
     assert js["vlm_supplement"]["confidence"] == 0.7
     assert js["vlm_supplement"]["provider"] == "OPENAI"
+
+
+async def test_session_floorplan_remerges_after_vlm_unifies_fragment_classes(
+    monkeypatch,
+) -> None:
+    # 한 벽의 타일 조각이 서로 다른 클래스로 나오면 1차 병합(클래스별)은 둘을 남남으로
+    # 남긴다. VLM 이 그 불일치를 정리해 같은 클래스로 만들면 다시 합쳐야 한다 —
+    # 안 그러면 오버레이에 같은 벽이 둘로 뜨고 개수도 부풀려진다(#remerge-after-vlm).
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    async def fake_vlm(*, image_url, regions, image, settings, user_context=None):
+        # 미확정으로 잡힌 조각을 옆 조각과 같은 확정 비내력으로 교정.
+        return {
+            "provider": "OPENAI",
+            "model": "gpt-5.4-mini",
+            "notes": [],
+            "reclassifications": [
+                {
+                    "object_id": "pred:2",
+                    "new_label": "wall_nonbearing",
+                    "reason": "같은 벽의 연속 구간",
+                }
+            ],
+            "confidence": 0.8,
+            "is_floorplan": True,
+        }
+
+    monkeypatch.setattr("src.agent.tools.vlm.interpret_floorplan_impl", fake_vlm)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        # 겹치는 두 조각인데 클래스가 달라 1차 병합에서 안 합쳐진다.
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 300, "height": 100},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+                    },
+                    {
+                        "region_id": "pred:2",
+                        "class_name": "wall_other",
+                        "score": 0.4,
+                        "polygon": [90, 0, 200, 0, 200, 10, 90, 10],
+                    },
+                ],
+            },
+        )
+
+    ctx = RunContext()
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    assert res["ok"] is True
+    assert res["region_count"] == 1  # 교정 후 재병합 → 벽 1개
+    assert "비내력벽 후보 1" in res["summary"]
+
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    walls = session["judgment_schema"]["wall_objects"]
+    assert len(walls) == 1
+    assert walls[0]["wall_type"] == "NON_LOAD_BEARING"
+    # 교정 조각이 섞였으므로 병합본의 출처도 VLM 이어야 한다(교정 이력 보존).
+    assert walls[0]["source_engine"] == "VLM"
 
 
 async def test_session_floorplan_degrades_when_vlm_says_not_floorplan(

@@ -343,11 +343,16 @@ def _parse_regions(raw_predictions: list[Any]) -> list[dict[str, Any]]:
             "polygon": [float(v) for v in polygon],
             "requires_hitl": bool(item.get("requires_hitl"))
             or str(label).startswith("wall_"),
-            "touches_tile_border": bool(item.get("touches_tile_border")),
+            # 계약(1.4.0)이 boolean 인 필드 — **실제 bool 만** 받는다. bool(...) 로 넘기면
+            # 핸들러가 잘못 보낸 문자열 "false" 가 truthy 라 True 가 되고, 그 region 이
+            # 병합 단계에서 부풀려져 남남 벽까지 한 덩어리로 묶인다(#tile-meta-validation).
+            "touches_tile_border": item.get("touches_tile_border") is True,
         }
         tile_index = item.get("tile_index")
+        # 계약상 0 이상 정수. 음수/실수/bool 은 형식 위반이라 싣지 않는다.
         if isinstance(tile_index, int) and not isinstance(tile_index, bool):
-            region["tile_index"] = tile_index
+            if tile_index >= 0:
+                region["tile_index"] = tile_index
         score = item.get("score")
         if (
             isinstance(score, (int, float))
@@ -485,6 +490,14 @@ def _compute_crop_box(
     }
 
 
+# 오버레이 payload 의 벽 어휘 버전. 카드가 class_name 을 해석하는 규칙이 v4 에서 바뀌어
+# (wall_other: 비내력 후보 → 미확정), **저장된 옛 카드를 새 규칙으로 읽으면 안 된다** —
+# chat_messages.ui_components 에 남은 v3 카드는 wall_other 를 초록 비내력 후보로 그렸고,
+# 그 세션의 judgment_schema.wall_objects 도 NON_LOAD_BEARING 으로 굳어 있다. 이 값이 없는
+# payload = v3 로 보고 옛 규칙으로 그린다(#overlay-vocab-version).
+OVERLAY_VOCAB_VERSION = 4
+
+
 def build_overlay_spec(
     *, asset_id: Any, image: dict[str, Any] | None, regions: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -493,11 +506,15 @@ def build_overlay_spec(
     asset_id 로 프론트가 표시용 서명 URL 을 발급받고, image(원본 크기)로 좌표를 스케일해
     polygon 을 그린다. ``crop`` 은 검출 엔티티를 감싼 크롭 프레임으로, 프론트가 viewBox 로
     써서 도면 외곽 여백(치수·표제란)을 잘라낸 채 확대 표시한다(MASK 대체).
+
+    ``vocab_version`` 은 카드가 class_name 을 어느 어휘로 읽어야 하는지 알려 준다 — 저장된
+    옛 카드가 새 의미로 재해석되지 않게 하는 판별자다.
     """
     props: dict[str, Any] = {
         "asset_id": str(asset_id),
         "image": image or {},
         "regions": regions,
+        "vocab_version": OVERLAY_VOCAB_VERSION,
     }
     crop = _compute_crop_box(regions, image)
     if crop is not None:
@@ -586,8 +603,14 @@ _TILE_BORDER_JOIN_RADIUS_PX = _TILE_BORDER_JOIN_PX / 2
 
 def _merge_overlapping_regions(
     regions: list[dict[str, Any]],
+    *,
+    id_prefix: str = "merged",
 ) -> list[dict[str, Any]]:
     """겹치거나(intersect) 타일 경계에서 갈라진 같은-클래스 region 을 하나로 병합(후처리).
+
+    ``id_prefix`` 는 새로 부여할 병합 id 의 접두사다. VLM 교정 뒤 **다시** 병합할 때
+    기본값을 그대로 쓰면 1차 병합이 남긴 ``merged:1`` 과 2차 병합의 ``merged:1`` 이
+    충돌해 서로 다른 벽이 같은 id 를 갖는다 — 2차는 다른 접두사를 넘긴다.
 
     세그멘테이션이 한 벽을 여러 인스턴스로 쪼개 내보내 오버레이가 서로 겹쳐 보이던 문제를
     정리한다 — shapely unary_union 으로 클래스별 폴리곤을 합쳐 연결된 영역을 단일 region 으로
@@ -668,19 +691,22 @@ def _merge_overlapping_regions(
             scores = [
                 m["score"] for m in members if isinstance(m.get("score"), (int, float))
             ]
-            out.append(
-                {
-                    "region_id": f"merged:{counter}",
-                    "class_name": cls,
-                    "polygon": flat,
-                    "score": (sum(scores) / len(scores)) if scores else None,
-                    "requires_hitl": any(bool(m.get("requires_hitl")) for m in members)
-                    or cls.startswith("wall_"),
-                    "touches_tile_border": any(
-                        bool(m.get("touches_tile_border")) for m in members
-                    ),
-                }
-            )
+            merged_region: dict[str, Any] = {
+                "region_id": f"{id_prefix}:{counter}",
+                "class_name": cls,
+                "polygon": flat,
+                "score": (sum(scores) / len(scores)) if scores else None,
+                "requires_hitl": any(bool(m.get("requires_hitl")) for m in members)
+                or cls.startswith("wall_"),
+                "touches_tile_border": any(
+                    bool(m.get("touches_tile_border")) for m in members
+                ),
+            }
+            # VLM 이 교정한 조각이 하나라도 섞였으면 병합본도 VLM 출처다 — 이 값을 잃으면
+            # 판단객체의 source_engine 이 MASK2FORMER 로 되돌아가 교정 이력이 사라진다.
+            if any(m.get("source_engine") == "VLM" for m in members):
+                merged_region["source_engine"] = "VLM"
+            out.append(merged_region)
     return out
 
 
@@ -812,12 +838,28 @@ async def segment_session_floorplan(
     vlm_ids: set[str] = set()
     if supplement and supplement.get("reclassifications"):
         by_id = {r.get("region_id"): r for r in regions if isinstance(r, dict)}
+        reclassified = False
         for rc in supplement["reclassifications"]:
             reg = by_id.get(rc.get("object_id"))
             if reg is not None:
                 reg["class_name"] = rc["new_label"]  # VLM 교정 적용
                 reg["source_engine"] = "VLM"
                 vlm_ids.add(rc["object_id"])
+                reclassified = True
+        if reclassified:
+            # 교정으로 **클래스가 같아진 조각들**을 다시 병합한다(#remerge-after-vlm).
+            # 1차 병합은 클래스별로 묶으므로, 한 벽의 타일 조각이 서로 다른 클래스로
+            # 나왔다면 그때는 남남으로 남는다. VLM 이 그 불일치를 정리해 같은 클래스로
+            # 만들면 비로소 하나로 합칠 수 있고, 그러지 않으면 오버레이에 같은 벽이 둘로
+            # 뜨고 개수도 부풀려진다. id 접두사를 달리해 1차 병합 id 와의 충돌을 피하고,
+            # VLM 출처는 병합본에 보존된다.
+            regions = _merge_overlapping_regions(regions, id_prefix="vlm-merged")
+            # 병합으로 region_id 가 바뀌므로 출처는 id 목록이 아니라 region 자체에서 읽는다.
+            vlm_ids = {
+                str(r.get("region_id"))
+                for r in regions
+                if isinstance(r, dict) and r.get("source_engine") == "VLM"
+            }
 
     if run_context is not None and run_id is not None:
         from .domain import emit_ui_component_impl

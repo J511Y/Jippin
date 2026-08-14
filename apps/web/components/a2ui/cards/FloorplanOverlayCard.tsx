@@ -61,7 +61,29 @@ export type FloorplanOverlayPayload = {
   /** 검출 엔티티를 감싼 크롭 프레임(원본 픽셀). viewBox 로 써서 여백을 잘라낸다(MASK 대체). */
   crop?: CropFrame;
   regions?: OverlayRegion[];
+  /** 벽 어휘 버전(서버 주입). 없으면 v3 — 아래 normalizeLegacyRegions 참고. */
+  vocab_version?: number;
 };
+
+/**
+ * 저장된 v3 카드를 v4 어휘로 옮긴다 — 옛 세션을 다시 열었을 때의 의미 보존이 핵심.
+ *
+ * v3 에서는 `wall_other` 가 초록 '비내력벽 후보'로 그려졌고 `wall_unknown` 이 회색이었다.
+ * v4 는 `wall_nonbearing`=확정 비내력, `wall_other`=미확정으로 의미가 갈렸다. 그래서
+ * `chat_messages.ui_components` 에 남아 있는 v3 payload 를 그대로 새 규칙으로 읽으면,
+ * **사용자가 이미 '비내력벽'으로 안내받고 골랐던 벽이 '미확정 벽'으로 뒤바뀌어** 보인다.
+ * 그 세션의 `judgment_schema.wall_objects` 는 NON_LOAD_BEARING 으로 굳어 있어 리포트와도
+ * 어긋난다. 판별자(`vocab_version`)가 없는 payload 는 v3 로 보고 옛 의미대로 매핑한다.
+ */
+export function normalizeLegacyRegions(
+  regions: OverlayRegion[],
+  vocabVersion: number
+): OverlayRegion[] {
+  if (vocabVersion >= 4) return regions;
+  return regions.map((r) =>
+    r.class_name === 'wall_other' ? { ...r, class_name: 'wall_nonbearing' } : r
+  );
+}
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -129,7 +151,15 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
   const sessionId = actions?.sessionId;
   const assetId = typeof payload.asset_id === 'string' ? payload.asset_id : undefined;
 
-  const regions = useMemo(() => normalizeRegions(payload.regions), [payload.regions]);
+  // v3 카드(vocab_version 없음)는 옛 어휘 의미로 되살린 뒤 v4 규칙 하나로만 렌더한다.
+  const regions = useMemo(
+    () =>
+      normalizeLegacyRegions(
+        normalizeRegions(payload.regions),
+        typeof payload.vocab_version === 'number' ? payload.vocab_version : 3
+      ),
+    [payload.regions, payload.vocab_version]
+  );
 
   // 원본 이미지 크기 — <image> 가 이 좌표계로 그려진다. payload.image 우선, 없으면
   // 폴리곤 bbox 로 추정.

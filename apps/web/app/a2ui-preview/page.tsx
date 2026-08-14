@@ -35,7 +35,14 @@ const NATIVE_SPECS: { label: string; component: Record<string, unknown> }[] = [
       elements: {
         ov: {
           type: 'FloorplanOverlay',
-          props: { asset_id: '', image: { width: 1000, height: 800 }, regions: OVERLAY_REGIONS }
+          // vocab_version 은 서버가 싣는 벽 어휘 판별자 — 없으면 카드가 v3 저장분으로
+          // 보고 wall_other 를 비내력 후보로 되돌린다. 미리보기는 현행(v4) 기준.
+          props: {
+            asset_id: '',
+            image: { width: 1000, height: 800 },
+            vocab_version: 4,
+            regions: OVERLAY_REGIONS
+          }
         }
       }
     }
