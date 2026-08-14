@@ -45,11 +45,9 @@ _bg_tasks: set[asyncio.Task[None]] = set()
 
 async def _fire(endpoint: str, token: str | None) -> None:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    body = {
-        "inputs": _TINY_PNG_DATA_URL,
-        # 워밍업은 디테일 불필요 — 작은 해상도로 비용 최소화.
-        "parameters": {"max_inference_side": 256},
-    }
+    # 파라미터 없이 최소 입력만 — v4 핸들러는 원본 픽셀을 타일로 자르므로 1x1 입력이면
+    # 타일 1장으로 끝난다(리사이즈 파라미터는 계약에서 사라졌다).
+    body = {"inputs": _TINY_PNG_DATA_URL}
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(endpoint, json=body, headers=headers)

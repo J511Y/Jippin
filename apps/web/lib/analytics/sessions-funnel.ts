@@ -47,20 +47,32 @@ export function trackPrecheckFloorplanAttach(): void {
 
 /**
  * 도면 오버레이 카드 노출(분석 결과 렌더).
- * wall_other_count: 선택 가능한 비내력벽 후보 수(벽만 — 퍼널/실험 지표 정본).
+ * wall_nonbearing_count: 선택 가능한 비내력벽 후보 수(벽만 — 퍼널/실험 지표 정본).
  * window_count: 선택 가능한 창호 수(별도 집계 — 벽 지표를 오염시키지 않는다).
- * wall_unknown_count: 구조 불확실 벽 수(별도 집계 — 모델 불확실성 모니터링용).
+ * wall_uncertain_count: 미확정 벽 수(별도 집계 — 모델 불확실성 모니터링용).
+ *
+ * ⚠ 세그멘테이션 v4 에서 키 이름이 바뀌었다(구 wall_other_count/wall_unknown_count).
+ * 클래스 이름을 따 짓던 옛 키를 **역할 기준으로** 다시 이름 붙인 것이다 — 옛 키가 실제로
+ * 세던 건 "선택 가능한 비내력 후보 수"와 "불확실 벽 수"였고, v4 에서 그 역할을 맡는 건
+ * 각각 wall_nonbearing 과 wall_other∪wall_unknown 이다.
+ *
+ * 마이그레이션 창 동안 **옛 키를 같은 역할의 값으로 함께 싣는다**(dual-emit). 웹 릴리스가
+ * GTM 변수 갱신보다 먼저 나가면 기존 퍼널·실험이 값을 통째로 잃기 때문이다. GTM 이 새 키로
+ * 옮겨간 뒤 옛 키 두 개를 지우면 된다(#analytics-dual-emit).
  */
 export function trackPrecheckOverlayView(
-  wallOtherCount: number,
+  wallNonbearingCount: number,
   windowCount = 0,
-  wallUnknownCount = 0
+  wallUncertainCount = 0
 ): void {
   pushToDataLayer({
     event: PRECHECK_OVERLAY_VIEW_EVENT,
-    wall_other_count: wallOtherCount,
+    wall_nonbearing_count: wallNonbearingCount,
     window_count: windowCount,
-    wall_unknown_count: wallUnknownCount
+    wall_uncertain_count: wallUncertainCount,
+    // @deprecated GTM 이전용 별칭 — 새 키로 옮긴 뒤 제거.
+    wall_other_count: wallNonbearingCount,
+    wall_unknown_count: wallUncertainCount
   });
 }
 

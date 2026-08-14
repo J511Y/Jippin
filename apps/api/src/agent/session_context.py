@@ -99,7 +99,7 @@ def build_session_state_context(
             windows = judgment.get("window_objects")
             window_count = len(windows) if isinstance(windows, list) else 0
             window_txt = f", 창호 {window_count}곳" if window_count else ""
-            unknown_txt = f", 구조 불확실 벽 {unknown}곳" if unknown else ""
+            unknown_txt = f", 미확정 벽 {unknown}곳" if unknown else ""
             lines.append(
                 f"- 평면도: 첨부 + 분석 완료 (비내력벽 후보 {nonload}곳, 내력벽 후보 "
                 f"{load}곳{unknown_txt}{window_txt}). 도면이 이미 있으니 **도면 기준으로 "
@@ -108,7 +108,8 @@ def build_session_state_context(
             )
             if unknown:
                 lines.append(
-                    "  (구조 불확실 벽 = 도면만으로 내력/비내력을 가르지 못한 벽. 철거 "
+                    "  (미확정 벽 = 도면만으로 내력/비내력을 가르지 못해 판단을 보류한 "
+                    "벽. 철거 "
                     "대상에 포함되면 내력 여부를 단정하지 말고 추가 확인(현장/전문가)이 "
                     "필요하다고 안내할 것.)"
                 )
@@ -128,7 +129,7 @@ def build_session_state_context(
             " (모두 비내력벽 후보)"
             if all_nonload
             else (
-                " (구조 불확실 벽 포함 — 내력 여부 단정 금지, 추가 확인 필요)"
+                " (미확정 벽 포함 — 내력 여부 단정 금지, 추가 확인 필요)"
                 if any_unknown
                 else ""
             )

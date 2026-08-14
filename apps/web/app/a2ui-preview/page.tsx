@@ -19,9 +19,9 @@ const OVERLAY_REGIONS = [
   { region_id: 'w2', class_name: 'wall_reinforced_concrete', polygon: [40, 740, 960, 740, 960, 760, 40, 760], score: 0.68, requires_hitl: true },
   { region_id: 'w3', class_name: 'wall_reinforced_concrete', polygon: [40, 40, 60, 40, 60, 760, 40, 760], score: 0.66, requires_hitl: true },
   { region_id: 'w4', class_name: 'wall_reinforced_concrete', polygon: [940, 40, 960, 40, 960, 760, 940, 760], score: 0.69, requires_hitl: true },
-  { region_id: 'w5', class_name: 'wall_other', polygon: [500, 60, 520, 60, 520, 400, 500, 400], score: 0.62, requires_hitl: true },
-  { region_id: 'w6', class_name: 'wall_other', polygon: [60, 400, 500, 400, 500, 420, 60, 420], score: 0.6, requires_hitl: true },
-  { region_id: 'w7', class_name: 'wall_unknown', polygon: [520, 400, 740, 400, 740, 420, 520, 420], score: 0.44, requires_hitl: true },
+  { region_id: 'w5', class_name: 'wall_nonbearing', polygon: [500, 60, 520, 60, 520, 400, 500, 400], score: 0.62, requires_hitl: true },
+  { region_id: 'w6', class_name: 'wall_nonbearing', polygon: [60, 400, 500, 400, 500, 420, 60, 420], score: 0.6, requires_hitl: true },
+  { region_id: 'w7', class_name: 'wall_other', polygon: [520, 400, 740, 400, 740, 420, 520, 420], score: 0.44, requires_hitl: true },
   { region_id: 'd1', class_name: 'door', polygon: [240, 400, 300, 400, 300, 420, 240, 420], score: 0.8 },
   { region_id: 'g1', class_name: 'window', polygon: [740, 740, 860, 740, 860, 760, 740, 760], score: 0.75 }
 ];
@@ -29,13 +29,57 @@ const OVERLAY_REGIONS = [
 // (1) json-render 네이티브 스펙 — 백엔드가 새로 방출할 포맷.
 const NATIVE_SPECS: { label: string; component: Record<string, unknown> }[] = [
   {
-    label: 'FloorplanOverlay (native spec) — 폴리곤 오버레이 + 비내력벽·구조 불확실 벽 선택',
+    label: 'FloorplanOverlay (native spec) — 폴리곤 오버레이 + 비내력벽·미확정 벽 선택',
     component: {
       root: 'ov',
       elements: {
         ov: {
           type: 'FloorplanOverlay',
-          props: { asset_id: '', image: { width: 1000, height: 800 }, regions: OVERLAY_REGIONS }
+          // vocab_version 은 서버가 싣는 벽 어휘 판별자 — 없으면 카드가 v3 저장분으로
+          // 보고 wall_other 를 비내력 후보로 되돌린다. 미리보기는 현행(v4) 기준.
+          props: {
+            asset_id: '',
+            image: { width: 1000, height: 800 },
+            vocab_version: 4,
+            regions: OVERLAY_REGIONS
+          }
+        }
+      }
+    }
+  },
+  {
+    // 하위호환 확인용 — vocab_version 이 없는 v3 저장분은 wall_other 를 초록 비내력
+    // 후보로 되돌려 그린다(옛 세션을 다시 열었을 때 사용자가 본 의미 그대로).
+    label: 'FloorplanOverlay (v3 저장분) — vocab_version 없음 → 옛 어휘로 렌더',
+    component: {
+      root: 'ov3',
+      elements: {
+        ov3: {
+          type: 'FloorplanOverlay',
+          props: {
+            asset_id: '',
+            image: { width: 1000, height: 800 },
+            regions: OVERLAY_REGIONS
+          }
+        }
+      }
+    }
+  },
+  {
+    // 비내력 후보가 0곳인 도면 — v4 는 판단 보류를 별도 클래스로 내므로 실제로 나온다.
+    // 안내 문구가 없는 초록색을 가리키지 않고 회색 벽으로 유도하는지 확인하는 케이스.
+    label: 'FloorplanOverlay (미확정 벽만) — 초록 후보 0곳일 때 안내 문구',
+    component: {
+      root: 'ovu',
+      elements: {
+        ovu: {
+          type: 'FloorplanOverlay',
+          props: {
+            asset_id: '',
+            image: { width: 1000, height: 800 },
+            vocab_version: 4,
+            regions: OVERLAY_REGIONS.filter((r) => r.class_name !== 'wall_nonbearing')
+          }
         }
       }
     }
