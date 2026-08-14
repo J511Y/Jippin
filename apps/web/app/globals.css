@@ -11,7 +11,9 @@
      var() 를 직접 읽는다 — 하드코딩 hex 제거 + 다크모드/리브랜드 시 한곳에서 관리. */
   --floorplan-wall-load: var(--mantine-color-danger-6);
   --floorplan-wall-nonload: var(--mantine-color-success-6);
-  --floorplan-wall-unknown: #8a929b;
+  /* 미확정 벽(wall_other, 구 wall_unknown) — 도면만으로 구조를 가르지 못해 판단을 보류한
+     벽. 확정 비내력(초록)과 색으로 갈라 사용자가 확인 대상임을 알아채게 한다. */
+  --floorplan-wall-uncertain: #8a929b;
   --floorplan-door: #3f6f9c;
   --floorplan-window: #3c8896;
   --floorplan-space-balcony: #c0803c;

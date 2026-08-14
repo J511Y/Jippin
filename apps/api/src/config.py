@@ -138,7 +138,10 @@ class Settings(BaseSettings):
     agent_enabled: bool = Field(default=False)
     agent_model: str = Field(default="openai:gpt-5.4-mini")
     # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
-    agent_run_wallclock_timeout_seconds: int = Field(default=600)
+    # 도면 분석 런은 세그멘테이션이 지배한다: 콜드스타트 폴링 300s + 타일 추론 최대 600s.
+    # 여기에 VLM(60s)·에이전트 왕복 여유를 더해 1200s 로 잡는다 — 바깥 예산이 이보다 짧으면
+    # 안쪽에서 아직 기다릴 수 있는 콜드스타트/추론을 런너가 먼저 끊는다(#v4-latency).
+    agent_run_wallclock_timeout_seconds: int = Field(default=1200)
 
     # AI-002 VLM 도면 문맥 해석(SDD §4.4). Mask2Former 레이블을 OpenAI Vision 으로 보완·
     # 정합성 검증한다. 모델/키는 agent 와 공유(gpt-5.4-mini). 비활성/실패 시 세그멘테이션
@@ -182,19 +185,38 @@ class Settings(BaseSettings):
     # 배포가 CPU(intel-spr) + scale-to-zero(15분) 라, 유휴 후 첫 요청은 콜드스타트로
     # TTFB 가 수십 초~수 분이다(모델 카드: "long request timeout"). 전용 엔드포인트는
     # 보통 503 재시도가 아니라 연결을 잡고 늘어지므로 per-request timeout 을 넉넉히 잡는다
-    # (run wall-clock 600s 이내). 503 재시도는 폴백으로 둔다.
-    hf_segmentation_timeout_seconds: int = Field(default=300)
+    # (run wall-clock 이내). 503 재시도는 폴백으로 둔다.
+    #
+    # v4(원본 해상도 타일)부터는 **추론 자체가** 도면당 타일 수만큼 forward 를 돈다
+    # (4963×3509 기준 약 12회). CPU 인스턴스에서 도면당 수 분이 될 수 있어 상한을 올렸다.
+    # 근본 해법은 비동기 처리(작업 큐 + 완료 알림) 또는 GPU 전환이다(#v4-latency).
+    hf_segmentation_timeout_seconds: int = Field(default=600)
     # 이 전용 엔드포인트는 scale-to-zero 에서 깨어나는 동안 **503** 을 즉시 돌려준다
     # (Retry-After/estimated_time 힌트 없음). CPU 스케일업이 수 분 걸릴 수 있어, 고정
-    # 폴링 간격으로 준비될 때까지 재시도한다 — max_retries × poll 이 run wall-clock(600s)
-    # 안에 들도록 잡는다(30 × 10s = 300s).
+    # 폴링 간격으로 준비될 때까지 재시도한다 — max_retries × poll = 30 × 10s = **300s**.
+    # 이 창은 v4 이전부터 지원하던 값이라 줄이지 않는다(200~300s 만에 깨어나던 콜드스타트가
+    # 갑자기 COLD_START_TIMEOUT 이 된다). 대신 바깥 예산(run wall-clock)을 늘려 맞춘다.
     hf_segmentation_cold_start_max_retries: int = Field(default=30)
     hf_segmentation_cold_start_poll_seconds: int = Field(default=10)
-    # 추론 파라미터(모델 카드 cmp180_full). 학습은 1536 square resize. CPU 지연이 크면
-    # max_inference_side 를 1280/1024 로 낮춰 절충할 수 있다(디테일 ↔ 지연).
-    hf_segmentation_threshold: float = Field(default=0.5)
+    # 배포된 엔드포인트가 서빙하는 모델의 어휘 세대(3|4). **요청 파라미터는 응답을 보기
+    # 전에 정해야 하므로**, 응답으로 어휘를 판별하는 것만으로는 threshold 를 맞출 수 없다
+    # (#threshold-cutover). 엔드포인트 모델 교체는 앱 배포와 별개의 수동 작업이라, 교체와
+    # **같이 뒤집는 스위치**를 설정으로 둔다. 기본 3 = 아직 옛 모델(교체 전 안전값).
+    # 응답 어휘가 이 값과 다르면 도구가 경고 로그를 남긴다(뒤집기를 잊어도 드러나게).
+    hf_segmentation_expected_vocab_version: int = Field(default=3)
+    # 추론 파라미터. 리사이즈 파라미터는 두지 않는다 — v4 는 원본 픽셀 타일 추론이 전제라
+    # 입력을 축소하면 성능이 붕괴한다(도구가 threshold/mask_threshold/max_tiles 만 넘긴다).
+    # threshold 는 None 이면 어휘 세대 기본값을 쓴다: v3=0.5(기존 운영값), v4=0.35 — v4 의
+    # 비내력 계열은 점수가 낮게 나와 0.5 에서 상당수가 걸러진다(모델 평가도 0.35 축).
+    # 숫자를 넣으면 세대와 무관하게 그 값으로 고정한다(운영 튜닝용).
+    hf_segmentation_threshold: float | None = Field(default=None)
     hf_segmentation_mask_threshold: float = Field(default=0.5)
-    hf_segmentation_max_inference_side: int = Field(default=1536)
+    # 타일 수 상한 — 원본 해상도를 그대로 보내는 만큼 **작업량 상한을 우리가 명시**한다.
+    # 업로드 게이트는 content-type(image/*) + 인코딩 크기(50MiB)만 보므로, 고압축 이미지가
+    # 디코드 후 거대한 픽셀로 펼쳐지면(decompression bomb) 타일 루프가 무한정 늘어난다.
+    # 이 값을 넘으면 핸들러가 추론 전에 400 으로 거절해 CPU/메모리 소모를 끊는다
+    # (#tile-budget). 4963×3509 기준 약 12타일이라 80 은 정상 도면에 충분한 여유다.
+    hf_segmentation_max_tiles: int = Field(default=80)
     # 세그멘테이션에 넘길 이미지 URL 의 허용 호스트(스토리지 서명 URL 호스트). 비우면
     # SSRF 가드(https + 사설/로컬/메타데이터 차단)만 적용하고 공개 https 는 허용한다.
     # 운영에서는 스토리지 호스트로 채워 세션 경계를 강제하길 권장한다. (콤마 구분)
@@ -368,6 +390,16 @@ class Settings(BaseSettings):
         # (빈 template_id 로 발송하면 SOLAPI 가 전건 거부한다.)
         if v is None or (isinstance(v, str) and not v.strip()):
             return cls.model_fields[info.field_name].default
+        return v
+
+    @field_validator("hf_segmentation_threshold", mode="before")
+    @classmethod
+    def _blank_threshold_to_none(cls, v: object) -> object:
+        # 빈 문자열은 '미지정'(=어휘 세대 기본값)으로 취급한다. compose 는 미설정 변수를
+        # `${VAR:-}` 로 빈 문자열 주입하는데, float | None 은 ""를 파싱하지 못해
+        # **기본 `docker compose up` 이 부팅 단계에서 죽는다**(#blank-threshold-env).
+        if isinstance(v, str) and not v.strip():
+            return None
         return v
 
     @field_validator("auth_oauth_state_ttl_seconds")
