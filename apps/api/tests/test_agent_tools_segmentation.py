@@ -1041,6 +1041,33 @@ def test_parse_regions_rejects_malformed_tile_metadata() -> None:
     assert regions[1]["tile_index"] == 0
 
 
+def test_merge_does_not_duplicate_point_touching_walls() -> None:
+    # 모서리(꼭짓점) 한 점만 맞닿은 두 벽. unary_union 은 이를 2개 part 로 두는데,
+    # intersects 로 소속을 정하면 점 접촉도 True 라 **양쪽 part 가 두 벽을 모두** 멤버로
+    # 가져가 같은 병합본이 두 번 생성된다(개수·오버레이·판단객체 부풀림).
+    # 소속은 양의 면적 겹침으로 정해야 한다(#point-touch-duplication).
+    from src.agent.tools.segmentation import _merge_overlapping_regions
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+            "score": 0.6,
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [10, 10, 20, 10, 20, 20, 10, 20],
+            "score": 0.5,
+        },
+    ]
+    merged = _merge_overlapping_regions(regions)
+    # 점 접촉은 병합 사유가 아니다 — 원본 둘이 그대로 남아야 한다(중복 없음).
+    assert len(merged) == 2
+    assert {r["region_id"] for r in merged} == {"pred:1", "pred:2"}
+
+
 def test_merge_preserves_vlm_provenance_and_custom_id_prefix() -> None:
     # VLM 이 교정한 조각이 섞이면 병합본도 VLM 출처를 유지한다 — 잃으면 판단객체의
     # source_engine 이 MASK2FORMER 로 되돌아가 교정 이력이 사라진다. id 접두사는

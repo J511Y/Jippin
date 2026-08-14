@@ -811,7 +811,12 @@ def _merge_overlapping_regions(
         for part in parts:
             if part.is_empty or part.geom_type != "Polygon":
                 continue
-            part_members = [r for g, r in shaped if part.intersects(g)]
+            # 소속 판정은 **양(+)의 면적 겹침**으로 한다. intersects 는 꼭짓점 한 점만
+            # 닿아도 True 라, 모서리로 맞닿은 두 벽이 각각의 part 에 **양쪽 다** 배정돼
+            # 같은 멤버 집합이 두 번 처리되고 병합본이 중복 생성된다(오버레이·요약·판단
+            # 객체가 모두 부풀려짐, #point-touch-duplication). 폴리곤은 연결 성분 하나에만
+            # 면적을 겹칠 수 있으므로 이 기준이면 정확히 한 곳에 배정된다.
+            part_members = [r for g, r in shaped if part.intersection(g).area > 0]
             if part_members:
                 comps.append((part, part_members))
 
