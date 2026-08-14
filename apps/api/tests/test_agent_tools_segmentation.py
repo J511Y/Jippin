@@ -32,7 +32,9 @@ def _settings(**override: object) -> SimpleNamespace:
         "hf_segmentation_timeout_seconds": 5,
         "hf_segmentation_cold_start_max_retries": 0,
         "hf_segmentation_cold_start_poll_seconds": 10,
-        "hf_segmentation_threshold": 0.35,
+        # 어휘 세대는 v4(교체 완료) 기준 — threshold 는 세대 기본값(0.35)으로 결정된다.
+        "hf_segmentation_expected_vocab_version": 4,
+        "hf_segmentation_threshold": None,
         "hf_segmentation_mask_threshold": 0.5,
         "hf_segmentation_max_tiles": 80,
         "hf_segmentation_allowed_image_hosts": [],
@@ -193,6 +195,66 @@ async def test_200_no_uncertain_wall_omits_summary_segment() -> None:
             image_url=_IMG, settings=_settings(), client=client
         )
     assert "미확정" not in res["summary"]
+
+
+async def test_threshold_follows_expected_vocab_version() -> None:
+    # threshold 는 **응답을 보기 전에** 정해진다 — 응답 기반 어휘 판별로는 못 맞춘다.
+    # 교체 전(v3)에 v4 값(0.35)이 나가면 기존에 걸러지던 저점수 벽이 선택 대상으로
+    # 올라와 판정이 흔들린다(#threshold-cutover). 설정 세대로 고르고, 명시값은 고정.
+    seen: list[float] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(req.content)["parameters"]["threshold"])
+        return httpx.Response(200, json={"predictions": []})
+
+    for expected, want in ((3, 0.5), (4, 0.35)):
+        async with _client(handler) as client:
+            await segment_floorplan_impl(
+                image_url=_IMG,
+                settings=_settings(
+                    hf_segmentation_expected_vocab_version=expected,
+                    hf_segmentation_threshold=None,
+                ),
+                client=client,
+            )
+        assert seen[-1] == want
+
+    # 명시값은 세대와 무관하게 그대로 나간다(운영 튜닝).
+    async with _client(handler) as client:
+        await segment_floorplan_impl(
+            image_url=_IMG,
+            settings=_settings(
+                hf_segmentation_expected_vocab_version=3,
+                hf_segmentation_threshold=0.42,
+            ),
+            client=client,
+        )
+    assert seen[-1] == 0.42
+
+
+async def test_vocab_mismatch_is_warned(monkeypatch) -> None:
+    # 설정 세대와 실제 서빙 모델이 어긋나면(교체 전후 스위치 뒤집기 누락) 경고로 드러난다.
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        seg_module.log, "warning", lambda event, **kw: warnings.append(event)
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": {"num_classes": 18},
+                "predictions": [{"class_name": "wall_other", "score": 0.6}],
+            },
+        )
+
+    async with _client(handler) as client:
+        await segment_floorplan_impl(
+            image_url=_IMG,
+            settings=_settings(hf_segmentation_expected_vocab_version=4),
+            client=client,
+        )
+    assert "segmentation_vocab_mismatch" in warnings
 
 
 async def test_200_v3_endpoint_keeps_legacy_wall_roles() -> None:

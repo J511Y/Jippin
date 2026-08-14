@@ -16,9 +16,11 @@ v4(2026-08-12)에서 두 가지가 바뀌었다:
    ``input_long_side_below_expected`` 가 실려 온다(경고 로깅 대상).
 
 요청 계약: ``{"inputs": <data URL|base64|HTTP(S) URL>, "parameters": {threshold,
-mask_threshold}}``. tile_size/tile_overlap 은 학습값이라 넘기지 않고 핸들러 기본값을
-쓴다. 벽 후보(특히 비내력 계열)는 점수가 낮게 나와 threshold 0.5 에서 상당수가 걸러지
-므로 운영 기본은 0.35 다(모델 평가 축과 동일).
+mask_threshold, max_tiles}}``. tile_size/tile_overlap 은 학습값이라 넘기지 않고 핸들러
+기본값을 쓴다. threshold 는 어휘 세대로 고른다 — v4 의 벽 후보(특히 비내력 계열)는 점수가
+낮게 나와 0.5 에서 상당수가 걸러지므로 0.35(모델 평가 축과 동일), v3 은 기존 운영값 0.5.
+**요청 파라미터는 응답을 보기 전에 정해야 해서** 아래 응답 기반 판별로는 못 맞춘다 —
+설정 ``hf_segmentation_expected_vocab_version`` 을 엔드포인트 교체와 함께 뒤집는다.
 
 응답: per-region ``predictions[]``(class_name/score/polygon/bbox/tile_index/
 touches_tile_border…) — 여기서 라벨별 count + score 평균으로 집계해
@@ -95,6 +97,24 @@ _V4_NUM_CLASSES = 19
 # (wall_other = 선택 가능한 비내력 후보) 되돌려 놓는다 — 교체 전까지는 오늘과 동일하게
 # 동작하고, 엔드포인트가 19클래스를 서빙하는 순간 자동으로 v4 의미로 넘어간다.
 _V3_TO_V4_LABEL: dict[str, str] = {"wall_other": "wall_nonbearing"}
+
+# 어휘 세대별 기본 threshold. v3 은 기존 운영값(0.5), v4 는 비내력 계열의 낮은 점수를
+# 감안한 0.35. **요청 파라미터는 응답을 보기 전에 정해야 해서** 응답 기반 판별로는 못
+# 맞춘다 — 설정의 expected_vocab_version 으로 고른다(#threshold-cutover).
+_THRESHOLD_BY_VOCAB: dict[int, float] = {3: 0.5, 4: 0.35}
+
+
+def _expected_vocab_version(settings: "Settings") -> int:
+    raw = getattr(settings, "hf_segmentation_expected_vocab_version", 3)
+    return raw if isinstance(raw, int) and raw in _THRESHOLD_BY_VOCAB else 3
+
+
+def _resolve_threshold(settings: "Settings") -> float:
+    """요청에 실을 threshold — 명시값이 있으면 그 값, 없으면 어휘 세대 기본값."""
+    override = getattr(settings, "hf_segmentation_threshold", None)
+    if isinstance(override, (int, float)) and not isinstance(override, bool):
+        return float(override)
+    return _THRESHOLD_BY_VOCAB[_expected_vocab_version(settings)]
 
 
 def _detect_vocab_version(data: dict[str, Any], raw_predictions: list[Any]) -> int:
@@ -227,7 +247,7 @@ def _retry_delay(resp: httpx.Response, fallback: float) -> float:
     return min(fallback, _MAX_RETRY_DELAY_SECONDS)
 
 
-def _parse_ok(data: Any) -> dict[str, Any]:
+def _parse_ok(data: Any, *, expected_vocab: int = 4) -> dict[str, Any]:
     """200 응답 파싱 — 모델 카드(cmp180_full)의 per-region ``predictions[]`` 를 라벨별로
     집계해 계약의 ``instances[{label, count, mean_confidence}]`` 로 환원한다.
 
@@ -284,7 +304,7 @@ def _parse_ok(data: Any) -> dict[str, Any]:
         instances.append(entry)
 
     summary = summarize_counts(counts)
-    _log_tiling_notes(data, vocab_version=vocab_version)
+    _log_tiling_notes(data, vocab_version=vocab_version, expected_vocab=expected_vocab)
     # 현재 모델 응답엔 저장된 마스크 자산이 없다(폴리곤만). 다만 핸들러가 향후
     # mask_asset_id(UUID)를 줄 수 있으니 방어적으로 보존한다.
     mask = _valid_uuid(data.get("mask_asset_id"))
@@ -334,7 +354,9 @@ def _counts_by_class(regions: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
-def _log_tiling_notes(data: dict[str, Any], *, vocab_version: int = 4) -> None:
+def _log_tiling_notes(
+    data: dict[str, Any], *, vocab_version: int = 4, expected_vocab: int = 4
+) -> None:
     """응답의 ``notes``/``tiling``/``timing`` 을 로그로 남긴다(계약엔 싣지 않음).
 
     핵심은 ``input_long_side_below_expected`` 다 — 앱이 도면을 축소해 보내고 있다는
@@ -351,6 +373,15 @@ def _log_tiling_notes(data: dict[str, Any], *, vocab_version: int = 4) -> None:
     if vocab_version < 4:
         # 엔드포인트가 아직 옛 모델을 서빙 중 — 교체 완료 시 이 경고가 멈춘다.
         log.warning("segmentation_legacy_vocab", vocab_version=vocab_version)
+    if vocab_version != expected_vocab:
+        # 설정(expected_vocab_version)과 실제 서빙 모델이 어긋났다. 응답 의미는 실제
+        # 기준으로 해석하지만 **요청 threshold 는 설정 기준으로 나갔다** — 교체 전후로
+        # 스위치 뒤집기를 잊으면 여기서 드러난다(#threshold-cutover).
+        log.warning(
+            "segmentation_vocab_mismatch",
+            detected=vocab_version,
+            expected=expected_vocab,
+        )
     log.info(
         "segmentation_tiling",
         vocab_version=vocab_version,
@@ -1108,7 +1139,7 @@ async def segment_floorplan_impl(
                     json={
                         "inputs": image_url,
                         "parameters": {
-                            "threshold": settings.hf_segmentation_threshold,
+                            "threshold": _resolve_threshold(settings),
                             "mask_threshold": settings.hf_segmentation_mask_threshold,
                             "max_tiles": settings.hf_segmentation_max_tiles,
                         },
@@ -1182,7 +1213,7 @@ async def segment_floorplan_impl(
                     error_code="SEGMENTATION_BAD_RESPONSE",
                     summary="응답 JSON 파싱에 실패했습니다.",
                 )
-            return _parse_ok(data)
+            return _parse_ok(data, expected_vocab=_expected_vocab_version(settings))
     finally:
         if owns_client:
             await client.aclose()
