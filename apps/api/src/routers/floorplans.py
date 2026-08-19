@@ -249,50 +249,20 @@ async def update_selected_walls(
         if payload.window_region_ids is not None
         else None
     )
-    # 최신 분석 산출과 대조 검증(#stale-overlay-submission). 완료된 오버레이 카드는 이전
-    # 메시지에 그대로 남아 여전히 클릭·제출이 가능하다 — 재분석으로 region id 가 갈린 뒤
-    # 옛 카드가 제출되면, 방금 프루닝으로 걷어낸 id 가 그대로 되살아나 룰 평가가 존재하지
-    # 않는(또는 내력벽이 된) 철거 대상을 쓰게 된다. 벽은 선택 가능 타입(LOAD_BEARING 제외)
-    # 만, 창호는 window_objects 만 인정하고, 하나라도 어긋나면 409 로 거절한다(부분 수용은
-    # 사용자가 고른 것과 다른 선택을 조용히 영속하는 셈이라 하지 않는다). 빈 목록(선택
-    # 해제)은 검증 대상이 없다.
-    if clean_walls or clean_windows:
-        session = await main_flow.get_owned_session(
-            session_id,
-            owner_user_id=requester.user_id,
-            owner_is_anonymous=requester.is_anonymous,
-        )
-        js = session.get("judgment_schema")
-        js = js if isinstance(js, dict) else {}
-        wall_objects = js.get("wall_objects")
-        window_objects = js.get("window_objects")
-        selectable_walls = {
-            w.get("id")
-            for w in (wall_objects if isinstance(wall_objects, list) else [])
-            if isinstance(w, dict) and w.get("wall_type") != "LOAD_BEARING"
-        }
-        selectable_windows = {
-            w.get("id")
-            for w in (window_objects if isinstance(window_objects, list) else [])
-            if isinstance(w, dict)
-        }
-        stale = [rid for rid in clean_walls if rid not in selectable_walls] + [
-            rid for rid in (clean_windows or []) if rid not in selectable_windows
-        ]
-        if stale:
-            raise ZippinException(
-                "Selection does not match the latest analysis objects.",
-                code="SELECTION_STALE",
-                http_status=409,
-            )
     patch: dict[str, list[str]] = {"selected_walls": clean_walls}
     if clean_windows is not None:
         patch["selected_windows"] = clean_windows
+    # 최신 분석 산출과의 대조 검증(#stale-overlay-submission)은 merge 가 **행잠금
+    # 트랜잭션 안에서** 수행한다(validate_selection) — 라우트에서 스냅숏으로 검증하면
+    # 그 읽기와 영속 사이에 재분석 커밋이 끼어 옛 id 가 새 객체 옆에 살아남는 TOCTOU
+    # 창이 생긴다. 어긋나면 409 SELECTION_STALE(세션 무변경), 빈 목록(선택 해제)은
+    # 검증 대상이 없다.
     merged = await main_flow.merge_judgment_schema(
         session_id=session_id,
         owner_user_id=requester.user_id,
         owner_is_anonymous=requester.is_anonymous,
         patch=patch,
+        validate_selection=True,
     )
     walls = merged.get("selected_walls")
     windows = merged.get("selected_windows")

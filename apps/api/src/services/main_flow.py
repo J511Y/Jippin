@@ -981,15 +981,11 @@ async def search_floorplan_catalog(
     )
 
 
-def _prune_selections_inplace(merged: dict[str, Any]) -> bool:
-    """merged 판단스키마의 저장된 선택을 현행 객체의 선택 가능 id 와 교집합으로 줄인다.
+def _selectable_selection_ids(js: dict[str, Any]) -> tuple[set[Any], set[Any]]:
+    """판단스키마의 (선택 가능 벽 id, 창호 id) — 벽은 LOAD_BEARING 제외."""
 
-    벽은 ``wall_objects`` 중 선택 가능 타입(LOAD_BEARING 제외), 창호는
-    ``window_objects`` 만 인정한다. 하나라도 걸러냈으면 True.
-    """
-
-    walls = merged.get("wall_objects")
-    windows = merged.get("window_objects")
+    walls = js.get("wall_objects")
+    windows = js.get("window_objects")
     selectable_walls = {
         w.get("id")
         for w in (walls if isinstance(walls, list) else [])
@@ -1000,6 +996,17 @@ def _prune_selections_inplace(merged: dict[str, Any]) -> bool:
         for w in (windows if isinstance(windows, list) else [])
         if isinstance(w, dict)
     }
+    return selectable_walls, selectable_windows
+
+
+def _prune_selections_inplace(merged: dict[str, Any]) -> bool:
+    """merged 판단스키마의 저장된 선택을 현행 객체의 선택 가능 id 와 교집합으로 줄인다.
+
+    벽은 ``wall_objects`` 중 선택 가능 타입(LOAD_BEARING 제외), 창호는
+    ``window_objects`` 만 인정한다. 하나라도 걸러냈으면 True.
+    """
+
+    selectable_walls, selectable_windows = _selectable_selection_ids(merged)
     changed = False
     for key, valid_ids in (
         ("selected_walls", selectable_walls),
@@ -1015,17 +1022,26 @@ def _prune_selections_inplace(merged: dict[str, Any]) -> bool:
     return changed
 
 
+#: _db_merge_judgment_schema 의 검증 실패 sentinel — 쓰기 없이 중단됐음을 알린다.
+_MERGE_SELECTION_STALE = "selection_stale"
+
+
 async def _db_merge_judgment_schema(
-    session_id: uuid.UUID, *, patch: dict[str, Any]
-) -> tuple[dict[str, Any], bool] | None:
-    """판단스키마 병합 + 선택 프루닝 + rule_eval 무효화를 **단일 행잠금 트랜잭션**으로.
+    session_id: uuid.UUID, *, patch: dict[str, Any], validate_selection: bool = False
+) -> tuple[dict[str, Any], bool] | str | None:
+    """판단스키마 병합 + 선택 검증/프루닝 + rule_eval 무효화를 **단일 행잠금 트랜잭션**으로.
 
     분석 산출(wall/window_objects)을 갈아끼우는 쓰기와 저장된 선택의 프루닝이 분리돼
     있으면, 그 사이에 옛 오버레이 카드의 PATCH 가 끼어들어(검증은 아직 옛 객체 기준으로
     통과) 방금 사라진 id 가 새 객체 옆에 살아남는다 — FOR UPDATE 로 잠근 같은
     트랜잭션에서 병합 직후 프루닝까지 마쳐 그 창을 없앤다(#atomic-merge-prune).
-    반환은 (merged, selection_pruned). 행이 없으면 None(호출자 owner-gate 이후의
-    삭제 race).
+
+    ``validate_selection`` 이면 patch 에 실린 선택 id 를 **잠근 행의 현행 객체**와
+    대조해, 하나라도 어긋나면 아무것도 쓰지 않고 ``_MERGE_SELECTION_STALE`` 을
+    돌려준다 — 스냅숏 검증과 영속 사이의 재분석 커밋 창 제거(#stale-overlay-submission).
+
+    반환은 (merged, selection_pruned) / 검증 실패 sentinel / 행 부재 None(호출자
+    owner-gate 이후의 삭제 race).
     """
 
     prune = "wall_objects" in patch or "window_objects" in patch
@@ -1051,6 +1067,17 @@ async def _db_merge_judgment_schema(
         current = row0.judgment_schema
         merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
         merged.update(patch)
+        if validate_selection:
+            selectable_walls, selectable_windows = _selectable_selection_ids(merged)
+            for key, valid_ids in (
+                ("selected_walls", selectable_walls),
+                ("selected_windows", selectable_windows),
+            ):
+                requested = patch.get(key)
+                if isinstance(requested, list) and any(
+                    rid not in valid_ids for rid in requested
+                ):
+                    return _MERGE_SELECTION_STALE  # 쓰기 전 중단 — 세션 무변경.
         selection_pruned = _prune_selections_inplace(merged) if prune else False
         values: dict[str, Any] = {"judgment_schema": merged}
         # 분석·선택이 바뀌면 그 입력으로 계산된 기존 판정은 stale 이다 — rule_eval_result
@@ -1076,6 +1103,7 @@ async def merge_judgment_schema(
     owner_user_id: uuid.UUID,
     owner_is_anonymous: bool,
     patch: dict[str, Any],
+    validate_selection: bool = False,
 ) -> dict[str, Any]:
     """공통 판단 스키마(JSONB)에 top-level 키를 병합한다(owner-gated).
 
@@ -1087,6 +1115,11 @@ async def merge_judgment_schema(
     분석 산출(wall/window_objects)이 패치되면 저장된 선택(selected_walls/windows)을
     새 객체의 선택 가능 id 와 교집합으로 **같은 트랜잭션에서** 줄인다 — 재분석과 옛
     카드 제출의 경합에서도 유령 id 가 남지 않는다(#atomic-merge-prune).
+
+    ``validate_selection``(사용자 선택 PATCH 경로)이면 patch 의 선택 id 를 잠근 행의
+    현행 객체와 대조해, 어긋나면 아무것도 쓰지 않고 409(SELECTION_STALE)를 던진다 —
+    스냅숏 검증으로는 재분석 커밋이 사이에 끼는 TOCTOU 를 못 막는다
+    (#stale-overlay-submission).
     """
 
     await _resolve_owner_session(
@@ -1094,10 +1127,17 @@ async def merge_judgment_schema(
         owner_user_id=owner_user_id,
         owner_is_anonymous=owner_is_anonymous,
     )
-    result = await _db_merge_judgment_schema(session_id, patch=patch)
+    result = await _db_merge_judgment_schema(
+        session_id, patch=patch, validate_selection=validate_selection
+    )
     if result is None:
         # owner-gate 통과 직후의 삭제 race — 부재 세션과 동일하게 취급.
         raise _not_found("Session not found.")
+    if isinstance(result, str):
+        raise _conflict(
+            "Selection does not match the latest analysis objects.",
+            "SELECTION_STALE",
+        )
     merged, selection_pruned = result
 
     # 분석/선택 마일스톤에 따라 status 전진. selected_*(사용자 선택)는 wall_objects

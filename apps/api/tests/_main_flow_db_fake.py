@@ -234,11 +234,16 @@ class FakeMainFlowDb:
         return dict(row)
 
     async def _db_merge_judgment_schema(
-        self, session_id: uuid.UUID, *, patch: dict[str, Any]
-    ) -> tuple[dict[str, Any], bool] | None:
-        """판단스키마 병합 + 원자 선택 프루닝 + rule_eval 무효화(real seam 미러).
+        self,
+        session_id: uuid.UUID,
+        *,
+        patch: dict[str, Any],
+        validate_selection: bool = False,
+    ) -> tuple[dict[str, Any], bool] | str | None:
+        """판단스키마 병합 + 원자 선택 검증/프루닝 + rule_eval 무효화(real seam 미러).
 
         real 은 FOR UPDATE 단일 트랜잭션 — fake 는 단일 스레드라 그대로 순차 수행.
+        validate_selection 검증 실패는 쓰기 없이 sentinel 반환(real 과 동일).
         """
 
         row = self.sessions.get(session_id)
@@ -247,6 +252,17 @@ class FakeMainFlowDb:
         current = row.get("judgment_schema")
         merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
         merged.update(patch)
+        if validate_selection:
+            walls_ok, windows_ok = main_flow._selectable_selection_ids(merged)
+            for key, valid_ids in (
+                ("selected_walls", walls_ok),
+                ("selected_windows", windows_ok),
+            ):
+                requested = patch.get(key)
+                if isinstance(requested, list) and any(
+                    rid not in valid_ids for rid in requested
+                ):
+                    return main_flow._MERGE_SELECTION_STALE
         selection_pruned = False
         if "wall_objects" in patch or "window_objects" in patch:
             selection_pruned = main_flow._prune_selections_inplace(merged)

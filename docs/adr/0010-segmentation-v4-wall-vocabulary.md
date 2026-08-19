@@ -90,8 +90,10 @@ stride 4 에서 동작하는 것까지 겹쳐 얇은 벽이 서브픽셀이 됐�
   교집합으로 줄여 영속한다 — 유령/내력벽 id 가 룰 평가의 철거 대상으로 남지 않게.
   프루닝은 wall/window_objects 를 갈아끼우는 **같은 행잠금 트랜잭션 안**에서 수행한다
   (`_db_merge_judgment_schema`, #atomic-merge-prune) — 스냅숏과 영속 사이에 옛 카드
-  제출이 끼어드는 TOCTOU 창이 없다. `PATCH /selected-walls` 도 선택 id 를 최신 객체와
-  대조해 어긋나면 409 SELECTION_STALE 로 거절한다(옛 오버레이 카드 제출 차단).
+  제출이 끼어드는 TOCTOU 창이 없다. `PATCH /selected-walls` 의 선택 id 검증도 **같은
+  병합 트랜잭션 안**에서 현행 객체와 대조한다(`validate_selection`) — 어긋나면 쓰기
+  없이 409 SELECTION_STALE 로 거절하고, 프론트 카드는 이 409 를 받으면 성공 위장
+  메시지를 발화하지 않고 카드를 만료 표시해 최신 카드로 유도한다.
   프론트 복원도 현재 카드에 존재하는 선택 가능 id 만 받는다(구 데이터 방어).
   walls_selected 마일스톤은 **비어 있지 않은 선택**만 인정하고, 프루닝으로 살아 있는
   선택이 전부 사라지면 forward-only 배지를 `awaiting_overlay` 로 **명시 재개**한다

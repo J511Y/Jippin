@@ -38,6 +38,7 @@ import {
   trackPrecheckOverlayView,
   trackPrecheckWallSelect
 } from '@/lib/analytics/sessions-funnel';
+import { parseApiError } from '@/lib/api/error';
 import {
   getFloorplanAssetSignedUrl,
   getSession,
@@ -259,6 +260,8 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  // 서버가 409 SELECTION_STALE 로 거절한 카드 — 재분석으로 대체된 옛 분석 결과다.
+  const [stale, setStale] = useState(false);
 
   const interactive = actions !== null;
   const streaming = actions?.busy ?? false;
@@ -346,8 +349,16 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
       if (sessionId) {
         try {
           await updateSelectedWalls(sessionId, wallIds, winIds);
-        } catch {
-          /* 영속 실패는 무시 — 메시지 발화로 흐름은 이어간다 */
+        } catch (err) {
+          // 옛 분석 카드 제출(409 SELECTION_STALE): 서버가 세션을 바꾸지 않았다 —
+          // 여기서 성공한 척 메시지를 보내면 에이전트가 실제 저장 상태(비었거나 더
+          // 새로운 선택)와 어긋난 채 진행한다. 카드를 만료 표시하고 최신 카드로
+          // 유도하며, 메시지는 발화하지 않는다(#stale-overlay-submission).
+          if (parseApiError(err).code === 'SELECTION_STALE') {
+            setStale(true);
+            return;
+          }
+          /* 기타 영속 실패는 무시 — 메시지 발화로 흐름은 이어간다 */
         }
       }
       trackPrecheckWallSelect(selected.size);
@@ -372,14 +383,16 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
 
   const hasSelectable = selectableRegions.length > 0;
   const submitDisabled =
-    selected.size === 0 || submitting || submitted || streaming || !interactive;
-  const submitLabel = submitting
-    ? '제출 중…'
-    : submitted
-      ? `철거 검토 요청을 보냈어요 · ${selected.size}곳`
-      : selected.size > 0
-        ? `선택한 ${selected.size}곳 철거 검토하기`
-        : '철거할 벽이나 창호를 먼저 골라 주세요';
+    selected.size === 0 || submitting || submitted || streaming || !interactive || stale;
+  const submitLabel = stale
+    ? '이 카드는 이전 분석 결과예요'
+    : submitting
+      ? '제출 중…'
+      : submitted
+        ? `철거 검토 요청을 보냈어요 · ${selected.size}곳`
+        : selected.size > 0
+          ? `선택한 ${selected.size}곳 철거 검토하기`
+          : '철거할 벽이나 창호를 먼저 골라 주세요';
 
   return (
     <CardShell accent="blueprint" labelledBy={titleId}>
@@ -502,6 +515,13 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
             </Button>
           ) : null}
         </Group>
+
+        {stale ? (
+          <Text size="sm" c="var(--mantine-color-warning-8)" style={{ lineHeight: 1.55 }}>
+            도면이 다시 분석되어 이 카드의 선택은 더 이상 쓸 수 없어요. 아래 최신 도면
+            분석 카드에서 다시 골라 주세요.
+          </Text>
+        ) : null}
 
         {hasSelectable ? (
           // 1차 액션(제품 기능 진입: 선택 제출) — jippin filled. coral 은 전환 CTA 전용.

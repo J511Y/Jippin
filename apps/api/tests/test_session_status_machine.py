@@ -310,3 +310,42 @@ async def test_analysis_patch_keeps_still_valid_selection(monkeypatch) -> None:
     )
     assert merged["selected_walls"] == ["w1"]  # w2(소멸)만 걸러짐
     assert fake.sessions[sid]["status"] == "collecting_info"  # 살아 있는 선택 → 유지
+
+
+async def test_merge_validate_selection_rejects_atomically(monkeypatch) -> None:
+    # #stale-overlay-submission: validate_selection 은 병합 트랜잭션 안에서 현행 객체와
+    # 대조한다 — 어긋나면 아무것도 쓰지 않고 409 SELECTION_STALE. 스냅숏 검증과 달리
+    # 재분석 커밋이 사이에 끼어들 창이 없다.
+    import pytest
+
+    from src.errors import ZippinException
+
+    fake = install_main_flow_fake(monkeypatch)
+    owner, sid = await _new_session(fake)
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}]},
+    )
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"selected_walls": ["w1"]},
+        validate_selection=True,
+    )
+    assert fake.sessions[sid]["status"] == "collecting_info"
+
+    with pytest.raises(ZippinException) as exc:
+        await main_flow.merge_judgment_schema(
+            session_id=sid,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            patch={"selected_walls": ["ghost:1"]},
+            validate_selection=True,
+        )
+    assert exc.value.code == "SELECTION_STALE"
+    # 거절은 세션을 전혀 바꾸지 않는다 — 기존 선택·배지 유지.
+    assert fake.sessions[sid]["judgment_schema"]["selected_walls"] == ["w1"]
+    assert fake.sessions[sid]["status"] == "collecting_info"
