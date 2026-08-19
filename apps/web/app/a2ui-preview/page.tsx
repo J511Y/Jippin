@@ -85,6 +85,27 @@ const NATIVE_SPECS: { label: string; component: Record<string, unknown> }[] = [
     }
   },
   {
+    // 내력벽만 잡힌 도면(#bearing-only-copy) — 선택 가능 영역·제출 버튼이 없으므로
+    // 선택 지시 대신 상황 설명만 나오는지, 집계 라인이 내력벽 개수를 보여 주는지 확인.
+    label: 'FloorplanOverlay (내력벽만) — 선택 가능 영역 0곳일 때 안내 문구',
+    component: {
+      root: 'ovb',
+      elements: {
+        ovb: {
+          type: 'FloorplanOverlay',
+          props: {
+            asset_id: '',
+            image: { width: 1000, height: 800 },
+            vocab_version: 4,
+            regions: OVERLAY_REGIONS.filter(
+              (r) => r.class_name === 'wall_reinforced_concrete'
+            )
+          }
+        }
+      }
+    }
+  },
+  {
     label: 'FloorplanRequest (native spec)',
     component: {
       root: 'fp',

@@ -63,7 +63,7 @@ jippin/
 | DB · Auth | **Supabase Postgres + Supabase Auth** | `supabase/migrations/*.sql` 이 forward schema SSOT (ADR-0004) |
 | 세션·캐시 | Redis 7.4 (로컬 compose / 운영 managed 도쿄) | ADR-0006 |
 | 로컬 오케스트레이션 | **docker-compose 3-컨테이너** (web + api + redis) | DB 는 외부 Supabase 원격 |
-| AI | **Mask2Former (HF Inference Endpoint) + VLM(`gpt-5.4-mini`) + 대화형 에이전트(deepagents/LangGraph)** | 도면 세그멘테이션·판별·사전검토 세션 구현 완료 (`apps/api/src/agent/`) |
+| AI | **Mask2Former (HF Inference Endpoint) + VLM(`gpt-5.6-luna`) + 대화형 에이전트(deepagents/LangGraph, `gpt-5.6-luna`)** | 도면 세그멘테이션·판별·사전검토 세션 구현 완료 (`apps/api/src/agent/`) |
 | 건축물대장 | **세움터 직결 내재화** (`apps/seumteo-worker`, ADR-0009 — CODEF 대체) | 우리집 체크 (`/home-check`) 데이터 소스 |
 | 배포 토폴로지 | **분리형 (배포 완료 — ADR-0006 / [`DEPLOYMENT.md`](DEPLOYMENT.md))**: web=Vercel(jippin.ai) · api=Fly.io 도쿄(api.jippin.ai) · redis=managed 도쿄 · DB=Supabase | ADR-0002(단일 VM) supersede. ADR 문서 상태는 Proposed 잔존 |
 

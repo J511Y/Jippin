@@ -7,6 +7,8 @@
  * - OVERLAY-001: AI 분석 결과(폴리곤/클래스)를 평면도 위에 반투명 색상 + 레이블 + 범례로
  *   오버레이. SVG 기반(폴리곤=DOM 요소 → 클릭/키보드/접근성 용이, 의존성 0). 핀치/휠 줌·
  *   드래그/스와이프 팬. stroke 는 non-scaling 이라 줌 무관 일정 두께(149개에서도 안 뭉갬).
+ *   내력벽 후보(wall_reinforced_concrete)도 **표시-전용(빨강, 선택 불가)**으로 함께 그려
+ *   비내력 후보와 한눈에 대비되게 한다(2026-08-19 모델 레포 인계 — #rc-priority 짝).
  * - OVERLAY-002: 비내력벽 후보(wall_nonbearing)와 창호(window)를 클릭/키보드로 단일·복수
  *   선택 → selected_walls/selected_windows 로 판단스키마에 기록. 창호는 거실-발코니 통합
  *   (경계 창호 철거) 검토용 — 외기 접촉 여부 판정은 에이전트(LLM)가 대화·도면 관찰로 내린다.
@@ -36,6 +38,7 @@ import {
   trackPrecheckOverlayView,
   trackPrecheckWallSelect
 } from '@/lib/analytics/sessions-funnel';
+import { parseApiError } from '@/lib/api/error';
 import {
   getFloorplanAssetSignedUrl,
   getSession,
@@ -217,6 +220,12 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     () => regions.filter((r) => r.class_name === 'wall_nonbearing'),
     [regions]
   );
+  // 내력벽 후보 — **표시 전용**(선택 불가). 서버가 RC 와 겹친 비내력 판정을 이미 걷어냈고
+  // (#rc-priority), 여기서는 철거 불가 벽이 어디인지 사용자가 함께 보도록 빨강으로 그린다.
+  const bearingWallRegions = useMemo(
+    () => regions.filter((r) => r.class_name === 'wall_reinforced_concrete'),
+    [regions]
+  );
   const uncertainWallRegions = useMemo(
     () =>
       regions.filter(
@@ -240,6 +249,10 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     () => new Set(uncertainWallRegions.map((r) => r.region_id)),
     [uncertainWallRegions]
   );
+  const selectableIds = useMemo(
+    () => new Set(selectableRegions.map((r) => r.region_id)),
+    [selectableRegions]
+  );
 
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
@@ -247,6 +260,8 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  // 서버가 409 SELECTION_STALE 로 거절한 카드 — 재분석으로 대체된 옛 분석 결과다.
+  const [stale, setStale] = useState(false);
 
   const interactive = actions !== null;
   const streaming = actions?.busy ?? false;
@@ -281,10 +296,15 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
         else setImageFailed(true);
         const prevWalls = session?.judgment_schema?.selected_walls;
         const prevWindows = session?.judgment_schema?.selected_windows;
+        // 이 카드에 실제로 존재하는 선택 가능 영역만 복원한다 — 재분석으로 id 가 바뀐
+        // 옛 선택(서버가 프루닝하기 전에 저장된 데이터 포함)이 유령 선택으로 남아
+        // '제출됨' 상태를 잘못 복원하지 않게(#stale-selection-prune 의 프론트 방어).
         const restored = [
           ...(Array.isArray(prevWalls) ? prevWalls : []),
           ...(Array.isArray(prevWindows) ? prevWindows : [])
-        ].filter((x): x is string => typeof x === 'string');
+        ]
+          .filter((x): x is string => typeof x === 'string')
+          .filter((id) => selectableIds.has(id));
         if (restored.length > 0) {
           setSelected(new Set(restored));
           setSubmitted(true); // 이미 제출된 선택 복원.
@@ -298,7 +318,7 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     return () => {
       ignore = true;
     };
-  }, [sessionId, assetId]);
+  }, [sessionId, assetId, selectableIds]);
 
   // 토글은 **로컬 상태만** 바꾼다(자동 저장 안 함) — 아래 '제출' 버튼으로 확정한다.
   const toggle = useCallback((regionId: string) => {
@@ -329,8 +349,16 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
       if (sessionId) {
         try {
           await updateSelectedWalls(sessionId, wallIds, winIds);
-        } catch {
-          /* 영속 실패는 무시 — 메시지 발화로 흐름은 이어간다 */
+        } catch (err) {
+          // 옛 분석 카드 제출(409 SELECTION_STALE): 서버가 세션을 바꾸지 않았다 —
+          // 여기서 성공한 척 메시지를 보내면 에이전트가 실제 저장 상태(비었거나 더
+          // 새로운 선택)와 어긋난 채 진행한다. 카드를 만료 표시하고 최신 카드로
+          // 유도하며, 메시지는 발화하지 않는다(#stale-overlay-submission).
+          if (parseApiError(err).code === 'SELECTION_STALE') {
+            setStale(true);
+            return;
+          }
+          /* 기타 영속 실패는 무시 — 메시지 발화로 흐름은 이어간다 */
         }
       }
       trackPrecheckWallSelect(selected.size);
@@ -355,14 +383,16 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
 
   const hasSelectable = selectableRegions.length > 0;
   const submitDisabled =
-    selected.size === 0 || submitting || submitted || streaming || !interactive;
-  const submitLabel = submitting
-    ? '제출 중…'
-    : submitted
-      ? `철거 검토 요청을 보냈어요 · ${selected.size}곳`
-      : selected.size > 0
-        ? `선택한 ${selected.size}곳 철거 검토하기`
-        : '철거할 벽이나 창호를 먼저 골라 주세요';
+    selected.size === 0 || submitting || submitted || streaming || !interactive || stale;
+  const submitLabel = stale
+    ? '이 카드는 이전 분석 결과예요'
+    : submitting
+      ? '제출 중…'
+      : submitted
+        ? `철거 검토 요청을 보냈어요 · ${selected.size}곳`
+        : selected.size > 0
+          ? `선택한 ${selected.size}곳 철거 검토하기`
+          : '철거할 벽이나 창호를 먼저 골라 주세요';
 
   return (
     <CardShell accent="blueprint" labelledBy={titleId}>
@@ -384,6 +414,21 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
               철거가 가능한 건 <b>비내력벽(초록)</b>이에요.{' '}
             </>
           ) : null}
+          {bearingWallRegions.length > 0 ? (
+            hasSelectable ? (
+              <>
+                <b>빨간 벽</b>은 내력벽으로 보이는 부분이라 철거 검토 대상으로 고를 수
+                없어요.{' '}
+              </>
+            ) : (
+              // 내력벽만 잡힌 도면 — 고를 수 있는 영역·제출 버튼이 없으므로 선택 안내
+              // 대신 상황 설명만 한다(없는 초록 벽을 찾게 하지 않는다).
+              <>
+                이 도면에서는 <b>내력벽으로 보이는 벽(빨강)</b>만 잡혔어요 — 철거를
+                검토할 수 있는 비내력벽 후보가 없어 다른 도면이 필요할 수 있어요.{' '}
+              </>
+            )
+          ) : null}
           {uncertainWallRegions.length > 0 ? (
             wallRegions.length > 0 ? (
               <>
@@ -404,8 +449,14 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
               있어요 — 단, 바깥 공기와 바로 닿는 바깥쪽 창은 철거할 수 없어요.{' '}
             </>
           ) : null}
-          영역을 눌러 고른 뒤(여러 곳 가능) <b>제출</b> 버튼을 눌러 주세요. 표시는 AI 추정
-          후보예요.
+          {/* 선택 지시는 실제로 고를 수 있을 때만 — 내력벽만 잡히면 제출 버튼 자체가
+              없다(#bearing-only-copy). */}
+          {hasSelectable ? (
+            <>
+              영역을 눌러 고른 뒤(여러 곳 가능) <b>제출</b> 버튼을 눌러 주세요.{' '}
+            </>
+          ) : null}
+          표시는 AI 추정 후보예요.
         </Text>
 
         {loading ? (
@@ -417,10 +468,11 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
           />
         ) : (
           <OverlayCanvas
-            key={`${frame.x},${frame.y},${frame.w},${frame.h}:${selectableRegions.length}`}
+            key={`${frame.x},${frame.y},${frame.w},${frame.h}:${selectableRegions.length}:${bearingWallRegions.length}`}
             frame={frame}
             imgDims={imgDims}
             regions={selectableRegions}
+            bearingRegions={bearingWallRegions}
             imageUrl={imageUrl}
             imageFailed={imageFailed}
             selected={selected}
@@ -434,6 +486,9 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
             {hasSelectable
               ? [
                   wallRegions.length > 0 ? `비내력벽 후보 ${wallRegions.length}곳` : null,
+                  bearingWallRegions.length > 0
+                    ? `내력벽 후보 ${bearingWallRegions.length}곳(선택 불가)`
+                    : null,
                   uncertainWallRegions.length > 0
                     ? `미확정 벽 ${uncertainWallRegions.length}곳`
                     : null,
@@ -442,7 +497,9 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
                 ]
                   .filter(Boolean)
                   .join(' · ')
-              : '선택 가능한 비내력벽·창호가 없어요. 다른 도면이 필요할 수 있어요.'}
+              : bearingWallRegions.length > 0
+                ? `내력벽 후보 ${bearingWallRegions.length}곳(선택 불가) — 철거를 검토할 비내력벽·창호는 안 잡혔어요.`
+                : '선택 가능한 비내력벽·창호가 없어요. 다른 도면이 필요할 수 있어요.'}
           </Text>
           {selected.size > 0 ? (
             // 터치 타깃 ≥44px (DESIGN.md §4.7) — 시각은 작게, 히트 영역만 확보.
@@ -458,6 +515,13 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
             </Button>
           ) : null}
         </Group>
+
+        {stale ? (
+          <Text size="sm" c="var(--mantine-color-warning-8)" style={{ lineHeight: 1.55 }}>
+            도면이 다시 분석되어 이 카드의 선택은 더 이상 쓸 수 없어요. 아래 최신 도면
+            분석 카드에서 다시 골라 주세요.
+          </Text>
+        ) : null}
 
         {hasSelectable ? (
           // 1차 액션(제품 기능 진입: 선택 제출) — jippin filled. coral 은 전환 CTA 전용.
@@ -495,6 +559,7 @@ function OverlayCanvas({
   frame,
   imgDims,
   regions,
+  bearingRegions,
   imageUrl,
   imageFailed,
   selected,
@@ -504,6 +569,8 @@ function OverlayCanvas({
   frame: ViewBox;
   imgDims: { w: number; h: number };
   regions: OverlayRegion[];
+  /** 내력벽 후보(wall_reinforced_concrete) — 표시 전용, 클릭/포커스 없음. */
+  bearingRegions: OverlayRegion[];
   imageUrl: string | null;
   imageFailed: boolean;
   selected: Set<string>;
@@ -677,6 +744,25 @@ function OverlayCanvas({
             onError={onImageError}
           />
         ) : null}
+
+        {/* 내력벽 후보 — 표시 전용(빨강, 실선). 선택 폴리곤보다 먼저 그려 항상 아래 깔리고,
+            클릭/포커스를 받지 않아 선택 흐름을 방해하지 않는다. 색만이 아니라 **실선 vs
+            점선**으로도 '선택 불가 vs 선택 가능'을 인코딩한다(WCAG 1.4.1). */}
+        {bearingRegions.map((r) => (
+          <polygon
+            key={r.region_id}
+            className="fp-poly"
+            points={toPoints(r.polygon)}
+            vectorEffect="non-scaling-stroke"
+            fill="var(--floorplan-wall-load)"
+            fillOpacity={0.2}
+            stroke="var(--floorplan-wall-load)"
+            strokeOpacity={0.85}
+            strokeWidth={1.4}
+            pointerEvents="none"
+            aria-hidden
+          />
+        ))}
 
         {regions.map((r) => {
           // 부모가 선택 가능 영역(wall_nonbearing 비내력벽 후보 + wall_other/wall_unknown

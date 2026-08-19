@@ -237,17 +237,32 @@ async def update_selected_walls(
     ``selected_windows``(창호) 로 병합한다. LLM 을 거치지 않는 직접 UI 액션이라 REST 로
     둔다(클릭마다 모델을 깨우지 않음). 창호의 철거 가부(외기 접촉 vs 발코니-실 경계)는
     여기서 판정하지 않는다 — 에이전트(CHAT)가 window_demolition_boundary 로 판단한다.
+
+    선택 id 는 **최신 분석 산출**(wall_objects/window_objects)과 대조해, 존재하지 않거나
+    선택 불가(내력벽)인 id 가 섞이면 409(SELECTION_STALE)로 거절한다 — 재분석 이전의
+    옛 오버레이 카드 제출이 프루닝된 id 를 되살리는 경로 차단(#stale-overlay-submission).
     """
 
     clean_walls = _dedupe_region_ids(payload.region_ids)
+    clean_windows = (
+        _dedupe_region_ids(payload.window_region_ids)
+        if payload.window_region_ids is not None
+        else None
+    )
     patch: dict[str, list[str]] = {"selected_walls": clean_walls}
-    if payload.window_region_ids is not None:
-        patch["selected_windows"] = _dedupe_region_ids(payload.window_region_ids)
+    if clean_windows is not None:
+        patch["selected_windows"] = clean_windows
+    # 최신 분석 산출과의 대조 검증(#stale-overlay-submission)은 merge 가 **행잠금
+    # 트랜잭션 안에서** 수행한다(validate_selection) — 라우트에서 스냅숏으로 검증하면
+    # 그 읽기와 영속 사이에 재분석 커밋이 끼어 옛 id 가 새 객체 옆에 살아남는 TOCTOU
+    # 창이 생긴다. 어긋나면 409 SELECTION_STALE(세션 무변경), 빈 목록(선택 해제)은
+    # 검증 대상이 없다.
     merged = await main_flow.merge_judgment_schema(
         session_id=session_id,
         owner_user_id=requester.user_id,
         owner_is_anonymous=requester.is_anonymous,
         patch=patch,
+        validate_selection=True,
     )
     walls = merged.get("selected_walls")
     windows = merged.get("selected_windows")

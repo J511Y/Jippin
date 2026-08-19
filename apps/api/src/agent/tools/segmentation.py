@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import ipaddress
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -921,6 +922,255 @@ def _merge_overlapping_regions(
     return out
 
 
+# 내력벽 우선 규칙(#rc-priority)에서 잘린 비내력 잔여 조각을 살릴 최소 크기. 원본 대비
+# 비율(슬리버 방지)과 절대 면적(원본 픽셀 기준)을 모두 넘어야 한다 — RC 가 벽의
+# 대부분을 덮으면 남는 작은 조각이 '선택 가능한 벽'으로 그려지는 것을 막는다.
+# 절대 하한은 **10×10px = 100px²**(2026-08-19 모델 레포 지시) — 원본 해상도(중앙값
+# 4963×3509) 기준 10px 은 실제 벽이라 보기 어려운 크기다.
+_RC_PRIORITY_MIN_REMAINDER_RATIO = 0.05
+_RC_PRIORITY_MIN_REMAINDER_AREA_PX = 100.0
+
+
+def _clip_geometry_digest(flat_polygon: list[float]) -> str:
+    """잘린 조각 id 에 넣는 기하 지문(8 hex, #rc-clip-geometry-id).
+
+    0.1px 로 라운딩해 부동소수 노이즈는 흡수하고, RC 경계 이동 같은 실제 기하 변화는
+    다른 지문 → 다른 id 가 되게 한다. 같은 도면을 같은 결과로 재분석하면 지문이 같아
+    저장된 선택이 보존되고, 기하가 달라지면 id 교집합 프루닝이 선택을 무효화한다.
+
+    좌표 나열을 그대로 해시하면 **표현이 지문을 바꾼다** — 같은 링이라도 시작 꼭짓점
+    순환이나 감기 방향(시계/반시계), 닫힘점 포함 여부가 달라지면 다른 문자열이 된다.
+    라운딩 후 (1) 닫힘 중복점 제거, (2) 정방향·역방향 각각을 최소 꼭짓점에서 시작하게
+    회전시킨 뒤 사전순으로 작은 쪽을 채택해 **정준형**으로 해시한다
+    (#canonical-ring-digest) — '같은 기하 = 같은 지문' 이 표현과 무관하게 성립한다.
+    """
+
+    pts = [
+        (f"{flat_polygon[i]:.1f}", f"{flat_polygon[i + 1]:.1f}")
+        for i in range(0, len(flat_polygon) - 1, 2)
+    ]
+    if len(pts) > 1 and pts[0] == pts[-1]:
+        pts = pts[:-1]  # 닫힘 중복점 제거(표현 차이 흡수)
+    if not pts:  # 방어 — 호출부는 항상 실제 폴리곤(≥3점)을 넘긴다.
+        return hashlib.md5(b"").hexdigest()[:8]
+
+    def _rotated_min(seq: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        pivot = seq.index(min(seq))
+        return seq[pivot:] + seq[:pivot]
+
+    canonical = min(_rotated_min(pts), _rotated_min(list(reversed(pts))))
+    data = ";".join(f"{x},{y}" for x, y in canonical)
+    return hashlib.md5(data.encode("ascii")).hexdigest()[:8]
+
+
+def _suppress_rc_overlapped_nonbearing(
+    regions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """``wall_reinforced_concrete`` 와 면적이 겹치는 ``wall_nonbearing`` 영역을 잘라낸다.
+
+    내력벽 우선 규칙(#rc-priority, 모델 레포 인계 2026-08-19): 같은 벽이 비내력·RC 양쪽
+    으로 판정되면 **겹치는 영역의 비내력 판정은 무시**한다 — 내력 가능성이 있는 영역이
+    초록 '철거 가능 후보'로 그려지고 NON_LOAD_BEARING 으로 영속되는 안전 역전을 막는다.
+
+    - 겹침 판정은 **양(+)의 면적 교집합**이다. 점/모서리 접촉(intersects=True, 면적 0)은
+      겹침이 아니다 — 벽은 원래 서로 맞닿는다(#point-touch-duplication 과 같은 기준).
+    - 부분 겹침이면 RC 와의 교집합만 도려내고 잔여를 남긴다. 잔여가 원본 대비
+      ``_RC_PRIORITY_MIN_REMAINDER_RATIO`` 미만이거나 절대 면적이 10×10px(100px²) 미만
+      이면 후보에서 제외한다(작은 조각이 선택 대상으로 남지 않게). 이 판정은 **구멍
+      분해 전 연결 잔여** 기준이다 — 분해가 만든 인공 절단 조각에는 적용하지 않는다
+      (#threshold-before-decomposition).
+    - RC 가 벽 가운데를 가로질러 잔여가 여러 조각이면 각각을 별도 region 으로 살린다 —
+      실제로 서로 떨어진 후보 벽들이다. 잘린 조각은 원본 id 를 버리고 **기하 지문 id**
+      ``{id}~<지문8>`` 을 받는다(#rc-clip-geometry-id) — 같은 기하로 재분석되면 id 가
+      같아 저장된 선택이 보존되고, RC 경계가 이동해 기하가 달라지면 id 도 달라져 id
+      기준 프루닝·검증이 선택을 자동 무효화한다(순번 접미사는 호출 간 결정적으로
+      재사용돼 이 보장을 못 한다). 지문 충돌 시 ``:N`` 을 덧붙여 전체 region 집합에서
+      유일성을 지킨다(#rc-split-id-collision).
+    - RC 가 벽 안에 **완전히 포함**되면 difference 가 구멍 뚫린 폴리곤을 낸다 — 단일
+      외곽 링 계약으로는 구멍을 못 싣으므로 구멍 없는 조각들로 분해해 보존한다
+      (#rc-hole-preservation). 잘린 조각은 ``touches_tile_border`` 를 해제한다(경계에
+      닿던 부분이 도려내졌을 수 있어, 2차 병합의 경계 잇기가 무관한 벽을 붙이는 것 차단).
+    - **미확정 벽(wall_other/wall_unknown)은 건드리지 않는다** — UNKNOWN 이라 애초에
+      철거 후보로 승격되지 않고, HITL 확인 흐름의 입력을 임의로 줄이지 않는다.
+    - shapely 부재/폴리곤화 실패는 원본 유지로 degrade(병합과 동일 정책).
+
+    호출 시점: 1차 병합 직후와 VLM 교정 재병합 직후 — VLM 이 벽을 RC 로 교정하면 그때
+    새로 생기는 겹침도 같은 규칙을 탄다.
+    """
+
+    try:
+        from shapely.geometry import Polygon, box
+        from shapely.ops import unary_union
+    except Exception:  # noqa: BLE001 - shapely 미존재 시 억제 없이 진행
+        return regions
+
+    def _split_across(p: Any, *, cut_x: float | None, cut_y: float | None) -> list[Any]:
+        """폴리곤을 수직(cut_x) 또는 수평(cut_y) 절단선으로 두 반쪽에 교차시킨다."""
+        minx, miny, maxx, maxy = p.bounds
+        if cut_x is not None:
+            halves = [
+                p.intersection(box(minx - 1.0, miny - 1.0, cut_x, maxy + 1.0)),
+                p.intersection(box(cut_x, miny - 1.0, maxx + 1.0, maxy + 1.0)),
+            ]
+        else:
+            halves = [
+                p.intersection(box(minx - 1.0, miny - 1.0, maxx + 1.0, cut_y)),
+                p.intersection(box(minx - 1.0, cut_y, maxx + 1.0, maxy + 1.0)),
+            ]
+        parts: list[Any] = []
+        for half in halves:
+            for part in list(half.geoms) if hasattr(half, "geoms") else [half]:
+                if part.geom_type == "Polygon" and not part.is_empty and part.area > 0:
+                    parts.append(part)
+        return parts
+
+    def _hole_free_pieces(p: Any) -> list[Any]:
+        """내부 링(구멍)이 있는 폴리곤을 구멍 없는 조각들로 분해한다(반복 처리).
+
+        RC 가 비내력벽 **안에 완전히 포함**되면 difference 가 구멍 뚫린 폴리곤을 내는데,
+        region 계약의 polygon 은 단일 외곽 링이라 구멍을 표현하지 못한다 — exterior 만
+        직렬화하면 도려낸 RC 영역이 다시 초록 후보로 살아나 이 규칙의 목적이 무너진다.
+
+        첫 구멍의 중심을 지나는 절단선으로 잘라 워크리스트로 반복 분해한다 — 진행
+        판정(총 구멍 수 감소)을 통과한 절단만 스택에 되돌아가므로 **스택 전체의 구멍
+        총합이 단조 감소**하고, 구멍 없는 조각은 pop 즉시 out 으로 빠진다. 따라서 구멍
+        개수와 무관하게 종료가 보장되며 **개수 상한을 두지 않는다** — 상한(재귀 깊이
+        캡·처리 횟수 캡)은 정상 진행 중에도 스택에 남은 유효 잔여를 통째로 버린다
+        (#hole-cap-drop, #hole-count-cap-drop). 수직 절단이 진행을 못 만들면(퇴화 구멍
+        중심이 경계에 정렬) 수평으로 재시도하고, 그래도 안 되면 **그 조각만** 포기한다
+        (큐에 남은 다른 조각은 계속 처리).
+        """
+
+        out: list[Any] = []
+        stack = [p]
+        while stack:
+            cur = stack.pop()
+            if not cur.interiors:
+                out.append(cur)
+                continue
+            hole = cur.interiors[0]
+            progressed = False
+            for cut_x, cut_y in (
+                (float(hole.centroid.x), None),
+                (None, float(hole.centroid.y)),
+            ):
+                parts = _split_across(cur, cut_x=cut_x, cut_y=cut_y)
+                # 진행 판정 — 총 구멍 수가 줄었을 때만 채택(경계 정렬 절단은 원본을
+                # 그대로 돌려줘 무한 루프가 된다).
+                if sum(len(part.interiors) for part in parts) < len(cur.interiors):
+                    stack.extend(parts)
+                    progressed = True
+                    break
+            if not progressed:
+                log.warning("segmentation_hole_decompose_no_progress")
+        return out
+
+    def _to_geom(r: dict[str, Any]) -> Any | None:
+        poly = r.get("polygon") or []
+        pts = [(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)]
+        try:
+            g = Polygon(pts)
+            if not g.is_valid:
+                g = g.buffer(0)
+            return g if (not g.is_empty and g.area > 0) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    rc_geoms = [
+        g
+        for r in regions
+        if isinstance(r, dict)
+        and r.get("class_name") == "wall_reinforced_concrete"
+        and (g := _to_geom(r)) is not None
+    ]
+    if not rc_geoms:
+        return regions
+    rc_union = unary_union(rc_geoms)
+
+    out: list[dict[str, Any]] = []
+    dropped = 0
+    trimmed = 0
+    # 분할 조각 id 는 **전체 region 집합 기준으로 유일**해야 한다 — 1차 억제가 만든
+    # `pred:2:2` 가 남아 있는 상태에서 2차(VLM 후) 억제가 `pred:2` 를 다시 쪼개면 같은
+    # 접미사를 재사용해 SVG key/selected_walls 가 충돌한다(#rc-split-id-collision).
+    used_ids = {str(r.get("region_id")) for r in regions if isinstance(r, dict)}
+    for r in regions:
+        if not isinstance(r, dict) or r.get("class_name") != "wall_nonbearing":
+            out.append(r)
+            continue
+        g = _to_geom(r)
+        if g is None:
+            out.append(r)  # 폴리곤화 불가 → 원본 유지(degrade)
+            continue
+        overlap = rc_union.intersection(g).area
+        if overlap <= 0:
+            out.append(r)
+            continue
+        remainder = g.difference(rc_union)
+        raw_pieces = (
+            list(remainder.geoms)
+            if remainder.geom_type == "MultiPolygon"
+            else [remainder]
+        )
+        # 크기 임계값은 **연결 잔여**(구멍 분해 전) 기준으로 판정한다 — 구멍 분해는
+        # 단일 외곽 링 계약 때문에 만드는 인공 절단이라, 절단 조각에 비율 컷을 적용하면
+        # RC 와 겹치지도 않은 유효 영역이 잘려 나간다(예: 벽 가장자리 근처의 작은 RC
+        # 구멍이 만드는 얇은 절단 스트립, #threshold-before-decomposition).
+        min_area = max(
+            _RC_PRIORITY_MIN_REMAINDER_AREA_PX,
+            g.area * _RC_PRIORITY_MIN_REMAINDER_RATIO,
+        )
+        survivors = [
+            p for p in raw_pieces if p.geom_type == "Polygon" and p.area >= min_area
+        ]
+        # RC 가 벽 안에 완전히 포함된 경우의 구멍을 조각 분해로 보존한다 — exterior 만
+        # 직렬화하면 도려낸 영역이 되살아난다(#rc-hole-preservation). 분해 조각은 크기
+        # 임계값 면제 — 절단선이 만든 퇴화 조각만 노이즈 컷(1px²)으로 거른다.
+        kept = [
+            hp
+            for p in survivors
+            for hp in _hole_free_pieces(p)
+            if hp.geom_type == "Polygon" and hp.area >= 1.0
+        ]
+        if not kept:
+            dropped += 1
+            continue  # 사실상 전부 RC 안 → 비내력 판정 자체를 무시.
+        trimmed += 1
+        base_id = str(r.get("region_id"))
+        for p in kept:
+            flat: list[float] = []
+            for x, y in p.exterior.coords:
+                flat += [float(x), float(y)]
+            piece = {**r, "polygon": flat}
+            # 도형이 잘렸으므로 타일 경계 표식은 더 이상 믿을 수 없다 — 경계에 닿던
+            # 부분이 도려내졌을 수 있는데 표식이 남으면 2차 병합의 경계 잇기(≤3px)가
+            # 무관한 벽을 이 조각에 이어 붙인다. 과소 병합(보수) 쪽으로 눕힌다
+            # (#unknown-tile-provenance 와 같은 방향). tile_index 는 여전히 사실이라
+            # 남긴다(겹침 판정에만 쓰임).
+            piece["touches_tile_border"] = False
+            # 잘린 조각은 **원본 id 를 물려받지 않고, 기하 지문이 id 가 된다**
+            # (#rc-clip-geometry-id). 순번 접미사(`{id}:N`)는 호출 안에서만 유일해
+            # 재분석에서 결정적으로 재사용된다 — RC 경계가 조금만 이동해도 같은
+            # `pred:2:1` 이 **다른 기하**를 가리켜, id 교집합 프루닝과 SELECTION_STALE
+            # 검증(둘 다 id 기준)이 기하가 바뀐 선택을 통과시킨다. 폴리곤 지문을 id 에
+            # 넣어 '같은 기하 = 같은 id(선택 보존), 다른 기하 = 다른 id(선택 무효화)'
+            # 를 id 체계 자체로 보장한다.
+            digest = _clip_geometry_digest(flat)
+            rid = f"{base_id}~{digest}"
+            n = 1
+            while rid in used_ids:  # 동일 기하 중복(비정상) 방어
+                n += 1
+                rid = f"{base_id}~{digest}:{n}"
+            piece["region_id"] = rid
+            used_ids.add(rid)
+            out.append(piece)
+    if dropped or trimmed:
+        log.info(
+            "segmentation_rc_priority_suppressed", dropped=dropped, trimmed=trimmed
+        )
+    return out
+
+
 async def segment_session_floorplan(
     *,
     session_id: uuid.UUID,
@@ -1014,6 +1264,8 @@ async def segment_session_floorplan(
     # 후처리: 겹치는 같은-클래스 엔티티를 하나로 병합(세그멘테이션이 한 벽을 여러 조각으로
     # 쪼개 오버레이가 겹치던 문제 정리). 이후 VLM/오버레이/선택이 모두 병합본 기준.
     regions = _merge_overlapping_regions(regions)
+    # 내력벽 우선(#rc-priority): RC 와 면적이 겹치는 비내력 판정은 그 영역만큼 무시한다.
+    regions = _suppress_rc_overlapped_nonbearing(regions)
     image = result.get("image")
 
     # AI-002 VLM 문맥 해석 — 도면 이미지로 Mask2Former 레이블을 보완(실패 시 None=단독 degrade).
@@ -1065,6 +1317,9 @@ async def segment_session_floorplan(
             # 뜨고 개수도 부풀려진다. id 접두사를 달리해 1차 병합 id 와의 충돌을 피하고,
             # VLM 출처는 병합본에 보존된다.
             regions = _merge_overlapping_regions(regions, id_prefix="vlm-merged")
+            # VLM 이 벽을 RC 로(또는 RC 이웃으로) 교정하면 새 겹침이 생길 수 있다 —
+            # 내력벽 우선 규칙을 재적용한다(#rc-priority).
+            regions = _suppress_rc_overlapped_nonbearing(regions)
             # 병합으로 region_id 가 바뀌므로 출처는 id 목록이 아니라 region 자체에서 읽는다.
             vlm_ids = {
                 str(r.get("region_id"))
@@ -1072,31 +1327,55 @@ async def segment_session_floorplan(
                 if isinstance(r, dict) and r.get("source_engine") == "VLM"
             }
 
-    if run_context is not None and run_id is not None:
-        from .domain import emit_ui_component_impl
-
-        # 오버레이는 머지된(VLM 교정 반영) regions 로 띄운다.
-        spec = build_overlay_spec(asset_id=asset["id"], image=image, regions=regions)
-        with contextlib.suppress(Exception):
-            await emit_ui_component_impl(
-                run_context=run_context, run_id=run_id, components=[spec]
-            )
-
     walls, spaces, windows = build_judgment_objects(regions, vlm_ids=vlm_ids)
     patch: dict[str, Any] = {
         "wall_objects": walls,
         "space_objects": spaces,
         "window_objects": windows,
     }
+    # 재분석은 region id 를 새로 만든다(병합 merged:N, RC 억제의 드롭/분할, VLM 재병합).
+    # 저장된 선택(selected_walls/windows)의 프루닝은 여기서 하지 않는다 —
+    # merge_judgment_schema 가 wall/window_objects 패치를 영속하는 **같은 행잠금
+    # 트랜잭션에서** 새 선택 가능 id 와의 교집합으로 줄인다(#atomic-merge-prune).
+    # 도구 쪽에서 미리 읽어 patch 에 실으면, 그 스냅숏과 영속 사이에 옛 카드 제출이
+    # 끼어드는 창이 생긴다(#stale-overlay-submission 의 잔여 race).
     if supplement is not None:
         patch["vlm_supplement"] = supplement
-    with contextlib.suppress(Exception):
+    # **판단객체를 먼저 영속하고, 성공했을 때만 오버레이 카드를 방출한다**
+    # (#persist-before-emit). 카드를 먼저 내보내면 사용자가 즉시 제출했을 때
+    # PATCH /selected-walls 가 아직 옛 wall_objects 로 검증해 새 카드가
+    # SELECTION_STALE 로 만료 표시되고, 영속이 끝내 실패하면 그 카드는 영영 제출
+    # 불가가 된다 — 방출된 오버레이는 항상 그 즉시 제출 가능해야 한다.
+    judgment_persisted = True
+    try:
         await main_flow.merge_judgment_schema(
             session_id=session_id,
             owner_user_id=owner_user_id,
             owner_is_anonymous=owner_is_anonymous,
             patch=patch,
         )
+    except Exception:  # noqa: BLE001 - 영속 실패는 분석 자체를 무르지 않는다(best-effort)
+        judgment_persisted = False
+        log.warning("segmentation_judgment_persist_failed", session_id=str(session_id))
+
+    overlay_emitted = False
+    if judgment_persisted and run_context is not None and run_id is not None:
+        from .domain import emit_ui_component_impl
+
+        # 오버레이는 머지된(VLM 교정 반영) regions 로 띄운다.
+        spec = build_overlay_spec(asset_id=asset["id"], image=image, regions=regions)
+        try:
+            await emit_ui_component_impl(
+                run_context=run_context, run_id=run_id, components=[spec]
+            )
+            overlay_emitted = True
+        except Exception:  # noqa: BLE001 - 방출 실패는 분석을 무르지 않는다
+            # emit 은 in-memory 버퍼에 먼저 넣고 내구 버퍼(pending_ui)에 쓴다 — 내구
+            # 쓰기가 실패해도 in-memory 에 들어갔으면 이번 스트림의 drain 이 카드를
+            # 첨부한다. 그때 False 를 돌리면 에이전트가 "오버레이 없음"으로 재시도해
+            # 카드가 중복되거나 안내가 모순된다 — **버퍼 도달 여부**로 판정한다
+            # (#emit-flag-from-buffer).
+            overlay_emitted = spec in getattr(run_context, "pending_ui_components", [])
 
     # 요약 — 세그멘테이션 + VLM 보완. ANALYSIS_LOW_CONFIDENCE(0.6 미만)면 재확인 권장.
     #
@@ -1126,7 +1405,9 @@ async def segment_session_floorplan(
         "schema_version": SCHEMA_VERSION,
         "ok": True,
         "summary": summary,
-        "overlay_emitted": True,
+        # 실제 방출 여부(#persist-before-emit) — 영속 실패로 카드를 안 냈으면 False.
+        # 에이전트는 False 면 오버레이 안내 대신 재분석/재시도 흐름을 탄다.
+        "overlay_emitted": overlay_emitted,
         "region_count": len(regions),
         "analysis_low_confidence": low_conf,
     }
