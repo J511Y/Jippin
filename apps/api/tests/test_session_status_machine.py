@@ -242,3 +242,71 @@ async def test_reopen_skipped_when_selection_alive_at_regress_time(monkeypatch) 
     )
     assert res is not None
     assert fake.sessions[sid]["status"] == "awaiting_overlay"
+
+
+async def test_analysis_patch_prunes_selection_atomically(monkeypatch) -> None:
+    # #atomic-merge-prune: 분석 패치가 **선택 키 없이** wall_objects 만 갈아끼워도,
+    # 저장된 선택은 같은 병합 안에서 새 선택 가능 id 와 교집합으로 줄어든다 — 프루닝
+    # 스냅숏과 영속 사이에 옛 카드 제출이 끼어드는 창(TOCTOU)이 없다. 전부 걸러지면
+    # 오버레이 단계로 재개까지 이어진다.
+    fake = install_main_flow_fake(monkeypatch)
+    owner, sid = await _new_session(fake)
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}]},
+    )
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"selected_walls": ["w1"]},
+    )
+    assert fake.sessions[sid]["status"] == "collecting_info"
+    # 재분석: 선택 키 없는 분석 패치 — w1 이 사라지고 w2 만 남는다.
+    merged = await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "w2", "wall_type": "NON_LOAD_BEARING"}]},
+    )
+    assert merged["selected_walls"] == []  # 병합과 같은 단계에서 프루닝
+    assert fake.sessions[sid]["judgment_schema"]["selected_walls"] == []
+    assert fake.sessions[sid]["status"] == "awaiting_overlay"  # 재개까지 연쇄
+
+
+async def test_analysis_patch_keeps_still_valid_selection(monkeypatch) -> None:
+    # 원자 프루닝은 여전히 유효한 선택은 남긴다(전량 초기화가 아니라 교집합).
+    fake = install_main_flow_fake(monkeypatch)
+    owner, sid = await _new_session(fake)
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={
+            "wall_objects": [
+                {"id": "w1", "wall_type": "NON_LOAD_BEARING"},
+                {"id": "w2", "wall_type": "NON_LOAD_BEARING"},
+            ]
+        },
+    )
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"selected_walls": ["w1", "w2"]},
+    )
+    merged = await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={
+            "wall_objects": [
+                {"id": "w1", "wall_type": "NON_LOAD_BEARING"},
+                {"id": "w3", "wall_type": "LOAD_BEARING"},
+            ]
+        },
+    )
+    assert merged["selected_walls"] == ["w1"]  # w2(소멸)만 걸러짐
+    assert fake.sessions[sid]["status"] == "collecting_info"  # 살아 있는 선택 → 유지

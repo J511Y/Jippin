@@ -28,6 +28,7 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_insert_session",
     "_db_advance_session_status",
     "_db_regress_session_status",
+    "_db_merge_judgment_schema",
     "_db_select_session",
     "_db_list_sessions",
     "_db_clear_owner_sessions_expiry",
@@ -231,6 +232,38 @@ class FakeMainFlowDb:
         row["status"] = target
         self._touch_session(session_id)
         return dict(row)
+
+    async def _db_merge_judgment_schema(
+        self, session_id: uuid.UUID, *, patch: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool] | None:
+        """판단스키마 병합 + 원자 선택 프루닝 + rule_eval 무효화(real seam 미러).
+
+        real 은 FOR UPDATE 단일 트랜잭션 — fake 는 단일 스레드라 그대로 순차 수행.
+        """
+
+        row = self.sessions.get(session_id)
+        if row is None:
+            return None
+        current = row.get("judgment_schema")
+        merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
+        merged.update(patch)
+        selection_pruned = False
+        if "wall_objects" in patch or "window_objects" in patch:
+            selection_pruned = main_flow._prune_selections_inplace(merged)
+        row["judgment_schema"] = merged
+        if any(
+            key in patch
+            for key in (
+                "selected_walls",
+                "wall_objects",
+                "selected_windows",
+                "window_objects",
+            )
+        ):
+            row["rule_eval_result"] = None
+            row["rule_evaluated_at"] = None
+        self._touch_session(session_id)
+        return merged, selection_pruned
 
     async def _db_select_session(self, session_id: uuid.UUID) -> dict[str, Any] | None:
         row = self.sessions.get(session_id)

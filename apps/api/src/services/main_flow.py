@@ -981,6 +981,95 @@ async def search_floorplan_catalog(
     )
 
 
+def _prune_selections_inplace(merged: dict[str, Any]) -> bool:
+    """merged 판단스키마의 저장된 선택을 현행 객체의 선택 가능 id 와 교집합으로 줄인다.
+
+    벽은 ``wall_objects`` 중 선택 가능 타입(LOAD_BEARING 제외), 창호는
+    ``window_objects`` 만 인정한다. 하나라도 걸러냈으면 True.
+    """
+
+    walls = merged.get("wall_objects")
+    windows = merged.get("window_objects")
+    selectable_walls = {
+        w.get("id")
+        for w in (walls if isinstance(walls, list) else [])
+        if isinstance(w, dict) and w.get("wall_type") != "LOAD_BEARING"
+    }
+    selectable_windows = {
+        w.get("id")
+        for w in (windows if isinstance(windows, list) else [])
+        if isinstance(w, dict)
+    }
+    changed = False
+    for key, valid_ids in (
+        ("selected_walls", selectable_walls),
+        ("selected_windows", selectable_windows),
+    ):
+        prev = merged.get(key)
+        if not isinstance(prev, list):
+            continue
+        kept = [s for s in prev if isinstance(s, str) and s in valid_ids]
+        if kept != prev:
+            merged[key] = kept
+            changed = True
+    return changed
+
+
+async def _db_merge_judgment_schema(
+    session_id: uuid.UUID, *, patch: dict[str, Any]
+) -> tuple[dict[str, Any], bool] | None:
+    """판단스키마 병합 + 선택 프루닝 + rule_eval 무효화를 **단일 행잠금 트랜잭션**으로.
+
+    분석 산출(wall/window_objects)을 갈아끼우는 쓰기와 저장된 선택의 프루닝이 분리돼
+    있으면, 그 사이에 옛 오버레이 카드의 PATCH 가 끼어들어(검증은 아직 옛 객체 기준으로
+    통과) 방금 사라진 id 가 새 객체 옆에 살아남는다 — FOR UPDATE 로 잠근 같은
+    트랜잭션에서 병합 직후 프루닝까지 마쳐 그 창을 없앤다(#atomic-merge-prune).
+    반환은 (merged, selection_pruned). 행이 없으면 None(호출자 owner-gate 이후의
+    삭제 race).
+    """
+
+    prune = "wall_objects" in patch or "window_objects" in patch
+    clear_rule_eval = any(
+        key in patch
+        for key in (
+            "selected_walls",
+            "wall_objects",
+            "selected_windows",
+            "window_objects",
+        )
+    )
+    async with get_engine().begin() as conn:
+        row0 = (
+            await conn.execute(
+                sa.select(_SESSIONS.c.id, _SESSIONS.c.judgment_schema)
+                .where(_SESSIONS.c.id == session_id)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if row0 is None:
+            return None
+        current = row0.judgment_schema
+        merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
+        merged.update(patch)
+        selection_pruned = _prune_selections_inplace(merged) if prune else False
+        values: dict[str, Any] = {"judgment_schema": merged}
+        # 분석·선택이 바뀌면 그 입력으로 계산된 기존 판정은 stale 이다 — rule_eval_result
+        # 를 비워 옛 판정이 rule-backed 로 보이지 않게 한다(#stale-verdict-on-input-change).
+        if clear_rule_eval:
+            values["rule_eval_result"] = None
+            values["rule_evaluated_at"] = None
+        await conn.execute(
+            sa.update(_SESSIONS)
+            .where(_SESSIONS.c.id == session_id)
+            .values(
+                last_activity_at=sa.func.now(),
+                updated_at=sa.func.now(),
+                **values,
+            )
+        )
+    return merged, selection_pruned
+
+
 async def merge_judgment_schema(
     *,
     session_id: uuid.UUID,
@@ -994,33 +1083,22 @@ async def merge_judgment_schema(
     등을 ``sessions.judgment_schema`` 에 누적한다. 전체 CommonJudgmentSchema 검증은
     RULE 진입 시점에 별도로 하고, 여기선 부분 누적만 한다(top-level merge). 타인/부재
     세션은 404 (``_resolve_owner_session``).
+
+    분석 산출(wall/window_objects)이 패치되면 저장된 선택(selected_walls/windows)을
+    새 객체의 선택 가능 id 와 교집합으로 **같은 트랜잭션에서** 줄인다 — 재분석과 옛
+    카드 제출의 경합에서도 유령 id 가 남지 않는다(#atomic-merge-prune).
     """
 
-    session = await _resolve_owner_session(
+    await _resolve_owner_session(
         session_id,
         owner_user_id=owner_user_id,
         owner_is_anonymous=owner_is_anonymous,
     )
-    current = session.get("judgment_schema")
-    merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
-    merged.update(patch)
-    values: dict[str, Any] = {"judgment_schema": merged}
-    # 분석(wall/window_objects)·선택(selected_walls/windows)이 바뀌면 그 입력으로 계산된
-    # 기존 판정은 stale 이다 — rule_eval_result 를 비워, 입력이 바뀐 새 맥락에서 옛 판정이
-    # 리포트/판정 카드에 rule-backed 로 보이는 걸 막는다. 다음 evaluate_rules 가 새로
-    # 채운다(#stale-verdict-on-input-change). 주소 변경은 DB 트리거가 별도로 무효화한다.
-    if any(
-        key in patch
-        for key in (
-            "selected_walls",
-            "wall_objects",
-            "selected_windows",
-            "window_objects",
-        )
-    ):
-        values["rule_eval_result"] = None
-        values["rule_evaluated_at"] = None
-    await _db_update_session_fields(session_id, values)
+    result = await _db_merge_judgment_schema(session_id, patch=patch)
+    if result is None:
+        # owner-gate 통과 직후의 삭제 race — 부재 세션과 동일하게 취급.
+        raise _not_found("Session not found.")
+    merged, selection_pruned = result
 
     # 분석/선택 마일스톤에 따라 status 전진. selected_*(사용자 선택)는 wall_objects
     # (분석 산출)보다 뒤 단계라 우선 처리한다(둘 다 오면 collecting_info).
@@ -1043,11 +1121,12 @@ async def merge_judgment_schema(
         await advance_session_status(
             session_id=session_id, target="awaiting_overlay", reason="analysis_complete"
         )
-    if patched_selection and not any(
+    if (patched_selection or selection_pruned) and not any(
         _nonempty_selection(merged.get(k)) for k in selection_keys
     ):
-        # 선택 키가 패치됐는데 병합 결과 살아 있는 선택이 하나도 없다 — 사용자가 다시
-        # 골라야 하므로 오버레이 단계로 재개한다(이미 그 이하 단계면 no-op).
+        # 선택이 패치로 비워졌거나 원자 프루닝이 걷어냈는데 살아 있는 선택이 하나도
+        # 없다 — 사용자가 다시 골라야 하므로 오버레이 단계로 재개한다(이미 그 이하
+        # 단계면 no-op).
         # only_if_no_selection: 빈 선택 기록과 이 재개 사이에 사용자의 새 선택 PATCH 가
         # 끼어들 수 있다 — 되돌리기 직전 같은 트랜잭션에서 선택이 여전히 비었는지
         # 재확인해, 최신 선택을 배지 후퇴로 덮어쓰지 않는다(#reopen-recheck-selection).
