@@ -66,7 +66,7 @@ curl http://localhost:8000/healthz
 - **파생 프리미티브**: `SUPABASE_REF`, `PUBLIC_WEB_ORIGIN` (여러 URL 을 부팅 시 파생 — `config.py::_derive_from_primitives`)
 - **리드/주소/스토리지**: `JUSO_CONFM_KEY`, `LEAD_FLOORPLAN_BUCKET`, `SESSION_FLOORPLAN_BUCKET`, `SESSION_REPORT_BUCKET`
 - **우리집 체크**: `CODEF_*`, `SEUMTER_ID/PASSWORD`, `HOME_CHECK_DOC_BUCKET`, `EXTENSION_JUDGE_ENABLED`, `SEUMTEO_ENABLED`, `SEUMTEO_WORKER_URL/TOKEN` (세움터 워커 스위치 — ADR-0009)
-- **에이전트/LLM**: `AGENT_ENABLED`, `AGENT_MODEL` (기본 `openai:gpt-5.4-mini`), `OPENAI_API_KEY`, `LANGCHAIN_TRACING_V2`, `LANGSMITH_*`. 에이전트 체크포인터는 **direct `:5432` `DATABASE_URL` 필수** (`config.py::_validate_agent_checkpointer_url` 이 부팅 차단)
+- **에이전트/LLM**: `AGENT_ENABLED`, `AGENT_MODEL` (기본 `openai:gpt-5.4-mini`), `VLM_MODEL` (도면 VLM 전용, 기본 `openai:gpt-5.6-luna`), `OPENAI_API_KEY`, `LANGCHAIN_TRACING_V2`, `LANGSMITH_*`. 에이전트 체크포인터는 **direct `:5432` `DATABASE_URL` 필수** (`config.py::_validate_agent_checkpointer_url` 이 부팅 차단)
 - **도면 세그멘테이션**: `HF_SEGMENTATION_ENDPOINT_URL/TOKEN` (+ 타임아웃/재시도/threshold — private endpoint, scale-to-zero 콜드스타트 유의)
 - **OAuth/가입/SMS**: `KAKAO_*`, `GOOGLE_OAUTH_*`, `NAVER_OAUTH_*`, `OAUTH_STATE_REDIS_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SOLAPI_*`, `PHONE_OTP_*`
 

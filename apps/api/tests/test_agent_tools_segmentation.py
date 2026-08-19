@@ -1663,3 +1663,120 @@ async def test_session_floorplan_infected_always_blocked(monkeypatch) -> None:
     )
     assert res["ok"] is False
     assert res["error_code"] == "SEGMENTATION_NOT_SCANNED"
+
+
+def test_rc_priority_drops_fully_overlapped_nonbearing() -> None:
+    # #rc-priority: 같은 벽이 비내력·RC 양쪽으로 판정되면 RC 우선 — RC 안에 완전히
+    # 들어간 비내력 판정은 통째로 무시된다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [10, 2, 90, 2, 90, 8, 10, 8],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    assert [r["region_id"] for r in out] == ["pred:1"]  # RC 만 남는다
+
+
+def test_rc_priority_trims_partial_overlap() -> None:
+    # 부분 겹침이면 교집합만 도려내고 잔여를 남긴다 — 잔여엔 RC 와의 겹침이 없다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [80, 0, 150, 0, 150, 10, 80, 10],
+            "score": 0.6,
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    assert len(nb) == 1
+    assert nb[0]["region_id"] == "pred:2"  # 단일 잔여는 원본 id 유지
+    assert nb[0]["score"] == 0.6  # 속성 보존
+    xs = nb[0]["polygon"][0::2]
+    assert min(xs) >= 100.0  # RC(x<=100) 구간이 도려내졌다
+
+
+def test_rc_priority_splits_remainder_into_pieces() -> None:
+    # RC 가 비내력벽 가운데를 가로지르면 잔여 두 조각이 각각 별도 region 으로 남는다
+    # (실제로 서로 떨어진 후보 벽). 첫 조각은 원본 id, 나머지는 `{id}:2` 식.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [45, 0, 55, 0, 55, 50, 45, 50],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 20, 100, 20, 100, 30, 0, 30],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    assert len(nb) == 2
+    assert {r["region_id"] for r in nb} == {"pred:2", "pred:2:2"}
+    for r in nb:
+        xs = r["polygon"][0::2]
+        # 각 조각은 RC 스트립(45..55) 바깥에만 있다.
+        assert max(xs) <= 45.0 or min(xs) >= 55.0
+
+
+def test_rc_priority_ignores_edge_contact_and_other_classes() -> None:
+    # 점/모서리 접촉(면적 0 교집합)은 겹침이 아니고, 미확정 벽(wall_other)은 겹쳐도
+    # 건드리지 않는다 — UNKNOWN 이라 철거 후보로 승격되지 않는다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+        },
+        {
+            # RC 와 변을 공유(면적 0) — 유지.
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [10, 0, 20, 0, 20, 10, 10, 10],
+        },
+        {
+            # RC 와 면적 겹침이지만 미확정 벽 — 유지.
+            "region_id": "pred:3",
+            "class_name": "wall_other",
+            "polygon": [5, 0, 15, 0, 15, 10, 5, 10],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    assert {r["region_id"] for r in out} == {"pred:1", "pred:2", "pred:3"}
+    nb = next(r for r in out if r["region_id"] == "pred:2")
+    assert nb["polygon"] == [10, 0, 20, 0, 20, 10, 10, 10]  # 무변형
+
+
+def test_rc_priority_noop_without_rc() -> None:
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+        }
+    ]
+    assert _suppress_rc_overlapped_nonbearing(regions) == regions

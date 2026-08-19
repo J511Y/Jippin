@@ -144,10 +144,13 @@ class Settings(BaseSettings):
     agent_run_wallclock_timeout_seconds: int = Field(default=1200)
 
     # AI-002 VLM 도면 문맥 해석(SDD §4.4). Mask2Former 레이블을 OpenAI Vision 으로 보완·
-    # 정합성 검증한다. 모델/키는 agent 와 공유(gpt-5.4-mini). 비활성/실패 시 세그멘테이션
+    # 정합성 검증한다. 키는 agent 와 공유(openai_api_key). 비활성/실패 시 세그멘테이션
     # 단독으로 degrade(VLM_TIMEOUT). 0.6 미만 신뢰도는 ANALYSIS_LOW_CONFIDENCE 로 재업로드 권장.
     vlm_floorplan_enabled: bool = Field(default=True)
     vlm_floorplan_timeout_seconds: int = Field(default=60)
+    # VLM 전용 모델(2026-08-19 부터 agent_model 과 분리) — 도면 이미지 판독 품질이 대화
+    # 모델과 별개 축이라 따로 올린다. agent_model 과 같은 "openai:<model>" 형식만 지원.
+    vlm_model: str = Field(default="openai:gpt-5.6-luna")
 
     # 우리집 체크 — 신고 확장 ↔ 대장 변동사항 LLM 대조 판정(home_check_extension). 운영 default
     # 는 False — 켜지 않으면 판정을 건너뛰어 리포트에 extension_check 가 없고 OpenAI 의존이

@@ -7,6 +7,8 @@
  * - OVERLAY-001: AI 분석 결과(폴리곤/클래스)를 평면도 위에 반투명 색상 + 레이블 + 범례로
  *   오버레이. SVG 기반(폴리곤=DOM 요소 → 클릭/키보드/접근성 용이, 의존성 0). 핀치/휠 줌·
  *   드래그/스와이프 팬. stroke 는 non-scaling 이라 줌 무관 일정 두께(149개에서도 안 뭉갬).
+ *   내력벽 후보(wall_reinforced_concrete)도 **표시-전용(빨강, 선택 불가)**으로 함께 그려
+ *   비내력 후보와 한눈에 대비되게 한다(2026-08-19 모델 레포 인계 — #rc-priority 짝).
  * - OVERLAY-002: 비내력벽 후보(wall_nonbearing)와 창호(window)를 클릭/키보드로 단일·복수
  *   선택 → selected_walls/selected_windows 로 판단스키마에 기록. 창호는 거실-발코니 통합
  *   (경계 창호 철거) 검토용 — 외기 접촉 여부 판정은 에이전트(LLM)가 대화·도면 관찰로 내린다.
@@ -217,6 +219,12 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     () => regions.filter((r) => r.class_name === 'wall_nonbearing'),
     [regions]
   );
+  // 내력벽 후보 — **표시 전용**(선택 불가). 서버가 RC 와 겹친 비내력 판정을 이미 걷어냈고
+  // (#rc-priority), 여기서는 철거 불가 벽이 어디인지 사용자가 함께 보도록 빨강으로 그린다.
+  const bearingWallRegions = useMemo(
+    () => regions.filter((r) => r.class_name === 'wall_reinforced_concrete'),
+    [regions]
+  );
   const uncertainWallRegions = useMemo(
     () =>
       regions.filter(
@@ -384,6 +392,12 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
               철거가 가능한 건 <b>비내력벽(초록)</b>이에요.{' '}
             </>
           ) : null}
+          {bearingWallRegions.length > 0 ? (
+            <>
+              <b>빨간 벽</b>은 내력벽으로 보이는 부분이라 철거 검토 대상으로 고를 수
+              없어요.{' '}
+            </>
+          ) : null}
           {uncertainWallRegions.length > 0 ? (
             wallRegions.length > 0 ? (
               <>
@@ -417,10 +431,11 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
           />
         ) : (
           <OverlayCanvas
-            key={`${frame.x},${frame.y},${frame.w},${frame.h}:${selectableRegions.length}`}
+            key={`${frame.x},${frame.y},${frame.w},${frame.h}:${selectableRegions.length}:${bearingWallRegions.length}`}
             frame={frame}
             imgDims={imgDims}
             regions={selectableRegions}
+            bearingRegions={bearingWallRegions}
             imageUrl={imageUrl}
             imageFailed={imageFailed}
             selected={selected}
@@ -434,6 +449,9 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
             {hasSelectable
               ? [
                   wallRegions.length > 0 ? `비내력벽 후보 ${wallRegions.length}곳` : null,
+                  bearingWallRegions.length > 0
+                    ? `내력벽 후보 ${bearingWallRegions.length}곳(선택 불가)`
+                    : null,
                   uncertainWallRegions.length > 0
                     ? `미확정 벽 ${uncertainWallRegions.length}곳`
                     : null,
@@ -495,6 +513,7 @@ function OverlayCanvas({
   frame,
   imgDims,
   regions,
+  bearingRegions,
   imageUrl,
   imageFailed,
   selected,
@@ -504,6 +523,8 @@ function OverlayCanvas({
   frame: ViewBox;
   imgDims: { w: number; h: number };
   regions: OverlayRegion[];
+  /** 내력벽 후보(wall_reinforced_concrete) — 표시 전용, 클릭/포커스 없음. */
+  bearingRegions: OverlayRegion[];
   imageUrl: string | null;
   imageFailed: boolean;
   selected: Set<string>;
@@ -677,6 +698,25 @@ function OverlayCanvas({
             onError={onImageError}
           />
         ) : null}
+
+        {/* 내력벽 후보 — 표시 전용(빨강, 실선). 선택 폴리곤보다 먼저 그려 항상 아래 깔리고,
+            클릭/포커스를 받지 않아 선택 흐름을 방해하지 않는다. 색만이 아니라 **실선 vs
+            점선**으로도 '선택 불가 vs 선택 가능'을 인코딩한다(WCAG 1.4.1). */}
+        {bearingRegions.map((r) => (
+          <polygon
+            key={r.region_id}
+            className="fp-poly"
+            points={toPoints(r.polygon)}
+            vectorEffect="non-scaling-stroke"
+            fill="var(--floorplan-wall-load)"
+            fillOpacity={0.2}
+            stroke="var(--floorplan-wall-load)"
+            strokeOpacity={0.85}
+            strokeWidth={1.4}
+            pointerEvents="none"
+            aria-hidden
+          />
+        ))}
 
         {regions.map((r) => {
           // 부모가 선택 가능 영역(wall_nonbearing 비내력벽 후보 + wall_other/wall_unknown

@@ -921,6 +921,112 @@ def _merge_overlapping_regions(
     return out
 
 
+# 내력벽 우선 규칙(#rc-priority)에서 잘린 비내력 잔여 조각을 살릴 최소 크기. 원본 대비
+# 비율(슬리버 방지)과 절대 면적(원본 픽셀 기준 노이즈 컷)을 모두 넘어야 한다 — RC 가
+# 벽의 대부분을 덮으면 남는 몇 픽셀 조각이 '선택 가능한 벽'으로 그려지는 것을 막는다.
+_RC_PRIORITY_MIN_REMAINDER_RATIO = 0.05
+_RC_PRIORITY_MIN_REMAINDER_AREA_PX = 16.0
+
+
+def _suppress_rc_overlapped_nonbearing(
+    regions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """``wall_reinforced_concrete`` 와 면적이 겹치는 ``wall_nonbearing`` 영역을 잘라낸다.
+
+    내력벽 우선 규칙(#rc-priority, 모델 레포 인계 2026-08-19): 같은 벽이 비내력·RC 양쪽
+    으로 판정되면 **겹치는 영역의 비내력 판정은 무시**한다 — 내력 가능성이 있는 영역이
+    초록 '철거 가능 후보'로 그려지고 NON_LOAD_BEARING 으로 영속되는 안전 역전을 막는다.
+
+    - 겹침 판정은 **양(+)의 면적 교집합**이다. 점/모서리 접촉(intersects=True, 면적 0)은
+      겹침이 아니다 — 벽은 원래 서로 맞닿는다(#point-touch-duplication 과 같은 기준).
+    - 부분 겹침이면 RC 와의 교집합만 도려내고 잔여를 남긴다. 잔여가 원본 대비
+      ``_RC_PRIORITY_MIN_REMAINDER_RATIO`` 미만이거나 절대 면적이 노이즈 수준이면 통째로
+      드롭한다(몇 픽셀 슬리버가 선택 대상으로 남지 않게).
+    - RC 가 벽 가운데를 가로질러 잔여가 여러 조각이면 각각을 별도 region 으로 살린다 —
+      실제로 서로 떨어진 후보 벽들이다. 첫 조각은 원본 id 를 유지하고 나머지는
+      ``{id}:2`` 식으로 부여한다(pred:/merged:/vlm-merged: 계열과 충돌하지 않음).
+    - **미확정 벽(wall_other/wall_unknown)은 건드리지 않는다** — UNKNOWN 이라 애초에
+      철거 후보로 승격되지 않고, HITL 확인 흐름의 입력을 임의로 줄이지 않는다.
+    - shapely 부재/폴리곤화 실패는 원본 유지로 degrade(병합과 동일 정책).
+
+    호출 시점: 1차 병합 직후와 VLM 교정 재병합 직후 — VLM 이 벽을 RC 로 교정하면 그때
+    새로 생기는 겹침도 같은 규칙을 탄다.
+    """
+
+    try:
+        from shapely.geometry import Polygon
+        from shapely.ops import unary_union
+    except Exception:  # noqa: BLE001 - shapely 미존재 시 억제 없이 진행
+        return regions
+
+    def _to_geom(r: dict[str, Any]) -> Any | None:
+        poly = r.get("polygon") or []
+        pts = [(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)]
+        try:
+            g = Polygon(pts)
+            if not g.is_valid:
+                g = g.buffer(0)
+            return g if (not g.is_empty and g.area > 0) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    rc_geoms = [
+        g
+        for r in regions
+        if isinstance(r, dict)
+        and r.get("class_name") == "wall_reinforced_concrete"
+        and (g := _to_geom(r)) is not None
+    ]
+    if not rc_geoms:
+        return regions
+    rc_union = unary_union(rc_geoms)
+
+    out: list[dict[str, Any]] = []
+    dropped = 0
+    trimmed = 0
+    for r in regions:
+        if not isinstance(r, dict) or r.get("class_name") != "wall_nonbearing":
+            out.append(r)
+            continue
+        g = _to_geom(r)
+        if g is None:
+            out.append(r)  # 폴리곤화 불가 → 원본 유지(degrade)
+            continue
+        overlap = rc_union.intersection(g).area
+        if overlap <= 0:
+            out.append(r)
+            continue
+        remainder = g.difference(rc_union)
+        pieces = (
+            list(remainder.geoms)
+            if remainder.geom_type == "MultiPolygon"
+            else [remainder]
+        )
+        min_area = max(
+            _RC_PRIORITY_MIN_REMAINDER_AREA_PX,
+            g.area * _RC_PRIORITY_MIN_REMAINDER_RATIO,
+        )
+        kept = [p for p in pieces if p.geom_type == "Polygon" and p.area >= min_area]
+        if not kept:
+            dropped += 1
+            continue  # 사실상 전부 RC 안 → 비내력 판정 자체를 무시.
+        trimmed += 1
+        base_id = str(r.get("region_id"))
+        for k, p in enumerate(kept):
+            flat: list[float] = []
+            for x, y in p.exterior.coords:
+                flat += [float(x), float(y)]
+            piece = {**r, "polygon": flat}
+            if k > 0:
+                piece["region_id"] = f"{base_id}:{k + 1}"
+            out.append(piece)
+    if dropped or trimmed:
+        log.info(
+            "segmentation_rc_priority_suppressed", dropped=dropped, trimmed=trimmed
+        )
+    return out
+
+
 async def segment_session_floorplan(
     *,
     session_id: uuid.UUID,
@@ -1014,6 +1120,8 @@ async def segment_session_floorplan(
     # 후처리: 겹치는 같은-클래스 엔티티를 하나로 병합(세그멘테이션이 한 벽을 여러 조각으로
     # 쪼개 오버레이가 겹치던 문제 정리). 이후 VLM/오버레이/선택이 모두 병합본 기준.
     regions = _merge_overlapping_regions(regions)
+    # 내력벽 우선(#rc-priority): RC 와 면적이 겹치는 비내력 판정은 그 영역만큼 무시한다.
+    regions = _suppress_rc_overlapped_nonbearing(regions)
     image = result.get("image")
 
     # AI-002 VLM 문맥 해석 — 도면 이미지로 Mask2Former 레이블을 보완(실패 시 None=단독 degrade).
@@ -1065,6 +1173,9 @@ async def segment_session_floorplan(
             # 뜨고 개수도 부풀려진다. id 접두사를 달리해 1차 병합 id 와의 충돌을 피하고,
             # VLM 출처는 병합본에 보존된다.
             regions = _merge_overlapping_regions(regions, id_prefix="vlm-merged")
+            # VLM 이 벽을 RC 로(또는 RC 이웃으로) 교정하면 새 겹침이 생길 수 있다 —
+            # 내력벽 우선 규칙을 재적용한다(#rc-priority).
+            regions = _suppress_rc_overlapped_nonbearing(regions)
             # 병합으로 region_id 가 바뀌므로 출처는 id 목록이 아니라 region 자체에서 읽는다.
             vlm_ids = {
                 str(r.get("region_id"))

@@ -154,6 +154,8 @@ services:
       PHASE_A_SKELETON_ENABLED: "${PHASE_A_SKELETON_ENABLED:-false}"
       AGENT_ENABLED: "${AGENT_ENABLED:-false}"
       AGENT_MODEL: "${AGENT_MODEL:-openai:gpt-5.4-mini}"
+      # AI-002 VLM(도면 문맥 해석) 전용 모델 — AGENT_MODEL 과 분리(2026-08-19).
+      VLM_MODEL: "${VLM_MODEL:-openai:gpt-5.6-luna}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       LANGCHAIN_TRACING_V2: "${LANGCHAIN_TRACING_V2:-false}"
       LANGSMITH_API_KEY: "${LANGSMITH_API_KEY:-}"
