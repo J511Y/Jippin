@@ -945,9 +945,11 @@ def _suppress_rc_overlapped_nonbearing(
       ``_RC_PRIORITY_MIN_REMAINDER_RATIO`` 미만이거나 절대 면적이 10×10px(100px²) 미만
       이면 후보에서 제외한다(작은 조각이 선택 대상으로 남지 않게).
     - RC 가 벽 가운데를 가로질러 잔여가 여러 조각이면 각각을 별도 region 으로 살린다 —
-      실제로 서로 떨어진 후보 벽들이다. 첫 조각은 원본 id 를 유지하고 나머지는
-      ``{id}:N`` 식으로 부여하되 **전체 region 집합에서 유일**한 N 을 고른다(1·2차
-      억제가 겹쳐도 충돌 없음, #rc-split-id-collision).
+      실제로 서로 떨어진 후보 벽들이다. 잘린 조각은 **모두 새 id** ``{id}:N`` 을 받고
+      원본 id 는 사라진다(#rc-clip-id-invalidation) — 기하가 달라진 잔여가 저장된
+      선택(id 교집합 프루닝, #stale-selection-prune)에 옛 벽으로 살아남지 않게 한다.
+      N 은 **전체 region 집합에서 유일**하게 고른다(1·2차 억제가 겹쳐도 충돌 없음,
+      #rc-split-id-collision).
     - RC 가 벽 안에 **완전히 포함**되면 difference 가 구멍 뚫린 폴리곤을 낸다 — 단일
       외곽 링 계약으로는 구멍을 못 싣으므로 구멍 없는 조각들로 분해해 보존한다
       (#rc-hole-preservation). 잘린 조각은 ``touches_tile_border`` 를 해제한다(경계에
@@ -1070,11 +1072,15 @@ def _suppress_rc_overlapped_nonbearing(
             # (#unknown-tile-provenance 와 같은 방향). tile_index 는 여전히 사실이라
             # 남긴다(겹침 판정에만 쓰임).
             piece["touches_tile_border"] = False
-            if k > 0:
-                n = k + 1
-                while f"{base_id}:{n}" in used_ids:
-                    n += 1
-                piece["region_id"] = f"{base_id}:{n}"
+            # 잘린 조각은 **원본 id 를 물려받지 않는다**(#rc-clip-id-invalidation) —
+            # 첫 조각이 원본 id 를 유지하면, 재분석 시 저장된 선택의 id 교집합 프루닝
+            # (#stale-selection-prune)이 '기하가 달라진 잔여'를 사용자가 고른 벽으로
+            # 계속 취급한다. 모든 조각에 새 id 를 부여해 잘린 벽의 선택은 자동으로
+            # 무효화하고, 사용자가 바뀐 철거 대상을 다시 확인·선택하게 한다.
+            n = k + 1
+            while f"{base_id}:{n}" in used_ids:
+                n += 1
+            piece["region_id"] = f"{base_id}:{n}"
             used_ids.add(str(piece["region_id"]))
             out.append(piece)
     if dropped or trimmed:

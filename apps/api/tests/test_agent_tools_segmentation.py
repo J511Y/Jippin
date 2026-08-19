@@ -1706,7 +1706,9 @@ def test_rc_priority_trims_partial_overlap() -> None:
     out = _suppress_rc_overlapped_nonbearing(regions)
     nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
     assert len(nb) == 1
-    assert nb[0]["region_id"] == "pred:2"  # 단일 잔여는 원본 id 유지
+    # 잘린 조각은 원본 id 를 물려받지 않는다(#rc-clip-id-invalidation) — 기하가 바뀐
+    # 잔여가 저장된 선택(id 교집합)에 옛 벽으로 살아남으면 안 된다.
+    assert nb[0]["region_id"] == "pred:2:1"
     assert nb[0]["score"] == 0.6  # 속성 보존
     xs = nb[0]["polygon"][0::2]
     assert min(xs) >= 100.0  # RC(x<=100) 구간이 도려내졌다
@@ -1714,7 +1716,7 @@ def test_rc_priority_trims_partial_overlap() -> None:
 
 def test_rc_priority_splits_remainder_into_pieces() -> None:
     # RC 가 비내력벽 가운데를 가로지르면 잔여 두 조각이 각각 별도 region 으로 남는다
-    # (실제로 서로 떨어진 후보 벽). 첫 조각은 원본 id, 나머지는 `{id}:2` 식.
+    # (실제로 서로 떨어진 후보 벽). 원본 id 는 사라지고 모든 조각이 `{id}:N` 새 id.
     from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
 
     regions = [
@@ -1732,7 +1734,7 @@ def test_rc_priority_splits_remainder_into_pieces() -> None:
     out = _suppress_rc_overlapped_nonbearing(regions)
     nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
     assert len(nb) == 2
-    assert {r["region_id"] for r in nb} == {"pred:2", "pred:2:2"}
+    assert {r["region_id"] for r in nb} == {"pred:2:1", "pred:2:2"}
     for r in nb:
         xs = r["polygon"][0::2]
         # 각 조각은 RC 스트립(45..55) 바깥에만 있다.
@@ -1865,7 +1867,7 @@ def test_rc_priority_split_ids_avoid_existing_siblings() -> None:
     out = _suppress_rc_overlapped_nonbearing(regions)
     ids = [r["region_id"] for r in out]
     assert len(ids) == len(set(ids))  # 전역 유일
-    assert set(ids) == {"pred:1", "pred:2", "pred:2:2", "pred:2:3"}
+    assert set(ids) == {"pred:1", "pred:2:1", "pred:2:2", "pred:2:3"}
 
 
 def test_rc_priority_clears_border_flag_on_clipped_pieces() -> None:
@@ -1960,3 +1962,64 @@ async def test_session_floorplan_prunes_stale_selection(monkeypatch) -> None:
     js = session["judgment_schema"]
     assert js["selected_walls"] == ["pred:1"]  # 유령·내력벽 id 제거
     assert js["selected_windows"] == ["pred:2"]
+
+
+async def test_session_floorplan_invalidates_selection_of_clipped_wall(
+    monkeypatch,
+) -> None:
+    # #rc-clip-id-invalidation: 선택했던 벽이 RC 억제로 잘리면 잔여 조각은 새 id 를
+    # 받으므로 저장된 선택이 프루닝에서 자동 무효화된다 — 기하가 달라진 잔여를
+    # 사용자가 고른 벽으로 계속 취급하지 않고, 다시 확인·선택하게 한다.
+    session_id, owner = await _session_with_asset(monkeypatch)
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"selected_walls": ["pred:1"]},
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        # pred:1 이 RC(pred:2)와 부분 겹침 → 잔여는 pred:1:1 로 새 id 를 받는다.
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [80, 0, 150, 0, 150, 10, 80, 10],
+                    },
+                    {
+                        "region_id": "pred:2",
+                        "class_name": "wall_reinforced_concrete",
+                        "score": 0.8,
+                        "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+                    },
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is True
+
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    js = session["judgment_schema"]
+    assert js["selected_walls"] == []  # 잘린 벽의 선택은 무효화
+    wall_ids = {w["id"] for w in js["wall_objects"]}
+    assert "pred:1:1" in wall_ids and "pred:1" not in wall_ids
