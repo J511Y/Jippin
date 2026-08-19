@@ -349,3 +349,43 @@ async def test_merge_validate_selection_rejects_atomically(monkeypatch) -> None:
     # 거절은 세션을 전혀 바꾸지 않는다 — 기존 선택·배지 유지.
     assert fake.sessions[sid]["judgment_schema"]["selected_walls"] == ["w1"]
     assert fake.sessions[sid]["status"] == "collecting_info"
+
+
+async def test_advance_skipped_when_selection_pruned_before_advance(
+    monkeypatch,
+) -> None:
+    # #advance-recheck-selection: 선택 커밋과 지연된 전진 사이에 재분석 프루닝이 그
+    # 선택을 걷어냈으면(두 탭 경합), 빈 세션을 '선택 완료'(collecting_info)로 올리지
+    # 않는다 — reopen 의 only_if_no_selection 과 대칭 가드.
+    fake = install_main_flow_fake(monkeypatch)
+    owner, sid = await _new_session(fake)
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}]},
+    )
+    assert fake.sessions[sid]["status"] == "awaiting_overlay"
+
+    # 프루닝이 선택을 비운 상태를 재현 — 살아 있는 선택이 없으면 전진 no-op.
+    fake.sessions[sid]["judgment_schema"]["selected_walls"] = []
+    res = await main_flow.advance_session_status(
+        session_id=sid,
+        target="collecting_info",
+        reason="walls_selected",
+        only_if_live_selection=True,
+    )
+    assert res is None
+    assert fake.sessions[sid]["status"] == "awaiting_overlay"
+    assert "collecting_info" not in _events(fake, sid)  # 마일스톤 이벤트도 생략
+
+    # 선택이 실제로 살아 있으면 정상 전진.
+    fake.sessions[sid]["judgment_schema"]["selected_walls"] = ["w1"]
+    res = await main_flow.advance_session_status(
+        session_id=sid,
+        target="collecting_info",
+        reason="walls_selected",
+        only_if_live_selection=True,
+    )
+    assert res is not None
+    assert fake.sessions[sid]["status"] == "collecting_info"

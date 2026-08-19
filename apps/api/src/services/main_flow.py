@@ -158,6 +158,7 @@ async def _db_advance_session_status(
     *,
     reason: str | None,
     run_id: uuid.UUID | None,
+    only_if_live_selection: bool = False,
 ) -> dict[str, Any] | None:
     """마일스톤 도달을 기록하고 status 를 forward-only 로 전이한다(단일 트랜잭션).
 
@@ -169,6 +170,11 @@ async def _db_advance_session_status(
     종료 상태(expired/deleted)면 아무것도 하지 않는다. reference-scope 등 트리거가 전이를
     거부하면 트랜잭션 전체가 롤백된다. 반환은 status 가 실제 전진했을 때만 갱신된 row, 아니면
     None(전진 안 함; 이벤트는 기록됐을 수 있음).
+
+    ``only_if_live_selection`` 이면 **같은 트랜잭션에서** judgment_schema 를 다시 읽어
+    살아 있는 선택이 없으면 이벤트·전진 모두 생략한다 — 선택 커밋과 이 지연된 전진
+    사이에 재분석 프루닝이 그 선택을 걷어낸 경우, 빈 세션을 '선택 완료'로 전진시키지
+    않는다(#advance-recheck-selection, reopen 의 only_if_no_selection 과 대칭 가드).
     """
 
     target_rank = _STATUS_RANK[target]
@@ -176,14 +182,19 @@ async def _db_advance_session_status(
         # 같은 세션의 동시 전이를 직렬화한다 — FOR UPDATE 로 행을 잠가, 두 트랜잭션이
         # 같은 현재 status 를 읽고 낮은 rank 로 덮어쓰거나 잘못된 forward 이벤트를 남기는
         # race 를 막는다(병행 주소확정/도면업로드, handoff 와 에이전트 전이 경합 등).
-        current = (
+        row0 = (
             await conn.execute(
-                sa.select(_SESSIONS.c.status)
+                sa.select(_SESSIONS.c.status, _SESSIONS.c.judgment_schema)
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
             )
-        ).scalar_one_or_none()
-        if current is None or current in _TERMINAL_STATUSES:
+        ).one_or_none()
+        if row0 is None:
+            return None
+        current = row0.status
+        if current in _TERMINAL_STATUSES:
+            return None
+        if only_if_live_selection and not _has_live_selection(row0.judgment_schema):
             return None
 
         # 마일스톤 이벤트 — 단계별 1회(중복 방지). status 전진 여부와 무관하게 기록한다.
@@ -232,20 +243,26 @@ async def advance_session_status(
     target: str,
     reason: str | None = None,
     run_id: uuid.UUID | None = None,
+    only_if_live_selection: bool = False,
 ) -> dict[str, Any] | None:
     """도구/플로우 마일스톤에서 세션 status 를 한 단계 전진시킨다(best-effort, runtime-only).
 
     forward-only(뒤로 안 감) + 종료 상태 보호. 전이가 reference-scope 트리거에 막히거나
     (예: 주소/도면 없이 분석 단계 진입) 기타 오류가 나도 **사용자 플로우를 막지 않도록**
     예외를 삼키고 None 을 반환한다 — status 는 진행 상황의 투영일 뿐 정본 데이터가 아니다.
-    실제 전이가 일어났으면 갱신된 세션 row 를 반환한다.
+    실제 전이가 일어났으면 갱신된 세션 row 를 반환한다. ``only_if_live_selection`` 은
+    전진 직전 같은 트랜잭션에서 살아 있는 선택을 재확인한다(#advance-recheck-selection).
     """
 
     if target not in _STATUS_RANK:
         raise ValueError(f"advance_session_status: 알 수 없는 상태 {target!r}.")
     try:
         return await _db_advance_session_status(
-            session_id, target, reason=reason, run_id=run_id
+            session_id,
+            target,
+            reason=reason,
+            run_id=run_id,
+            only_if_live_selection=only_if_live_selection,
         )
     except Exception:  # noqa: BLE001 - 상태 전이 실패는 도구/플로우를 막지 않는다
         _log.warning(
@@ -1154,8 +1171,15 @@ async def merge_judgment_schema(
     selection_keys = ("selected_walls", "selected_windows")
     patched_selection = [k for k in selection_keys if k in patch]
     if any(_nonempty_selection(patch[k]) for k in patched_selection):
+        # only_if_live_selection: 이 병합의 선택 커밋과 여기 지연된 전진 사이에 재분석
+        # 프루닝이 그 선택을 걷어냈을 수 있다(두 탭 경합) — 전진 직전 같은 트랜잭션에서
+        # 저장된 선택이 여전히 살아 있는지 재확인해, 빈 세션을 '선택 완료'로 올리지
+        # 않는다(#advance-recheck-selection, 아래 재개 가드와 대칭).
         await advance_session_status(
-            session_id=session_id, target="collecting_info", reason="walls_selected"
+            session_id=session_id,
+            target="collecting_info",
+            reason="walls_selected",
+            only_if_live_selection=True,
         )
     elif "wall_objects" in patch:
         await advance_session_status(
