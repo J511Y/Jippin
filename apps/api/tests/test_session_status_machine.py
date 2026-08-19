@@ -87,6 +87,63 @@ async def test_merge_schema_advances_overlay_then_collecting(monkeypatch) -> Non
     assert _events(fake, sid) == ["draft", "awaiting_overlay", "collecting_info"]
 
 
+async def test_empty_selection_patch_reopens_overlay_stage(monkeypatch) -> None:
+    # #selection-invalidation-reopen: 재분석 프루닝이 selected_walls 를 비우면
+    # walls_selected 마일스톤이 아니고(키 존재만으로 전진 금지), 살아 있는 선택이
+    # 하나도 없으므로 forward-only 배지를 awaiting_overlay 로 명시 재개한다 —
+    # 사용자가 다시 골라야 하는 현실과 SSE/퍼널 상태를 일치시킨다.
+    fake = install_main_flow_fake(monkeypatch)
+    owner, sid = await _new_session(fake)
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}]},
+    )
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"selected_walls": ["w1"]},
+    )
+    assert fake.sessions[sid]["status"] == "collecting_info"
+    # 재분석: 새 분석 산출 + 전부 무효화된 선택.
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={
+            "wall_objects": [{"id": "w1:1", "wall_type": "NON_LOAD_BEARING"}],
+            "selected_walls": [],
+        },
+    )
+    assert fake.sessions[sid]["status"] == "awaiting_overlay"
+    assert _events(fake, sid)[-1] == "awaiting_overlay"  # 재개 이벤트 기록
+
+
+async def test_empty_wall_selection_keeps_status_when_window_selection_alive(
+    monkeypatch,
+) -> None:
+    # 벽 선택이 비워져도 창호 선택이 살아 있으면 아직 검토할 선택이 있다 — 재개하지
+    # 않는다(선택 키 별 부분 무효화).
+    fake = install_main_flow_fake(monkeypatch)
+    owner, sid = await _new_session(fake)
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"selected_walls": ["w1"], "selected_windows": ["g1"]},
+    )
+    assert fake.sessions[sid]["status"] == "collecting_info"
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"selected_walls": []},
+    )
+    assert fake.sessions[sid]["status"] == "collecting_info"
+
+
 async def test_set_verdict_advances_to_report_ready(monkeypatch) -> None:
     fake = install_main_flow_fake(monkeypatch)
     _owner, sid = await _new_session(fake)

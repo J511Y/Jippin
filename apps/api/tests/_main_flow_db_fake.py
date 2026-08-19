@@ -27,6 +27,7 @@ from src.services import main_flow
 _SEAM_NAMES: tuple[str, ...] = (
     "_db_insert_session",
     "_db_advance_session_status",
+    "_db_regress_session_status",
     "_db_select_session",
     "_db_list_sessions",
     "_db_clear_owner_sessions_expiry",
@@ -187,6 +188,39 @@ class FakeMainFlowDb:
             )
         if rank.get(from_status, -1) >= rank[target]:
             return None
+        row["status"] = target
+        self._touch_session(session_id)
+        return dict(row)
+
+    async def _db_regress_session_status(
+        self,
+        session_id: uuid.UUID,
+        target: str,
+        *,
+        reason: str | None,
+    ) -> dict[str, Any] | None:
+        """status 명시적 후퇴(재개 전용, real seam 미러) — 재개 이벤트는 매번 기록.
+
+        종료 상태와 handoff 는 건드리지 않고, 현재가 target 이하면 no-op(None).
+        """
+
+        rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
+        row = self.sessions.get(session_id)
+        if row is None or row["status"] in ("expired", "deleted", "handoff"):
+            return None
+        from_status = row["status"]
+        if rank.get(from_status, -1) <= rank[target]:
+            return None
+        self.session_status_events.append(
+            {
+                "session_id": session_id,
+                "from_status": from_status,
+                "to_status": target,
+                "reason": reason,
+                "run_id": None,
+                "occurred_at": _now(),
+            }
+        )
         row["status"] = target
         self._touch_session(session_id)
         return dict(row)

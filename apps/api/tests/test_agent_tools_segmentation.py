@@ -2023,3 +2023,40 @@ async def test_session_floorplan_invalidates_selection_of_clipped_wall(
     assert js["selected_walls"] == []  # 잘린 벽의 선택은 무효화
     wall_ids = {w["id"] for w in js["wall_objects"]}
     assert "pred:1:1" in wall_ids and "pred:1" not in wall_ids
+    # 선택이 전부 무효화됐으므로 배지도 오버레이 단계로 재개된다 — 선택 완료
+    # (collecting_info)에 남으면 SSE/퍼널이 현실과 어긋난다(#selection-invalidation-reopen).
+    assert session["status"] == "awaiting_overlay"
+
+
+def test_rc_priority_size_threshold_ignores_decomposition_cuts() -> None:
+    # #threshold-before-decomposition: 크기 임계값은 연결 잔여(구멍 분해 전) 기준이다.
+    # 벽 가장자리 근처의 작은 RC 구멍은 절단선이 얇은 스트립을 만들지만, 그 스트립은
+    # RC 와 겹친 적 없는 유효 영역이라 비율 컷으로 버리면 안 된다.
+    from shapely.geometry import Point, Polygon
+
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            # 100×100 벽의 왼쪽 가장자리 근처(x 2..6)에 완전히 포함된 작은 RC.
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [2, 40, 6, 40, 6, 60, 2, 60],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 100, 0, 100],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    assert len(nb) >= 2  # 절단 스트립(~360px², 비율 컷 미만)도 살아남는다
+    total = 0.0
+    rc_center = Point(4.0, 50.0)
+    for r in nb:
+        poly = r["polygon"]
+        shape = Polygon([(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)])
+        assert not shape.contains(rc_center)  # RC 영역은 여전히 비어 있다
+        total += shape.area
+    assert abs(total - (10000.0 - 80.0)) < 1.0  # 연결 잔여 전체가 보존된다

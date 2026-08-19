@@ -256,6 +256,84 @@ async def advance_session_status(
         return None
 
 
+async def _db_regress_session_status(
+    session_id: uuid.UUID,
+    target: str,
+    *,
+    reason: str | None,
+) -> dict[str, Any] | None:
+    """status 를 명시적으로 **뒤로** 되돌린다(재개 전용, 단일 트랜잭션).
+
+    forward-only 는 배지의 기본 불변식이지만, 입력이 무효화되어 사용자가 이전 단계를
+    **다시 해야 하는** 경우(예: 재분석이 오버레이 선택을 전부 무효화)는 전진 이력이
+    현실과 어긋난다 — 이때만 이 경로로 되돌린다. 마일스톤 이벤트와 달리 재개 이벤트는
+    매번 기록한다(반복 재개도 각각 의미 있는 이력). 종료 상태와 handoff(상담 전환 —
+    사람 소유 단계)는 건드리지 않는다. 현재가 target 이하면 no-op(None).
+    """
+
+    target_rank = _STATUS_RANK[target]
+    async with get_engine().begin() as conn:
+        current = (
+            await conn.execute(
+                sa.select(_SESSIONS.c.status)
+                .where(_SESSIONS.c.id == session_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if current is None or current in _TERMINAL_STATUSES or current == "handoff":
+            return None
+        if _STATUS_RANK.get(current, -1) <= target_rank:
+            return None
+        await conn.execute(
+            sa.insert(_SESSION_STATUS_EVENTS).values(
+                session_id=session_id,
+                from_status=current,
+                to_status=target,
+                reason=reason,
+                run_id=None,
+            )
+        )
+        row = (
+            await conn.execute(
+                sa.update(_SESSIONS)
+                .where(_SESSIONS.c.id == session_id)
+                .values(
+                    status=target,
+                    last_activity_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                )
+                .returning(*_SESSIONS.c)
+            )
+        ).one()
+    return dict(row._mapping)
+
+
+async def reopen_session_status(
+    *,
+    session_id: uuid.UUID,
+    target: str,
+    reason: str | None = None,
+) -> dict[str, Any] | None:
+    """세션 status 를 이전 단계로 재개한다(best-effort, runtime-only).
+
+    advance_session_status 의 역방향 쌍 — 입력 무효화로 사용자가 이전 단계를 다시
+    수행해야 할 때만 쓴다(#selection-invalidation-reopen). 실패는 삼킨다(status 는
+    진행 상황의 투영일 뿐 정본 데이터가 아니다).
+    """
+
+    if target not in _STATUS_RANK:
+        raise ValueError(f"reopen_session_status: 알 수 없는 상태 {target!r}.")
+    try:
+        return await _db_regress_session_status(session_id, target, reason=reason)
+    except Exception:  # noqa: BLE001 - 상태 재개 실패는 플로우를 막지 않는다
+        _log.warning(
+            "session_status_reopen_failed",
+            session_id=str(session_id),
+            target=target,
+        )
+        return None
+
+
 async def _db_select_session(session_id: uuid.UUID) -> dict[str, Any] | None:
     async with get_engine().begin() as conn:
         row = (
@@ -916,15 +994,37 @@ async def merge_judgment_schema(
         values["rule_eval_result"] = None
         values["rule_evaluated_at"] = None
     await _db_update_session_fields(session_id, values)
+
     # 분석/선택 마일스톤에 따라 status 전진. selected_*(사용자 선택)는 wall_objects
     # (분석 산출)보다 뒤 단계라 우선 처리한다(둘 다 오면 collecting_info).
-    if "selected_walls" in patch or "selected_windows" in patch:
+    #
+    # 마일스톤은 **비어 있지 않은 선택**만 인정한다 — 재분석 프루닝이 싣는
+    # `selected_walls: []` 는 "사용자가 골랐다"가 아니라 "선택이 무효화됐다"는 신호다.
+    # 키 존재만 보고 walls_selected 로 전진하면, 선택이 전부 사라졌는데도 forward-only
+    # 배지가 collecting_info 에 남아 오버레이 단계로 못 돌아간다(#selection-invalidation-
+    # reopen).
+    def _nonempty_selection(value: Any) -> bool:
+        return isinstance(value, list) and len(value) > 0
+
+    selection_keys = ("selected_walls", "selected_windows")
+    patched_selection = [k for k in selection_keys if k in patch]
+    if any(_nonempty_selection(patch[k]) for k in patched_selection):
         await advance_session_status(
             session_id=session_id, target="collecting_info", reason="walls_selected"
         )
     elif "wall_objects" in patch:
         await advance_session_status(
             session_id=session_id, target="awaiting_overlay", reason="analysis_complete"
+        )
+    if patched_selection and not any(
+        _nonempty_selection(merged.get(k)) for k in selection_keys
+    ):
+        # 선택 키가 패치됐는데 병합 결과 살아 있는 선택이 하나도 없다 — 사용자가 다시
+        # 골라야 하므로 오버레이 단계로 재개한다(이미 그 이하 단계면 no-op).
+        await reopen_session_status(
+            session_id=session_id,
+            target="awaiting_overlay",
+            reason="selection_invalidated",
         )
     return merged
 

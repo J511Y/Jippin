@@ -943,7 +943,9 @@ def _suppress_rc_overlapped_nonbearing(
       겹침이 아니다 — 벽은 원래 서로 맞닿는다(#point-touch-duplication 과 같은 기준).
     - 부분 겹침이면 RC 와의 교집합만 도려내고 잔여를 남긴다. 잔여가 원본 대비
       ``_RC_PRIORITY_MIN_REMAINDER_RATIO`` 미만이거나 절대 면적이 10×10px(100px²) 미만
-      이면 후보에서 제외한다(작은 조각이 선택 대상으로 남지 않게).
+      이면 후보에서 제외한다(작은 조각이 선택 대상으로 남지 않게). 이 판정은 **구멍
+      분해 전 연결 잔여** 기준이다 — 분해가 만든 인공 절단 조각에는 적용하지 않는다
+      (#threshold-before-decomposition).
     - RC 가 벽 가운데를 가로질러 잔여가 여러 조각이면 각각을 별도 region 으로 살린다 —
       실제로 서로 떨어진 후보 벽들이다. 잘린 조각은 **모두 새 id** ``{id}:N`` 을 받고
       원본 id 는 사라진다(#rc-clip-id-invalidation) — 기하가 달라진 잔여가 저장된
@@ -1043,19 +1045,26 @@ def _suppress_rc_overlapped_nonbearing(
             if remainder.geom_type == "MultiPolygon"
             else [remainder]
         )
-        # RC 가 벽 안에 완전히 포함된 경우의 구멍을 조각 분해로 보존한다 — exterior 만
-        # 직렬화하면 도려낸 영역이 되살아난다(#rc-hole-preservation).
-        pieces = [
-            hp
-            for p in raw_pieces
-            if p.geom_type == "Polygon"
-            for hp in _hole_free_pieces(p)
-        ]
+        # 크기 임계값은 **연결 잔여**(구멍 분해 전) 기준으로 판정한다 — 구멍 분해는
+        # 단일 외곽 링 계약 때문에 만드는 인공 절단이라, 절단 조각에 비율 컷을 적용하면
+        # RC 와 겹치지도 않은 유효 영역이 잘려 나간다(예: 벽 가장자리 근처의 작은 RC
+        # 구멍이 만드는 얇은 절단 스트립, #threshold-before-decomposition).
         min_area = max(
             _RC_PRIORITY_MIN_REMAINDER_AREA_PX,
             g.area * _RC_PRIORITY_MIN_REMAINDER_RATIO,
         )
-        kept = [p for p in pieces if p.geom_type == "Polygon" and p.area >= min_area]
+        survivors = [
+            p for p in raw_pieces if p.geom_type == "Polygon" and p.area >= min_area
+        ]
+        # RC 가 벽 안에 완전히 포함된 경우의 구멍을 조각 분해로 보존한다 — exterior 만
+        # 직렬화하면 도려낸 영역이 되살아난다(#rc-hole-preservation). 분해 조각은 크기
+        # 임계값 면제 — 절단선이 만든 퇴화 조각만 노이즈 컷(1px²)으로 거른다.
+        kept = [
+            hp
+            for p in survivors
+            for hp in _hole_free_pieces(p)
+            if hp.geom_type == "Polygon" and hp.area >= 1.0
+        ]
         if not kept:
             dropped += 1
             continue  # 사실상 전부 RC 안 → 비내력 판정 자체를 무시.
