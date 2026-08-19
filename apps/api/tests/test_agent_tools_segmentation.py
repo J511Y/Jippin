@@ -1892,3 +1892,71 @@ def test_rc_priority_clears_border_flag_on_clipped_pieces() -> None:
     nb = next(r for r in out if r["class_name"] == "wall_nonbearing")
     assert nb["touches_tile_border"] is False
     assert nb["tile_index"] == 1
+
+
+async def test_session_floorplan_prunes_stale_selection(monkeypatch) -> None:
+    # #stale-selection-prune: 재분석으로 region id 가 바뀌면(병합/RC 억제/드롭) 저장된
+    # selected_walls/windows 가 유령 id 나 내력벽 id 를 가리킬 수 있다 — 새 '선택 가능'
+    # id(비내력·미확정 벽 + 창호)와의 교집합으로 줄여 영속한다.
+    session_id, owner = await _session_with_asset(monkeypatch)
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={
+            # pred:1 은 살아남고, ghost:9 는 이번 분석에 없는 id, pred:3 은 내력벽이
+            # 되는 id — 뒤의 둘은 걸러져야 한다.
+            "selected_walls": ["pred:1", "pred:3", "ghost:9"],
+            "selected_windows": ["pred:2", "ghost:w"],
+        },
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [0, 0, 20, 0, 20, 20, 0, 20],
+                    },
+                    {
+                        "region_id": "pred:2",
+                        "class_name": "window",
+                        "score": 0.7,
+                        "polygon": [200, 0, 220, 0, 220, 10, 200, 10],
+                    },
+                    {
+                        "region_id": "pred:3",
+                        "class_name": "wall_reinforced_concrete",
+                        "score": 0.8,
+                        "polygon": [400, 0, 420, 0, 420, 10, 400, 10],
+                    },
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is True
+
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    js = session["judgment_schema"]
+    assert js["selected_walls"] == ["pred:1"]  # 유령·내력벽 id 제거
+    assert js["selected_windows"] == ["pred:2"]

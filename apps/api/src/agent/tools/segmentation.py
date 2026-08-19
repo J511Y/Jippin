@@ -1256,6 +1256,34 @@ async def segment_session_floorplan(
         "space_objects": spaces,
         "window_objects": windows,
     }
+    # 재분석은 region id 를 새로 만든다(병합 merged:N, RC 억제의 드롭/분할, VLM 재병합).
+    # 이전 선택(selected_walls/windows)이 새 객체에 없는 — 혹은 이제 내력벽이 된 — id 를
+    # 가리키면, 오버레이 복원과 룰 평가가 유령/철거 불가 벽을 철거 대상으로 계속 취급한다.
+    # 저장된 선택을 새 '선택 가능' id(비내력·미확정 벽 + 창호)와 교집합으로 줄인다
+    # (#stale-selection-prune). 바뀔 때만 patch 에 실어 불필요한 덮어쓰기를 피한다 —
+    # merge_judgment_schema 가 선택 변경 시 rule_eval_result 도 함께 비운다.
+    with contextlib.suppress(Exception):
+        session = await main_flow.get_owned_session(
+            session_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
+        js = session.get("judgment_schema")
+        js = js if isinstance(js, dict) else {}
+        selectable_wall_ids = {
+            w["id"] for w in walls if w["wall_type"] != "LOAD_BEARING"
+        }
+        window_object_ids = {w["id"] for w in windows}
+        for key, valid_ids in (
+            ("selected_walls", selectable_wall_ids),
+            ("selected_windows", window_object_ids),
+        ):
+            prev = js.get(key)
+            if not isinstance(prev, list):
+                continue
+            kept = [s for s in prev if isinstance(s, str) and s in valid_ids]
+            if kept != prev:
+                patch[key] = kept
     if supplement is not None:
         patch["vlm_supplement"] = supplement
     with contextlib.suppress(Exception):

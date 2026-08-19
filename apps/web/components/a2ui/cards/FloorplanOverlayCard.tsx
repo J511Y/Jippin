@@ -248,6 +248,10 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     () => new Set(uncertainWallRegions.map((r) => r.region_id)),
     [uncertainWallRegions]
   );
+  const selectableIds = useMemo(
+    () => new Set(selectableRegions.map((r) => r.region_id)),
+    [selectableRegions]
+  );
 
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
@@ -289,10 +293,15 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
         else setImageFailed(true);
         const prevWalls = session?.judgment_schema?.selected_walls;
         const prevWindows = session?.judgment_schema?.selected_windows;
+        // 이 카드에 실제로 존재하는 선택 가능 영역만 복원한다 — 재분석으로 id 가 바뀐
+        // 옛 선택(서버가 프루닝하기 전에 저장된 데이터 포함)이 유령 선택으로 남아
+        // '제출됨' 상태를 잘못 복원하지 않게(#stale-selection-prune 의 프론트 방어).
         const restored = [
           ...(Array.isArray(prevWalls) ? prevWalls : []),
           ...(Array.isArray(prevWindows) ? prevWindows : [])
-        ].filter((x): x is string => typeof x === 'string');
+        ]
+          .filter((x): x is string => typeof x === 'string')
+          .filter((id) => selectableIds.has(id));
         if (restored.length > 0) {
           setSelected(new Set(restored));
           setSubmitted(true); // 이미 제출된 선택 복원.
@@ -306,7 +315,7 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     return () => {
       ignore = true;
     };
-  }, [sessionId, assetId]);
+  }, [sessionId, assetId, selectableIds]);
 
   // 토글은 **로컬 상태만** 바꾼다(자동 저장 안 함) — 아래 '제출' 버튼으로 확정한다.
   const toggle = useCallback((regionId: string) => {

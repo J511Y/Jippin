@@ -81,6 +81,10 @@ stride 4 에서 동작하는 것까지 겹쳐 얇은 벽이 서브픽셀이 됐�
   은 겹침이 아니다. VLM 교정 재병합 뒤에도 같은 규칙을 재적용한다
   (`_suppress_rc_overlapped_nonbearing`). 미확정 벽(`wall_other`/`wall_unknown`)은 대상이
   아니다 — 애초에 UNKNOWN 이라 철거 후보로 승격되지 않는다.
+- **선택 프루닝**: 재분석은 region id 를 새로 만들므로, 판단스키마에 저장된
+  `selected_walls`/`selected_windows` 를 새 '선택 가능' id(비내력·미확정 벽 + 창호)와의
+  교집합으로 줄여 영속한다 — 유령/내력벽 id 가 룰 평가의 철거 대상으로 남지 않게.
+  프론트 복원도 현재 카드에 존재하는 선택 가능 id 만 받는다(구 데이터 방어).
 - **오버레이**: 내력벽 후보(`wall_reinforced_concrete`)를 **표시 전용(빨강, 실선, 선택 불가)**
   으로 함께 그린다. 사용자 선택 대상은 종전대로 비내력 후보(초록)·미확정 벽(회색)·창호(파랑)
   뿐이다. payload 는 원래 RC region 을 싣고 있었으므로 계약/vocab_version 변경은 없다
