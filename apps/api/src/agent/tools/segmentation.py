@@ -922,10 +922,12 @@ def _merge_overlapping_regions(
 
 
 # 내력벽 우선 규칙(#rc-priority)에서 잘린 비내력 잔여 조각을 살릴 최소 크기. 원본 대비
-# 비율(슬리버 방지)과 절대 면적(원본 픽셀 기준 노이즈 컷)을 모두 넘어야 한다 — RC 가
-# 벽의 대부분을 덮으면 남는 몇 픽셀 조각이 '선택 가능한 벽'으로 그려지는 것을 막는다.
+# 비율(슬리버 방지)과 절대 면적(원본 픽셀 기준)을 모두 넘어야 한다 — RC 가 벽의
+# 대부분을 덮으면 남는 작은 조각이 '선택 가능한 벽'으로 그려지는 것을 막는다.
+# 절대 하한은 **10×10px = 100px²**(2026-08-19 모델 레포 지시) — 원본 해상도(중앙값
+# 4963×3509) 기준 10px 은 실제 벽이라 보기 어려운 크기다.
 _RC_PRIORITY_MIN_REMAINDER_RATIO = 0.05
-_RC_PRIORITY_MIN_REMAINDER_AREA_PX = 16.0
+_RC_PRIORITY_MIN_REMAINDER_AREA_PX = 100.0
 
 
 def _suppress_rc_overlapped_nonbearing(
@@ -940,8 +942,8 @@ def _suppress_rc_overlapped_nonbearing(
     - 겹침 판정은 **양(+)의 면적 교집합**이다. 점/모서리 접촉(intersects=True, 면적 0)은
       겹침이 아니다 — 벽은 원래 서로 맞닿는다(#point-touch-duplication 과 같은 기준).
     - 부분 겹침이면 RC 와의 교집합만 도려내고 잔여를 남긴다. 잔여가 원본 대비
-      ``_RC_PRIORITY_MIN_REMAINDER_RATIO`` 미만이거나 절대 면적이 노이즈 수준이면 통째로
-      드롭한다(몇 픽셀 슬리버가 선택 대상으로 남지 않게).
+      ``_RC_PRIORITY_MIN_REMAINDER_RATIO`` 미만이거나 절대 면적이 10×10px(100px²) 미만
+      이면 후보에서 제외한다(작은 조각이 선택 대상으로 남지 않게).
     - RC 가 벽 가운데를 가로질러 잔여가 여러 조각이면 각각을 별도 region 으로 살린다 —
       실제로 서로 떨어진 후보 벽들이다. 첫 조각은 원본 id 를 유지하고 나머지는
       ``{id}:2`` 식으로 부여한다(pred:/merged:/vlm-merged: 계열과 충돌하지 않음).

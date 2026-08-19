@@ -136,7 +136,9 @@ class Settings(BaseSettings):
     # _validate_agent_checkpointer_url 에서 제거됨 — #stale-phase-prereq).
     # LLM/추적/HF 시크릿은 Fly secrets 로 주입한다(.env.example 의 agent 섹션 참조).
     agent_enabled: bool = Field(default=False)
-    agent_model: str = Field(default="openai:gpt-5.4-mini")
+    # 대화형 에이전트 모델. 2026-08-19 gpt-5.4-mini → gpt-5.6-luna 로 상향(VLM 과 동일
+    # 모델이지만 설정은 vlm_model 과 분리 유지 — 독립적으로 되돌릴 수 있게).
+    agent_model: str = Field(default="openai:gpt-5.6-luna")
     # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
     # 도면 분석 런은 세그멘테이션이 지배한다: 콜드스타트 폴링 300s + 타일 추론 최대 600s.
     # 여기에 VLM(60s)·에이전트 왕복 여유를 더해 1200s 로 잡는다 — 바깥 예산이 이보다 짧으면

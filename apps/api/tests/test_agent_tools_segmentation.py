@@ -1780,3 +1780,26 @@ def test_rc_priority_noop_without_rc() -> None:
         }
     ]
     assert _suppress_rc_overlapped_nonbearing(regions) == regions
+
+
+def test_rc_priority_drops_remainder_smaller_than_10x10() -> None:
+    # 잘려 남은 비내력 조각이 10×10px(100px²) 미만이면 벽으로 보기 어려운 크기라
+    # 후보에서 제외한다(2026-08-19 모델 레포 지시). 비율(5%)로는 통과하는 크기라
+    # 절대 하한이 실제로 작동하는지를 본다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+        },
+        {
+            # 원본 130px² — 잔여(x 100..108)는 80px² < 100px² 인데 비율은 61%.
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [95, 0, 108, 0, 108, 10, 95, 10],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    assert [r["region_id"] for r in out] == ["pred:1"]
