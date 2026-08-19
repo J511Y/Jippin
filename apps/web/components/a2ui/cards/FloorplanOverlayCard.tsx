@@ -393,10 +393,19 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
             </>
           ) : null}
           {bearingWallRegions.length > 0 ? (
-            <>
-              <b>빨간 벽</b>은 내력벽으로 보이는 부분이라 철거 검토 대상으로 고를 수
-              없어요.{' '}
-            </>
+            hasSelectable ? (
+              <>
+                <b>빨간 벽</b>은 내력벽으로 보이는 부분이라 철거 검토 대상으로 고를 수
+                없어요.{' '}
+              </>
+            ) : (
+              // 내력벽만 잡힌 도면 — 고를 수 있는 영역·제출 버튼이 없으므로 선택 안내
+              // 대신 상황 설명만 한다(없는 초록 벽을 찾게 하지 않는다).
+              <>
+                이 도면에서는 <b>내력벽으로 보이는 벽(빨강)</b>만 잡혔어요 — 철거를
+                검토할 수 있는 비내력벽 후보가 없어 다른 도면이 필요할 수 있어요.{' '}
+              </>
+            )
           ) : null}
           {uncertainWallRegions.length > 0 ? (
             wallRegions.length > 0 ? (
@@ -418,8 +427,14 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
               있어요 — 단, 바깥 공기와 바로 닿는 바깥쪽 창은 철거할 수 없어요.{' '}
             </>
           ) : null}
-          영역을 눌러 고른 뒤(여러 곳 가능) <b>제출</b> 버튼을 눌러 주세요. 표시는 AI 추정
-          후보예요.
+          {/* 선택 지시는 실제로 고를 수 있을 때만 — 내력벽만 잡히면 제출 버튼 자체가
+              없다(#bearing-only-copy). */}
+          {hasSelectable ? (
+            <>
+              영역을 눌러 고른 뒤(여러 곳 가능) <b>제출</b> 버튼을 눌러 주세요.{' '}
+            </>
+          ) : null}
+          표시는 AI 추정 후보예요.
         </Text>
 
         {loading ? (
@@ -460,7 +475,9 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
                 ]
                   .filter(Boolean)
                   .join(' · ')
-              : '선택 가능한 비내력벽·창호가 없어요. 다른 도면이 필요할 수 있어요.'}
+              : bearingWallRegions.length > 0
+                ? `내력벽 후보 ${bearingWallRegions.length}곳(선택 불가) — 철거를 검토할 비내력벽·창호는 안 잡혔어요.`
+                : '선택 가능한 비내력벽·창호가 없어요. 다른 도면이 필요할 수 있어요.'}
           </Text>
           {selected.size > 0 ? (
             // 터치 타깃 ≥44px (DESIGN.md §4.7) — 시각은 작게, 히트 영역만 확보.

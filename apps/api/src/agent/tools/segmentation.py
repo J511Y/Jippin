@@ -946,7 +946,12 @@ def _suppress_rc_overlapped_nonbearing(
       이면 후보에서 제외한다(작은 조각이 선택 대상으로 남지 않게).
     - RC 가 벽 가운데를 가로질러 잔여가 여러 조각이면 각각을 별도 region 으로 살린다 —
       실제로 서로 떨어진 후보 벽들이다. 첫 조각은 원본 id 를 유지하고 나머지는
-      ``{id}:2`` 식으로 부여한다(pred:/merged:/vlm-merged: 계열과 충돌하지 않음).
+      ``{id}:N`` 식으로 부여하되 **전체 region 집합에서 유일**한 N 을 고른다(1·2차
+      억제가 겹쳐도 충돌 없음, #rc-split-id-collision).
+    - RC 가 벽 안에 **완전히 포함**되면 difference 가 구멍 뚫린 폴리곤을 낸다 — 단일
+      외곽 링 계약으로는 구멍을 못 싣으므로 구멍 없는 조각들로 분해해 보존한다
+      (#rc-hole-preservation). 잘린 조각은 ``touches_tile_border`` 를 해제한다(경계에
+      닿던 부분이 도려내졌을 수 있어, 2차 병합의 경계 잇기가 무관한 벽을 붙이는 것 차단).
     - **미확정 벽(wall_other/wall_unknown)은 건드리지 않는다** — UNKNOWN 이라 애초에
       철거 후보로 승격되지 않고, HITL 확인 흐름의 입력을 임의로 줄이지 않는다.
     - shapely 부재/폴리곤화 실패는 원본 유지로 degrade(병합과 동일 정책).
@@ -956,10 +961,38 @@ def _suppress_rc_overlapped_nonbearing(
     """
 
     try:
-        from shapely.geometry import Polygon
+        from shapely.geometry import Polygon, box
         from shapely.ops import unary_union
     except Exception:  # noqa: BLE001 - shapely 미존재 시 억제 없이 진행
         return regions
+
+    def _hole_free_pieces(p: Any, depth: int = 0) -> list[Any]:
+        """내부 링(구멍)이 있는 폴리곤을 구멍 없는 조각들로 분해한다.
+
+        RC 가 비내력벽 **안에 완전히 포함**되면 difference 가 구멍 뚫린 폴리곤을 내는데,
+        region 계약의 polygon 은 단일 외곽 링이라 구멍을 표현하지 못한다 — exterior 만
+        직렬화하면 도려낸 RC 영역이 다시 초록 후보로 살아나 이 규칙의 목적이 무너진다.
+        첫 구멍의 중심을 지나는 수직선으로 잘라 재귀 분해한다(절단선이 그 구멍을 가르므로
+        구멍 수가 단조 감소 → 종료 보장. depth 캡은 방어용).
+        """
+
+        if not p.interiors:
+            return [p]
+        if depth >= 8:  # 구멍 8개 초과는 비정상 도형 — 조각을 포기(호출부가 드롭)
+            return []
+        minx, miny, maxx, maxy = p.bounds
+        cx = float(p.interiors[0].centroid.x)
+        halves = [
+            p.intersection(box(minx - 1.0, miny - 1.0, cx, maxy + 1.0)),
+            p.intersection(box(cx, miny - 1.0, maxx + 1.0, maxy + 1.0)),
+        ]
+        pieces: list[Any] = []
+        for half in halves:
+            parts = list(half.geoms) if hasattr(half, "geoms") else [half]
+            for part in parts:
+                if part.geom_type == "Polygon" and not part.is_empty and part.area > 0:
+                    pieces.extend(_hole_free_pieces(part, depth + 1))
+        return pieces
 
     def _to_geom(r: dict[str, Any]) -> Any | None:
         poly = r.get("polygon") or []
@@ -986,6 +1019,10 @@ def _suppress_rc_overlapped_nonbearing(
     out: list[dict[str, Any]] = []
     dropped = 0
     trimmed = 0
+    # 분할 조각 id 는 **전체 region 집합 기준으로 유일**해야 한다 — 1차 억제가 만든
+    # `pred:2:2` 가 남아 있는 상태에서 2차(VLM 후) 억제가 `pred:2` 를 다시 쪼개면 같은
+    # 접미사를 재사용해 SVG key/selected_walls 가 충돌한다(#rc-split-id-collision).
+    used_ids = {str(r.get("region_id")) for r in regions if isinstance(r, dict)}
     for r in regions:
         if not isinstance(r, dict) or r.get("class_name") != "wall_nonbearing":
             out.append(r)
@@ -999,11 +1036,19 @@ def _suppress_rc_overlapped_nonbearing(
             out.append(r)
             continue
         remainder = g.difference(rc_union)
-        pieces = (
+        raw_pieces = (
             list(remainder.geoms)
             if remainder.geom_type == "MultiPolygon"
             else [remainder]
         )
+        # RC 가 벽 안에 완전히 포함된 경우의 구멍을 조각 분해로 보존한다 — exterior 만
+        # 직렬화하면 도려낸 영역이 되살아난다(#rc-hole-preservation).
+        pieces = [
+            hp
+            for p in raw_pieces
+            if p.geom_type == "Polygon"
+            for hp in _hole_free_pieces(p)
+        ]
         min_area = max(
             _RC_PRIORITY_MIN_REMAINDER_AREA_PX,
             g.area * _RC_PRIORITY_MIN_REMAINDER_RATIO,
@@ -1019,8 +1064,18 @@ def _suppress_rc_overlapped_nonbearing(
             for x, y in p.exterior.coords:
                 flat += [float(x), float(y)]
             piece = {**r, "polygon": flat}
+            # 도형이 잘렸으므로 타일 경계 표식은 더 이상 믿을 수 없다 — 경계에 닿던
+            # 부분이 도려내졌을 수 있는데 표식이 남으면 2차 병합의 경계 잇기(≤3px)가
+            # 무관한 벽을 이 조각에 이어 붙인다. 과소 병합(보수) 쪽으로 눕힌다
+            # (#unknown-tile-provenance 와 같은 방향). tile_index 는 여전히 사실이라
+            # 남긴다(겹침 판정에만 쓰임).
+            piece["touches_tile_border"] = False
             if k > 0:
-                piece["region_id"] = f"{base_id}:{k + 1}"
+                n = k + 1
+                while f"{base_id}:{n}" in used_ids:
+                    n += 1
+                piece["region_id"] = f"{base_id}:{n}"
+            used_ids.add(str(piece["region_id"]))
             out.append(piece)
     if dropped or trimmed:
         log.info(

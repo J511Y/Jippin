@@ -1803,3 +1803,92 @@ def test_rc_priority_drops_remainder_smaller_than_10x10() -> None:
     ]
     out = _suppress_rc_overlapped_nonbearing(regions)
     assert [r["region_id"] for r in out] == ["pred:1"]
+
+
+def test_rc_priority_preserves_hole_when_rc_fully_inside() -> None:
+    # #rc-hole-preservation: RC 가 비내력벽 안에 완전히 포함되면 difference 가 구멍 뚫린
+    # 폴리곤을 낸다. exterior 만 직렬화하면 도려낸 RC 영역이 초록 후보로 되살아나므로,
+    # 구멍 없는 조각들로 분해해 어떤 조각도 RC 중심을 덮지 않아야 한다.
+    from shapely.geometry import Point, Polygon
+
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [40, 40, 60, 40, 60, 60, 40, 60],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 100, 0, 100],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    assert len(nb) >= 2  # 도넛 → 구멍 없는 조각 분해
+    total = 0.0
+    rc_center = Point(50, 50)
+    for r in nb:
+        poly = r["polygon"]
+        shape = Polygon([(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)])
+        assert not shape.interiors  # 조각엔 구멍이 없다
+        assert not shape.contains(rc_center)  # RC 영역을 덮는 조각이 없다
+        total += shape.area
+    assert abs(total - 9600.0) < 1.0  # 10000 − RC 400 이 보존된다
+
+
+def test_rc_priority_split_ids_avoid_existing_siblings() -> None:
+    # #rc-split-id-collision: 이전 억제가 남긴 `pred:2:2` 가 이미 있으면 재분할 접미사가
+    # 이를 건너뛰어 전역 유일한 id 를 받는다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [45, 0, 55, 0, 55, 50, 45, 50],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 20, 100, 20, 100, 30, 0, 30],
+        },
+        {
+            # 앞선 패스가 만들었을 법한 형제 id — RC 와 안 겹쳐 그대로 남는다.
+            "region_id": "pred:2:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [200, 0, 220, 0, 220, 20, 200, 20],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    ids = [r["region_id"] for r in out]
+    assert len(ids) == len(set(ids))  # 전역 유일
+    assert set(ids) == {"pred:1", "pred:2", "pred:2:2", "pred:2:3"}
+
+
+def test_rc_priority_clears_border_flag_on_clipped_pieces() -> None:
+    # 잘린 조각은 touches_tile_border 를 해제한다 — 경계에 닿던 부분이 도려내졌을 수
+    # 있는데 표식이 남으면 2차 병합의 경계 잇기(≤3px)가 무관한 벽을 붙인다.
+    # tile_index 는 여전히 사실이라 보존한다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [80, 0, 150, 0, 150, 10, 80, 10],
+            "touches_tile_border": True,
+            "tile_index": 1,
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = next(r for r in out if r["class_name"] == "wall_nonbearing")
+    assert nb["touches_tile_border"] is False
+    assert nb["tile_index"] == 1
