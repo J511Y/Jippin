@@ -103,6 +103,10 @@ stride 4 에서 동작하는 것까지 겹쳐 얇은 벽이 서브픽셀이 됐�
   `rule_eval_result` 도 비운다(경합으로 되살아난 stale 판정 소거). verdict 영속
   (`set_session_verdict`)도 평가가 읽은 **선택 스냅숏 조건부**다 — 평가와 영속 사이에
   저장 선택이 바뀌면 쓰지 않는다(입력 지문 #stale-verdict-write 의 선택판 대응).
+- **방출 순서**: 판단객체(wall/window_objects) 영속이 **성공한 뒤에만** 오버레이 카드를
+  방출한다(#persist-before-emit) — 방출된 카드는 항상 그 즉시 제출 가능하다(옛 객체
+  기준 검증에 걸려 새 카드가 SELECTION_STALE 로 만료되는 역전 방지). report_ready
+  전진도 잠금 안에서 `rule_eval_result` 존재를 재확인한다(#advance-recheck-verdict).
 - **오버레이**: 내력벽 후보(`wall_reinforced_concrete`)를 **표시 전용(빨강, 실선, 선택 불가)**
   으로 함께 그린다. 사용자 선택 대상은 종전대로 비내력 후보(초록)·미확정 벽(회색)·창호(파랑)
   뿐이다. payload 는 원래 RC region 을 싣고 있었으므로 계약/vocab_version 변경은 없다

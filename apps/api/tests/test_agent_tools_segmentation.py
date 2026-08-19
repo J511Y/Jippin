@@ -2143,3 +2143,126 @@ def test_rc_priority_clip_ids_track_geometry() -> None:
     id_c = clipped_id(_suppress_rc_overlapped_nonbearing(regions(120.0)))
     assert id_a == id_b  # 동일 기하 → 동일 id(선택 보존)
     assert id_a != id_c  # 경계 이동 → 다른 id(선택 무효화)
+
+
+async def test_session_floorplan_persists_before_emitting_overlay(
+    monkeypatch,
+) -> None:
+    # #persist-before-emit: 판단객체 영속이 오버레이 방출보다 먼저다 — 카드를 먼저
+    # 내보내면 즉시 제출이 옛 wall_objects 기준 검증에 걸려(SELECTION_STALE) 방금 나온
+    # 카드가 만료 표시된다.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.6-luna"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    order: list[str] = []
+    real_merge = main_flow.merge_judgment_schema
+
+    async def merge_spy(**kwargs):
+        order.append("persist")
+        return await real_merge(**kwargs)
+
+    async def emit_spy(**kwargs):
+        order.append("emit")
+        return {"ok": True}
+
+    monkeypatch.setattr(main_flow, "merge_judgment_schema", merge_spy)
+    monkeypatch.setattr("src.agent.tools.domain.emit_ui_component_impl", emit_spy)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [0, 0, 20, 0, 20, 20, 0, 20],
+                    }
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=RunContext(),
+            run_id=run["id"],
+        )
+    assert res["ok"] is True
+    assert res["overlay_emitted"] is True
+    assert order == ["persist", "emit"]  # 영속이 항상 방출보다 먼저
+
+
+async def test_session_floorplan_skips_overlay_when_persist_fails(
+    monkeypatch,
+) -> None:
+    # #persist-before-emit: 영속이 실패하면 카드를 내보내지 않는다 — 제출이 영영
+    # 불가능한(SELECTION_STALE) 오버레이를 사용자에게 보여 주지 않는다.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.6-luna"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    async def merge_boom(**kwargs):
+        raise RuntimeError("persist failed")
+
+    emitted: list[object] = []
+
+    async def emit_spy(**kwargs):
+        emitted.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(main_flow, "merge_judgment_schema", merge_boom)
+    monkeypatch.setattr("src.agent.tools.domain.emit_ui_component_impl", emit_spy)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [0, 0, 20, 0, 20, 20, 0, 20],
+                    }
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=RunContext(),
+            run_id=run["id"],
+        )
+    assert res["ok"] is True  # 분석 자체는 무르지 않는다(best-effort)
+    assert res["overlay_emitted"] is False
+    assert emitted == []  # 카드 미방출

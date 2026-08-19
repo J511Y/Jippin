@@ -161,12 +161,14 @@ class FakeMainFlowDb:
         reason: str | None,
         run_id: uuid.UUID | None,
         only_if_live_selection: bool = False,
+        only_if_rule_eval: bool = False,
     ) -> dict[str, Any] | None:
         """마일스톤 이벤트(단계별 1회) + forward-only status(real seam 미러).
 
         reference-scope 트리거는 미적용. status 가 이미 더 높아도 마일스톤 이벤트는
         단계별 1회 기록하고(중복 방지), status 는 더 높을 때만 전진한다.
-        only_if_live_selection 이면 저장된 선택이 살아 있을 때만 수행(real 미러).
+        only_if_live_selection(선택 생존)/only_if_rule_eval(판정 존재) 가드는
+        real seam 미러 — 조건 미충족이면 이벤트·전진 모두 생략.
         """
 
         rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
@@ -176,6 +178,8 @@ class FakeMainFlowDb:
         if only_if_live_selection and not main_flow._has_live_selection(
             row.get("judgment_schema")
         ):
+            return None
+        if only_if_rule_eval and row.get("rule_eval_result") is None:
             return None
         from_status = row["status"]
         already = any(

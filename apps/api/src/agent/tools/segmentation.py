@@ -1310,16 +1310,6 @@ async def segment_session_floorplan(
                 if isinstance(r, dict) and r.get("source_engine") == "VLM"
             }
 
-    if run_context is not None and run_id is not None:
-        from .domain import emit_ui_component_impl
-
-        # 오버레이는 머지된(VLM 교정 반영) regions 로 띄운다.
-        spec = build_overlay_spec(asset_id=asset["id"], image=image, regions=regions)
-        with contextlib.suppress(Exception):
-            await emit_ui_component_impl(
-                run_context=run_context, run_id=run_id, components=[spec]
-            )
-
     walls, spaces, windows = build_judgment_objects(regions, vlm_ids=vlm_ids)
     patch: dict[str, Any] = {
         "wall_objects": walls,
@@ -1334,13 +1324,34 @@ async def segment_session_floorplan(
     # 끼어드는 창이 생긴다(#stale-overlay-submission 의 잔여 race).
     if supplement is not None:
         patch["vlm_supplement"] = supplement
-    with contextlib.suppress(Exception):
+    # **판단객체를 먼저 영속하고, 성공했을 때만 오버레이 카드를 방출한다**
+    # (#persist-before-emit). 카드를 먼저 내보내면 사용자가 즉시 제출했을 때
+    # PATCH /selected-walls 가 아직 옛 wall_objects 로 검증해 새 카드가
+    # SELECTION_STALE 로 만료 표시되고, 영속이 끝내 실패하면 그 카드는 영영 제출
+    # 불가가 된다 — 방출된 오버레이는 항상 그 즉시 제출 가능해야 한다.
+    judgment_persisted = True
+    try:
         await main_flow.merge_judgment_schema(
             session_id=session_id,
             owner_user_id=owner_user_id,
             owner_is_anonymous=owner_is_anonymous,
             patch=patch,
         )
+    except Exception:  # noqa: BLE001 - 영속 실패는 분석 자체를 무르지 않는다(best-effort)
+        judgment_persisted = False
+        log.warning("segmentation_judgment_persist_failed", session_id=str(session_id))
+
+    overlay_emitted = False
+    if judgment_persisted and run_context is not None and run_id is not None:
+        from .domain import emit_ui_component_impl
+
+        # 오버레이는 머지된(VLM 교정 반영) regions 로 띄운다.
+        spec = build_overlay_spec(asset_id=asset["id"], image=image, regions=regions)
+        with contextlib.suppress(Exception):
+            await emit_ui_component_impl(
+                run_context=run_context, run_id=run_id, components=[spec]
+            )
+            overlay_emitted = True
 
     # 요약 — 세그멘테이션 + VLM 보완. ANALYSIS_LOW_CONFIDENCE(0.6 미만)면 재확인 권장.
     #
@@ -1370,7 +1381,9 @@ async def segment_session_floorplan(
         "schema_version": SCHEMA_VERSION,
         "ok": True,
         "summary": summary,
-        "overlay_emitted": True,
+        # 실제 방출 여부(#persist-before-emit) — 영속 실패로 카드를 안 냈으면 False.
+        # 에이전트는 False 면 오버레이 안내 대신 재분석/재시도 흐름을 탄다.
+        "overlay_emitted": overlay_emitted,
         "region_count": len(regions),
         "analysis_low_confidence": low_conf,
     }

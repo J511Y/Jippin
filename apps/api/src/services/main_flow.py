@@ -159,6 +159,7 @@ async def _db_advance_session_status(
     reason: str | None,
     run_id: uuid.UUID | None,
     only_if_live_selection: bool = False,
+    only_if_rule_eval: bool = False,
 ) -> dict[str, Any] | None:
     """마일스톤 도달을 기록하고 status 를 forward-only 로 전이한다(단일 트랜잭션).
 
@@ -175,6 +176,11 @@ async def _db_advance_session_status(
     살아 있는 선택이 없으면 이벤트·전진 모두 생략한다 — 선택 커밋과 이 지연된 전진
     사이에 재분석 프루닝이 그 선택을 걷어낸 경우, 빈 세션을 '선택 완료'로 전진시키지
     않는다(#advance-recheck-selection, reopen 의 only_if_no_selection 과 대칭 가드).
+
+    ``only_if_rule_eval`` 이면 같은 트랜잭션에서 ``rule_eval_result`` 를 다시 읽어
+    비어 있으면 생략한다 — verdict 쓰기와 이 지연된 report_ready 전진 사이에 재분석
+    병합이 판정을 소거한 경우, 리포트 없는 세션이 report_ready 배지를 달지 않는다
+    (#advance-recheck-verdict; GET /report 의 준비 기준 = rule_eval_result 존재).
     """
 
     target_rank = _STATUS_RANK[target]
@@ -184,7 +190,11 @@ async def _db_advance_session_status(
         # race 를 막는다(병행 주소확정/도면업로드, handoff 와 에이전트 전이 경합 등).
         row0 = (
             await conn.execute(
-                sa.select(_SESSIONS.c.status, _SESSIONS.c.judgment_schema)
+                sa.select(
+                    _SESSIONS.c.status,
+                    _SESSIONS.c.judgment_schema,
+                    _SESSIONS.c.rule_eval_result,
+                )
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
             )
@@ -195,6 +205,8 @@ async def _db_advance_session_status(
         if current in _TERMINAL_STATUSES:
             return None
         if only_if_live_selection and not _has_live_selection(row0.judgment_schema):
+            return None
+        if only_if_rule_eval and row0.rule_eval_result is None:
             return None
 
         # 마일스톤 이벤트 — 단계별 1회(중복 방지). status 전진 여부와 무관하게 기록한다.
@@ -244,6 +256,7 @@ async def advance_session_status(
     reason: str | None = None,
     run_id: uuid.UUID | None = None,
     only_if_live_selection: bool = False,
+    only_if_rule_eval: bool = False,
 ) -> dict[str, Any] | None:
     """도구/플로우 마일스톤에서 세션 status 를 한 단계 전진시킨다(best-effort, runtime-only).
 
@@ -251,7 +264,8 @@ async def advance_session_status(
     (예: 주소/도면 없이 분석 단계 진입) 기타 오류가 나도 **사용자 플로우를 막지 않도록**
     예외를 삼키고 None 을 반환한다 — status 는 진행 상황의 투영일 뿐 정본 데이터가 아니다.
     실제 전이가 일어났으면 갱신된 세션 row 를 반환한다. ``only_if_live_selection`` 은
-    전진 직전 같은 트랜잭션에서 살아 있는 선택을 재확인한다(#advance-recheck-selection).
+    전진 직전 같은 트랜잭션에서 살아 있는 선택을(#advance-recheck-selection),
+    ``only_if_rule_eval`` 은 판정 존재를(#advance-recheck-verdict) 재확인한다.
     """
 
     if target not in _STATUS_RANK:
@@ -263,6 +277,7 @@ async def advance_session_status(
             reason=reason,
             run_id=run_id,
             only_if_live_selection=only_if_live_selection,
+            only_if_rule_eval=only_if_rule_eval,
         )
     except Exception:  # noqa: BLE001 - 상태 전이 실패는 도구/플로우를 막지 않는다
         _log.warning(
@@ -1631,9 +1646,16 @@ async def set_session_verdict(
         expected_selected_windows=expected_selected_windows,
     )
     # 판정이 실제로 영속됐을 때만(입력이 안 바뀌었을 때) 리포트 준비됨으로 전진.
+    # only_if_rule_eval: 판정 쓰기와 이 지연된 전진 사이에 재분석 병합이 판정을
+    # 소거했을 수 있다 — 전진 직전 같은 트랜잭션에서 rule_eval_result 존재를
+    # 재확인해, 리포트 없는 세션이 report_ready 배지를 달지 않는다
+    # (#advance-recheck-verdict).
     if persisted is not None:
         await advance_session_status(
-            session_id=session_id, target="report_ready", reason="report_ready"
+            session_id=session_id,
+            target="report_ready",
+            reason="report_ready",
+            only_if_rule_eval=True,
         )
     return persisted
 

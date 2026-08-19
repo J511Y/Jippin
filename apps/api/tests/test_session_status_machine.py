@@ -412,3 +412,31 @@ async def test_reopen_clears_interleaved_verdict(monkeypatch) -> None:
     assert res is not None
     assert fake.sessions[sid]["status"] == "awaiting_overlay"
     assert fake.sessions[sid]["rule_eval_result"] is None  # stale 판정 동시 소거
+
+
+async def test_report_ready_advance_requires_verdict_presence(monkeypatch) -> None:
+    # #advance-recheck-verdict: verdict 쓰기와 지연된 report_ready 전진 사이에 재분석
+    # 병합이 판정을 소거하면, 리포트 없는 세션이 report_ready 배지를 달면 안 된다 —
+    # 전진 직전 잠금 안에서 rule_eval_result 존재를 재확인한다.
+    fake = install_main_flow_fake(monkeypatch)
+    _owner, sid = await _new_session(fake)
+    assert fake.sessions[sid].get("rule_eval_result") is None
+    res = await main_flow.advance_session_status(
+        session_id=sid,
+        target="report_ready",
+        reason="report_ready",
+        only_if_rule_eval=True,
+    )
+    assert res is None
+    assert fake.sessions[sid]["status"] == "draft"
+    assert "report_ready" not in _events(fake, sid)  # 이벤트도 생략
+
+    fake.sessions[sid]["rule_eval_result"] = {"verdict": "ALLOW"}
+    res = await main_flow.advance_session_status(
+        session_id=sid,
+        target="report_ready",
+        reason="report_ready",
+        only_if_rule_eval=True,
+    )
+    assert res is not None
+    assert fake.sessions[sid]["status"] == "report_ready"
