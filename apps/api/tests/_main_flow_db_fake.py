@@ -206,12 +206,14 @@ class FakeMainFlowDb:
         *,
         reason: str | None,
         only_if_no_selection: bool = False,
+        clear_rule_eval: bool = False,
     ) -> dict[str, Any] | None:
         """status 명시적 후퇴(재개 전용, real seam 미러) — 재개 이벤트는 매번 기록.
 
         종료 상태와 handoff 는 건드리지 않고, 현재가 target 이하면 no-op(None).
         only_if_no_selection 이면 현재 judgment_schema 에 살아 있는 선택이 있을 때
-        되돌리지 않는다(동시 PATCH 방어, real seam 미러).
+        되돌리지 않는다(동시 PATCH 방어). clear_rule_eval 이면 되돌리며 stale 판정도
+        함께 비운다(real seam 미러).
         """
 
         rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
@@ -236,6 +238,9 @@ class FakeMainFlowDb:
             }
         )
         row["status"] = target
+        if clear_rule_eval:
+            row["rule_eval_result"] = None
+            row["rule_evaluated_at"] = None
         self._touch_session(session_id)
         return dict(row)
 
@@ -633,6 +638,8 @@ class FakeMainFlowDb:
         values: dict[str, Any],
         expected_asset_id: Any,
         expected_address_id: Any,
+        expected_selected_walls: Any = main_flow._UNSET,
+        expected_selected_windows: Any = main_flow._UNSET,
     ) -> dict[str, Any] | None:
         row = self.sessions.get(session_id)
         if row is None:
@@ -648,6 +655,16 @@ class FakeMainFlowDb:
             and row.get("address_id") != expected_address_id
         ):
             return None
+        # 평가가 읽은 선택 스냅숏과 현재 저장 선택이 같을 때만 쓴다(real seam 미러,
+        # #verdict-selection-fingerprint).
+        for expected, key in (
+            (expected_selected_walls, "selected_walls"),
+            (expected_selected_windows, "selected_windows"),
+        ):
+            if expected is not main_flow._UNSET and (
+                main_flow._stored_selection(row.get("judgment_schema"), key) != expected
+            ):
+                return None
         row.update(values)
         row["updated_at"] = _now()
         return dict(row)

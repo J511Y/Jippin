@@ -288,6 +288,7 @@ async def _db_regress_session_status(
     *,
     reason: str | None,
     only_if_no_selection: bool = False,
+    clear_rule_eval: bool = False,
 ) -> dict[str, Any] | None:
     """status 를 명시적으로 **뒤로** 되돌린다(재개 전용, 단일 트랜잭션).
 
@@ -301,6 +302,11 @@ async def _db_regress_session_status(
     읽어, 살아 있는 선택이 하나라도 있으면 되돌리지 않는다 — 프루닝(빈 선택) 기록과
     재개 사이에 사용자의 새 선택 PATCH 가 끼어든 경우, 그 최신 선택을 배지 후퇴로
     덮어쓰지 않게 한다(#reopen-recheck-selection).
+
+    ``clear_rule_eval`` 이면 되돌리는 **같은 트랜잭션에서** rule_eval_result 도 비운다 —
+    병합(verdict 소거)과 이 재개 사이에 set_session_verdict 가 끼어들어 무효화된 선택
+    기준의 판정을 다시 써 놓았을 수 있다(#reopen-clears-verdict). 오버레이를 다시
+    골라야 하는 세션에서 GET /report 가 그 stale 판정을 제공하지 않게 한다.
     """
 
     target_rank = _STATUS_RANK[target]
@@ -330,14 +336,18 @@ async def _db_regress_session_status(
                 run_id=None,
             )
         )
+        values: dict[str, Any] = {"status": target}
+        if clear_rule_eval:
+            values["rule_eval_result"] = None
+            values["rule_evaluated_at"] = None
         row = (
             await conn.execute(
                 sa.update(_SESSIONS)
                 .where(_SESSIONS.c.id == session_id)
                 .values(
-                    status=target,
                     last_activity_at=sa.func.now(),
                     updated_at=sa.func.now(),
+                    **values,
                 )
                 .returning(*_SESSIONS.c)
             )
@@ -351,13 +361,16 @@ async def reopen_session_status(
     target: str,
     reason: str | None = None,
     only_if_no_selection: bool = False,
+    clear_rule_eval: bool = False,
 ) -> dict[str, Any] | None:
     """세션 status 를 이전 단계로 재개한다(best-effort, runtime-only).
 
     advance_session_status 의 역방향 쌍 — 입력 무효화로 사용자가 이전 단계를 다시
     수행해야 할 때만 쓴다(#selection-invalidation-reopen). 실패는 삼킨다(status 는
     진행 상황의 투영일 뿐 정본 데이터가 아니다). ``only_if_no_selection`` 은 되돌리기
-    직전 같은 트랜잭션에서 선택이 여전히 비어 있는지 재확인한다(동시 PATCH 방어).
+    직전 같은 트랜잭션에서 선택이 여전히 비어 있는지 재확인하고(동시 PATCH 방어),
+    ``clear_rule_eval`` 은 같은 트랜잭션에서 stale 판정도 함께 비운다
+    (#reopen-clears-verdict).
     """
 
     if target not in _STATUS_RANK:
@@ -368,6 +381,7 @@ async def reopen_session_status(
             target,
             reason=reason,
             only_if_no_selection=only_if_no_selection,
+            clear_rule_eval=clear_rule_eval,
         )
     except Exception:  # noqa: BLE001 - 상태 재개 실패는 플로우를 막지 않는다
         _log.warning(
@@ -1199,6 +1213,10 @@ async def merge_judgment_schema(
             target="awaiting_overlay",
             reason="selection_invalidated",
             only_if_no_selection=True,
+            # 병합의 verdict 소거와 이 재개 사이에 set_session_verdict 가 끼어들어
+            # 무효화된 선택 기준 판정을 되살렸을 수 있다 — 재개와 같은 트랜잭션에서
+            # 다시 비운다(#reopen-clears-verdict).
+            clear_rule_eval=True,
         )
     return merged
 
@@ -1516,33 +1534,64 @@ async def get_session_inputs(
     return row.get("selected_floorplan_asset_id"), row.get("address_id")
 
 
+def _stored_selection(judgment_schema: Any, key: str) -> list[Any]:
+    """판단스키마의 선택 리스트(없거나 형식 밖이면 빈 리스트) — 지문 비교용 정규화."""
+    js = judgment_schema if isinstance(judgment_schema, dict) else {}
+    value = js.get(key)
+    return value if isinstance(value, list) else []
+
+
 async def _db_set_session_verdict_if_inputs(
     session_id: uuid.UUID,
     values: dict[str, Any],
     expected_asset_id: Any,
     expected_address_id: Any,
+    expected_selected_walls: Any = _UNSET,
+    expected_selected_windows: Any = _UNSET,
 ) -> dict[str, Any] | None:
-    # 조건부 UPDATE: 분석 시작 때 본 입력과 현재 입력이 같을 때만 verdict 를 쓴다.
-    # _UNSET 인 입력은 검사를 건너뛴다(None 은 "값이 없음" 으로 검사 대상).
-    conds = [_SESSIONS.c.id == session_id]
-    if expected_asset_id is not _UNSET:
-        conds.append(
-            _SESSIONS.c.selected_floorplan_asset_id.is_not_distinct_from(
-                expected_asset_id
-            )
-        )
-    if expected_address_id is not _UNSET:
-        conds.append(_SESSIONS.c.address_id.is_not_distinct_from(expected_address_id))
+    # 조건부 UPDATE: 분석 시작 때 본 입력(asset/address)과 **평가가 읽은 선택**이 현재
+    # 값과 같을 때만 verdict 를 쓴다 — FOR UPDATE 로 잠근 같은 트랜잭션에서 검사·쓰기를
+    # 마쳐, 평가와 영속 사이에 재분석 프루닝/사용자 재선택이 끼면 stale 판정을 버린다
+    # (#verdict-selection-fingerprint). _UNSET 인 항목은 검사를 건너뛴다(None 은 "값이
+    # 없음"으로 검사 대상).
     async with get_engine().begin() as conn:
+        row0 = (
+            await conn.execute(
+                sa.select(
+                    _SESSIONS.c.selected_floorplan_asset_id,
+                    _SESSIONS.c.address_id,
+                    _SESSIONS.c.judgment_schema,
+                )
+                .where(_SESSIONS.c.id == session_id)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if row0 is None:
+            return None
+        if (
+            expected_asset_id is not _UNSET
+            and row0.selected_floorplan_asset_id != expected_asset_id
+        ):
+            return None
+        if expected_address_id is not _UNSET and row0.address_id != expected_address_id:
+            return None
+        for expected, key in (
+            (expected_selected_walls, "selected_walls"),
+            (expected_selected_windows, "selected_windows"),
+        ):
+            if expected is not _UNSET and (
+                _stored_selection(row0.judgment_schema, key) != expected
+            ):
+                return None
         row = (
             await conn.execute(
                 sa.update(_SESSIONS)
-                .where(*conds)
+                .where(_SESSIONS.c.id == session_id)
                 .values(updated_at=sa.func.now(), **values)
                 .returning(*_SESSIONS.c)
             )
-        ).one_or_none()
-    return dict(row._mapping) if row is not None else None
+        ).one()
+    return dict(row._mapping)
 
 
 async def set_session_verdict(
@@ -1551,6 +1600,8 @@ async def set_session_verdict(
     rule_eval_result: dict[str, Any],
     expected_asset_id: Any = _UNSET,
     expected_address_id: Any = _UNSET,
+    expected_selected_walls: Any = _UNSET,
+    expected_selected_windows: Any = _UNSET,
 ) -> dict[str, Any] | None:
     """룰 판정 결과(rule-eval-result)를 세션에 영속한다 — runtime-only.
 
@@ -1560,8 +1611,11 @@ async def set_session_verdict(
 
     분석 시작 때 캡처한 입력(asset_id/address_id)을 넘기면, 그 사이 입력이 바뀌었을
     경우 stale verdict 를 쓰지 않고 None 을 반환한다 — 분석 중 도면 교체로 옛 판정이
-    새 입력에 report-ready 로 붙는 race 를 막는다(#stale-verdict-write). status 는
-    건드리지 않는다(reference-scope 트리거가 asset-only report_ready 를 거부).
+    새 입력에 report-ready 로 붙는 race 를 막는다(#stale-verdict-write). 평가가 읽은
+    선택 스냅숏(expected_selected_walls/windows)을 넘기면 같은 방식으로, 평가와 영속
+    사이에 재분석 프루닝/재선택으로 저장 선택이 바뀐 판정을 버린다
+    (#verdict-selection-fingerprint). status 는 건드리지 않는다(reference-scope
+    트리거가 asset-only report_ready 를 거부).
     """
 
     values = {
@@ -1569,7 +1623,12 @@ async def set_session_verdict(
         "rule_evaluated_at": _now(),
     }
     persisted = await _db_set_session_verdict_if_inputs(
-        session_id, values, expected_asset_id, expected_address_id
+        session_id,
+        values,
+        expected_asset_id,
+        expected_address_id,
+        expected_selected_walls=expected_selected_walls,
+        expected_selected_windows=expected_selected_windows,
     )
     # 판정이 실제로 영속됐을 때만(입력이 안 바뀌었을 때) 리포트 준비됨으로 전진.
     if persisted is not None:

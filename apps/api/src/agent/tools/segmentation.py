@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import ipaddress
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -930,6 +931,18 @@ _RC_PRIORITY_MIN_REMAINDER_RATIO = 0.05
 _RC_PRIORITY_MIN_REMAINDER_AREA_PX = 100.0
 
 
+def _clip_geometry_digest(flat_polygon: list[float]) -> str:
+    """잘린 조각 id 에 넣는 기하 지문(8 hex, #rc-clip-geometry-id).
+
+    0.1px 로 라운딩해 부동소수 노이즈는 흡수하고, RC 경계 이동 같은 실제 기하 변화는
+    다른 지문 → 다른 id 가 되게 한다. 같은 도면을 같은 결과로 재분석하면 지문이 같아
+    저장된 선택이 보존되고, 기하가 달라지면 id 교집합 프루닝이 선택을 무효화한다.
+    """
+
+    data = ";".join(f"{v:.1f}" for v in flat_polygon)
+    return hashlib.md5(data.encode("ascii")).hexdigest()[:8]
+
+
 def _suppress_rc_overlapped_nonbearing(
     regions: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -947,11 +960,12 @@ def _suppress_rc_overlapped_nonbearing(
       분해 전 연결 잔여** 기준이다 — 분해가 만든 인공 절단 조각에는 적용하지 않는다
       (#threshold-before-decomposition).
     - RC 가 벽 가운데를 가로질러 잔여가 여러 조각이면 각각을 별도 region 으로 살린다 —
-      실제로 서로 떨어진 후보 벽들이다. 잘린 조각은 **모두 새 id** ``{id}:N`` 을 받고
-      원본 id 는 사라진다(#rc-clip-id-invalidation) — 기하가 달라진 잔여가 저장된
-      선택(id 교집합 프루닝, #stale-selection-prune)에 옛 벽으로 살아남지 않게 한다.
-      N 은 **전체 region 집합에서 유일**하게 고른다(1·2차 억제가 겹쳐도 충돌 없음,
-      #rc-split-id-collision).
+      실제로 서로 떨어진 후보 벽들이다. 잘린 조각은 원본 id 를 버리고 **기하 지문 id**
+      ``{id}~<지문8>`` 을 받는다(#rc-clip-geometry-id) — 같은 기하로 재분석되면 id 가
+      같아 저장된 선택이 보존되고, RC 경계가 이동해 기하가 달라지면 id 도 달라져 id
+      기준 프루닝·검증이 선택을 자동 무효화한다(순번 접미사는 호출 간 결정적으로
+      재사용돼 이 보장을 못 한다). 지문 충돌 시 ``:N`` 을 덧붙여 전체 region 집합에서
+      유일성을 지킨다(#rc-split-id-collision).
     - RC 가 벽 안에 **완전히 포함**되면 difference 가 구멍 뚫린 폴리곤을 낸다 — 단일
       외곽 링 계약으로는 구멍을 못 싣으므로 구멍 없는 조각들로 분해해 보존한다
       (#rc-hole-preservation). 잘린 조각은 ``touches_tile_border`` 를 해제한다(경계에
@@ -1106,7 +1120,7 @@ def _suppress_rc_overlapped_nonbearing(
             continue  # 사실상 전부 RC 안 → 비내력 판정 자체를 무시.
         trimmed += 1
         base_id = str(r.get("region_id"))
-        for k, p in enumerate(kept):
+        for p in kept:
             flat: list[float] = []
             for x, y in p.exterior.coords:
                 flat += [float(x), float(y)]
@@ -1117,16 +1131,21 @@ def _suppress_rc_overlapped_nonbearing(
             # (#unknown-tile-provenance 와 같은 방향). tile_index 는 여전히 사실이라
             # 남긴다(겹침 판정에만 쓰임).
             piece["touches_tile_border"] = False
-            # 잘린 조각은 **원본 id 를 물려받지 않는다**(#rc-clip-id-invalidation) —
-            # 첫 조각이 원본 id 를 유지하면, 재분석 시 저장된 선택의 id 교집합 프루닝
-            # (#stale-selection-prune)이 '기하가 달라진 잔여'를 사용자가 고른 벽으로
-            # 계속 취급한다. 모든 조각에 새 id 를 부여해 잘린 벽의 선택은 자동으로
-            # 무효화하고, 사용자가 바뀐 철거 대상을 다시 확인·선택하게 한다.
-            n = k + 1
-            while f"{base_id}:{n}" in used_ids:
+            # 잘린 조각은 **원본 id 를 물려받지 않고, 기하 지문이 id 가 된다**
+            # (#rc-clip-geometry-id). 순번 접미사(`{id}:N`)는 호출 안에서만 유일해
+            # 재분석에서 결정적으로 재사용된다 — RC 경계가 조금만 이동해도 같은
+            # `pred:2:1` 이 **다른 기하**를 가리켜, id 교집합 프루닝과 SELECTION_STALE
+            # 검증(둘 다 id 기준)이 기하가 바뀐 선택을 통과시킨다. 폴리곤 지문을 id 에
+            # 넣어 '같은 기하 = 같은 id(선택 보존), 다른 기하 = 다른 id(선택 무효화)'
+            # 를 id 체계 자체로 보장한다.
+            digest = _clip_geometry_digest(flat)
+            rid = f"{base_id}~{digest}"
+            n = 1
+            while rid in used_ids:  # 동일 기하 중복(비정상) 방어
                 n += 1
-            piece["region_id"] = f"{base_id}:{n}"
-            used_ids.add(str(piece["region_id"]))
+                rid = f"{base_id}~{digest}:{n}"
+            piece["region_id"] = rid
+            used_ids.add(rid)
             out.append(piece)
     if dropped or trimmed:
         log.info(

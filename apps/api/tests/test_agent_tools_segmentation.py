@@ -1706,9 +1706,11 @@ def test_rc_priority_trims_partial_overlap() -> None:
     out = _suppress_rc_overlapped_nonbearing(regions)
     nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
     assert len(nb) == 1
-    # 잘린 조각은 원본 id 를 물려받지 않는다(#rc-clip-id-invalidation) — 기하가 바뀐
-    # 잔여가 저장된 선택(id 교집합)에 옛 벽으로 살아남으면 안 된다.
-    assert nb[0]["region_id"] == "pred:2:1"
+    # 잘린 조각은 원본 id 를 물려받지 않고 기하 지문 id 를 받는다
+    # (#rc-clip-geometry-id) — 기하가 바뀐 잔여가 저장된 선택(id 교집합)에 옛 벽으로
+    # 살아남으면 안 된다.
+    assert nb[0]["region_id"].startswith("pred:2~")
+    assert nb[0]["region_id"] != "pred:2"
     assert nb[0]["score"] == 0.6  # 속성 보존
     xs = nb[0]["polygon"][0::2]
     assert min(xs) >= 100.0  # RC(x<=100) 구간이 도려내졌다
@@ -1734,7 +1736,9 @@ def test_rc_priority_splits_remainder_into_pieces() -> None:
     out = _suppress_rc_overlapped_nonbearing(regions)
     nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
     assert len(nb) == 2
-    assert {r["region_id"] for r in nb} == {"pred:2:1", "pred:2:2"}
+    ids = {r["region_id"] for r in nb}
+    assert len(ids) == 2  # 두 조각이 서로 다른 기하 지문 id
+    assert all(i.startswith("pred:2~") for i in ids)
     for r in nb:
         xs = r["polygon"][0::2]
         # 각 조각은 RC 스트립(45..55) 바깥에만 있다.
@@ -1842,8 +1846,8 @@ def test_rc_priority_preserves_hole_when_rc_fully_inside() -> None:
 
 
 def test_rc_priority_split_ids_avoid_existing_siblings() -> None:
-    # #rc-split-id-collision: 이전 억제가 남긴 `pred:2:2` 가 이미 있으면 재분할 접미사가
-    # 이를 건너뛰어 전역 유일한 id 를 받는다.
+    # #rc-split-id-collision: 기존 region 과 id 가 절대 충돌하지 않는다 — 잘린 조각은
+    # 기하 지문 id(`{id}~<지문>`)를 받고, 이전 패스가 남긴 형제 id 는 그대로 보존된다.
     from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
 
     regions = [
@@ -1867,7 +1871,9 @@ def test_rc_priority_split_ids_avoid_existing_siblings() -> None:
     out = _suppress_rc_overlapped_nonbearing(regions)
     ids = [r["region_id"] for r in out]
     assert len(ids) == len(set(ids))  # 전역 유일
-    assert set(ids) == {"pred:1", "pred:2:1", "pred:2:2", "pred:2:3"}
+    assert "pred:1" in ids and "pred:2:2" in ids  # RC·기존 형제는 그대로
+    clipped = [i for i in ids if i.startswith("pred:2~")]
+    assert len(clipped) == 2  # 분할 조각 둘은 기하 지문 id
 
 
 def test_rc_priority_clears_border_flag_on_clipped_pieces() -> None:
@@ -1984,7 +1990,7 @@ async def test_session_floorplan_invalidates_selection_of_clipped_wall(
     monkeypatch.setattr(storage, "sign_object_url", fake_sign)
 
     def handler(req: httpx.Request) -> httpx.Response:
-        # pred:1 이 RC(pred:2)와 부분 겹침 → 잔여는 pred:1:1 로 새 id 를 받는다.
+        # pred:1 이 RC(pred:2)와 부분 겹침 → 잔여는 기하 지문 id(pred:1~…)를 받는다.
         return httpx.Response(
             200,
             json={
@@ -2022,7 +2028,8 @@ async def test_session_floorplan_invalidates_selection_of_clipped_wall(
     js = session["judgment_schema"]
     assert js["selected_walls"] == []  # 잘린 벽의 선택은 무효화
     wall_ids = {w["id"] for w in js["wall_objects"]}
-    assert "pred:1:1" in wall_ids and "pred:1" not in wall_ids
+    assert any(i.startswith("pred:1~") for i in wall_ids)
+    assert "pred:1" not in wall_ids
     # 선택이 전부 무효화됐으므로 배지도 오버레이 단계로 재개된다 — 선택 완료
     # (collecting_info)에 남으면 SSE/퍼널이 현실과 어긋난다(#selection-invalidation-reopen).
     assert session["status"] == "awaiting_overlay"
@@ -2106,3 +2113,33 @@ def test_rc_priority_preserves_geometry_with_many_holes() -> None:
         total += shape.area
     # 벽 100,000 − RC 9×400 = 96,400 이 (노이즈 컷 오차 내에서) 보존된다.
     assert abs(total - 96400.0) < 2.0
+
+
+def test_rc_priority_clip_ids_track_geometry() -> None:
+    # #rc-clip-geometry-id: 같은 기하로 재분석되면 잘린 조각 id 가 같아 저장된 선택이
+    # 보존되고, RC 경계가 이동해 잔여 기하가 달라지면 id 도 달라져 id 기준 프루닝·검증이
+    # 선택을 무효화한다 — 순번 접미사는 이 구분을 못 한다(결정적 재사용).
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    def regions(rc_right: float) -> list[dict]:
+        return [
+            {
+                "region_id": "pred:1",
+                "class_name": "wall_reinforced_concrete",
+                "polygon": [0, 0, rc_right, 0, rc_right, 10, 0, 10],
+            },
+            {
+                "region_id": "pred:2",
+                "class_name": "wall_nonbearing",
+                "polygon": [80, 0, 200, 0, 200, 10, 80, 10],
+            },
+        ]
+
+    def clipped_id(out: list[dict]) -> str:
+        return next(r["region_id"] for r in out if r["class_name"] == "wall_nonbearing")
+
+    id_a = clipped_id(_suppress_rc_overlapped_nonbearing(regions(100.0)))
+    id_b = clipped_id(_suppress_rc_overlapped_nonbearing(regions(100.0)))
+    id_c = clipped_id(_suppress_rc_overlapped_nonbearing(regions(120.0)))
+    assert id_a == id_b  # 동일 기하 → 동일 id(선택 보존)
+    assert id_a != id_c  # 경계 이동 → 다른 id(선택 무효화)

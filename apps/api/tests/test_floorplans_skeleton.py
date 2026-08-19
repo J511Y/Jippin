@@ -678,3 +678,48 @@ async def test_selected_walls_validates_against_latest_objects(fake_db):
         requester=requester,
     )
     assert res.selected_walls == []
+
+
+async def test_verdict_write_requires_matching_selection(fake_db):
+    # #verdict-selection-fingerprint: 평가가 읽은 선택 스냅숏과 현재 저장 선택이 같을
+    # 때만 verdict 를 영속한다 — 평가와 영속 사이에 재분석 프루닝/재선택이 끼면 stale
+    # 판정을 버린다(입력 지문 #stale-verdict-write 의 선택판 대응).
+    session_id, owner = await _create_session_direct()
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={
+            "wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}],
+            "selected_walls": ["w1"],
+        },
+    )
+
+    # 스냅숏과 저장 선택이 일치 → 영속.
+    persisted = await main_flow.set_session_verdict(
+        session_id=session_id,
+        rule_eval_result={"verdict": "ALLOW"},
+        expected_selected_walls=["w1"],
+        expected_selected_windows=[],
+    )
+    assert persisted is not None
+    assert persisted["rule_eval_result"]["verdict"] == "ALLOW"
+
+    # 그 사이 선택이 무효화(프루닝)됐다면 옛 스냅숏 기준 판정은 쓰지 않는다.
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "w2", "wall_type": "NON_LOAD_BEARING"}]},
+    )
+    stale = await main_flow.set_session_verdict(
+        session_id=session_id,
+        rule_eval_result={"verdict": "DENY"},
+        expected_selected_walls=["w1"],
+        expected_selected_windows=[],
+    )
+    assert stale is None
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    assert session["rule_eval_result"] is None  # 병합이 비운 그대로 — stale 미기록

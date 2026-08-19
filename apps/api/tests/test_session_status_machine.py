@@ -389,3 +389,26 @@ async def test_advance_skipped_when_selection_pruned_before_advance(
     )
     assert res is not None
     assert fake.sessions[sid]["status"] == "collecting_info"
+
+
+async def test_reopen_clears_interleaved_verdict(monkeypatch) -> None:
+    # #reopen-clears-verdict: 병합(verdict 소거)과 재개 사이에 set_session_verdict 가
+    # 끼어들어 무효화된 선택 기준의 판정을 되살릴 수 있다 — 재개가 같은 트랜잭션에서
+    # rule_eval_result 도 함께 비워, 오버레이를 다시 골라야 하는 세션에서 GET /report
+    # 가 stale 판정을 제공하지 않게 한다.
+    fake = install_main_flow_fake(monkeypatch)
+    owner, sid = await _new_session(fake)
+    await main_flow.advance_session_status(session_id=sid, target="report_ready")
+    # interleave 재현: 선택은 비었는데 판정이 남아 있는 상태.
+    fake.sessions[sid]["judgment_schema"] = {"selected_walls": []}
+    fake.sessions[sid]["rule_eval_result"] = {"verdict": "ALLOW"}
+    res = await main_flow.reopen_session_status(
+        session_id=sid,
+        target="awaiting_overlay",
+        reason="selection_invalidated",
+        only_if_no_selection=True,
+        clear_rule_eval=True,
+    )
+    assert res is not None
+    assert fake.sessions[sid]["status"] == "awaiting_overlay"
+    assert fake.sessions[sid]["rule_eval_result"] is None  # stale 판정 동시 소거

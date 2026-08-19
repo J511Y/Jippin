@@ -651,6 +651,18 @@ async def evaluate_rules_impl(
         js = await main_flow.get_session_judgment_schema(session_id)
     except Exception:  # noqa: BLE001 - 조회 실패는 무시(룰엔진이 미확인으로 처리)
         js = {}
+    # 평가가 근거로 삼는 선택 스냅숏 — verdict 영속을 이 스냅숏 조건부로 만든다
+    # (#verdict-selection-fingerprint). 평가와 영속 사이에 재분석 프루닝/사용자
+    # 재선택으로 저장 선택이 바뀌면 set_session_verdict 가 쓰지 않아, 무효화된 선택
+    # 기준 판정이 report-ready 로 붙지 않는다.
+    snapshot_walls = (
+        js.get("selected_walls") if isinstance(js.get("selected_walls"), list) else []
+    )
+    snapshot_windows = (
+        js.get("selected_windows")
+        if isinstance(js.get("selected_windows"), list)
+        else []
+    )
     # 철거 대상 벽 종류는 **사용자가 도면에서 고른 벽(selected_walls)이 정본**이다 — 모델이
     # judgment_values 로 wall_type 을 넘겨도 선택에서 유도한 값으로 덮어쓴다(모델이 선택과
     # 다른 wall_type 을 우겨 내력벽을 비내력벽으로 잘못 판정/영속하는 걸 막는다,
@@ -744,6 +756,8 @@ async def evaluate_rules_impl(
             rule_eval_result=result,
             expected_asset_id=expected_asset,
             expected_address_id=expected_address,
+            expected_selected_walls=snapshot_walls,
+            expected_selected_windows=snapshot_windows,
         )
         if persisted is None:
             # 평가 도중 입력이 바뀜 — 판정은 사용자에게 보여 주되 리포트엔 영속하지
