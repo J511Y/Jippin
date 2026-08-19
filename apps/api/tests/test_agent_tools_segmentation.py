@@ -2266,3 +2266,117 @@ async def test_session_floorplan_skips_overlay_when_persist_fails(
     assert res["ok"] is True  # 분석 자체는 무르지 않는다(best-effort)
     assert res["overlay_emitted"] is False
     assert emitted == []  # 카드 미방출
+
+
+def test_clip_geometry_digest_is_representation_invariant() -> None:
+    # #canonical-ring-digest: 같은 링이면 시작 꼭짓점 순환·감기 방향·닫힘점 포함 여부와
+    # 무관하게 지문이 같아야 한다 — 표현이 지문을 바꾸면 재분석에서 유효한 선택이
+    # 이유 없이 무효화된다. 기하가 다르면 지문도 달라야 한다.
+    from src.agent.tools.segmentation import _clip_geometry_digest
+
+    base = [0, 0, 10, 0, 10, 10, 0, 10]
+    rotated = [10, 0, 10, 10, 0, 10, 0, 0]  # 시작 꼭짓점 순환
+    rewound = [0, 0, 0, 10, 10, 10, 10, 0]  # 반대 감기 방향
+    closed = [0, 0, 10, 0, 10, 10, 0, 10, 0, 0]  # 닫힘점 포함 표현
+    digests = {_clip_geometry_digest(p) for p in (base, rotated, rewound, closed)}
+    assert len(digests) == 1  # 표현 불변
+    assert _clip_geometry_digest([0, 0, 12, 0, 12, 10, 0, 10]) not in digests
+
+
+def test_rc_priority_scales_past_moderate_hole_counts() -> None:
+    # #hole-count-cap-drop: 분해에 개수 상한이 없다 — RC 섬이 많아도(여기선 25개)
+    # 스택에 남은 유효 잔여를 버리지 않고 전체 면적이 보존된다(종료는 총 구멍 수
+    # 단조 감소로 보장).
+    from shapely.geometry import Polygon
+
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    count = 25
+    rc_regions = [
+        {
+            "region_id": f"rc:{k}",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [
+                50 + 100 * k,
+                40,
+                70 + 100 * k,
+                40,
+                70 + 100 * k,
+                60,
+                50 + 100 * k,
+                60,
+            ],
+        }
+        for k in range(count)
+    ]
+    regions = rc_regions + [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 2600, 0, 2600, 100, 0, 100],
+        }
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    total = 0.0
+    for r in nb:
+        poly = r["polygon"]
+        shape = Polygon([(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)])
+        assert not shape.interiors
+        total += shape.area
+    assert abs(total - (260000.0 - count * 400.0)) < 2.0
+
+
+async def test_session_floorplan_overlay_flag_tracks_inmemory_buffer(
+    monkeypatch,
+) -> None:
+    # #emit-flag-from-buffer: 내구 버퍼(pending_ui) 쓰기가 실패해도 in-memory 버퍼에
+    # 카드가 들어갔으면 이번 스트림 drain 이 카드를 첨부한다 — overlay_emitted 는
+    # 실제 버퍼 도달 기준이어야 에이전트가 중복 방출/모순 안내를 하지 않는다.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.6-luna"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    async def boom_append(**kwargs):
+        raise RuntimeError("durable buffer down")
+
+    monkeypatch.setattr(main_flow, "append_pending_ui", boom_append)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [0, 0, 20, 0, 20, 20, 0, 20],
+                    }
+                ],
+            },
+        )
+
+    ctx = RunContext()
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    assert res["ok"] is True
+    assert len(ctx.pending_ui_components) == 1  # in-memory 버퍼엔 들어갔다
+    assert res["overlay_emitted"] is True  # 버퍼 도달 기준으로 True

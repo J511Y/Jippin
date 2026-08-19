@@ -937,9 +937,29 @@ def _clip_geometry_digest(flat_polygon: list[float]) -> str:
     0.1px 로 라운딩해 부동소수 노이즈는 흡수하고, RC 경계 이동 같은 실제 기하 변화는
     다른 지문 → 다른 id 가 되게 한다. 같은 도면을 같은 결과로 재분석하면 지문이 같아
     저장된 선택이 보존되고, 기하가 달라지면 id 교집합 프루닝이 선택을 무효화한다.
+
+    좌표 나열을 그대로 해시하면 **표현이 지문을 바꾼다** — 같은 링이라도 시작 꼭짓점
+    순환이나 감기 방향(시계/반시계), 닫힘점 포함 여부가 달라지면 다른 문자열이 된다.
+    라운딩 후 (1) 닫힘 중복점 제거, (2) 정방향·역방향 각각을 최소 꼭짓점에서 시작하게
+    회전시킨 뒤 사전순으로 작은 쪽을 채택해 **정준형**으로 해시한다
+    (#canonical-ring-digest) — '같은 기하 = 같은 지문' 이 표현과 무관하게 성립한다.
     """
 
-    data = ";".join(f"{v:.1f}" for v in flat_polygon)
+    pts = [
+        (f"{flat_polygon[i]:.1f}", f"{flat_polygon[i + 1]:.1f}")
+        for i in range(0, len(flat_polygon) - 1, 2)
+    ]
+    if len(pts) > 1 and pts[0] == pts[-1]:
+        pts = pts[:-1]  # 닫힘 중복점 제거(표현 차이 흡수)
+    if not pts:  # 방어 — 호출부는 항상 실제 폴리곤(≥3점)을 넘긴다.
+        return hashlib.md5(b"").hexdigest()[:8]
+
+    def _rotated_min(seq: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        pivot = seq.index(min(seq))
+        return seq[pivot:] + seq[:pivot]
+
+    canonical = min(_rotated_min(pts), _rotated_min(list(reversed(pts))))
+    data = ";".join(f"{x},{y}" for x, y in canonical)
     return hashlib.md5(data.encode("ascii")).hexdigest()[:8]
 
 
@@ -1011,26 +1031,23 @@ def _suppress_rc_overlapped_nonbearing(
         region 계약의 polygon 은 단일 외곽 링이라 구멍을 표현하지 못한다 — exterior 만
         직렬화하면 도려낸 RC 영역이 다시 초록 후보로 살아나 이 규칙의 목적이 무너진다.
 
-        첫 구멍의 중심을 지나는 절단선으로 잘라 워크리스트로 반복 분해한다 — 절단은
-        대상 구멍을 반드시 가르므로 조각들의 총 구멍 수가 단조 감소해 **구멍 개수와
-        무관하게** 종료가 보장된다(재귀 깊이 캡으로 잔여를 통째로 버리던 것 교정,
-        #hole-cap-drop). 수직 절단이 진행을 못 만들면(퇴화 구멍 중심이 경계에 정렬)
-        수평으로 재시도하고, 그래도 안 되면 그 조각만 포기한다. guard 는 무한 루프
-        방어용 상한으로 정상 경로에서는 도달하지 않는다.
+        첫 구멍의 중심을 지나는 절단선으로 잘라 워크리스트로 반복 분해한다 — 진행
+        판정(총 구멍 수 감소)을 통과한 절단만 스택에 되돌아가므로 **스택 전체의 구멍
+        총합이 단조 감소**하고, 구멍 없는 조각은 pop 즉시 out 으로 빠진다. 따라서 구멍
+        개수와 무관하게 종료가 보장되며 **개수 상한을 두지 않는다** — 상한(재귀 깊이
+        캡·처리 횟수 캡)은 정상 진행 중에도 스택에 남은 유효 잔여를 통째로 버린다
+        (#hole-cap-drop, #hole-count-cap-drop). 수직 절단이 진행을 못 만들면(퇴화 구멍
+        중심이 경계에 정렬) 수평으로 재시도하고, 그래도 안 되면 **그 조각만** 포기한다
+        (큐에 남은 다른 조각은 계속 처리).
         """
 
         out: list[Any] = []
         stack = [p]
-        guard = 0
         while stack:
             cur = stack.pop()
             if not cur.interiors:
                 out.append(cur)
                 continue
-            guard += 1
-            if guard > 1024:
-                log.warning("segmentation_hole_decompose_guard_exceeded")
-                break
             hole = cur.interiors[0]
             progressed = False
             for cut_x, cut_y in (
@@ -1347,11 +1364,18 @@ async def segment_session_floorplan(
 
         # 오버레이는 머지된(VLM 교정 반영) regions 로 띄운다.
         spec = build_overlay_spec(asset_id=asset["id"], image=image, regions=regions)
-        with contextlib.suppress(Exception):
+        try:
             await emit_ui_component_impl(
                 run_context=run_context, run_id=run_id, components=[spec]
             )
             overlay_emitted = True
+        except Exception:  # noqa: BLE001 - 방출 실패는 분석을 무르지 않는다
+            # emit 은 in-memory 버퍼에 먼저 넣고 내구 버퍼(pending_ui)에 쓴다 — 내구
+            # 쓰기가 실패해도 in-memory 에 들어갔으면 이번 스트림의 drain 이 카드를
+            # 첨부한다. 그때 False 를 돌리면 에이전트가 "오버레이 없음"으로 재시도해
+            # 카드가 중복되거나 안내가 모순된다 — **버퍼 도달 여부**로 판정한다
+            # (#emit-flag-from-buffer).
+            overlay_emitted = spec in getattr(run_context, "pending_ui_components", [])
 
     # 요약 — 세그멘테이션 + VLM 보완. ANALYSIS_LOW_CONFIDENCE(0.6 미만)면 재확인 권장.
     #
