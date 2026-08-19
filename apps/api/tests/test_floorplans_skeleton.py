@@ -616,3 +616,65 @@ async def test_candidate_snapshot_service_preserves_snapshot_in_response(fake_db
     # 참조가 새지 않도록 ``dict(...)`` 로 복사해 저장한다.
     snapshot["display_label"] = "MUTATED"
     assert saved[0]["floorplan_snapshot"]["display_label"] == "84A 표준 평면"
+
+
+async def test_selected_walls_validates_against_latest_objects(fake_db):
+    # #stale-overlay-submission: 이전 메시지에 남은 옛 오버레이 카드는 여전히 제출이
+    # 가능하다 — 재분석으로 사라졌거나 내력벽이 된 id 는 409 로 거절해, 프루닝으로
+    # 걷어낸 선택이 옛 카드 제출로 되살아나지 않게 한다. 빈 목록(선택 해제)은 통과.
+    from types import SimpleNamespace
+
+    from src.routers.floorplans import SelectedWallsRequest, update_selected_walls
+
+    session_id, owner = await _create_session_direct()
+    requester = SimpleNamespace(user_id=owner, is_anonymous=False)
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={
+            "wall_objects": [
+                {"id": "w1", "wall_type": "NON_LOAD_BEARING"},
+                {"id": "w2", "wall_type": "LOAD_BEARING"},
+            ],
+            "window_objects": [{"id": "g1"}],
+        },
+    )
+
+    # 정상: 선택 가능 벽(비내력) + 창호.
+    res = await update_selected_walls(
+        SelectedWallsRequest(region_ids=["w1"], window_region_ids=["g1"]),
+        session_id=session_id,
+        requester=requester,
+    )
+    assert res.selected_walls == ["w1"]
+    assert res.selected_windows == ["g1"]
+
+    # 존재하지 않는(프루닝된) id → 거절.
+    with pytest.raises(ZippinException) as exc:
+        await update_selected_walls(
+            SelectedWallsRequest(region_ids=["ghost:1"]),
+            session_id=session_id,
+            requester=requester,
+        )
+    assert exc.value.code == "SELECTION_STALE"
+
+    # 내력벽 id → 거절(오버레이에서도 선택 불가인 벽).
+    with pytest.raises(ZippinException):
+        await update_selected_walls(
+            SelectedWallsRequest(region_ids=["w2"]),
+            session_id=session_id,
+            requester=requester,
+        )
+
+    # 거절이 기존 선택을 건드리지 않았고, 빈 목록(선택 해제)은 검증 없이 통과한다.
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    assert session["judgment_schema"]["selected_walls"] == ["w1"]
+    res = await update_selected_walls(
+        SelectedWallsRequest(region_ids=[]),
+        session_id=session_id,
+        requester=requester,
+    )
+    assert res.selected_walls == []

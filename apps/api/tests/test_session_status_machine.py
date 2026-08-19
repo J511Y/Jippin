@@ -206,3 +206,39 @@ async def test_advance_rejects_unknown_status(monkeypatch) -> None:
 
     with pytest.raises(ValueError):
         await main_flow.advance_session_status(session_id=sid, target="bogus")
+
+
+async def test_reopen_skipped_when_selection_alive_at_regress_time(monkeypatch) -> None:
+    # #reopen-recheck-selection: 프루닝(빈 선택) 기록과 재개 사이에 사용자의 새 선택
+    # PATCH 가 끼어들 수 있다 — 재개는 되돌리기 직전 저장된 선택이 여전히 비어 있을
+    # 때만 수행한다(only_if_no_selection).
+    fake = install_main_flow_fake(monkeypatch)
+    owner, sid = await _new_session(fake)
+    await main_flow.merge_judgment_schema(
+        session_id=sid,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"selected_walls": ["w1"]},
+    )
+    assert fake.sessions[sid]["status"] == "collecting_info"
+
+    # 동시 PATCH 가 선택을 되살린 상태를 재현 — 살아 있는 선택이 있으면 no-op.
+    res = await main_flow.reopen_session_status(
+        session_id=sid,
+        target="awaiting_overlay",
+        reason="selection_invalidated",
+        only_if_no_selection=True,
+    )
+    assert res is None
+    assert fake.sessions[sid]["status"] == "collecting_info"
+
+    # 선택이 실제로 비어 있으면 되돌린다.
+    fake.sessions[sid]["judgment_schema"]["selected_walls"] = []
+    res = await main_flow.reopen_session_status(
+        session_id=sid,
+        target="awaiting_overlay",
+        reason="selection_invalidated",
+        only_if_no_selection=True,
+    )
+    assert res is not None
+    assert fake.sessions[sid]["status"] == "awaiting_overlay"

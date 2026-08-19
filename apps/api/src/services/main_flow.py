@@ -256,11 +256,21 @@ async def advance_session_status(
         return None
 
 
+def _has_live_selection(judgment_schema: Any) -> bool:
+    """판단스키마에 비어 있지 않은 선택(selected_walls/windows)이 하나라도 있으면 True."""
+    js = judgment_schema if isinstance(judgment_schema, dict) else {}
+    return any(
+        isinstance(js.get(key), list) and len(js[key]) > 0
+        for key in ("selected_walls", "selected_windows")
+    )
+
+
 async def _db_regress_session_status(
     session_id: uuid.UUID,
     target: str,
     *,
     reason: str | None,
+    only_if_no_selection: bool = False,
 ) -> dict[str, Any] | None:
     """status 를 명시적으로 **뒤로** 되돌린다(재개 전용, 단일 트랜잭션).
 
@@ -269,20 +279,30 @@ async def _db_regress_session_status(
     현실과 어긋난다 — 이때만 이 경로로 되돌린다. 마일스톤 이벤트와 달리 재개 이벤트는
     매번 기록한다(반복 재개도 각각 의미 있는 이력). 종료 상태와 handoff(상담 전환 —
     사람 소유 단계)는 건드리지 않는다. 현재가 target 이하면 no-op(None).
+
+    ``only_if_no_selection`` 이면 **같은 트랜잭션에서** 현재 judgment_schema 를 다시
+    읽어, 살아 있는 선택이 하나라도 있으면 되돌리지 않는다 — 프루닝(빈 선택) 기록과
+    재개 사이에 사용자의 새 선택 PATCH 가 끼어든 경우, 그 최신 선택을 배지 후퇴로
+    덮어쓰지 않게 한다(#reopen-recheck-selection).
     """
 
     target_rank = _STATUS_RANK[target]
     async with get_engine().begin() as conn:
-        current = (
+        row0 = (
             await conn.execute(
-                sa.select(_SESSIONS.c.status)
+                sa.select(_SESSIONS.c.status, _SESSIONS.c.judgment_schema)
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
             )
-        ).scalar_one_or_none()
-        if current is None or current in _TERMINAL_STATUSES or current == "handoff":
+        ).one_or_none()
+        if row0 is None:
+            return None
+        current = row0.status
+        if current in _TERMINAL_STATUSES or current == "handoff":
             return None
         if _STATUS_RANK.get(current, -1) <= target_rank:
+            return None
+        if only_if_no_selection and _has_live_selection(row0.judgment_schema):
             return None
         await conn.execute(
             sa.insert(_SESSION_STATUS_EVENTS).values(
@@ -313,18 +333,25 @@ async def reopen_session_status(
     session_id: uuid.UUID,
     target: str,
     reason: str | None = None,
+    only_if_no_selection: bool = False,
 ) -> dict[str, Any] | None:
     """세션 status 를 이전 단계로 재개한다(best-effort, runtime-only).
 
     advance_session_status 의 역방향 쌍 — 입력 무효화로 사용자가 이전 단계를 다시
     수행해야 할 때만 쓴다(#selection-invalidation-reopen). 실패는 삼킨다(status 는
-    진행 상황의 투영일 뿐 정본 데이터가 아니다).
+    진행 상황의 투영일 뿐 정본 데이터가 아니다). ``only_if_no_selection`` 은 되돌리기
+    직전 같은 트랜잭션에서 선택이 여전히 비어 있는지 재확인한다(동시 PATCH 방어).
     """
 
     if target not in _STATUS_RANK:
         raise ValueError(f"reopen_session_status: 알 수 없는 상태 {target!r}.")
     try:
-        return await _db_regress_session_status(session_id, target, reason=reason)
+        return await _db_regress_session_status(
+            session_id,
+            target,
+            reason=reason,
+            only_if_no_selection=only_if_no_selection,
+        )
     except Exception:  # noqa: BLE001 - 상태 재개 실패는 플로우를 막지 않는다
         _log.warning(
             "session_status_reopen_failed",
@@ -1021,10 +1048,14 @@ async def merge_judgment_schema(
     ):
         # 선택 키가 패치됐는데 병합 결과 살아 있는 선택이 하나도 없다 — 사용자가 다시
         # 골라야 하므로 오버레이 단계로 재개한다(이미 그 이하 단계면 no-op).
+        # only_if_no_selection: 빈 선택 기록과 이 재개 사이에 사용자의 새 선택 PATCH 가
+        # 끼어들 수 있다 — 되돌리기 직전 같은 트랜잭션에서 선택이 여전히 비었는지
+        # 재확인해, 최신 선택을 배지 후퇴로 덮어쓰지 않는다(#reopen-recheck-selection).
         await reopen_session_status(
             session_id=session_id,
             target="awaiting_overlay",
             reason="selection_invalidated",
+            only_if_no_selection=True,
         )
     return merged
 

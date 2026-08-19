@@ -2060,3 +2060,49 @@ def test_rc_priority_size_threshold_ignores_decomposition_cuts() -> None:
         assert not shape.contains(rc_center)  # RC 영역은 여전히 비어 있다
         total += shape.area
     assert abs(total - (10000.0 - 80.0)) < 1.0  # 연결 잔여 전체가 보존된다
+
+
+def test_rc_priority_preserves_geometry_with_many_holes() -> None:
+    # #hole-cap-drop: RC 섬이 8개를 넘어도(여기선 9개) 분해가 잔여를 통째로 버리지
+    # 않는다 — 워크리스트 반복은 총 구멍 수가 단조 감소해 개수와 무관하게 끝난다.
+    from shapely.geometry import Point, Polygon
+
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    rc_regions = [
+        {
+            "region_id": f"rc:{k}",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [
+                50 + 100 * k,
+                40,
+                70 + 100 * k,
+                40,
+                70 + 100 * k,
+                60,
+                50 + 100 * k,
+                60,
+            ],
+        }
+        for k in range(9)
+    ]
+    regions = rc_regions + [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 1000, 0, 1000, 100, 0, 100],
+        }
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    assert nb  # 잔여가 통째로 사라지지 않는다
+    total = 0.0
+    centers = [Point(60 + 100 * k, 50) for k in range(9)]
+    for r in nb:
+        poly = r["polygon"]
+        shape = Polygon([(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)])
+        assert not shape.interiors  # 모든 조각은 구멍이 없다
+        assert all(not shape.contains(c) for c in centers)  # RC 영역은 비어 있다
+        total += shape.area
+    # 벽 100,000 − RC 9×400 = 96,400 이 (노이즈 컷 오차 내에서) 보존된다.
+    assert abs(total - 96400.0) < 2.0

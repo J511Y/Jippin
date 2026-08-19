@@ -970,33 +970,69 @@ def _suppress_rc_overlapped_nonbearing(
     except Exception:  # noqa: BLE001 - shapely 미존재 시 억제 없이 진행
         return regions
 
-    def _hole_free_pieces(p: Any, depth: int = 0) -> list[Any]:
-        """내부 링(구멍)이 있는 폴리곤을 구멍 없는 조각들로 분해한다.
+    def _split_across(p: Any, *, cut_x: float | None, cut_y: float | None) -> list[Any]:
+        """폴리곤을 수직(cut_x) 또는 수평(cut_y) 절단선으로 두 반쪽에 교차시킨다."""
+        minx, miny, maxx, maxy = p.bounds
+        if cut_x is not None:
+            halves = [
+                p.intersection(box(minx - 1.0, miny - 1.0, cut_x, maxy + 1.0)),
+                p.intersection(box(cut_x, miny - 1.0, maxx + 1.0, maxy + 1.0)),
+            ]
+        else:
+            halves = [
+                p.intersection(box(minx - 1.0, miny - 1.0, maxx + 1.0, cut_y)),
+                p.intersection(box(minx - 1.0, cut_y, maxx + 1.0, maxy + 1.0)),
+            ]
+        parts: list[Any] = []
+        for half in halves:
+            for part in list(half.geoms) if hasattr(half, "geoms") else [half]:
+                if part.geom_type == "Polygon" and not part.is_empty and part.area > 0:
+                    parts.append(part)
+        return parts
+
+    def _hole_free_pieces(p: Any) -> list[Any]:
+        """내부 링(구멍)이 있는 폴리곤을 구멍 없는 조각들로 분해한다(반복 처리).
 
         RC 가 비내력벽 **안에 완전히 포함**되면 difference 가 구멍 뚫린 폴리곤을 내는데,
         region 계약의 polygon 은 단일 외곽 링이라 구멍을 표현하지 못한다 — exterior 만
         직렬화하면 도려낸 RC 영역이 다시 초록 후보로 살아나 이 규칙의 목적이 무너진다.
-        첫 구멍의 중심을 지나는 수직선으로 잘라 재귀 분해한다(절단선이 그 구멍을 가르므로
-        구멍 수가 단조 감소 → 종료 보장. depth 캡은 방어용).
+
+        첫 구멍의 중심을 지나는 절단선으로 잘라 워크리스트로 반복 분해한다 — 절단은
+        대상 구멍을 반드시 가르므로 조각들의 총 구멍 수가 단조 감소해 **구멍 개수와
+        무관하게** 종료가 보장된다(재귀 깊이 캡으로 잔여를 통째로 버리던 것 교정,
+        #hole-cap-drop). 수직 절단이 진행을 못 만들면(퇴화 구멍 중심이 경계에 정렬)
+        수평으로 재시도하고, 그래도 안 되면 그 조각만 포기한다. guard 는 무한 루프
+        방어용 상한으로 정상 경로에서는 도달하지 않는다.
         """
 
-        if not p.interiors:
-            return [p]
-        if depth >= 8:  # 구멍 8개 초과는 비정상 도형 — 조각을 포기(호출부가 드롭)
-            return []
-        minx, miny, maxx, maxy = p.bounds
-        cx = float(p.interiors[0].centroid.x)
-        halves = [
-            p.intersection(box(minx - 1.0, miny - 1.0, cx, maxy + 1.0)),
-            p.intersection(box(cx, miny - 1.0, maxx + 1.0, maxy + 1.0)),
-        ]
-        pieces: list[Any] = []
-        for half in halves:
-            parts = list(half.geoms) if hasattr(half, "geoms") else [half]
-            for part in parts:
-                if part.geom_type == "Polygon" and not part.is_empty and part.area > 0:
-                    pieces.extend(_hole_free_pieces(part, depth + 1))
-        return pieces
+        out: list[Any] = []
+        stack = [p]
+        guard = 0
+        while stack:
+            cur = stack.pop()
+            if not cur.interiors:
+                out.append(cur)
+                continue
+            guard += 1
+            if guard > 1024:
+                log.warning("segmentation_hole_decompose_guard_exceeded")
+                break
+            hole = cur.interiors[0]
+            progressed = False
+            for cut_x, cut_y in (
+                (float(hole.centroid.x), None),
+                (None, float(hole.centroid.y)),
+            ):
+                parts = _split_across(cur, cut_x=cut_x, cut_y=cut_y)
+                # 진행 판정 — 총 구멍 수가 줄었을 때만 채택(경계 정렬 절단은 원본을
+                # 그대로 돌려줘 무한 루프가 된다).
+                if sum(len(part.interiors) for part in parts) < len(cur.interiors):
+                    stack.extend(parts)
+                    progressed = True
+                    break
+            if not progressed:
+                log.warning("segmentation_hole_decompose_no_progress")
+        return out
 
     def _to_geom(r: dict[str, Any]) -> Any | None:
         poly = r.get("polygon") or []

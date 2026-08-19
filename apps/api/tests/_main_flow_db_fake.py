@@ -198,10 +198,13 @@ class FakeMainFlowDb:
         target: str,
         *,
         reason: str | None,
+        only_if_no_selection: bool = False,
     ) -> dict[str, Any] | None:
         """status 명시적 후퇴(재개 전용, real seam 미러) — 재개 이벤트는 매번 기록.
 
         종료 상태와 handoff 는 건드리지 않고, 현재가 target 이하면 no-op(None).
+        only_if_no_selection 이면 현재 judgment_schema 에 살아 있는 선택이 있을 때
+        되돌리지 않는다(동시 PATCH 방어, real seam 미러).
         """
 
         rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
@@ -210,6 +213,10 @@ class FakeMainFlowDb:
             return None
         from_status = row["status"]
         if rank.get(from_status, -1) <= rank[target]:
+            return None
+        if only_if_no_selection and main_flow._has_live_selection(
+            row.get("judgment_schema")
+        ):
             return None
         self.session_status_events.append(
             {
