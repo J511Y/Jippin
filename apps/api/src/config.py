@@ -206,9 +206,9 @@ class Settings(BaseSettings):
     # 배포된 엔드포인트가 서빙하는 모델의 어휘 세대(3|4). **요청 파라미터는 응답을 보기
     # 전에 정해야 하므로**, 응답으로 어휘를 판별하는 것만으로는 threshold 를 맞출 수 없다
     # (#threshold-cutover). 엔드포인트 모델 교체는 앱 배포와 별개의 수동 작업이라, 교체와
-    # **같이 뒤집는 스위치**를 설정으로 둔다. 기본 3 = 아직 옛 모델(교체 전 안전값).
+    # **같이 뒤집는 스위치**를 설정으로 둔다. 운영 엔드포인트가 v4 로 교체되었으므로 기본도 4.
     # 응답 어휘가 이 값과 다르면 도구가 경고 로그를 남긴다(뒤집기를 잊어도 드러나게).
-    hf_segmentation_expected_vocab_version: int = Field(default=3)
+    hf_segmentation_expected_vocab_version: int = Field(default=4)
     # 추론 파라미터. 리사이즈 파라미터는 두지 않는다 — v4 는 원본 픽셀 타일 추론이 전제라
     # 입력을 축소하면 성능이 붕괴한다(도구가 threshold/mask_threshold/max_tiles 만 넘긴다).
     # threshold 는 None 이면 어휘 세대 기본값을 쓴다: v3=0.5(기존 운영값), v4=0.35 — v4 의

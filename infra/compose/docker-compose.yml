@@ -167,7 +167,7 @@ services:
       # 서빙 중인 모델의 어휘 세대(3|4) — 엔드포인트 모델 교체와 함께 뒤집는다. 요청
       # threshold 가 이 값으로 정해진다(v3=0.5, v4=0.35). THRESHOLD 를 직접 넣으면 고정.
       # MAX_TILES 는 도면당 작업량 상한(초과 시 추론 전 거절).
-      HF_SEGMENTATION_EXPECTED_VOCAB_VERSION: "${HF_SEGMENTATION_EXPECTED_VOCAB_VERSION:-3}"
+      HF_SEGMENTATION_EXPECTED_VOCAB_VERSION: "${HF_SEGMENTATION_EXPECTED_VOCAB_VERSION:-4}"
       HF_SEGMENTATION_THRESHOLD: "${HF_SEGMENTATION_THRESHOLD:-}"
       HF_SEGMENTATION_MAX_TILES: "${HF_SEGMENTATION_MAX_TILES:-80}"
     ports:

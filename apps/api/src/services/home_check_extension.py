@@ -367,8 +367,9 @@ def _build_invoke(settings: "Settings") -> InvokeFn:
         api_key=api_key,
         max_retries=1,
         temperature=0,
+        use_responses_api=True,
         store=getattr(settings, "openai_store_logs", False),
-        model_kwargs={"metadata": {"app": "jippin-home-check-extension"}},
+        extra_body={"metadata": {"app": "jippin-home-check-extension"}},
     )
 
     async def _invoke(messages: list[dict[str, str]]) -> Any:

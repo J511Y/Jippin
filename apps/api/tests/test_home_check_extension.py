@@ -8,11 +8,14 @@ LLM 호출은 fake ``invoke`` 로 주입해 네트워크 없이 검증한다. �
 from __future__ import annotations
 
 import json
+import sys
+from types import SimpleNamespace
 
 import pytest
 
 from src.services.home_check_extension import (
     ExtensionJudgment,
+    _build_invoke,
     build_messages,
     judge_extension,
     parse_judgment,
@@ -49,6 +52,36 @@ class _Settings:
     openai_api_key = None  # _build_invoke 는 쓰지 않는다(invoke 주입).
     openai_store_logs = False
     extension_judge_timeout_seconds = 5.0
+
+
+def test_build_invoke_uses_responses_api(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeChatOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def ainvoke(self, messages):
+            return _Resp('{"verdict":"legal","reason":"ok"}')
+
+    monkeypatch.setitem(
+        sys.modules,
+        "langchain_openai",
+        SimpleNamespace(ChatOpenAI=_FakeChatOpenAI),
+    )
+    settings = SimpleNamespace(
+        agent_model="openai:gpt-5.6-luna",
+        openai_api_key="test-key",
+        openai_store_logs=False,
+    )
+
+    _build_invoke(settings)
+
+    assert captured["model"] == "gpt-5.6-luna"
+    assert captured["use_responses_api"] is True
+    assert captured["extra_body"] == {
+        "metadata": {"app": "jippin-home-check-extension"}
+    }
 
 
 # ---------------------------------------------------------------------------

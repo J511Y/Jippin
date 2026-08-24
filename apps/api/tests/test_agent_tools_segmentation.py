@@ -232,6 +232,10 @@ async def test_threshold_follows_expected_vocab_version() -> None:
     assert seen[-1] == 0.42
 
 
+def test_missing_vocab_setting_falls_back_to_deployed_v4() -> None:
+    assert seg_module._expected_vocab_version(SimpleNamespace()) == 4
+
+
 async def test_vocab_mismatch_is_warned(monkeypatch) -> None:
     # 설정 세대와 실제 서빙 모델이 어긋나면(교체 전후 스위치 뒤집기 누락) 경고로 드러난다.
     warnings: list[str] = []

@@ -149,6 +149,30 @@ async def test_translate_stream_messages_skips_non_ai_chunks() -> None:
     assert [s for s in signals if isinstance(s, TokenSignal)] == []
 
 
+async def test_translate_stream_reads_responses_api_content_blocks() -> None:
+    # Responses API 는 reasoning/text 블록 목록을 content 로 반환한다. 사용자에게는 text
+    # 블록만 흘리고 reasoning 요약/내부 블록은 노출하지 않는다.
+    response_chunk = SimpleNamespace(
+        content=[
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "내부"}],
+            },
+            {"type": "text", "text": "분석 완료"},
+        ],
+        tool_calls=None,
+        type="ai",
+    )
+    signals = [
+        s
+        async for s in translate_stream(
+            _aiter([("messages", (response_chunk, {}))]), tool_kinds={}
+        )
+    ]
+    tokens = [s for s in signals if isinstance(s, TokenSignal)]
+    assert [token.delta for token in tokens] == ["분석 완료"]
+
+
 async def test_translate_stream_messages_skips_internal_llm_chunks() -> None:
     # #vlm-token-leak: 도구 실행(tools 노드) 안의 내부 LLM(VLM AI-002) 출력은 config
     # 전파로 messages 모드에 잡힌다 — 내부 태그 또는 tools 노드 발원 청크는 토큰으로

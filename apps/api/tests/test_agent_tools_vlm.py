@@ -163,6 +163,8 @@ async def test_interpret_uses_dedicated_vlm_model(monkeypatch) -> None:
         settings=settings,
     )
     assert captured["model"] == "gpt-5.6-luna"
+    assert captured["use_responses_api"] is True
+    assert captured["extra_body"] == {"metadata": {"app": "jippin-vlm", "env": "test"}}
     assert res is not None and res["model"] == "gpt-5.6-luna"
 
 

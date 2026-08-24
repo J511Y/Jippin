@@ -106,7 +106,7 @@ _THRESHOLD_BY_VOCAB: dict[int, float] = {3: 0.5, 4: 0.35}
 
 
 def _expected_vocab_version(settings: "Settings") -> int:
-    raw = getattr(settings, "hf_segmentation_expected_vocab_version", 3)
+    raw = getattr(settings, "hf_segmentation_expected_vocab_version", 4)
     return raw if isinstance(raw, int) and raw in _THRESHOLD_BY_VOCAB else 3
 
 

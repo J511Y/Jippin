@@ -1,6 +1,6 @@
 # ADR 0010 — 도면 세그멘테이션 v4: 벽 어휘 3분화와 원본 해상도 타일 추론
 
-- **상태**: **Accepted (2026-08-13)** — 모델 레포 v4 인계에 따른 앱 정합.
+- **상태**: **Accepted (2026-08-13, 2026-08-24 운영 cutover)** — 모델 레포 v4 인계에 따른 앱 정합.
 - **관련**: ADR-0001 §7.4(AI 모델 선정), `packages/contracts/schemas/segmentation-result.schema.json`
   (**1.3.0 → 1.4.0**), `apps/api/src/agent/tools/segmentation.py`,
   `apps/web/components/a2ui/cards/FloorplanOverlayCard.tsx`.
@@ -31,6 +31,7 @@ stride 4 에서 동작하는 것까지 겹쳐 얇은 벽이 서브픽셀이 됐�
 | 판단 스키마 매핑 | `wall_nonbearing → NON_LOAD_BEARING`, `wall_other`·`wall_unknown → UNKNOWN`(룰엔진 HOLD), `wall_reinforced_concrete → LOAD_BEARING`. **비내력 후보군 = nonbearing ∪ other 지만 신뢰 등급을 나누는 것이 분리의 목적**이다. |
 | 입력 해상도 | **원본 픽셀 그대로 전송.** 리사이즈 파라미터(`max_inference_side`)를 계약·설정·요청에서 제거한다. 핸들러가 1536 타일/256 겹침으로 잘라 추론 후 전체 좌표로 합친다. |
 | threshold | 운영 기본 **0.35**(구 0.5). 비내력 계열은 점수가 낮게 나와 0.5 에서 상당수가 걸러진다(모델 평가도 0.35 축). |
+| 어휘 세대 설정 | 운영 HF Endpoint가 v4로 교체되었으므로 `HF_SEGMENTATION_EXPECTED_VOCAB_VERSION`과 코드·compose 기본값을 **4**로 맞춘다. 명시 override가 없을 때도 v4 threshold(0.35)를 선택해야 한다. |
 | 작업량 상한 | `max_tiles`(기본 80)를 **명시 전송**한다. 업로드 게이트는 content-type 과 인코딩 크기(50MiB)만 보므로, 고압축 이미지가 디코드 후 거대한 캔버스로 펼쳐지면 타일 루프가 폭주한다. |
 | 조각 병합 | 타일 경계에서 갈라진 조각을 앱에서 잇는다. **양쪽 모두 경계 조각**이고 원본 도형 사이 거리가 3px 이내이며 두 타일 집합이 **겹치지 않는** 쌍만 대상(한 타일을 공유하면 경계로 갈린 조각이 아니라 남남 벽). VLM 교정으로 클래스가 같아지면 한 번 더 병합한다. |
 | 저장분 호환 | 오버레이 payload 에 `vocab_version` 을 싣는다. 판별자가 없는 payload(=v3 저장분)는 옛 의미로 정규화해 그린다. |
