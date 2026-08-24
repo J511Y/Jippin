@@ -150,9 +150,10 @@ class Settings(BaseSettings):
     # 단독으로 degrade(VLM_TIMEOUT). 0.6 미만 신뢰도는 ANALYSIS_LOW_CONFIDENCE 로 재업로드 권장.
     vlm_floorplan_enabled: bool = Field(default=True)
     vlm_floorplan_timeout_seconds: int = Field(default=60)
-    # VLM 전용 모델(2026-08-19 부터 agent_model 과 분리) — 도면 이미지 판독 품질이 대화
-    # 모델과 별개 축이라 따로 올린다. agent_model 과 같은 "openai:<model>" 형식만 지원.
-    vlm_model: str = Field(default="openai:gpt-5.6-luna")
+    # VLM 전용 override(2026-08-19 부터 agent_model 과 분리) — 미설정/빈 문자열이면
+    # agent_model 을 상속한다. 독립 조정이 필요할 때만 같은 "openai:<model>" 형식으로
+    # 명시한다. effective 기본은 agent_model 과 같은 gpt-5.6-luna.
+    vlm_model: str | None = Field(default=None)
 
     # 우리집 체크 — 신고 확장 ↔ 대장 변동사항 LLM 대조 판정(home_check_extension). 운영 default
     # 는 False — 켜지 않으면 판정을 건너뛰어 리포트에 extension_check 가 없고 OpenAI 의존이

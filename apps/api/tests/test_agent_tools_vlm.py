@@ -168,10 +168,11 @@ async def test_interpret_uses_dedicated_vlm_model(monkeypatch) -> None:
     assert res is not None and res["model"] == "gpt-5.6-luna"
 
 
-async def test_interpret_falls_back_to_agent_model_without_vlm_model(
+async def test_interpret_falls_back_to_agent_model_without_vlm_override(
     monkeypatch,
 ) -> None:
-    # 구 설정 스텁(vlm_model 부재)은 agent_model 로 폴백 — 배포 스큐/롤백 안전망.
+    # 실제 Settings 기본(vlm_model=None)은 agent_model 로 폴백 — AGENT_MODEL 만 바꾼
+    # 롤백도 VLM 에 적용된다. 빈 문자열 compose 주입도 같은 경로다.
     import sys
 
     captured: dict[str, object] = {}
@@ -190,6 +191,7 @@ async def test_interpret_falls_back_to_agent_model_without_vlm_model(
     )
     settings = SimpleNamespace(
         vlm_floorplan_enabled=True,
+        vlm_model="",  # compose 의 빈 override 경로
         agent_model="openai:gpt-5.4-mini",
         openai_api_key="k",
         openai_store_logs=False,

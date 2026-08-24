@@ -28,7 +28,7 @@ API를 사용해야 하므로, 단순 모델명 교체만으로는 운영 전환
 | 항목 | 결정 |
 |---|---|
 | 대화형 에이전트 모델 | `config.py::agent_model` 기본값 **`openai:gpt-5.6-luna`** (구 `gpt-5.4-mini`). deepagents/LangGraph 런타임은 불변. |
-| 도면 VLM(AI-002) 모델 | **`config.py::vlm_model` 신설·분리**, 기본값 **`openai:gpt-5.6-luna`**. 값은 현재 에이전트와 같지만 설정을 분리해 **독립 조정·롤백**이 가능하다(도면 판독 품질과 대화 품질은 별개 축). `vlm_model` 부재(구 설정/롤백) 시 `agent_model` 폴백. |
+| 도면 VLM(AI-002) 모델 | **`config.py::vlm_model` 신설·분리**. 미설정/빈 값이면 `agent_model`을 상속해 effective 기본은 **`openai:gpt-5.6-luna`**다. 값을 명시하면 **독립 조정·롤백**이 가능하다(도면 판독 품질과 대화 품질은 별개 축). |
 | 확장 대조 판정(home_check_extension) | 별도 설정 없이 `agent_model` 공유 유지 — 본 전환을 따라 luna 로 이동. |
 | OpenAI API | 모든 `ChatOpenAI` 호출(대화형 에이전트·VLM·확장 대조)은 `use_responses_api=True`로 **Responses API를 명시**한다. OpenAI 요청 `metadata`는 현행 LangChain 버전에서 `extra_body`로 전달한다. |
 | 대화 이력 | LangGraph Postgres 체크포인터를 정본으로 유지한다. OpenAI `previous_response_id` 체인은 사용하지 않아 이력을 이중 관리하지 않는다. |

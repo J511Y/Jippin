@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+import pytest
+
 from src.agent.tools import domain
 from src.errors import ZippinException
 from src.services import home_check, leads, main_flow
@@ -692,6 +694,44 @@ async def test_evaluate_rules_agent_cross_turn_no_analysis_skips_persist(
     )
     assert res["ok"] is True
     assert fake.sessions[session_id]["rule_eval_result"] is None  # 영속 안 됨
+
+
+async def test_legacy_stale_selection_cannot_advance_or_persist_verdict(
+    monkeypatch,
+) -> None:
+    # 구 web 번들은 409 SELECTION_STALE 를 무시하고 "선택 완료" 채팅을 보낼 수 있다.
+    # 서버는 stale 선택을 원자적으로 거절하고, 모델이 이어서 비내력 판정을 주장해도
+    # 분석 객체+실제 저장 선택이 없으므로 상태/판정을 전진시키지 않는다.
+    session_id, fake = await _session_for_rules(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    fake.sessions[session_id]["status"] = "awaiting_overlay"
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [{"id": "new:1", "wall_type": "NON_LOAD_BEARING"}]
+    }
+
+    with pytest.raises(ZippinException) as exc:
+        await main_flow.merge_judgment_schema(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            patch={"selected_walls": ["stale:1"]},
+            validate_selection=True,
+        )
+    assert exc.value.code == "SELECTION_STALE"
+    assert "selected_walls" not in fake.sessions[session_id]["judgment_schema"]
+    assert fake.sessions[session_id]["status"] == "awaiting_overlay"
+
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={
+            "wall_type": "NON_LOAD_BEARING",
+            "wall_demolition_target": True,
+        },
+        run_context=domain.RunContext(),
+    )
+    assert res["ok"] is True
+    assert fake.sessions[session_id]["rule_eval_result"] is None
+    assert fake.sessions[session_id]["status"] == "awaiting_overlay"
 
 
 async def test_merge_judgment_schema_clears_stale_verdict(monkeypatch) -> None:
