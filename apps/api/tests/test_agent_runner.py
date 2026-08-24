@@ -19,7 +19,7 @@ import pytest
 
 from src.agent.events import SseEventStream
 from src.agent.projection import AssistantMessage, ToolEnd, ToolStart
-from src.agent.runner import AgentRunner, TokenSignal, translate_stream
+from src.agent.runner import AgentRunner, TokenSignal, ToolProgress, translate_stream
 from src.services import main_flow
 from tests._main_flow_db_fake import FakeMainFlowDb, install_main_flow_fake
 
@@ -64,6 +64,14 @@ def _chunks() -> list[Any]:
     return [
         ("messages", (SimpleNamespace(content="안녕", tool_calls=None), {})),
         ("updates", {"agent": {"messages": [_ai_tool_call()]}}),
+        (
+            "custom",
+            {
+                "type": "tool_progress",
+                "tool_name": "segment_floorplan",
+                "summary": "도면에서 벽과 공간을 찾고 있어요",
+            },
+        ),
         ("updates", {"tools": {"messages": [_tool_message()]}}),
         ("updates", {"agent": {"messages": [_final_ai()]}}),
     ]
@@ -111,6 +119,12 @@ async def test_translate_stream_emits_expected_signals() -> None:
     assert len(ends) == 1
     assert ends[0].lc_tool_call_id == "tc1"
     assert ends[0].status == "succeeded"
+
+    progress = [s for s in signals if isinstance(s, ToolProgress)]
+    assert len(progress) == 1
+    assert progress[0].tool_name == "segment_floorplan"
+    assert progress[0].tool_kind == "ai_model"
+    assert progress[0].summary == "도면에서 벽과 공간을 찾고 있어요"
 
     messages = [s for s in signals if isinstance(s, AssistantMessage)]
     assert len(messages) == 1
@@ -256,6 +270,12 @@ async def test_runner_streams_sse_and_finalizes(fake: FakeMainFlowDb) -> None:
 
     assert "token" in kinds
     assert any(ev == "tool_step" and data["status"] == "started" for ev, data in events)
+    assert any(
+        ev == "tool_step"
+        and data["status"] == "started"
+        and data["summary"] == "도면에서 벽과 공간을 찾고 있어요"
+        for ev, data in events
+    )
     assert any(
         ev == "tool_step" and data["status"] == "succeeded" for ev, data in events
     )

@@ -598,6 +598,7 @@ async def test_session_floorplan_signs_and_segments(monkeypatch) -> None:
             },
         )
 
+    progress: list[str] = []
     async with _client(handler) as client:
         res = await segment_session_floorplan(
             session_id=session_id,
@@ -605,9 +606,14 @@ async def test_session_floorplan_signs_and_segments(monkeypatch) -> None:
             owner_is_anonymous=False,
             settings=_settings(),
             client=client,
+            progress=progress.append,
         )
     assert res["ok"] is True
     assert {i["label"]: i["count"] for i in res["instances"]} == {"wall_nonbearing": 2}
+    assert progress == [
+        "도면 파일을 불러오고 있어요",
+        "도면에서 벽과 공간을 찾고 있어요",
+    ]
 
 
 async def test_session_summary_counts_merged_walls_not_tile_fragments(
