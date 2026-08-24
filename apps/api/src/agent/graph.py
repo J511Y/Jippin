@@ -55,14 +55,18 @@ def _build_model(settings: Any) -> Any:
     if model_str.startswith("openai:") and api_key:
         from langchain_openai import ChatOpenAI
 
+        # 도구를 쓰는 gpt-5.6-luna 는 Chat Completions 에서 reasoning_effort 와 함께
+        # 호출할 수 없으므로 Responses API 를 명시한다. LangGraph 체크포인트가 대화 이력의
+        # 정본이므로 use_previous_response_id 는 켜지 않는다.
         # store: 완성본을 OpenAI Platform Logs 에 저장(평가/디버깅). 프리체크 대화는 주소
         # 등 PII 를 담을 수 있어 **openai_store_logs 가 켜진 경우에만** 저장한다(기본 미저장,
         # 프로덕션 보호). metadata 로 앱/환경을 태깅해 환경별 필터링이 가능하게 한다.
         return ChatOpenAI(
             model=model_str.split(":", 1)[1],
             api_key=api_key,
+            use_responses_api=True,
             store=settings.openai_store_logs,
-            model_kwargs={
+            extra_body={
                 "metadata": {"app": "jippin-agent", "env": str(settings.app_env)}
             },
         )

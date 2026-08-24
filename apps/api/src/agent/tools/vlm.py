@@ -269,11 +269,12 @@ async def interpret_floorplan_impl(
             model=model_str.split(":", 1)[1],
             api_key=api_key,
             max_retries=1,
+            use_responses_api=True,
             store=getattr(settings, "openai_store_logs", False),
             # 내부 호출 태그 — 에이전트 런 안에서 실행될 때 이 호출의 콜백 이벤트가
             # SSE 토큰으로 새지 않게 translate_stream 이 필터한다(#vlm-token-leak).
             tags=[INTERNAL_LLM_TAG],
-            model_kwargs={
+            extra_body={
                 "metadata": {"app": "jippin-vlm", "env": str(settings.app_env)}
             },
         )
