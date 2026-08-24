@@ -106,7 +106,9 @@ def _present_turn_ui(components: list[dict[str, Any]]) -> list[dict[str, Any]]:
     먼저 보이고, 사용자가 CTA를 누른 뒤 prefill 상담 폼으로 이동한다.
     """
 
-    if not any(_a2ui_root_type(component) == "JudgmentSummary" for component in components):
+    if not any(
+        _a2ui_root_type(component) == "JudgmentSummary" for component in components
+    ):
         return components
     return [
         component
