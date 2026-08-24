@@ -158,6 +158,8 @@ async def _db_advance_session_status(
     *,
     reason: str | None,
     run_id: uuid.UUID | None,
+    only_if_live_selection: bool = False,
+    only_if_rule_eval: bool = False,
 ) -> dict[str, Any] | None:
     """마일스톤 도달을 기록하고 status 를 forward-only 로 전이한다(단일 트랜잭션).
 
@@ -169,6 +171,16 @@ async def _db_advance_session_status(
     종료 상태(expired/deleted)면 아무것도 하지 않는다. reference-scope 등 트리거가 전이를
     거부하면 트랜잭션 전체가 롤백된다. 반환은 status 가 실제 전진했을 때만 갱신된 row, 아니면
     None(전진 안 함; 이벤트는 기록됐을 수 있음).
+
+    ``only_if_live_selection`` 이면 **같은 트랜잭션에서** judgment_schema 를 다시 읽어
+    살아 있는 선택이 없으면 이벤트·전진 모두 생략한다 — 선택 커밋과 이 지연된 전진
+    사이에 재분석 프루닝이 그 선택을 걷어낸 경우, 빈 세션을 '선택 완료'로 전진시키지
+    않는다(#advance-recheck-selection, reopen 의 only_if_no_selection 과 대칭 가드).
+
+    ``only_if_rule_eval`` 이면 같은 트랜잭션에서 ``rule_eval_result`` 를 다시 읽어
+    비어 있으면 생략한다 — verdict 쓰기와 이 지연된 report_ready 전진 사이에 재분석
+    병합이 판정을 소거한 경우, 리포트 없는 세션이 report_ready 배지를 달지 않는다
+    (#advance-recheck-verdict; GET /report 의 준비 기준 = rule_eval_result 존재).
     """
 
     target_rank = _STATUS_RANK[target]
@@ -176,14 +188,25 @@ async def _db_advance_session_status(
         # 같은 세션의 동시 전이를 직렬화한다 — FOR UPDATE 로 행을 잠가, 두 트랜잭션이
         # 같은 현재 status 를 읽고 낮은 rank 로 덮어쓰거나 잘못된 forward 이벤트를 남기는
         # race 를 막는다(병행 주소확정/도면업로드, handoff 와 에이전트 전이 경합 등).
-        current = (
+        row0 = (
             await conn.execute(
-                sa.select(_SESSIONS.c.status)
+                sa.select(
+                    _SESSIONS.c.status,
+                    _SESSIONS.c.judgment_schema,
+                    _SESSIONS.c.rule_eval_result,
+                )
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
             )
-        ).scalar_one_or_none()
-        if current is None or current in _TERMINAL_STATUSES:
+        ).one_or_none()
+        if row0 is None:
+            return None
+        current = row0.status
+        if current in _TERMINAL_STATUSES:
+            return None
+        if only_if_live_selection and not _has_live_selection(row0.judgment_schema):
+            return None
+        if only_if_rule_eval and row0.rule_eval_result is None:
             return None
 
         # 마일스톤 이벤트 — 단계별 1회(중복 방지). status 전진 여부와 무관하게 기록한다.
@@ -232,24 +255,152 @@ async def advance_session_status(
     target: str,
     reason: str | None = None,
     run_id: uuid.UUID | None = None,
+    only_if_live_selection: bool = False,
+    only_if_rule_eval: bool = False,
 ) -> dict[str, Any] | None:
     """도구/플로우 마일스톤에서 세션 status 를 한 단계 전진시킨다(best-effort, runtime-only).
 
     forward-only(뒤로 안 감) + 종료 상태 보호. 전이가 reference-scope 트리거에 막히거나
     (예: 주소/도면 없이 분석 단계 진입) 기타 오류가 나도 **사용자 플로우를 막지 않도록**
     예외를 삼키고 None 을 반환한다 — status 는 진행 상황의 투영일 뿐 정본 데이터가 아니다.
-    실제 전이가 일어났으면 갱신된 세션 row 를 반환한다.
+    실제 전이가 일어났으면 갱신된 세션 row 를 반환한다. ``only_if_live_selection`` 은
+    전진 직전 같은 트랜잭션에서 살아 있는 선택을(#advance-recheck-selection),
+    ``only_if_rule_eval`` 은 판정 존재를(#advance-recheck-verdict) 재확인한다.
     """
 
     if target not in _STATUS_RANK:
         raise ValueError(f"advance_session_status: 알 수 없는 상태 {target!r}.")
     try:
         return await _db_advance_session_status(
-            session_id, target, reason=reason, run_id=run_id
+            session_id,
+            target,
+            reason=reason,
+            run_id=run_id,
+            only_if_live_selection=only_if_live_selection,
+            only_if_rule_eval=only_if_rule_eval,
         )
     except Exception:  # noqa: BLE001 - 상태 전이 실패는 도구/플로우를 막지 않는다
         _log.warning(
             "session_status_advance_failed",
+            session_id=str(session_id),
+            target=target,
+        )
+        return None
+
+
+def _has_live_selection(judgment_schema: Any) -> bool:
+    """판단스키마에 비어 있지 않은 선택(selected_walls/windows)이 하나라도 있으면 True."""
+    js = judgment_schema if isinstance(judgment_schema, dict) else {}
+    return any(
+        isinstance(js.get(key), list) and len(js[key]) > 0
+        for key in ("selected_walls", "selected_windows")
+    )
+
+
+async def _db_regress_session_status(
+    session_id: uuid.UUID,
+    target: str,
+    *,
+    reason: str | None,
+    only_if_no_selection: bool = False,
+    clear_rule_eval: bool = False,
+) -> dict[str, Any] | None:
+    """status 를 명시적으로 **뒤로** 되돌린다(재개 전용, 단일 트랜잭션).
+
+    forward-only 는 배지의 기본 불변식이지만, 입력이 무효화되어 사용자가 이전 단계를
+    **다시 해야 하는** 경우(예: 재분석이 오버레이 선택을 전부 무효화)는 전진 이력이
+    현실과 어긋난다 — 이때만 이 경로로 되돌린다. 마일스톤 이벤트와 달리 재개 이벤트는
+    매번 기록한다(반복 재개도 각각 의미 있는 이력). 종료 상태와 handoff(상담 전환 —
+    사람 소유 단계)는 건드리지 않는다. 현재가 target 이하면 no-op(None).
+
+    ``only_if_no_selection`` 이면 **같은 트랜잭션에서** 현재 judgment_schema 를 다시
+    읽어, 살아 있는 선택이 하나라도 있으면 되돌리지 않는다 — 프루닝(빈 선택) 기록과
+    재개 사이에 사용자의 새 선택 PATCH 가 끼어든 경우, 그 최신 선택을 배지 후퇴로
+    덮어쓰지 않게 한다(#reopen-recheck-selection).
+
+    ``clear_rule_eval`` 이면 되돌리는 **같은 트랜잭션에서** rule_eval_result 도 비운다 —
+    병합(verdict 소거)과 이 재개 사이에 set_session_verdict 가 끼어들어 무효화된 선택
+    기준의 판정을 다시 써 놓았을 수 있다(#reopen-clears-verdict). 오버레이를 다시
+    골라야 하는 세션에서 GET /report 가 그 stale 판정을 제공하지 않게 한다.
+    """
+
+    target_rank = _STATUS_RANK[target]
+    async with get_engine().begin() as conn:
+        row0 = (
+            await conn.execute(
+                sa.select(_SESSIONS.c.status, _SESSIONS.c.judgment_schema)
+                .where(_SESSIONS.c.id == session_id)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if row0 is None:
+            return None
+        current = row0.status
+        if current in _TERMINAL_STATUSES or current == "handoff":
+            return None
+        if _STATUS_RANK.get(current, -1) <= target_rank:
+            return None
+        if only_if_no_selection and _has_live_selection(row0.judgment_schema):
+            return None
+        await conn.execute(
+            sa.insert(_SESSION_STATUS_EVENTS).values(
+                session_id=session_id,
+                from_status=current,
+                to_status=target,
+                reason=reason,
+                run_id=None,
+            )
+        )
+        values: dict[str, Any] = {"status": target}
+        if clear_rule_eval:
+            values["rule_eval_result"] = None
+            values["rule_evaluated_at"] = None
+        row = (
+            await conn.execute(
+                sa.update(_SESSIONS)
+                .where(_SESSIONS.c.id == session_id)
+                .values(
+                    last_activity_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                    **values,
+                )
+                .returning(*_SESSIONS.c)
+            )
+        ).one()
+    return dict(row._mapping)
+
+
+async def reopen_session_status(
+    *,
+    session_id: uuid.UUID,
+    target: str,
+    reason: str | None = None,
+    only_if_no_selection: bool = False,
+    clear_rule_eval: bool = False,
+) -> dict[str, Any] | None:
+    """세션 status 를 이전 단계로 재개한다(best-effort, runtime-only).
+
+    advance_session_status 의 역방향 쌍 — 입력 무효화로 사용자가 이전 단계를 다시
+    수행해야 할 때만 쓴다(#selection-invalidation-reopen). 실패는 삼킨다(status 는
+    진행 상황의 투영일 뿐 정본 데이터가 아니다). ``only_if_no_selection`` 은 되돌리기
+    직전 같은 트랜잭션에서 선택이 여전히 비어 있는지 재확인하고(동시 PATCH 방어),
+    ``clear_rule_eval`` 은 같은 트랜잭션에서 stale 판정도 함께 비운다
+    (#reopen-clears-verdict).
+    """
+
+    if target not in _STATUS_RANK:
+        raise ValueError(f"reopen_session_status: 알 수 없는 상태 {target!r}.")
+    try:
+        return await _db_regress_session_status(
+            session_id,
+            target,
+            reason=reason,
+            only_if_no_selection=only_if_no_selection,
+            clear_rule_eval=clear_rule_eval,
+        )
+    except Exception:  # noqa: BLE001 - 상태 재개 실패는 플로우를 막지 않는다
+        _log.warning(
+            "session_status_reopen_failed",
             session_id=str(session_id),
             target=target,
         )
@@ -876,35 +1027,71 @@ async def search_floorplan_catalog(
     )
 
 
-async def merge_judgment_schema(
-    *,
-    session_id: uuid.UUID,
-    owner_user_id: uuid.UUID,
-    owner_is_anonymous: bool,
-    patch: dict[str, Any],
-) -> dict[str, Any]:
-    """공통 판단 스키마(JSONB)에 top-level 키를 병합한다(owner-gated).
+def _selectable_selection_ids(js: dict[str, Any]) -> tuple[set[Any], set[Any]]:
+    """판단스키마의 (선택 가능 벽 id, 창호 id) — 벽은 LOAD_BEARING 제외."""
 
-    OVERLAY 가 수집한 ``selected_walls``, AI 분석의 ``wall_objects``/``space_objects``
-    등을 ``sessions.judgment_schema`` 에 누적한다. 전체 CommonJudgmentSchema 검증은
-    RULE 진입 시점에 별도로 하고, 여기선 부분 누적만 한다(top-level merge). 타인/부재
-    세션은 404 (``_resolve_owner_session``).
+    walls = js.get("wall_objects")
+    windows = js.get("window_objects")
+    selectable_walls = {
+        w.get("id")
+        for w in (walls if isinstance(walls, list) else [])
+        if isinstance(w, dict) and w.get("wall_type") != "LOAD_BEARING"
+    }
+    selectable_windows = {
+        w.get("id")
+        for w in (windows if isinstance(windows, list) else [])
+        if isinstance(w, dict)
+    }
+    return selectable_walls, selectable_windows
+
+
+def _prune_selections_inplace(merged: dict[str, Any]) -> bool:
+    """merged 판단스키마의 저장된 선택을 현행 객체의 선택 가능 id 와 교집합으로 줄인다.
+
+    벽은 ``wall_objects`` 중 선택 가능 타입(LOAD_BEARING 제외), 창호는
+    ``window_objects`` 만 인정한다. 하나라도 걸러냈으면 True.
     """
 
-    session = await _resolve_owner_session(
-        session_id,
-        owner_user_id=owner_user_id,
-        owner_is_anonymous=owner_is_anonymous,
-    )
-    current = session.get("judgment_schema")
-    merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
-    merged.update(patch)
-    values: dict[str, Any] = {"judgment_schema": merged}
-    # 분석(wall/window_objects)·선택(selected_walls/windows)이 바뀌면 그 입력으로 계산된
-    # 기존 판정은 stale 이다 — rule_eval_result 를 비워, 입력이 바뀐 새 맥락에서 옛 판정이
-    # 리포트/판정 카드에 rule-backed 로 보이는 걸 막는다. 다음 evaluate_rules 가 새로
-    # 채운다(#stale-verdict-on-input-change). 주소 변경은 DB 트리거가 별도로 무효화한다.
-    if any(
+    selectable_walls, selectable_windows = _selectable_selection_ids(merged)
+    changed = False
+    for key, valid_ids in (
+        ("selected_walls", selectable_walls),
+        ("selected_windows", selectable_windows),
+    ):
+        prev = merged.get(key)
+        if not isinstance(prev, list):
+            continue
+        kept = [s for s in prev if isinstance(s, str) and s in valid_ids]
+        if kept != prev:
+            merged[key] = kept
+            changed = True
+    return changed
+
+
+#: _db_merge_judgment_schema 의 검증 실패 sentinel — 쓰기 없이 중단됐음을 알린다.
+_MERGE_SELECTION_STALE = "selection_stale"
+
+
+async def _db_merge_judgment_schema(
+    session_id: uuid.UUID, *, patch: dict[str, Any], validate_selection: bool = False
+) -> tuple[dict[str, Any], bool] | str | None:
+    """판단스키마 병합 + 선택 검증/프루닝 + rule_eval 무효화를 **단일 행잠금 트랜잭션**으로.
+
+    분석 산출(wall/window_objects)을 갈아끼우는 쓰기와 저장된 선택의 프루닝이 분리돼
+    있으면, 그 사이에 옛 오버레이 카드의 PATCH 가 끼어들어(검증은 아직 옛 객체 기준으로
+    통과) 방금 사라진 id 가 새 객체 옆에 살아남는다 — FOR UPDATE 로 잠근 같은
+    트랜잭션에서 병합 직후 프루닝까지 마쳐 그 창을 없앤다(#atomic-merge-prune).
+
+    ``validate_selection`` 이면 patch 에 실린 선택 id 를 **잠근 행의 현행 객체**와
+    대조해, 하나라도 어긋나면 아무것도 쓰지 않고 ``_MERGE_SELECTION_STALE`` 을
+    돌려준다 — 스냅숏 검증과 영속 사이의 재분석 커밋 창 제거(#stale-overlay-submission).
+
+    반환은 (merged, selection_pruned) / 검증 실패 sentinel / 행 부재 None(호출자
+    owner-gate 이후의 삭제 race).
+    """
+
+    prune = "wall_objects" in patch or "window_objects" in patch
+    clear_rule_eval = any(
         key in patch
         for key in (
             "selected_walls",
@@ -912,19 +1099,139 @@ async def merge_judgment_schema(
             "selected_windows",
             "window_objects",
         )
-    ):
-        values["rule_eval_result"] = None
-        values["rule_evaluated_at"] = None
-    await _db_update_session_fields(session_id, values)
+    )
+    async with get_engine().begin() as conn:
+        row0 = (
+            await conn.execute(
+                sa.select(_SESSIONS.c.id, _SESSIONS.c.judgment_schema)
+                .where(_SESSIONS.c.id == session_id)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if row0 is None:
+            return None
+        current = row0.judgment_schema
+        merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
+        merged.update(patch)
+        if validate_selection:
+            selectable_walls, selectable_windows = _selectable_selection_ids(merged)
+            for key, valid_ids in (
+                ("selected_walls", selectable_walls),
+                ("selected_windows", selectable_windows),
+            ):
+                requested = patch.get(key)
+                if isinstance(requested, list) and any(
+                    rid not in valid_ids for rid in requested
+                ):
+                    return _MERGE_SELECTION_STALE  # 쓰기 전 중단 — 세션 무변경.
+        selection_pruned = _prune_selections_inplace(merged) if prune else False
+        values: dict[str, Any] = {"judgment_schema": merged}
+        # 분석·선택이 바뀌면 그 입력으로 계산된 기존 판정은 stale 이다 — rule_eval_result
+        # 를 비워 옛 판정이 rule-backed 로 보이지 않게 한다(#stale-verdict-on-input-change).
+        if clear_rule_eval:
+            values["rule_eval_result"] = None
+            values["rule_evaluated_at"] = None
+        await conn.execute(
+            sa.update(_SESSIONS)
+            .where(_SESSIONS.c.id == session_id)
+            .values(
+                last_activity_at=sa.func.now(),
+                updated_at=sa.func.now(),
+                **values,
+            )
+        )
+    return merged, selection_pruned
+
+
+async def merge_judgment_schema(
+    *,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool,
+    patch: dict[str, Any],
+    validate_selection: bool = False,
+) -> dict[str, Any]:
+    """공통 판단 스키마(JSONB)에 top-level 키를 병합한다(owner-gated).
+
+    OVERLAY 가 수집한 ``selected_walls``, AI 분석의 ``wall_objects``/``space_objects``
+    등을 ``sessions.judgment_schema`` 에 누적한다. 전체 CommonJudgmentSchema 검증은
+    RULE 진입 시점에 별도로 하고, 여기선 부분 누적만 한다(top-level merge). 타인/부재
+    세션은 404 (``_resolve_owner_session``).
+
+    분석 산출(wall/window_objects)이 패치되면 저장된 선택(selected_walls/windows)을
+    새 객체의 선택 가능 id 와 교집합으로 **같은 트랜잭션에서** 줄인다 — 재분석과 옛
+    카드 제출의 경합에서도 유령 id 가 남지 않는다(#atomic-merge-prune).
+
+    ``validate_selection``(사용자 선택 PATCH 경로)이면 patch 의 선택 id 를 잠근 행의
+    현행 객체와 대조해, 어긋나면 아무것도 쓰지 않고 409(SELECTION_STALE)를 던진다 —
+    스냅숏 검증으로는 재분석 커밋이 사이에 끼는 TOCTOU 를 못 막는다
+    (#stale-overlay-submission).
+    """
+
+    await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    result = await _db_merge_judgment_schema(
+        session_id, patch=patch, validate_selection=validate_selection
+    )
+    if result is None:
+        # owner-gate 통과 직후의 삭제 race — 부재 세션과 동일하게 취급.
+        raise _not_found("Session not found.")
+    if isinstance(result, str):
+        raise _conflict(
+            "Selection does not match the latest analysis objects.",
+            "SELECTION_STALE",
+        )
+    merged, selection_pruned = result
+
     # 분석/선택 마일스톤에 따라 status 전진. selected_*(사용자 선택)는 wall_objects
     # (분석 산출)보다 뒤 단계라 우선 처리한다(둘 다 오면 collecting_info).
-    if "selected_walls" in patch or "selected_windows" in patch:
+    #
+    # 마일스톤은 **비어 있지 않은 선택**만 인정한다 — 재분석 프루닝이 싣는
+    # `selected_walls: []` 는 "사용자가 골랐다"가 아니라 "선택이 무효화됐다"는 신호다.
+    # 키 존재만 보고 walls_selected 로 전진하면, 선택이 전부 사라졌는데도 forward-only
+    # 배지가 collecting_info 에 남아 오버레이 단계로 못 돌아간다(#selection-invalidation-
+    # reopen).
+    def _nonempty_selection(value: Any) -> bool:
+        return isinstance(value, list) and len(value) > 0
+
+    selection_keys = ("selected_walls", "selected_windows")
+    patched_selection = [k for k in selection_keys if k in patch]
+    if any(_nonempty_selection(patch[k]) for k in patched_selection):
+        # only_if_live_selection: 이 병합의 선택 커밋과 여기 지연된 전진 사이에 재분석
+        # 프루닝이 그 선택을 걷어냈을 수 있다(두 탭 경합) — 전진 직전 같은 트랜잭션에서
+        # 저장된 선택이 여전히 살아 있는지 재확인해, 빈 세션을 '선택 완료'로 올리지
+        # 않는다(#advance-recheck-selection, 아래 재개 가드와 대칭).
         await advance_session_status(
-            session_id=session_id, target="collecting_info", reason="walls_selected"
+            session_id=session_id,
+            target="collecting_info",
+            reason="walls_selected",
+            only_if_live_selection=True,
         )
     elif "wall_objects" in patch:
         await advance_session_status(
             session_id=session_id, target="awaiting_overlay", reason="analysis_complete"
+        )
+    if (patched_selection or selection_pruned) and not any(
+        _nonempty_selection(merged.get(k)) for k in selection_keys
+    ):
+        # 선택이 패치로 비워졌거나 원자 프루닝이 걷어냈는데 살아 있는 선택이 하나도
+        # 없다 — 사용자가 다시 골라야 하므로 오버레이 단계로 재개한다(이미 그 이하
+        # 단계면 no-op).
+        # only_if_no_selection: 빈 선택 기록과 이 재개 사이에 사용자의 새 선택 PATCH 가
+        # 끼어들 수 있다 — 되돌리기 직전 같은 트랜잭션에서 선택이 여전히 비었는지
+        # 재확인해, 최신 선택을 배지 후퇴로 덮어쓰지 않는다(#reopen-recheck-selection).
+        await reopen_session_status(
+            session_id=session_id,
+            target="awaiting_overlay",
+            reason="selection_invalidated",
+            only_if_no_selection=True,
+            # 병합의 verdict 소거와 이 재개 사이에 set_session_verdict 가 끼어들어
+            # 무효화된 선택 기준 판정을 되살렸을 수 있다 — 재개와 같은 트랜잭션에서
+            # 다시 비운다(#reopen-clears-verdict).
+            clear_rule_eval=True,
         )
     return merged
 
@@ -1242,33 +1549,64 @@ async def get_session_inputs(
     return row.get("selected_floorplan_asset_id"), row.get("address_id")
 
 
+def _stored_selection(judgment_schema: Any, key: str) -> list[Any]:
+    """판단스키마의 선택 리스트(없거나 형식 밖이면 빈 리스트) — 지문 비교용 정규화."""
+    js = judgment_schema if isinstance(judgment_schema, dict) else {}
+    value = js.get(key)
+    return value if isinstance(value, list) else []
+
+
 async def _db_set_session_verdict_if_inputs(
     session_id: uuid.UUID,
     values: dict[str, Any],
     expected_asset_id: Any,
     expected_address_id: Any,
+    expected_selected_walls: Any = _UNSET,
+    expected_selected_windows: Any = _UNSET,
 ) -> dict[str, Any] | None:
-    # 조건부 UPDATE: 분석 시작 때 본 입력과 현재 입력이 같을 때만 verdict 를 쓴다.
-    # _UNSET 인 입력은 검사를 건너뛴다(None 은 "값이 없음" 으로 검사 대상).
-    conds = [_SESSIONS.c.id == session_id]
-    if expected_asset_id is not _UNSET:
-        conds.append(
-            _SESSIONS.c.selected_floorplan_asset_id.is_not_distinct_from(
-                expected_asset_id
-            )
-        )
-    if expected_address_id is not _UNSET:
-        conds.append(_SESSIONS.c.address_id.is_not_distinct_from(expected_address_id))
+    # 조건부 UPDATE: 분석 시작 때 본 입력(asset/address)과 **평가가 읽은 선택**이 현재
+    # 값과 같을 때만 verdict 를 쓴다 — FOR UPDATE 로 잠근 같은 트랜잭션에서 검사·쓰기를
+    # 마쳐, 평가와 영속 사이에 재분석 프루닝/사용자 재선택이 끼면 stale 판정을 버린다
+    # (#verdict-selection-fingerprint). _UNSET 인 항목은 검사를 건너뛴다(None 은 "값이
+    # 없음"으로 검사 대상).
     async with get_engine().begin() as conn:
+        row0 = (
+            await conn.execute(
+                sa.select(
+                    _SESSIONS.c.selected_floorplan_asset_id,
+                    _SESSIONS.c.address_id,
+                    _SESSIONS.c.judgment_schema,
+                )
+                .where(_SESSIONS.c.id == session_id)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if row0 is None:
+            return None
+        if (
+            expected_asset_id is not _UNSET
+            and row0.selected_floorplan_asset_id != expected_asset_id
+        ):
+            return None
+        if expected_address_id is not _UNSET and row0.address_id != expected_address_id:
+            return None
+        for expected, key in (
+            (expected_selected_walls, "selected_walls"),
+            (expected_selected_windows, "selected_windows"),
+        ):
+            if expected is not _UNSET and (
+                _stored_selection(row0.judgment_schema, key) != expected
+            ):
+                return None
         row = (
             await conn.execute(
                 sa.update(_SESSIONS)
-                .where(*conds)
+                .where(_SESSIONS.c.id == session_id)
                 .values(updated_at=sa.func.now(), **values)
                 .returning(*_SESSIONS.c)
             )
-        ).one_or_none()
-    return dict(row._mapping) if row is not None else None
+        ).one()
+    return dict(row._mapping)
 
 
 async def set_session_verdict(
@@ -1277,6 +1615,8 @@ async def set_session_verdict(
     rule_eval_result: dict[str, Any],
     expected_asset_id: Any = _UNSET,
     expected_address_id: Any = _UNSET,
+    expected_selected_walls: Any = _UNSET,
+    expected_selected_windows: Any = _UNSET,
 ) -> dict[str, Any] | None:
     """룰 판정 결과(rule-eval-result)를 세션에 영속한다 — runtime-only.
 
@@ -1286,8 +1626,11 @@ async def set_session_verdict(
 
     분석 시작 때 캡처한 입력(asset_id/address_id)을 넘기면, 그 사이 입력이 바뀌었을
     경우 stale verdict 를 쓰지 않고 None 을 반환한다 — 분석 중 도면 교체로 옛 판정이
-    새 입력에 report-ready 로 붙는 race 를 막는다(#stale-verdict-write). status 는
-    건드리지 않는다(reference-scope 트리거가 asset-only report_ready 를 거부).
+    새 입력에 report-ready 로 붙는 race 를 막는다(#stale-verdict-write). 평가가 읽은
+    선택 스냅숏(expected_selected_walls/windows)을 넘기면 같은 방식으로, 평가와 영속
+    사이에 재분석 프루닝/재선택으로 저장 선택이 바뀐 판정을 버린다
+    (#verdict-selection-fingerprint). status 는 건드리지 않는다(reference-scope
+    트리거가 asset-only report_ready 를 거부).
     """
 
     values = {
@@ -1295,12 +1638,24 @@ async def set_session_verdict(
         "rule_evaluated_at": _now(),
     }
     persisted = await _db_set_session_verdict_if_inputs(
-        session_id, values, expected_asset_id, expected_address_id
+        session_id,
+        values,
+        expected_asset_id,
+        expected_address_id,
+        expected_selected_walls=expected_selected_walls,
+        expected_selected_windows=expected_selected_windows,
     )
     # 판정이 실제로 영속됐을 때만(입력이 안 바뀌었을 때) 리포트 준비됨으로 전진.
+    # only_if_rule_eval: 판정 쓰기와 이 지연된 전진 사이에 재분석 병합이 판정을
+    # 소거했을 수 있다 — 전진 직전 같은 트랜잭션에서 rule_eval_result 존재를
+    # 재확인해, 리포트 없는 세션이 report_ready 배지를 달지 않는다
+    # (#advance-recheck-verdict).
     if persisted is not None:
         await advance_session_status(
-            session_id=session_id, target="report_ready", reason="report_ready"
+            session_id=session_id,
+            target="report_ready",
+            reason="report_ready",
+            only_if_rule_eval=True,
         )
     return persisted
 

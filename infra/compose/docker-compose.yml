@@ -153,7 +153,9 @@ services:
       # ---------------------------------------------------------------------
       PHASE_A_SKELETON_ENABLED: "${PHASE_A_SKELETON_ENABLED:-false}"
       AGENT_ENABLED: "${AGENT_ENABLED:-false}"
-      AGENT_MODEL: "${AGENT_MODEL:-openai:gpt-5.4-mini}"
+      AGENT_MODEL: "${AGENT_MODEL:-openai:gpt-5.6-luna}"
+      # AI-002 VLM(도면 문맥 해석) 전용 override — 비우면 앱이 AGENT_MODEL 상속.
+      VLM_MODEL: "${VLM_MODEL:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       LANGCHAIN_TRACING_V2: "${LANGCHAIN_TRACING_V2:-false}"
       LANGSMITH_API_KEY: "${LANGSMITH_API_KEY:-}"
@@ -165,7 +167,7 @@ services:
       # 서빙 중인 모델의 어휘 세대(3|4) — 엔드포인트 모델 교체와 함께 뒤집는다. 요청
       # threshold 가 이 값으로 정해진다(v3=0.5, v4=0.35). THRESHOLD 를 직접 넣으면 고정.
       # MAX_TILES 는 도면당 작업량 상한(초과 시 추론 전 거절).
-      HF_SEGMENTATION_EXPECTED_VOCAB_VERSION: "${HF_SEGMENTATION_EXPECTED_VOCAB_VERSION:-3}"
+      HF_SEGMENTATION_EXPECTED_VOCAB_VERSION: "${HF_SEGMENTATION_EXPECTED_VOCAB_VERSION:-4}"
       HF_SEGMENTATION_THRESHOLD: "${HF_SEGMENTATION_THRESHOLD:-}"
       HF_SEGMENTATION_MAX_TILES: "${HF_SEGMENTATION_MAX_TILES:-80}"
     ports:

@@ -1,6 +1,6 @@
 # ADR 0010 — 도면 세그멘테이션 v4: 벽 어휘 3분화와 원본 해상도 타일 추론
 
-- **상태**: **Accepted (2026-08-13)** — 모델 레포 v4 인계에 따른 앱 정합.
+- **상태**: **Accepted (2026-08-13, 2026-08-24 운영 cutover)** — 모델 레포 v4 인계에 따른 앱 정합.
 - **관련**: ADR-0001 §7.4(AI 모델 선정), `packages/contracts/schemas/segmentation-result.schema.json`
   (**1.3.0 → 1.4.0**), `apps/api/src/agent/tools/segmentation.py`,
   `apps/web/components/a2ui/cards/FloorplanOverlayCard.tsx`.
@@ -31,6 +31,7 @@ stride 4 에서 동작하는 것까지 겹쳐 얇은 벽이 서브픽셀이 됐�
 | 판단 스키마 매핑 | `wall_nonbearing → NON_LOAD_BEARING`, `wall_other`·`wall_unknown → UNKNOWN`(룰엔진 HOLD), `wall_reinforced_concrete → LOAD_BEARING`. **비내력 후보군 = nonbearing ∪ other 지만 신뢰 등급을 나누는 것이 분리의 목적**이다. |
 | 입력 해상도 | **원본 픽셀 그대로 전송.** 리사이즈 파라미터(`max_inference_side`)를 계약·설정·요청에서 제거한다. 핸들러가 1536 타일/256 겹침으로 잘라 추론 후 전체 좌표로 합친다. |
 | threshold | 운영 기본 **0.35**(구 0.5). 비내력 계열은 점수가 낮게 나와 0.5 에서 상당수가 걸러진다(모델 평가도 0.35 축). |
+| 어휘 세대 설정 | 운영 HF Endpoint가 v4로 교체되었으므로 `HF_SEGMENTATION_EXPECTED_VOCAB_VERSION`과 코드·compose 기본값을 **4**로 맞춘다. 명시 override가 없을 때도 v4 threshold(0.35)를 선택해야 한다. |
 | 작업량 상한 | `max_tiles`(기본 80)를 **명시 전송**한다. 업로드 게이트는 content-type 과 인코딩 크기(50MiB)만 보므로, 고압축 이미지가 디코드 후 거대한 캔버스로 펼쳐지면 타일 루프가 폭주한다. |
 | 조각 병합 | 타일 경계에서 갈라진 조각을 앱에서 잇는다. **양쪽 모두 경계 조각**이고 원본 도형 사이 거리가 3px 이내이며 두 타일 집합이 **겹치지 않는** 쌍만 대상(한 타일을 공유하면 경계로 갈린 조각이 아니라 남남 벽). VLM 교정으로 클래스가 같아지면 한 번 더 병합한다. |
 | 저장분 호환 | 오버레이 payload 에 `vocab_version` 을 싣는다. 판별자가 없는 payload(=v3 저장분)는 옛 의미로 정규화해 그린다. |
@@ -64,6 +65,53 @@ stride 4 에서 동작하는 것까지 겹쳐 얇은 벽이 서브픽셀이 됐�
   개별 벽 분리는 개선됐지만 완전하지 않아 **HITL 전제는 유지**된다.
 - 라벨 근거는 573장이라 전체 도면 분포를 대표하지 않을 수 있다. 특히 `wall_nonbearing` 은 이
   573장에서만 학습돼 데이터 기반이 얇다 — 전문가 라벨 추가 확보가 다음 성능 레버다.
+
+## 개정 — 2026-08-19: 내력벽 우선 규칙(#rc-priority) + 오버레이 내력벽 표시
+
+모델 레포 추가 인계에 따른 정합. 같은 벽이 `wall_nonbearing` 과 `wall_reinforced_concrete`
+양쪽으로 판정될 수 있는데, 이때 **내력(RC) 판정을 우선**한다.
+
+- **겹침 억제**: 병합 후처리에서 RC 와 **양(+)의 면적**이 겹치는 `wall_nonbearing` 영역은
+  그 교집합만큼 도려낸다. 잔여가 원본의 5% 미만이거나 **10×10px(100px²) 미만**이면 벽으로
+  보기 어려운 크기라 후보에서 통째로 제외한다 — 이 판정은 **구멍 분해 전 연결 잔여**
+  기준이다(분해가 만든 인공 절단 조각에 비율 컷을 적용하면 RC 와 겹치지 않은 유효 영역이
+  잘려 나간다). RC 가
+  가운데를 가로질러 잔여가 여러 조각이면 각각 별도 region 으로 살린다. 잘리거나 분할된
+  조각은 원본 id 를 버리고 **기하 지문 id** `{id}~<지문8>`(0.1px 라운딩 md5)을 받는다 —
+  같은 기하로 재분석되면 id 가 같아 선택이 보존되고, RC 경계가 이동해 기하가 달라지면
+  id 도 달라져 아래 id 기준 선택 프루닝·검증이 기하가 바뀐 선택을 자동 무효화한다
+  (순번 접미사는 호출 간 결정적으로 재사용돼 이 보장을 못 한다). RC 가 벽 안에 완전히 포함되면 difference 의 구멍을
+  **구멍 없는 조각 분해**로 보존한다(단일 외곽 링 계약이라 exterior 만 실으면 도려낸 영역이
+  되살아남). 잘린 조각은 `touches_tile_border` 를 해제해 2차 병합의 경계 잇기가 무관한
+  벽을 붙이지 않게 한다. 점/모서리 접촉(면적 0)
+  은 겹침이 아니다. VLM 교정 재병합 뒤에도 같은 규칙을 재적용한다
+  (`_suppress_rc_overlapped_nonbearing`). 미확정 벽(`wall_other`/`wall_unknown`)은 대상이
+  아니다 — 애초에 UNKNOWN 이라 철거 후보로 승격되지 않는다.
+- **선택 프루닝**: 재분석은 region id 를 새로 만들므로, 판단스키마에 저장된
+  `selected_walls`/`selected_windows` 를 새 '선택 가능' id(비내력·미확정 벽 + 창호)와의
+  교집합으로 줄여 영속한다 — 유령/내력벽 id 가 룰 평가의 철거 대상으로 남지 않게.
+  프루닝은 wall/window_objects 를 갈아끼우는 **같은 행잠금 트랜잭션 안**에서 수행한다
+  (`_db_merge_judgment_schema`, #atomic-merge-prune) — 스냅숏과 영속 사이에 옛 카드
+  제출이 끼어드는 TOCTOU 창이 없다. `PATCH /selected-walls` 의 선택 id 검증도 **같은
+  병합 트랜잭션 안**에서 현행 객체와 대조한다(`validate_selection`) — 어긋나면 쓰기
+  없이 409 SELECTION_STALE 로 거절하고, 프론트 카드는 이 409 를 받으면 성공 위장
+  메시지를 발화하지 않고 카드를 만료 표시해 최신 카드로 유도한다.
+  프론트 복원도 현재 카드에 존재하는 선택 가능 id 만 받는다(구 데이터 방어).
+  walls_selected 마일스톤은 **비어 있지 않은 선택**만 인정하고(전진·재개 모두 잠금 내
+  선택 재확인), 프루닝으로 살아 있는 선택이 전부 사라지면 forward-only 배지를
+  `awaiting_overlay` 로 **명시 재개**한다(`reopen_session_status`, 재개 이벤트 기록) —
+  사용자가 다시 골라야 하는 현실과 SSE/퍼널 상태를 일치시킨다. 재개는 같은 트랜잭션에서
+  `rule_eval_result` 도 비운다(경합으로 되살아난 stale 판정 소거). verdict 영속
+  (`set_session_verdict`)도 평가가 읽은 **선택 스냅숏 조건부**다 — 평가와 영속 사이에
+  저장 선택이 바뀌면 쓰지 않는다(입력 지문 #stale-verdict-write 의 선택판 대응).
+- **방출 순서**: 판단객체(wall/window_objects) 영속이 **성공한 뒤에만** 오버레이 카드를
+  방출한다(#persist-before-emit) — 방출된 카드는 항상 그 즉시 제출 가능하다(옛 객체
+  기준 검증에 걸려 새 카드가 SELECTION_STALE 로 만료되는 역전 방지). report_ready
+  전진도 잠금 안에서 `rule_eval_result` 존재를 재확인한다(#advance-recheck-verdict).
+- **오버레이**: 내력벽 후보(`wall_reinforced_concrete`)를 **표시 전용(빨강, 실선, 선택 불가)**
+  으로 함께 그린다. 사용자 선택 대상은 종전대로 비내력 후보(초록)·미확정 벽(회색)·창호(파랑)
+  뿐이다. payload 는 원래 RC region 을 싣고 있었으므로 계약/vocab_version 변경은 없다
+  (옛 번들은 그리지 않을 뿐 — 안전한 방향의 스큐).
 
 ## 후속
 

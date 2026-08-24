@@ -1,6 +1,7 @@
 """AI-002 VLM 도면 문맥 해석 (SDD §4.4, 기능명세서 §2.4 AI-002).
 
-Mask2Former(AI-001) 세그멘테이션 결과를 **OpenAI Vision(gpt-5.4-mini)**으로 보완한다 —
+Mask2Former(AI-001) 세그멘테이션 결과를 **OpenAI Vision**(설정 ``vlm_model``, 미설정 시
+대화 에이전트의 ``agent_model`` 상속)으로 보완한다 —
 도면 이미지를 직접 보고 (1) 잘못 분류된 벽 레이블 교정(reclassifications), (2) 공간 명칭·
 경계 모호 영역 자연어 해석(notes), (3) 전체 신뢰도/도면 여부를 낸다. LangChain 추상화로
 프로바이더 교체 가능(SDD §4.4 "VLM 프로바이더").
@@ -223,7 +224,9 @@ async def interpret_floorplan_impl(
 
     if not getattr(settings, "vlm_floorplan_enabled", False):
         return None
-    model_str = settings.agent_model
+    # VLM 전용 override(vlm_model). 미설정/빈 문자열/구 테스트 스텁이면 agent_model 로
+    # 폴백한다 — 형식·키 검증은 아래에서 동일하게 적용.
+    model_str = getattr(settings, "vlm_model", None) or settings.agent_model
     api_key = settings.openai_api_key
     if (
         not isinstance(model_str, str)
@@ -266,11 +269,12 @@ async def interpret_floorplan_impl(
             model=model_str.split(":", 1)[1],
             api_key=api_key,
             max_retries=1,
+            use_responses_api=True,
             store=getattr(settings, "openai_store_logs", False),
             # 내부 호출 태그 — 에이전트 런 안에서 실행될 때 이 호출의 콜백 이벤트가
             # SSE 토큰으로 새지 않게 translate_stream 이 필터한다(#vlm-token-leak).
             tags=[INTERNAL_LLM_TAG],
-            model_kwargs={
+            extra_body={
                 "metadata": {"app": "jippin-vlm", "env": str(settings.app_env)}
             },
         )

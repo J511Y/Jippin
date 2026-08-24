@@ -136,7 +136,9 @@ class Settings(BaseSettings):
     # _validate_agent_checkpointer_url 에서 제거됨 — #stale-phase-prereq).
     # LLM/추적/HF 시크릿은 Fly secrets 로 주입한다(.env.example 의 agent 섹션 참조).
     agent_enabled: bool = Field(default=False)
-    agent_model: str = Field(default="openai:gpt-5.4-mini")
+    # 대화형 에이전트 모델. 2026-08-19 gpt-5.4-mini → gpt-5.6-luna 로 상향(VLM 과 동일
+    # 모델이지만 설정은 vlm_model 과 분리 유지 — 독립적으로 되돌릴 수 있게).
+    agent_model: str = Field(default="openai:gpt-5.6-luna")
     # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
     # 도면 분석 런은 세그멘테이션이 지배한다: 콜드스타트 폴링 300s + 타일 추론 최대 600s.
     # 여기에 VLM(60s)·에이전트 왕복 여유를 더해 1200s 로 잡는다 — 바깥 예산이 이보다 짧으면
@@ -144,10 +146,14 @@ class Settings(BaseSettings):
     agent_run_wallclock_timeout_seconds: int = Field(default=1200)
 
     # AI-002 VLM 도면 문맥 해석(SDD §4.4). Mask2Former 레이블을 OpenAI Vision 으로 보완·
-    # 정합성 검증한다. 모델/키는 agent 와 공유(gpt-5.4-mini). 비활성/실패 시 세그멘테이션
+    # 정합성 검증한다. 키는 agent 와 공유(openai_api_key). 비활성/실패 시 세그멘테이션
     # 단독으로 degrade(VLM_TIMEOUT). 0.6 미만 신뢰도는 ANALYSIS_LOW_CONFIDENCE 로 재업로드 권장.
     vlm_floorplan_enabled: bool = Field(default=True)
     vlm_floorplan_timeout_seconds: int = Field(default=60)
+    # VLM 전용 override(2026-08-19 부터 agent_model 과 분리) — 미설정/빈 문자열이면
+    # agent_model 을 상속한다. 독립 조정이 필요할 때만 같은 "openai:<model>" 형식으로
+    # 명시한다. effective 기본은 agent_model 과 같은 gpt-5.6-luna.
+    vlm_model: str | None = Field(default=None)
 
     # 우리집 체크 — 신고 확장 ↔ 대장 변동사항 LLM 대조 판정(home_check_extension). 운영 default
     # 는 False — 켜지 않으면 판정을 건너뛰어 리포트에 extension_check 가 없고 OpenAI 의존이
@@ -201,9 +207,9 @@ class Settings(BaseSettings):
     # 배포된 엔드포인트가 서빙하는 모델의 어휘 세대(3|4). **요청 파라미터는 응답을 보기
     # 전에 정해야 하므로**, 응답으로 어휘를 판별하는 것만으로는 threshold 를 맞출 수 없다
     # (#threshold-cutover). 엔드포인트 모델 교체는 앱 배포와 별개의 수동 작업이라, 교체와
-    # **같이 뒤집는 스위치**를 설정으로 둔다. 기본 3 = 아직 옛 모델(교체 전 안전값).
+    # **같이 뒤집는 스위치**를 설정으로 둔다. 운영 엔드포인트가 v4 로 교체되었으므로 기본도 4.
     # 응답 어휘가 이 값과 다르면 도구가 경고 로그를 남긴다(뒤집기를 잊어도 드러나게).
-    hf_segmentation_expected_vocab_version: int = Field(default=3)
+    hf_segmentation_expected_vocab_version: int = Field(default=4)
     # 추론 파라미터. 리사이즈 파라미터는 두지 않는다 — v4 는 원본 픽셀 타일 추론이 전제라
     # 입력을 축소하면 성능이 붕괴한다(도구가 threshold/mask_threshold/max_tiles 만 넘긴다).
     # threshold 는 None 이면 어휘 세대 기본값을 쓴다: v3=0.5(기존 운영값), v4=0.35 — v4 의

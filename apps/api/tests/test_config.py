@@ -53,6 +53,16 @@ def test_anonymous_session_ttl_defaults_to_env_example_value() -> None:
     assert settings.anon_session_ttl_days == 30
 
 
+def test_segmentation_vocab_defaults_to_deployed_v4() -> None:
+    settings = Settings()
+    assert settings.hf_segmentation_expected_vocab_version == 4
+
+
+def test_vlm_model_defaults_to_agent_model_inheritance() -> None:
+    settings = Settings()
+    assert settings.vlm_model is None
+
+
 def test_empty_hosts_env_does_not_break_boot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
