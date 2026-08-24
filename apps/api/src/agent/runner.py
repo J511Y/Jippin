@@ -77,6 +77,44 @@ class ToolProgress:
 Signal = TokenSignal | ToolProgress | ToolStart | ToolEnd | AssistantMessage
 
 
+def _a2ui_root_type(component: Any) -> str | None:
+    """A2UI native spec/legacy wrapper에서 최상위 카드 타입을 읽는다."""
+
+    if not isinstance(component, dict):
+        return None
+    root = component.get("root")
+    elements = component.get("elements")
+    if isinstance(root, str) and isinstance(elements, dict):
+        element = elements.get(root)
+        if isinstance(element, dict) and isinstance(element.get("type"), str):
+            return element["type"]
+    if isinstance(component.get("type"), str):
+        return component["type"]
+    kind = component.get("kind")
+    if kind == "judgment-summary":
+        return "JudgmentSummary"
+    if kind == "consultation-handoff":
+        return "ConsultationHandoff"
+    return None
+
+
+def _present_turn_ui(components: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """최종 결과가 가진 상담 CTA와 중복되는 즉시 상담 폼을 제거한다.
+
+    emit_judgment_summary와 set_completion_decision 도구는 모델이 병렬 실행할 수 있어
+    버퍼 append 순서를 보장할 수 없다. drain 시점에 턴 전체를 보고 정규화해야 결과가
+    먼저 보이고, 사용자가 CTA를 누른 뒤 prefill 상담 폼으로 이동한다.
+    """
+
+    if not any(_a2ui_root_type(component) == "JudgmentSummary" for component in components):
+        return components
+    return [
+        component
+        for component in components
+        if _a2ui_root_type(component) != "ConsultationHandoff"
+    ]
+
+
 # --- astream 청크 → 정규화 시그널 번역 (langchain duck-typing) ----------------
 
 
@@ -647,7 +685,7 @@ class AgentRunner:
 
         ui_mem, snap_mem = self._run_context.drain_ui()
         ui_db, snap_db = await main_flow.take_pending_ui(run_id=self.run_id)
-        ui = ui_mem or ui_db
+        ui = _present_turn_ui(ui_mem or ui_db)
         snapshot = snap_mem if snap_mem is not None else snap_db
         return ui, snapshot
 

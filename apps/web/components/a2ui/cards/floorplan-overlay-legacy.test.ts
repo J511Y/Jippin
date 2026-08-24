@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeLegacyRegions, type OverlayRegion } from './FloorplanOverlayCard';
+import {
+  normalizeLegacyRegions,
+  selectableRegionSignature,
+  type OverlayRegion
+} from './FloorplanOverlayCard';
 
 /**
  * 저장된 v3 오버레이 카드의 의미 보존 — 세그멘테이션 v4 어휘 전환의 하위호환 지점.
@@ -37,5 +41,30 @@ describe('normalizeLegacyRegions', () => {
   it('원본 배열을 변형하지 않는다', () => {
     normalizeLegacyRegions(regions, 3);
     expect(regions[0]?.class_name).toBe('wall_other');
+  });
+});
+
+describe('selectableRegionSignature', () => {
+  it('A2UI가 새 배열을 만들거나 순서를 바꿔도 같은 선택 영역이면 안정적이다', () => {
+    const first: OverlayRegion[] = [
+      { region_id: 'wall:2', class_name: 'wall_nonbearing', polygon: [0, 0, 1, 0, 1, 1] },
+      { region_id: 'window:1', class_name: 'window', polygon: [0, 0, 1, 0, 1, 1] }
+    ];
+    const reconstructed = first.map((region) => ({ ...region })).reverse();
+
+    expect(selectableRegionSignature(reconstructed)).toBe(
+      selectableRegionSignature(first)
+    );
+  });
+
+  it('선택 영역 id가 바뀌면 다른 키를 낸다', () => {
+    const first: OverlayRegion[] = [
+      { region_id: 'wall:1', class_name: 'wall_nonbearing', polygon: [0, 0, 1, 0, 1, 1] }
+    ];
+    const changed: OverlayRegion[] = [{ ...first[0]!, region_id: 'wall:2' }];
+
+    expect(selectableRegionSignature(changed)).not.toBe(
+      selectableRegionSignature(first)
+    );
   });
 });
