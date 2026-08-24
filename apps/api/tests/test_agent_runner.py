@@ -353,6 +353,48 @@ async def test_runner_flushes_durable_ui_without_assistant_text(
     assert fake.agent_runs[run["id"]]["pending_judgment_snapshot"] is None
 
 
+async def test_runner_hides_redundant_handoff_when_final_result_is_buffered(
+    fake: FakeMainFlowDb,
+) -> None:
+    # 두 도구가 병렬로 끝나 ConsultationHandoff가 먼저 append돼도 최종 메시지는
+    # JudgmentSummary 하나만 보낸다. 그 카드의 CTA가 prefill 상담 폼을 소유한다.
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    run = await main_flow.create_agent_run(
+        session_id=session["id"], owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+    handoff = {
+        "root": "ch",
+        "elements": {"ch": {"type": "ConsultationHandoff", "props": {}}},
+    }
+    judgment = {
+        "root": "j",
+        "elements": {"j": {"type": "JudgmentSummary", "props": {}}},
+    }
+    await main_flow.append_pending_ui(
+        run_id=run["id"], components=[handoff, judgment], snapshot={"v": 1}
+    )
+    runner = AgentRunner(
+        session_id=session["id"],
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        run_id=run["id"],
+    )
+
+    frames = [
+        frame
+        async for frame in runner.stream(
+            user_message="x", agent=_FakeAgent(_token_only_chunks())
+        )
+    ]
+    messages = [data for event, data in _parse(frames) if event == "message"]
+
+    assert len(messages) == 1
+    assert messages[0]["ui_components"] == [judgment]
+
+
 async def test_runner_one_active_run_per_session(fake: FakeMainFlowDb) -> None:
     owner = uuid.uuid4()
     session = await main_flow.create_session(
