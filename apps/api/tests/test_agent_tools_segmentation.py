@@ -1663,3 +1663,720 @@ async def test_session_floorplan_infected_always_blocked(monkeypatch) -> None:
     )
     assert res["ok"] is False
     assert res["error_code"] == "SEGMENTATION_NOT_SCANNED"
+
+
+def test_rc_priority_drops_fully_overlapped_nonbearing() -> None:
+    # #rc-priority: 같은 벽이 비내력·RC 양쪽으로 판정되면 RC 우선 — RC 안에 완전히
+    # 들어간 비내력 판정은 통째로 무시된다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [10, 2, 90, 2, 90, 8, 10, 8],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    assert [r["region_id"] for r in out] == ["pred:1"]  # RC 만 남는다
+
+
+def test_rc_priority_trims_partial_overlap() -> None:
+    # 부분 겹침이면 교집합만 도려내고 잔여를 남긴다 — 잔여엔 RC 와의 겹침이 없다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [80, 0, 150, 0, 150, 10, 80, 10],
+            "score": 0.6,
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    assert len(nb) == 1
+    # 잘린 조각은 원본 id 를 물려받지 않고 기하 지문 id 를 받는다
+    # (#rc-clip-geometry-id) — 기하가 바뀐 잔여가 저장된 선택(id 교집합)에 옛 벽으로
+    # 살아남으면 안 된다.
+    assert nb[0]["region_id"].startswith("pred:2~")
+    assert nb[0]["region_id"] != "pred:2"
+    assert nb[0]["score"] == 0.6  # 속성 보존
+    xs = nb[0]["polygon"][0::2]
+    assert min(xs) >= 100.0  # RC(x<=100) 구간이 도려내졌다
+
+
+def test_rc_priority_splits_remainder_into_pieces() -> None:
+    # RC 가 비내력벽 가운데를 가로지르면 잔여 두 조각이 각각 별도 region 으로 남는다
+    # (실제로 서로 떨어진 후보 벽). 원본 id 는 사라지고 모든 조각이 `{id}:N` 새 id.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [45, 0, 55, 0, 55, 50, 45, 50],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 20, 100, 20, 100, 30, 0, 30],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    assert len(nb) == 2
+    ids = {r["region_id"] for r in nb}
+    assert len(ids) == 2  # 두 조각이 서로 다른 기하 지문 id
+    assert all(i.startswith("pred:2~") for i in ids)
+    for r in nb:
+        xs = r["polygon"][0::2]
+        # 각 조각은 RC 스트립(45..55) 바깥에만 있다.
+        assert max(xs) <= 45.0 or min(xs) >= 55.0
+
+
+def test_rc_priority_ignores_edge_contact_and_other_classes() -> None:
+    # 점/모서리 접촉(면적 0 교집합)은 겹침이 아니고, 미확정 벽(wall_other)은 겹쳐도
+    # 건드리지 않는다 — UNKNOWN 이라 철거 후보로 승격되지 않는다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+        },
+        {
+            # RC 와 변을 공유(면적 0) — 유지.
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [10, 0, 20, 0, 20, 10, 10, 10],
+        },
+        {
+            # RC 와 면적 겹침이지만 미확정 벽 — 유지.
+            "region_id": "pred:3",
+            "class_name": "wall_other",
+            "polygon": [5, 0, 15, 0, 15, 10, 5, 10],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    assert {r["region_id"] for r in out} == {"pred:1", "pred:2", "pred:3"}
+    nb = next(r for r in out if r["region_id"] == "pred:2")
+    assert nb["polygon"] == [10, 0, 20, 0, 20, 10, 10, 10]  # 무변형
+
+
+def test_rc_priority_noop_without_rc() -> None:
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+        }
+    ]
+    assert _suppress_rc_overlapped_nonbearing(regions) == regions
+
+
+def test_rc_priority_drops_remainder_smaller_than_10x10() -> None:
+    # 잘려 남은 비내력 조각이 10×10px(100px²) 미만이면 벽으로 보기 어려운 크기라
+    # 후보에서 제외한다(2026-08-19 모델 레포 지시). 비율(5%)로는 통과하는 크기라
+    # 절대 하한이 실제로 작동하는지를 본다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+        },
+        {
+            # 원본 130px² — 잔여(x 100..108)는 80px² < 100px² 인데 비율은 61%.
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [95, 0, 108, 0, 108, 10, 95, 10],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    assert [r["region_id"] for r in out] == ["pred:1"]
+
+
+def test_rc_priority_preserves_hole_when_rc_fully_inside() -> None:
+    # #rc-hole-preservation: RC 가 비내력벽 안에 완전히 포함되면 difference 가 구멍 뚫린
+    # 폴리곤을 낸다. exterior 만 직렬화하면 도려낸 RC 영역이 초록 후보로 되살아나므로,
+    # 구멍 없는 조각들로 분해해 어떤 조각도 RC 중심을 덮지 않아야 한다.
+    from shapely.geometry import Point, Polygon
+
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [40, 40, 60, 40, 60, 60, 40, 60],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 100, 0, 100],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    assert len(nb) >= 2  # 도넛 → 구멍 없는 조각 분해
+    total = 0.0
+    rc_center = Point(50, 50)
+    for r in nb:
+        poly = r["polygon"]
+        shape = Polygon([(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)])
+        assert not shape.interiors  # 조각엔 구멍이 없다
+        assert not shape.contains(rc_center)  # RC 영역을 덮는 조각이 없다
+        total += shape.area
+    assert abs(total - 9600.0) < 1.0  # 10000 − RC 400 이 보존된다
+
+
+def test_rc_priority_split_ids_avoid_existing_siblings() -> None:
+    # #rc-split-id-collision: 기존 region 과 id 가 절대 충돌하지 않는다 — 잘린 조각은
+    # 기하 지문 id(`{id}~<지문>`)를 받고, 이전 패스가 남긴 형제 id 는 그대로 보존된다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [45, 0, 55, 0, 55, 50, 45, 50],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 20, 100, 20, 100, 30, 0, 30],
+        },
+        {
+            # 앞선 패스가 만들었을 법한 형제 id — RC 와 안 겹쳐 그대로 남는다.
+            "region_id": "pred:2:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [200, 0, 220, 0, 220, 20, 200, 20],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    ids = [r["region_id"] for r in out]
+    assert len(ids) == len(set(ids))  # 전역 유일
+    assert "pred:1" in ids and "pred:2:2" in ids  # RC·기존 형제는 그대로
+    clipped = [i for i in ids if i.startswith("pred:2~")]
+    assert len(clipped) == 2  # 분할 조각 둘은 기하 지문 id
+
+
+def test_rc_priority_clears_border_flag_on_clipped_pieces() -> None:
+    # 잘린 조각은 touches_tile_border 를 해제한다 — 경계에 닿던 부분이 도려내졌을 수
+    # 있는데 표식이 남으면 2차 병합의 경계 잇기(≤3px)가 무관한 벽을 붙인다.
+    # tile_index 는 여전히 사실이라 보존한다.
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [80, 0, 150, 0, 150, 10, 80, 10],
+            "touches_tile_border": True,
+            "tile_index": 1,
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = next(r for r in out if r["class_name"] == "wall_nonbearing")
+    assert nb["touches_tile_border"] is False
+    assert nb["tile_index"] == 1
+
+
+async def test_session_floorplan_prunes_stale_selection(monkeypatch) -> None:
+    # #stale-selection-prune: 재분석으로 region id 가 바뀌면(병합/RC 억제/드롭) 저장된
+    # selected_walls/windows 가 유령 id 나 내력벽 id 를 가리킬 수 있다 — 새 '선택 가능'
+    # id(비내력·미확정 벽 + 창호)와의 교집합으로 줄여 영속한다.
+    session_id, owner = await _session_with_asset(monkeypatch)
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={
+            # pred:1 은 살아남고, ghost:9 는 이번 분석에 없는 id, pred:3 은 내력벽이
+            # 되는 id — 뒤의 둘은 걸러져야 한다.
+            "selected_walls": ["pred:1", "pred:3", "ghost:9"],
+            "selected_windows": ["pred:2", "ghost:w"],
+        },
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [0, 0, 20, 0, 20, 20, 0, 20],
+                    },
+                    {
+                        "region_id": "pred:2",
+                        "class_name": "window",
+                        "score": 0.7,
+                        "polygon": [200, 0, 220, 0, 220, 10, 200, 10],
+                    },
+                    {
+                        "region_id": "pred:3",
+                        "class_name": "wall_reinforced_concrete",
+                        "score": 0.8,
+                        "polygon": [400, 0, 420, 0, 420, 10, 400, 10],
+                    },
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is True
+
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    js = session["judgment_schema"]
+    assert js["selected_walls"] == ["pred:1"]  # 유령·내력벽 id 제거
+    assert js["selected_windows"] == ["pred:2"]
+
+
+async def test_session_floorplan_invalidates_selection_of_clipped_wall(
+    monkeypatch,
+) -> None:
+    # #rc-clip-id-invalidation: 선택했던 벽이 RC 억제로 잘리면 잔여 조각은 새 id 를
+    # 받으므로 저장된 선택이 프루닝에서 자동 무효화된다 — 기하가 달라진 잔여를
+    # 사용자가 고른 벽으로 계속 취급하지 않고, 다시 확인·선택하게 한다.
+    session_id, owner = await _session_with_asset(monkeypatch)
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"selected_walls": ["pred:1"]},
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        # pred:1 이 RC(pred:2)와 부분 겹침 → 잔여는 기하 지문 id(pred:1~…)를 받는다.
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [80, 0, 150, 0, 150, 10, 80, 10],
+                    },
+                    {
+                        "region_id": "pred:2",
+                        "class_name": "wall_reinforced_concrete",
+                        "score": 0.8,
+                        "polygon": [0, 0, 100, 0, 100, 10, 0, 10],
+                    },
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is True
+
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    js = session["judgment_schema"]
+    assert js["selected_walls"] == []  # 잘린 벽의 선택은 무효화
+    wall_ids = {w["id"] for w in js["wall_objects"]}
+    assert any(i.startswith("pred:1~") for i in wall_ids)
+    assert "pred:1" not in wall_ids
+    # 선택이 전부 무효화됐으므로 배지도 오버레이 단계로 재개된다 — 선택 완료
+    # (collecting_info)에 남으면 SSE/퍼널이 현실과 어긋난다(#selection-invalidation-reopen).
+    assert session["status"] == "awaiting_overlay"
+
+
+def test_rc_priority_size_threshold_ignores_decomposition_cuts() -> None:
+    # #threshold-before-decomposition: 크기 임계값은 연결 잔여(구멍 분해 전) 기준이다.
+    # 벽 가장자리 근처의 작은 RC 구멍은 절단선이 얇은 스트립을 만들지만, 그 스트립은
+    # RC 와 겹친 적 없는 유효 영역이라 비율 컷으로 버리면 안 된다.
+    from shapely.geometry import Point, Polygon
+
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    regions = [
+        {
+            # 100×100 벽의 왼쪽 가장자리 근처(x 2..6)에 완전히 포함된 작은 RC.
+            "region_id": "pred:1",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [2, 40, 6, 40, 6, 60, 2, 60],
+        },
+        {
+            "region_id": "pred:2",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 100, 0, 100, 100, 0, 100],
+        },
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    assert len(nb) >= 2  # 절단 스트립(~360px², 비율 컷 미만)도 살아남는다
+    total = 0.0
+    rc_center = Point(4.0, 50.0)
+    for r in nb:
+        poly = r["polygon"]
+        shape = Polygon([(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)])
+        assert not shape.contains(rc_center)  # RC 영역은 여전히 비어 있다
+        total += shape.area
+    assert abs(total - (10000.0 - 80.0)) < 1.0  # 연결 잔여 전체가 보존된다
+
+
+def test_rc_priority_preserves_geometry_with_many_holes() -> None:
+    # #hole-cap-drop: RC 섬이 8개를 넘어도(여기선 9개) 분해가 잔여를 통째로 버리지
+    # 않는다 — 워크리스트 반복은 총 구멍 수가 단조 감소해 개수와 무관하게 끝난다.
+    from shapely.geometry import Point, Polygon
+
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    rc_regions = [
+        {
+            "region_id": f"rc:{k}",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [
+                50 + 100 * k,
+                40,
+                70 + 100 * k,
+                40,
+                70 + 100 * k,
+                60,
+                50 + 100 * k,
+                60,
+            ],
+        }
+        for k in range(9)
+    ]
+    regions = rc_regions + [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 1000, 0, 1000, 100, 0, 100],
+        }
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    assert nb  # 잔여가 통째로 사라지지 않는다
+    total = 0.0
+    centers = [Point(60 + 100 * k, 50) for k in range(9)]
+    for r in nb:
+        poly = r["polygon"]
+        shape = Polygon([(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)])
+        assert not shape.interiors  # 모든 조각은 구멍이 없다
+        assert all(not shape.contains(c) for c in centers)  # RC 영역은 비어 있다
+        total += shape.area
+    # 벽 100,000 − RC 9×400 = 96,400 이 (노이즈 컷 오차 내에서) 보존된다.
+    assert abs(total - 96400.0) < 2.0
+
+
+def test_rc_priority_clip_ids_track_geometry() -> None:
+    # #rc-clip-geometry-id: 같은 기하로 재분석되면 잘린 조각 id 가 같아 저장된 선택이
+    # 보존되고, RC 경계가 이동해 잔여 기하가 달라지면 id 도 달라져 id 기준 프루닝·검증이
+    # 선택을 무효화한다 — 순번 접미사는 이 구분을 못 한다(결정적 재사용).
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    def regions(rc_right: float) -> list[dict]:
+        return [
+            {
+                "region_id": "pred:1",
+                "class_name": "wall_reinforced_concrete",
+                "polygon": [0, 0, rc_right, 0, rc_right, 10, 0, 10],
+            },
+            {
+                "region_id": "pred:2",
+                "class_name": "wall_nonbearing",
+                "polygon": [80, 0, 200, 0, 200, 10, 80, 10],
+            },
+        ]
+
+    def clipped_id(out: list[dict]) -> str:
+        return next(r["region_id"] for r in out if r["class_name"] == "wall_nonbearing")
+
+    id_a = clipped_id(_suppress_rc_overlapped_nonbearing(regions(100.0)))
+    id_b = clipped_id(_suppress_rc_overlapped_nonbearing(regions(100.0)))
+    id_c = clipped_id(_suppress_rc_overlapped_nonbearing(regions(120.0)))
+    assert id_a == id_b  # 동일 기하 → 동일 id(선택 보존)
+    assert id_a != id_c  # 경계 이동 → 다른 id(선택 무효화)
+
+
+async def test_session_floorplan_persists_before_emitting_overlay(
+    monkeypatch,
+) -> None:
+    # #persist-before-emit: 판단객체 영속이 오버레이 방출보다 먼저다 — 카드를 먼저
+    # 내보내면 즉시 제출이 옛 wall_objects 기준 검증에 걸려(SELECTION_STALE) 방금 나온
+    # 카드가 만료 표시된다.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.6-luna"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    order: list[str] = []
+    real_merge = main_flow.merge_judgment_schema
+
+    async def merge_spy(**kwargs):
+        order.append("persist")
+        return await real_merge(**kwargs)
+
+    async def emit_spy(**kwargs):
+        order.append("emit")
+        return {"ok": True}
+
+    monkeypatch.setattr(main_flow, "merge_judgment_schema", merge_spy)
+    monkeypatch.setattr("src.agent.tools.domain.emit_ui_component_impl", emit_spy)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [0, 0, 20, 0, 20, 20, 0, 20],
+                    }
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=RunContext(),
+            run_id=run["id"],
+        )
+    assert res["ok"] is True
+    assert res["overlay_emitted"] is True
+    assert order == ["persist", "emit"]  # 영속이 항상 방출보다 먼저
+
+
+async def test_session_floorplan_skips_overlay_when_persist_fails(
+    monkeypatch,
+) -> None:
+    # #persist-before-emit: 영속이 실패하면 카드를 내보내지 않는다 — 제출이 영영
+    # 불가능한(SELECTION_STALE) 오버레이를 사용자에게 보여 주지 않는다.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.6-luna"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    async def merge_boom(**kwargs):
+        raise RuntimeError("persist failed")
+
+    emitted: list[object] = []
+
+    async def emit_spy(**kwargs):
+        emitted.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(main_flow, "merge_judgment_schema", merge_boom)
+    monkeypatch.setattr("src.agent.tools.domain.emit_ui_component_impl", emit_spy)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [0, 0, 20, 0, 20, 20, 0, 20],
+                    }
+                ],
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=RunContext(),
+            run_id=run["id"],
+        )
+    assert res["ok"] is True  # 분석 자체는 무르지 않는다(best-effort)
+    assert res["overlay_emitted"] is False
+    assert emitted == []  # 카드 미방출
+
+
+def test_clip_geometry_digest_is_representation_invariant() -> None:
+    # #canonical-ring-digest: 같은 링이면 시작 꼭짓점 순환·감기 방향·닫힘점 포함 여부와
+    # 무관하게 지문이 같아야 한다 — 표현이 지문을 바꾸면 재분석에서 유효한 선택이
+    # 이유 없이 무효화된다. 기하가 다르면 지문도 달라야 한다.
+    from src.agent.tools.segmentation import _clip_geometry_digest
+
+    base = [0, 0, 10, 0, 10, 10, 0, 10]
+    rotated = [10, 0, 10, 10, 0, 10, 0, 0]  # 시작 꼭짓점 순환
+    rewound = [0, 0, 0, 10, 10, 10, 10, 0]  # 반대 감기 방향
+    closed = [0, 0, 10, 0, 10, 10, 0, 10, 0, 0]  # 닫힘점 포함 표현
+    digests = {_clip_geometry_digest(p) for p in (base, rotated, rewound, closed)}
+    assert len(digests) == 1  # 표현 불변
+    assert _clip_geometry_digest([0, 0, 12, 0, 12, 10, 0, 10]) not in digests
+
+
+def test_rc_priority_scales_past_moderate_hole_counts() -> None:
+    # #hole-count-cap-drop: 분해에 개수 상한이 없다 — RC 섬이 많아도(여기선 25개)
+    # 스택에 남은 유효 잔여를 버리지 않고 전체 면적이 보존된다(종료는 총 구멍 수
+    # 단조 감소로 보장).
+    from shapely.geometry import Polygon
+
+    from src.agent.tools.segmentation import _suppress_rc_overlapped_nonbearing
+
+    count = 25
+    rc_regions = [
+        {
+            "region_id": f"rc:{k}",
+            "class_name": "wall_reinforced_concrete",
+            "polygon": [
+                50 + 100 * k,
+                40,
+                70 + 100 * k,
+                40,
+                70 + 100 * k,
+                60,
+                50 + 100 * k,
+                60,
+            ],
+        }
+        for k in range(count)
+    ]
+    regions = rc_regions + [
+        {
+            "region_id": "pred:1",
+            "class_name": "wall_nonbearing",
+            "polygon": [0, 0, 2600, 0, 2600, 100, 0, 100],
+        }
+    ]
+    out = _suppress_rc_overlapped_nonbearing(regions)
+    nb = [r for r in out if r["class_name"] == "wall_nonbearing"]
+    total = 0.0
+    for r in nb:
+        poly = r["polygon"]
+        shape = Polygon([(poly[i], poly[i + 1]) for i in range(0, len(poly) - 1, 2)])
+        assert not shape.interiors
+        total += shape.area
+    assert abs(total - (260000.0 - count * 400.0)) < 2.0
+
+
+async def test_session_floorplan_overlay_flag_tracks_inmemory_buffer(
+    monkeypatch,
+) -> None:
+    # #emit-flag-from-buffer: 내구 버퍼(pending_ui) 쓰기가 실패해도 in-memory 버퍼에
+    # 카드가 들어갔으면 이번 스트림 drain 이 카드를 첨부한다 — overlay_emitted 는
+    # 실제 버퍼 도달 기준이어야 에이전트가 중복 방출/모순 안내를 하지 않는다.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.6-luna"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    async def boom_append(**kwargs):
+        raise RuntimeError("durable buffer down")
+
+    monkeypatch.setattr(main_flow, "append_pending_ui", boom_append)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.6,
+                        "polygon": [0, 0, 20, 0, 20, 20, 0, 20],
+                    }
+                ],
+            },
+        )
+
+    ctx = RunContext()
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    assert res["ok"] is True
+    assert len(ctx.pending_ui_components) == 1  # in-memory 버퍼엔 들어갔다
+    assert res["overlay_emitted"] is True  # 버퍼 도달 기준으로 True

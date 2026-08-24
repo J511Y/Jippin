@@ -121,6 +121,95 @@ def test_is_floorplan_only_explicit_false_rejects() -> None:
     assert flag("maybe") is True  # 형식오류 → 통과
 
 
+async def test_interpret_uses_dedicated_vlm_model(monkeypatch) -> None:
+    # VLM 은 대화 에이전트(agent_model)와 분리된 vlm_model 로 호출한다(2026-08-19,
+    # 기본 gpt-5.6-luna). supplement.model 표기도 실제 호출 모델을 따른다.
+    import sys
+
+    captured: dict[str, object] = {}
+
+    class _FakeChat:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def ainvoke(self, messages: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                content='{"is_floorplan": true, "confidence": 0.9, "notes": [],'
+                ' "reclassifications": []}'
+            )
+
+    monkeypatch.setitem(
+        sys.modules, "langchain_openai", SimpleNamespace(ChatOpenAI=_FakeChat)
+    )
+    settings = SimpleNamespace(
+        vlm_floorplan_enabled=True,
+        vlm_model="openai:gpt-5.6-luna",
+        agent_model="openai:gpt-5.4-mini",
+        openai_api_key="k",
+        openai_store_logs=False,
+        app_env="test",
+        vlm_floorplan_timeout_seconds=5,
+    )
+    res = await vlm.interpret_floorplan_impl(
+        image_url="https://x/y.png",
+        regions=[
+            {
+                "region_id": "pred:1",
+                "class_name": "wall_other",
+                "polygon": [0, 0, 1, 1, 2, 2],
+            }
+        ],
+        image={"width": 10, "height": 10},
+        settings=settings,
+    )
+    assert captured["model"] == "gpt-5.6-luna"
+    assert res is not None and res["model"] == "gpt-5.6-luna"
+
+
+async def test_interpret_falls_back_to_agent_model_without_vlm_model(
+    monkeypatch,
+) -> None:
+    # 구 설정 스텁(vlm_model 부재)은 agent_model 로 폴백 — 배포 스큐/롤백 안전망.
+    import sys
+
+    captured: dict[str, object] = {}
+
+    class _FakeChat:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def ainvoke(self, messages: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                content='{"is_floorplan": true, "notes": [], "reclassifications": []}'
+            )
+
+    monkeypatch.setitem(
+        sys.modules, "langchain_openai", SimpleNamespace(ChatOpenAI=_FakeChat)
+    )
+    settings = SimpleNamespace(
+        vlm_floorplan_enabled=True,
+        agent_model="openai:gpt-5.4-mini",
+        openai_api_key="k",
+        openai_store_logs=False,
+        app_env="test",
+        vlm_floorplan_timeout_seconds=5,
+    )
+    res = await vlm.interpret_floorplan_impl(
+        image_url="https://x/y.png",
+        regions=[
+            {
+                "region_id": "pred:1",
+                "class_name": "wall_other",
+                "polygon": [0, 0, 1, 1, 2, 2],
+            }
+        ],
+        image={"width": 10, "height": 10},
+        settings=settings,
+    )
+    assert captured["model"] == "gpt-5.4-mini"
+    assert res is not None
+
+
 async def test_interpret_disabled_returns_none() -> None:
     settings = SimpleNamespace(
         vlm_floorplan_enabled=False,

@@ -6,6 +6,7 @@
 - **베이스**: CEO 브리프 §6 — "명세서의 스택은 권장값, CTO가 2026-05-28 기준으로 재평가 후 ADR 발행"
 - **슈퍼시드**: 없음. 이후 동일 항목에 대한 변경은 본 ADR 을 supersede 하는 새 ADR 을 발행한다.
 - **부분 supersede 받음 (2026-05-29 / Proposed)**: [`ADR-0004`](0004-supabase-transition.md) 가 본 ADR §0 T3 (DB) · §4 (Neon Postgres 봉인) 를 Supabase Postgres 로 부분 supersede 진행 중. ADR-0004 Accepted 시점에 본 ADR §0 T3 / §4 가 정식 supersede 된다. T4 (Redis), T5 (R2), T6 (LLM), T7 (Lightsail) 은 영향 없음.
+- **부분 supersede 받음 (2026-08-19 / Accepted)**: [`ADR-0011`](0011-llm-model-gpt-5-6-luna.md) 이 본 ADR **§7.2 (VLM / LLM 모델 선정)** 을 `gpt-5.6-luna`(agent_model/vlm_model 분리)로 supersede. §7.2 의 LangChain 추상화 구조와 §7.1(세그멘테이션) 등 나머지는 영향 없음.
 
 ---
 
