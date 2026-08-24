@@ -39,6 +39,7 @@ import contextlib
 import hashlib
 import ipaddress
 import uuid
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
@@ -1180,6 +1181,7 @@ async def segment_session_floorplan(
     client: httpx.AsyncClient | None = None,
     run_context: Any | None = None,
     run_id: uuid.UUID | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """세션에 선택된 도면 asset 을 서명해 세그멘테이션한다.
 
@@ -1197,6 +1199,8 @@ async def segment_session_floorplan(
 
     from ...services import main_flow, storage
 
+    if progress is not None:
+        progress("도면 파일을 불러오고 있어요")
     asset = await main_flow.get_selected_floorplan_asset(
         session_id=session_id,
         owner_user_id=owner_user_id,
@@ -1252,6 +1256,8 @@ async def segment_session_floorplan(
             error_code="SEGMENTATION_ENDPOINT_UNAVAILABLE",
             summary="도면 접근 URL 발급에 실패했습니다.",
         )
+    if progress is not None:
+        progress("도면에서 벽과 공간을 찾고 있어요")
     result = await segment_floorplan_impl(
         image_url=signed, settings=settings, client=client
     )
@@ -1270,6 +1276,8 @@ async def segment_session_floorplan(
 
     # AI-002 VLM 문맥 해석 — 도면 이미지로 Mask2Former 레이블을 보완(실패 시 None=단독 degrade).
     supplement: dict[str, Any] | None = None
+    if progress is not None:
+        progress("벽의 종류와 도면 구성을 확인하고 있어요")
     with contextlib.suppress(Exception):
         from .vlm import interpret_floorplan_impl
 
@@ -1298,6 +1306,8 @@ async def segment_session_floorplan(
     )
 
     # AI-003 정합성 검증·정규화 — VLM 교정(reclassifications)을 regions 에 머지한다.
+    if progress is not None:
+        progress("분석 결과를 도면 위에 정리하고 있어요")
     vlm_ids: set[str] = set()
     if supplement and supplement.get("reclassifications"):
         by_id = {r.get("region_id"): r for r in regions if isinstance(r, dict)}

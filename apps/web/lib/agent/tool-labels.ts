@@ -97,5 +97,5 @@ export function toolStepText(
   if (status === 'succeeded') {
     return summary?.trim() || display.done;
   }
-  return display.active;
+  return summary?.trim() || display.active;
 }

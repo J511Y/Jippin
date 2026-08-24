@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import uuid
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .domain import (
@@ -107,6 +109,25 @@ def build_tools(
     async def segment_floorplan() -> dict[str, Any]:
         """세션에 업로드된 평면도를 세그멘테이션한다(벽/공간 분류). 도면 출처는 세션에
         선택된 asset 으로 고정된다(인자 없음). 도면 미업로드/엔드포인트 실패 시 ok=false."""
+        # LangGraph custom stream으로 긴 분석의 실제 내부 경계를 알린다. build_tools 산출물을
+        # 그래프 밖에서 직접 호출하는 진단 경로도 깨지지 않도록 writer 부재는 조용히 폴백.
+        progress_callback: Callable[[str], None] | None = None
+        with contextlib.suppress(RuntimeError):
+            from langgraph.config import get_stream_writer
+
+            writer = get_stream_writer()
+
+            def emit_progress(summary: str) -> None:
+                writer(
+                    {
+                        "type": "tool_progress",
+                        "tool_name": "segment_floorplan",
+                        "summary": summary,
+                    }
+                )
+
+            progress_callback = emit_progress
+
         return await segment_session_floorplan(
             session_id=session_id,
             owner_user_id=owner_user_id,
@@ -114,6 +135,7 @@ def build_tools(
             settings=settings,
             run_context=run_context,
             run_id=run_id,
+            progress=progress_callback,
         )
 
     @tool

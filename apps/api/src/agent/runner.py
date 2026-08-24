@@ -65,7 +65,16 @@ class TokenSignal:
     delta: str
 
 
-Signal = TokenSignal | ToolStart | ToolEnd | AssistantMessage
+@dataclass
+class ToolProgress:
+    """도구 내부의 장시간 처리 단계. 원장 lifecycle 과 분리된 사용자 안내용 신호."""
+
+    tool_name: str
+    tool_kind: str
+    summary: str
+
+
+Signal = TokenSignal | ToolProgress | ToolStart | ToolEnd | AssistantMessage
 
 
 # --- astream 청크 → 정규화 시그널 번역 (langchain duck-typing) ----------------
@@ -209,6 +218,26 @@ async def translate_stream(
             text = _message_text(getattr(chunk, "content", ""))
             if text and not getattr(chunk, "tool_calls", None):
                 yield TokenSignal(text)
+            continue
+
+        if mode == "custom":
+            # 장시간 도구가 get_stream_writer()로 보내는 세부 진행 안내. LLM이 만드는
+            # 자유 텍스트가 아니라 서버 도구가 발행한 정형 payload만 통과시킨다.
+            if not isinstance(data, dict) or data.get("type") != "tool_progress":
+                continue
+            tool_name = data.get("tool_name")
+            summary = data.get("summary")
+            if (
+                isinstance(tool_name, str)
+                and tool_name in tool_kinds
+                and isinstance(summary, str)
+                and 0 < len(summary.strip()) <= 100
+            ):
+                yield ToolProgress(
+                    tool_name=tool_name,
+                    tool_kind=tool_kinds[tool_name],
+                    summary=summary.strip(),
+                )
             continue
 
         if mode != "updates" or not isinstance(data, dict):
@@ -688,6 +717,15 @@ class AgentRunner:
                     break
                 if isinstance(sig, TokenSignal):
                     yield sse.token(sig.delta)
+                elif isinstance(sig, ToolProgress):
+                    # 같은 tool_name의 started 이벤트를 다시 보내면 프론트가 기존 활동
+                    # 한 줄을 교체한다. ledger의 start/end 투영에는 영향을 주지 않는다.
+                    yield sse.tool_step(
+                        tool_name=sig.tool_name,
+                        tool_kind=sig.tool_kind,
+                        status="started",
+                        summary=sig.summary,
+                    )
                 elif isinstance(sig, ToolStart):
                     await self._writer.project_tool_start(sig)
                     tool_meta[sig.lc_tool_call_id] = (sig.tool_name, sig.tool_kind)
