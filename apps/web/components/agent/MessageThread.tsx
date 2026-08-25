@@ -20,6 +20,7 @@ import {
   type ChatActivityStep,
   type ChatMessage
 } from '@/components/a2ui';
+import { presentTurnDynamics } from '@/components/a2ui/presentation';
 import { maskStreamingJson } from '@/lib/agent/streaming-text';
 import type { ToolActivityStep } from '@/lib/agent/useAgentStream';
 
@@ -104,7 +105,8 @@ function AssistantTurn({
 }) {
   const hasActivity = activity != null && activity.length > 0;
   const hasContent = content != null && content.length > 0;
-  const hasDynamics = dynamics != null && dynamics.length > 0;
+  const visibleDynamics = presentTurnDynamics(dynamics ?? []);
+  const hasDynamics = visibleDynamics.length > 0;
   return (
     <Group align="flex-start" gap="sm" wrap="nowrap" style={{ alignSelf: 'stretch' }}>
       <Avatar />
@@ -116,7 +118,7 @@ function AssistantTurn({
             카드)가 새로고침 시 사라지던 문제 해소(#ui-only-render). */}
         {hasDynamics ? (
           <Stack gap="xs" mt={2}>
-            {dynamics!.map((component, index) => (
+            {visibleDynamics.map((component, index) => (
               <A2uiSurface key={`${bubbleKey}-dyn-${index}`} component={component} />
             ))}
           </Stack>

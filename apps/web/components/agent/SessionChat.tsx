@@ -120,15 +120,7 @@ function Conversation({
 
   return (
     <ChatActionsProvider value={{ sessionId, sendMessage: send, busy, refreshSession }}>
-      <Box className={`chat-shell${hasPlan ? ' chat-with-plan' : ''}`}>
-        {/* 데스크톱: 좌측 진행 계획 사이드바(plan 이 있을 때만). 모바일에서는 숨기고
-            대신 thread 상단의 접이식 표현을 쓴다(아래 plan-mobile). */}
-        {hasPlan ? (
-          <Box className="plan-sidebar" component="aside" aria-label="진행 계획">
-            <PlanPanel plan={plan} busy={busy} />
-          </Box>
-        ) : null}
-
+      <Box className="chat-shell">
         <Box className="chat-main">
           {hasReport ? (
             <Box className="chat-report-link">
@@ -147,11 +139,11 @@ function Conversation({
 
           <Box className="chat-scroll" ref={scrollRef} onScroll={recomputeAtBottom}>
             <Box className="chat-column">
-              {/* 모바일 전용 접이식 진행 계획(thread 최상단). 데스크톱에서는 PlanPanel
-                  내부의 plan-mobile 표현이 hiddenFrom="sm" 으로 숨겨진다. */}
+              {/* 진행 계획은 모바일에서만 접이식으로 노출한다. PC에서는 채팅 폭을
+                  온전히 사용하도록 부모와 PlanPanel 양쪽에서 숨긴다. */}
               {hasPlan ? (
                 <Box className="plan-mobile-bar">
-                  <PlanPanel plan={plan} busy={busy} />
+                  <PlanPanel plan={plan} />
                 </Box>
               ) : null}
 

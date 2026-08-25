@@ -148,6 +148,19 @@ type ViewBox = { x: number; y: number; w: number; h: number };
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
 
+/** A2UI가 같은 payload를 새 객체로 만들더라도 데이터 의미가 같으면 같은 키를 낸다. */
+export function selectableRegionSignature(regions: readonly OverlayRegion[]): string {
+  return JSON.stringify(regions.map((region) => region.region_id).sort());
+}
+
+function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
+}
+
 export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPayload }) {
   const actions = useChatActions();
   const titleId = useId();
@@ -249,9 +262,12 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     () => new Set(uncertainWallRegions.map((r) => r.region_id)),
     [uncertainWallRegions]
   );
+  // json-render는 상위 채팅 상태가 바뀔 때 같은 카드 props를 새 객체로 구성할 수 있다.
+  // Set 객체가 아니라 안정적인 값 키를 effect 의존성으로 써 signed URL/session 재조회 폭주를 막는다.
+  const selectableIdsSignature = selectableRegionSignature(selectableRegions);
   const selectableIds = useMemo(
-    () => new Set(selectableRegions.map((r) => r.region_id)),
-    [selectableRegions]
+    () => new Set<string>(JSON.parse(selectableIdsSignature) as string[]),
+    [selectableIdsSignature]
   );
 
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -292,8 +308,12 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
           getSession(sessionId).catch(() => null)
         ]);
         if (ignore) return;
-        if (url) setImageUrl(url);
-        else setImageFailed(true);
+        if (url) {
+          setImageUrl(url);
+          setImageFailed(false);
+        } else {
+          setImageFailed(true);
+        }
         const prevWalls = session?.judgment_schema?.selected_walls;
         const prevWindows = session?.judgment_schema?.selected_windows;
         // 이 카드에 실제로 존재하는 선택 가능 영역만 복원한다 — 재분석으로 id 가 바뀐
@@ -305,10 +325,11 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
         ]
           .filter((x): x is string => typeof x === 'string')
           .filter((id) => selectableIds.has(id));
-        if (restored.length > 0) {
-          setSelected(new Set(restored));
-          setSubmitted(true); // 이미 제출된 선택 복원.
-        }
+        const restoredSet = new Set(restored);
+        setSelected((current) =>
+          sameStringSet(current, restoredSet) ? current : restoredSet
+        );
+        setSubmitted(restoredSet.size > 0); // 이미 제출된 선택 복원.
       } catch {
         if (!ignore) setImageFailed(true);
       } finally {
@@ -408,55 +429,54 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
         {/* 안내 문구는 **실제로 검출된 것만** 가리킨다 — 화면에 없는 색(초록 벽·파란 창)을
             찾게 하면 사용자가 헤매다 선택 흐름이 멈춘다. 비내력 후보가 하나도 없고 미확정
             벽만 잡히는 도면이 실제로 나온다(v4는 판단 보류를 별도 클래스로 낸다). */}
-        <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.55 }}>
+        <Stack component="ul" gap={4} m={0} pl="lg">
           {wallRegions.length > 0 ? (
-            <>
-              철거가 가능한 건 <b>비내력벽(초록)</b>이에요.{' '}
-            </>
+            <Text component="li" size="sm" c="var(--jippin-brand-copy)" lh={1.55}>
+              <b>비내력벽 후보(초록)</b>: 철거 검토 대상으로 선택할 수 있어요.
+            </Text>
           ) : null}
           {bearingWallRegions.length > 0 ? (
             hasSelectable ? (
-              <>
-                <b>빨간 벽</b>은 내력벽으로 보이는 부분이라 철거 검토 대상으로 고를 수
-                없어요.{' '}
-              </>
+              <Text component="li" size="sm" c="var(--jippin-brand-copy)" lh={1.55}>
+                <b>내력벽 후보(빨강)</b>: 철거 검토 대상으로 선택할 수 없어요.
+              </Text>
             ) : (
               // 내력벽만 잡힌 도면 — 고를 수 있는 영역·제출 버튼이 없으므로 선택 안내
               // 대신 상황 설명만 한다(없는 초록 벽을 찾게 하지 않는다).
-              <>
-                이 도면에서는 <b>내력벽으로 보이는 벽(빨강)</b>만 잡혔어요 — 철거를
-                검토할 수 있는 비내력벽 후보가 없어 다른 도면이 필요할 수 있어요.{' '}
-              </>
+              <Text component="li" size="sm" c="var(--jippin-brand-copy)" lh={1.55}>
+                이 도면에서는 <b>내력벽 후보(빨강)</b>만 확인됐어요. 철거를 검토할
+                비내력벽 후보가 없어 다른 도면이 필요할 수 있어요.
+              </Text>
             )
           ) : null}
           {uncertainWallRegions.length > 0 ? (
             wallRegions.length > 0 ? (
-              <>
-                <b>회색 벽</b>은 도면만으로는 아직 구조를 확인하지 못한 벽이에요 — 골라
-                주시면 추가 확인이 필요한 부분을 함께 안내해 드려요.{' '}
-              </>
+              <Text component="li" size="sm" c="var(--jippin-brand-copy)" lh={1.55}>
+                <b>미확정 벽(회색)</b>: 도면만으로 구조를 가르기 어려워 추가 확인이
+                필요해요. 철거 희망 영역으로 선택할 수 있어요.
+              </Text>
             ) : (
-              <>
-                이 도면에서는 도면만으로 구조를 확인하지 못한 <b>회색 벽</b>만 잡혔어요 —
-                철거를 검토하고 싶은 벽을 골라 주시면 확인이 필요한 부분을 함께 안내해
-                드려요.{' '}
-              </>
+              <Text component="li" size="sm" c="var(--jippin-brand-copy)" lh={1.55}>
+                이 도면에서는 <b>미확정 벽(회색)</b>만 확인됐어요. 철거를 검토할 벽을
+                고르면 추가 확인이 필요한 부분을 안내해 드려요.
+              </Text>
             )
           ) : null}
           {windowRegions.length > 0 ? (
-            <>
-              거실과 발코니 사이 <b>창호(파랑)</b>를 철거해 공간을 합치는 것도 검토할 수
-              있어요 — 단, 바깥 공기와 바로 닿는 바깥쪽 창은 철거할 수 없어요.{' '}
-            </>
+            <Text component="li" size="sm" c="var(--jippin-brand-copy)" lh={1.55}>
+              <b>창호(파랑)</b>: 거실과 발코니를 합칠 때 철거를 검토할 수 있어요. 바깥
+              공기와 바로 닿는 창은 철거할 수 없어요.
+            </Text>
           ) : null}
+        </Stack>
+
+        <Text size="sm" c="var(--jippin-brand-copy)" lh={1.55}>
           {/* 선택 지시는 실제로 고를 수 있을 때만 — 내력벽만 잡히면 제출 버튼 자체가
               없다(#bearing-only-copy). */}
-          {hasSelectable ? (
-            <>
-              영역을 눌러 고른 뒤(여러 곳 가능) <b>제출</b> 버튼을 눌러 주세요.{' '}
-            </>
-          ) : null}
-          표시는 AI 추정 후보예요.
+          {hasSelectable
+            ? '영역을 눌러 여러 곳을 고른 뒤 제출해 주세요. '
+            : null}
+          표시는 AI가 분석한 후보이며, 최종 확인이 필요해요.
         </Text>
 
         {loading ? (
@@ -894,7 +914,7 @@ function OverlayCanvas({
             도면 이미지를 못 불러와 영역만 표시해요
           </Text>
         </Group>
-      ) : (
+      ) : regions.length > 0 ? (
         <Group
           gap={5}
           wrap="nowrap"
@@ -926,7 +946,7 @@ function OverlayCanvas({
               .join('·') + '을 눌러 선택'}
           </Text>
         </Group>
-      )}
+      ) : null}
     </Box>
   );
 }
