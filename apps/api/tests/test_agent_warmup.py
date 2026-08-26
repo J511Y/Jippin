@@ -112,8 +112,6 @@ async def test_fire_sends_health_get_with_bearer(monkeypatch) -> None:
     monkeypatch.setattr(warmup.httpx, "AsyncClient", _Client)
     # 후행 슬래시가 있어도 /health 경로가 정확히 조립된다.
     await warmup._fire("https://hf.example/seg/", "tok")
-    assert calls == [
-        ("https://hf.example/seg/health", {"Authorization": "Bearer tok"})
-    ]
+    assert calls == [("https://hf.example/seg/health", {"Authorization": "Bearer tok"})]
     # 응답 코드를 로깅한다(503=웨이크 시작, 200=이미 웜) — 운영 검증 포인트.
     assert statuses == [503]
