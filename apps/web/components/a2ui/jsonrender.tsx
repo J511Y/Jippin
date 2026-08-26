@@ -60,8 +60,15 @@ const overlayRegion = z.object({
 export const a2uiCatalog = defineCatalog(schema, {
   components: {
     FloorplanRequest: {
-      props: z.object({ reason: z.string().optional() }),
-      description: '도면(평면도) 업로드를 사용자에게 요청하는 카드. reason 에 왜 필요한지 한 문장.'
+      props: z.object({
+        reason: z.string().optional(),
+        // 카드 발행 시점의 selected_floorplan_asset_id(서버 스탬프). 카탈로그에 선언해야
+        // Zod 가 strip 하지 않고 카드에 닿는다 — 재업로드 요청 카드가 "이 카드 이후 새
+        // asset 이 붙었는가"를 판정하는 근거(#floorplan-request-prior-asset).
+        prior_asset_id: z.string().nullable().optional()
+      }),
+      description:
+        '도면(평면도) 업로드를 사용자에게 요청하는 카드. reason 에 왜 필요한지 한 문장. prior_asset_id 는 발행 시점에 이미 선택돼 있던 asset(서버 스탬프, 재업로드 판정용).'
     },
     AddressCandidates: {
       props: z.object({ candidates: z.array(addressCandidate) }),

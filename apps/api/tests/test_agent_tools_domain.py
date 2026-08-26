@@ -926,3 +926,51 @@ async def test_non_handoff_decision_emits_no_card(monkeypatch) -> None:
     assert res.get("handoff_emitted") is False
     ui, _snap = ctx.drain_ui()
     assert ui == []
+
+
+async def test_emit_floorplan_request_stamps_prior_asset(monkeypatch) -> None:
+    # #floorplan-request-prior-asset: 카드엔 발행 시점의 선택 asset 이 스탬프된다 —
+    # 도면 없으면 None, 재요청이면 그 시점 asset id. 프론트는 이 값으로 "이 카드 이후
+    # 새 asset 이 붙었는가"를 판정해 재업로드 카드가 즉시 '첨부 완료'로 잠기지 않는다.
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+
+    await domain.emit_floorplan_request_impl(
+        run_context=ctx, run_id=run_id, session_id=session_id, reason="첫 요청"
+    )
+    asset = await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/a1.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    await domain.emit_floorplan_request_impl(
+        run_context=ctx, run_id=run_id, session_id=session_id, reason="재요청"
+    )
+
+    ui, _snap = ctx.drain_ui()
+    first, second = (spec["elements"]["fp"]["props"] for spec in ui)
+    assert first["prior_asset_id"] is None
+    assert second["prior_asset_id"] == str(asset["id"])
+    assert second["reason"] == "재요청"
+
+
+async def test_emit_floorplan_request_survives_stamp_failure(monkeypatch) -> None:
+    # 스탬프 조회 실패는 카드 방출을 막지 않는다 — prior_asset_id 없이(구 카드와 같은
+    # 보수적 동작) 방출된다.
+    session_id, run_id, _fake, ctx = await _session_run_ctx(monkeypatch)
+
+    async def boom(_sid):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(main_flow, "get_session_inputs", boom)
+    res = await domain.emit_floorplan_request_impl(
+        run_context=ctx, run_id=run_id, session_id=session_id, reason="요청"
+    )
+    assert res["ok"] is True
+    ui, _snap = ctx.drain_ui()
+    assert "prior_asset_id" not in ui[0]["elements"]["fp"]["props"]

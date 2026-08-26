@@ -122,6 +122,50 @@ def test_selected_windows_surface_with_boundary_delegation() -> None:
     assert "EXTERIOR|BALCONY_BOUNDARY" in ctx
 
 
+def test_floorplan_no_candidates_requests_reupload() -> None:
+    # #floorplan-reupload-exception: 분석은 끝났지만(wall_objects 키 존재) 벽·창호 후보가
+    # 0 이면 '분석 진행/대기'가 아니라 재업로드 예외 안내를 준다 — 운영에서 벽이 하나도
+    # 안 잡힌 도면(wall_objects=[]) 이 "다시 요청 금지"로 굳어 사용자가 갇히던 케이스.
+    session = {
+        "selected_floorplan_asset_id": "asset-1",
+        "judgment_schema": {
+            "wall_objects": [],
+            "space_objects": [{"id": "pred:25", "type": "ETC"}],
+        },
+    }
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "emit_floorplan_request" in ctx
+    assert "다른" in ctx and "평면도" in ctx
+    assert "분석 진행/대기" not in ctx
+    assert "검토를 이어갈 수 없다" in ctx
+
+
+def test_floorplan_windows_only_still_reviewable() -> None:
+    # 벽 후보 0 이어도 창호가 있으면 창호 철거 검토는 가능 — 재업로드 예외가 아니라
+    # 분석 완료 카운트로 안내한다.
+    session = {
+        "selected_floorplan_asset_id": "asset-1",
+        "judgment_schema": {
+            "wall_objects": [],
+            "window_objects": [{"id": "win:1"}],
+        },
+    }
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "창호 1곳" in ctx
+    assert "emit_floorplan_request" not in ctx
+
+
+def test_floorplan_attached_without_analysis_stays_pending() -> None:
+    # 분석 전(wall_objects 키 자체가 없음)엔 종전대로 '분석 진행/대기' + 재요청 금지.
+    session = {"selected_floorplan_asset_id": "asset-1", "judgment_schema": {}}
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "분석 진행/대기" in ctx
+    assert "emit_floorplan_request" not in ctx
+
+
 def test_known_judgment_values_listed() -> None:
     session = {
         "judgment_schema": {

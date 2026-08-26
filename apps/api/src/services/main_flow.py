@@ -706,6 +706,67 @@ async def _db_update_session_fields(
     return dict(row._mapping) if row is not None else None
 
 
+# 도면 교체 시 함께 무효화하는 judgment_schema 의 분석 산출 키. 전부 '이전 asset 의
+# 도면'을 설명하는 값이라 새 asset 이 붙는 순간 의미가 깨진다(#floorplan-replace-reset).
+# 사용자 답(judgment_values)·주소/대장 유래(building_info, register_supplement)는
+# 도면과 무관하므로 보존한다.
+_FLOORPLAN_ANALYSIS_KEYS: tuple[str, ...] = (
+    "wall_objects",
+    "space_objects",
+    "window_objects",
+    "vlm_supplement",
+    "selected_walls",
+    "selected_windows",
+)
+
+
+async def _db_link_session_floorplan_asset(
+    session_id: uuid.UUID, asset_id: uuid.UUID
+) -> dict[str, Any] | None:
+    """세션 포인터를 새 asset 으로 연결하고, **다른 asset 에서 갈아타는 경우** 이전
+    분석 산출을 같은 행잠금 트랜잭션에서 제거한다(#floorplan-replace-reset).
+
+    안 지우면 새 도면에 이전 도면의 wall_objects/selected_walls 가 남아, 에이전트가
+    '분석 완료'로 오인해 재분석을 건너뛰거나 옛 벽 판정을 새 도면 위에 설명하는 오류가
+    난다. verdict/completion_decision 무효화는 0016 트리거가(역할 무관) 처리하므로
+    여기서 중복하지 않는다.
+    """
+
+    async with get_engine().begin() as conn:
+        row0 = (
+            await conn.execute(
+                sa.select(
+                    _SESSIONS.c.selected_floorplan_asset_id,
+                    _SESSIONS.c.judgment_schema,
+                )
+                .where(_SESSIONS.c.id == session_id)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if row0 is None:
+            return None
+        values: dict[str, Any] = {"selected_floorplan_asset_id": asset_id}
+        prior = row0.selected_floorplan_asset_id
+        if prior is not None and prior != asset_id:
+            js = row0.judgment_schema if isinstance(row0.judgment_schema, dict) else {}
+            reset = {k: v for k, v in js.items() if k not in _FLOORPLAN_ANALYSIS_KEYS}
+            if reset != js:
+                values["judgment_schema"] = reset
+        row = (
+            await conn.execute(
+                sa.update(_SESSIONS)
+                .where(_SESSIONS.c.id == session_id)
+                .values(
+                    last_activity_at=sa.func.now(),
+                    updated_at=sa.func.now(),
+                    **values,
+                )
+                .returning(*_SESSIONS.c)
+            )
+        ).one_or_none()
+    return dict(row._mapping) if row is not None else None
+
+
 async def _db_insert_agent_run(values: dict[str, Any]) -> dict[str, Any] | None:
     """`agent_runs` INSERT(멱등). 같은 ``id`` 가 이미 있으면 ON CONFLICT DO NOTHING 으로
     None 을 반환한다 — 라우터가 헤더 노출 전에 만든 placeholder 나 이른 ``/interrupt``
@@ -1511,9 +1572,9 @@ async def create_floorplan_asset(
     # 세션을 이 asset 으로 연결한다. main_flow 는 비-authenticated 풀러로 쓰므로 0008
     # client-guard 트리거는 early-return 하고, 같은 세션 소속 asset 이라 reference-scope
     # 도 통과한다(상태 전이는 강제하지 않음 — 에이전트 플로우가 status 를 진행).
-    await _db_update_session_fields(
-        session_id, {"selected_floorplan_asset_id": asset["id"]}
-    )
+    # 재업로드(기존 asset 에서 갈아타기)면 이전 도면의 분석 산출도 같은 트랜잭션에서
+    # 제거된다(#floorplan-replace-reset) — 이전 도면 자체(asset row/파일)는 남는다.
+    await _db_link_session_floorplan_asset(session_id, asset["id"])
     # 도면 asset 이 세션에 연결됐으니 status 를 floorplan_selected 로 전진.
     await advance_session_status(
         session_id=session_id, target="floorplan_selected", reason="floorplan_selected"

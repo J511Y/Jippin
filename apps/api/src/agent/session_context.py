@@ -77,10 +77,16 @@ def build_session_state_context(
         if extra:
             lines.append(f"  (확정된 건물 정보: {', '.join(extra)})")
 
-    # 도면 — 첨부/분석됐으면 도면 우선, 도면을 다시 요청하지 말 것.
+    # 도면 — 첨부/분석됐으면 도면 우선, 도면을 다시 요청하지 말 것. 단, 분석이 끝났는데
+    # 벽·창호 후보가 하나도 없으면(=이 도면으로는 검토 불가) 예외로 재업로드를 유도한다
+    # (#floorplan-reupload-exception). 분석이 돌면 wall_objects 키가 빈 리스트라도 생기므로,
+    # 키 존재 여부로 '분석 전'과 '분석했지만 벽 0'을 가른다.
     walls = judgment.get("wall_objects")
     if session.get("selected_floorplan_asset_id"):
-        if isinstance(walls, list) and walls:
+        analyzed = isinstance(walls, list)
+        windows = judgment.get("window_objects")
+        window_count = len(windows) if isinstance(windows, list) else 0
+        if analyzed and (walls or window_count):
             nonload = sum(
                 1
                 for w in walls
@@ -96,8 +102,6 @@ def build_session_state_context(
                 for w in walls
                 if isinstance(w, dict) and w.get("wall_type") == "UNKNOWN"
             )
-            windows = judgment.get("window_objects")
-            window_count = len(windows) if isinstance(windows, list) else 0
             window_txt = f", 창호 {window_count}곳" if window_count else ""
             unknown_txt = f", 미확정 벽 {unknown}곳" if unknown else ""
             lines.append(
@@ -113,6 +117,15 @@ def build_session_state_context(
                     "대상에 포함되면 내력 여부를 단정하지 말고 추가 확인(현장/전문가)이 "
                     "필요하다고 안내할 것.)"
                 )
+        elif analyzed:
+            lines.append(
+                "- 평면도: 첨부 + 분석 완료 — 그러나 **벽·창호 후보가 하나도 잡히지 "
+                "않아 이 도면으로는 철거 검토를 이어갈 수 없다**. 이 경우는 '도면을 "
+                "다시 요청하지 않기' 규칙의 예외다: emit_floorplan_request 로 **다른 "
+                "평면도**(벽이 선명히 보이는 도면) 업로드를 요청할 것. 새 도면이 "
+                "첨부되면 segment_floorplan 으로 다시 분석한다(새 도면이 기존 도면을 "
+                "대체한다)."
+            )
         else:
             lines.append(
                 "- 평면도: 첨부됨(분석 진행/대기). 도면을 다시 요청하지 말 것."

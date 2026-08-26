@@ -52,6 +52,7 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_select_chat_tool_call_by_lc_id",
     "_db_list_chat_messages",
     "_db_update_session_fields",
+    "_db_link_session_floorplan_asset",
     "_db_insert_agent_run",
     "_db_select_agent_run",
     "_db_select_active_agent_run",
@@ -630,6 +631,32 @@ class FakeMainFlowDb:
         )
         row.update(values)
         if pointer_changed:
+            row["rule_eval_result"] = None
+            row["rule_evaluated_at"] = None
+            row["completion_decision"] = None
+        self._touch_session(session_id)
+        return dict(row)
+
+    async def _db_link_session_floorplan_asset(
+        self, session_id: uuid.UUID, asset_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        row = self.sessions.get(session_id)
+        if row is None:
+            return None
+        prior = row.get("selected_floorplan_asset_id")
+        row["selected_floorplan_asset_id"] = asset_id
+        if prior != asset_id:
+            # 재업로드(다른 asset 에서 갈아타기) — 이전 도면의 분석 산출을 제거한다
+            # (real seam 미러, #floorplan-replace-reset). 첫 연결(None→asset)엔 지울
+            # 분석이 없다.
+            js = row.get("judgment_schema")
+            if prior is not None and isinstance(js, dict):
+                row["judgment_schema"] = {
+                    k: v
+                    for k, v in js.items()
+                    if k not in main_flow._FLOORPLAN_ANALYSIS_KEYS
+                }
+            # migration 0016 trg_sessions_invalidate_verdict 미러(포인터 변경).
             row["rule_eval_result"] = None
             row["rule_evaluated_at"] = None
             row["completion_decision"] = None

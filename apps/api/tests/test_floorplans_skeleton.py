@@ -290,6 +290,52 @@ async def test_new_floorplan_invalidates_persisted_verdict(fake_db):
     assert fake_db.sessions[session_id]["completion_decision"] is None
 
 
+async def test_replacing_floorplan_resets_prior_analysis(fake_db):
+    """#floorplan-replace-reset: 다른 asset 으로 갈아타면 이전 도면의 분석 산출
+    (wall_objects/selected_walls 등)은 제거되고, 도면과 무관한 사용자 답
+    (judgment_values)은 남는다."""
+
+    session_id, subject = await _create_session_direct()
+
+    async def attach(name: str):
+        return await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=subject,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{subject}/{session_id}/{name}",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+
+    a1 = await attach("a1.png")
+    # a1 분석 산출 + 사용자 선택 + 사용자 답을 쌓는다.
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=subject,
+        owner_is_anonymous=False,
+        patch={
+            "wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}],
+            "space_objects": [{"id": "pred:2"}],
+            "window_objects": [],
+            "vlm_supplement": {"notes": ["관찰"]},
+            "selected_walls": ["pred:1"],
+            "judgment_values": {"floor_count": 6},
+        },
+    )
+
+    a2 = await attach("a2.png")
+    row = fake_db.sessions[session_id]
+    assert row["selected_floorplan_asset_id"] == a2["id"] != a1["id"]
+    js = row["judgment_schema"]
+    # 이전 도면의 분석 산출·선택은 새 도면에 남지 않는다.
+    for key in main_flow._FLOORPLAN_ANALYSIS_KEYS:
+        assert key not in js
+    # 도면과 무관한 사용자 답은 보존된다.
+    assert js.get("judgment_values") == {"floor_count": 6}
+
+
 async def test_set_session_verdict_skips_on_input_change(fake_db):
     """#stale-verdict-write: 분석 시작 때 본 입력과 현재 입력이 다르면 verdict 를 쓰지
     않고 None 반환(분석 도중 도면 교체 race)."""

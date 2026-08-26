@@ -801,18 +801,34 @@ async def emit_floorplan_request_impl(
     *,
     run_context: "RunContext",
     run_id: uuid.UUID,
+    session_id: uuid.UUID | None = None,
     reason: str | None = None,
 ) -> dict[str, Any]:
     """다음 답변에 **도면 업로드 카드(FloorplanRequest)** 를 첨부한다.
 
-    평면도가 필요한데 아직 첨부되지 않았을 때 호출한다. 본문에 업로드 방법을 텍스트로
+    평면도가 아직 첨부되지 않았을 때는 물론, **다른 도면으로 재업로드가 필요할 때**
+    (분석 결과 벽·창호 후보 0 등)도 호출된다. 본문에 업로드 방법을 텍스트로
     설명하는 대신 이 도구를 호출하면 프론트가 실제 업로드 컨트롤을 보여 준다. 미리 만든
     json-render 스펙을 emit_ui_component 버퍼에 넣을 뿐이라 LLM 이 스펙을 구성할 필요가 없다.
+
+    카드엔 발행 시점의 ``selected_floorplan_asset_id`` 를 ``prior_asset_id`` 로 스탬프
+    한다 — 프론트 카드는 "세션에 도면이 하나라도 있으면 첨부 완료"가 아니라 "이 카드
+    발행 **이후** 새 asset 이 붙었는가"로 완료를 판정해, 재업로드 요청 카드가 뜨자마자
+    '받았어요'로 잠기는 문제를 막는다(#floorplan-request-prior-asset). 조회 실패 시엔
+    스탬프를 생략한다(구 카드와 같은 보수적 동작으로 폴백).
     """
 
     props: dict[str, Any] = {}
     if isinstance(reason, str) and reason.strip():
         props["reason"] = reason.strip()
+    if session_id is not None:
+        try:
+            inputs = await main_flow.get_session_inputs(session_id)
+        except Exception:  # noqa: BLE001 - 스탬프 실패가 카드 방출을 막으면 안 된다
+            inputs = None
+        if inputs is not None:
+            asset_id = inputs[0]
+            props["prior_asset_id"] = str(asset_id) if asset_id is not None else None
     spec = {
         "root": "fp",
         "elements": {"fp": {"type": "FloorplanRequest", "props": props}},
