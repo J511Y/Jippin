@@ -11,6 +11,9 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
+
+from src.errors import ZippinException
 from src.services import leads, main_flow
 
 
@@ -127,6 +130,82 @@ async def test_create_lead_keeps_provided_address(monkeypatch) -> None:
     assert captured["session_id"] == session_id
     # 사용자가 입력한 주소는 폴백으로 덮어쓰지 않는다.
     assert captured["road_addr_part1"] == "사용자 입력 주소"
+
+
+async def test_create_lead_rejects_stale_floorplan_stamp(monkeypatch) -> None:
+    # #judgment-cta-revalidate 서버측 마무리: 결과 카드가 유래한 도면과 세션의 현재
+    # 도면이 다르면 lead 를 만들지 않는다(409) — 자동 첨부(#session-floorplan-carryover)
+    # 가 현재 도면을 실어, 옛 결론 + 새 도면이 결합된 상담이 접수되는 것을 차단.
+    owner = uuid.uuid4()
+    session_id = uuid.uuid4()
+    stamped = uuid.uuid4()
+    current = uuid.uuid4()
+    captured = _patch_insert(monkeypatch)
+
+    async def fake_select_session(sid):  # type: ignore[no-untyped-def]
+        return {
+            "id": session_id,
+            "user_id": owner,
+            "selected_floorplan_asset_id": current,
+        }
+
+    async def fake_get_address(sid):  # type: ignore[no-untyped-def]
+        return {"apartment_name": "세션아파트"}
+
+    monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
+    monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)
+
+    with pytest.raises(ZippinException) as exc:
+        await leads.create_lead(
+            user_id=owner,
+            is_anonymous=False,
+            payload={
+                "source_form": "precheck_session",
+                "applicant_name": "홍길동",
+                "applicant_phone": "010-1234-5678",
+                "road_addr_part1": None,
+                "session_id": session_id,
+                "expected_floorplan_asset_id": stamped,
+            },
+        )
+    assert exc.value.code == "LEAD_FLOORPLAN_STALE"
+    assert exc.value.http_status == 409
+    # lead 는 저장되지 않았다.
+    assert captured == {}
+
+
+async def test_create_lead_accepts_matching_floorplan_stamp(monkeypatch) -> None:
+    owner = uuid.uuid4()
+    session_id = uuid.uuid4()
+    asset_id = uuid.uuid4()
+    captured = _patch_insert(monkeypatch)
+
+    async def fake_select_session(sid):  # type: ignore[no-untyped-def]
+        return {
+            "id": session_id,
+            "user_id": owner,
+            "selected_floorplan_asset_id": asset_id,
+        }
+
+    async def fake_get_address(sid):  # type: ignore[no-untyped-def]
+        return {"apartment_name": "세션아파트"}
+
+    monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
+    monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)
+
+    await leads.create_lead(
+        user_id=owner,
+        is_anonymous=False,
+        payload={
+            "source_form": "precheck_session",
+            "applicant_name": "홍길동",
+            "applicant_phone": "010-1234-5678",
+            "road_addr_part1": None,
+            "session_id": session_id,
+            "expected_floorplan_asset_id": asset_id,
+        },
+    )
+    assert captured["session_id"] == session_id
 
 
 async def test_create_lead_ignores_foreign_session(monkeypatch) -> None:

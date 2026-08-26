@@ -4,6 +4,11 @@
 - **관련**: ADR-0001 §7.4(AI 모델 선정), `packages/contracts/schemas/segmentation-result.schema.json`
   (**1.3.0 → 1.4.0**), `apps/api/src/agent/tools/segmentation.py`,
   `apps/web/components/a2ui/cards/FloorplanOverlayCard.tsx`.
+- **개정 이력**: 2026-08-26 — 계약 **1.4.0 → 1.5.0**: `error_code` 에
+  `SEGMENTATION_STALE_INPUT` 추가(도면 재제출 기능의 동시성 가드 — 분석 도중 선택
+  도면이 교체되면 산출을 영속하지 않고 이 코드로 degrade, PR #185). 본 ADR 의 어휘·
+  해상도·병합 결정은 불변이며, 판단 스키마 쪽 짝은 `common-judgment-schema` **1.3.0**
+  (`vlm_supplement` null 허용 명문화 — 같은 PR #vlm-freshness).
 - **대체 아님**: 3단계 분석 파이프라인(세그멘테이션 → VLM → 정합성 머지)과 HITL 전제는 유지된다.
 
 ## 배경 / 문제

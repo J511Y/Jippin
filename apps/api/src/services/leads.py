@@ -292,6 +292,22 @@ async def create_lead(
             ):
                 lead_values["road_addr_part1"] = address_fallback
 
+    # 결과 카드 유래 상담의 도면 지문 검증(#judgment-cta-revalidate 서버측 마무리) —
+    # 카드가 발급된 도면과 세션의 **현재** 도면이 다르면 lead 를 만들지 않는다. 아래
+    # 자동 첨부(#session-floorplan-carryover)가 현재 도면을 실어 보내므로, 여기서 막지
+    # 않으면 옛 결론 + 새 도면이 결합된 상담이 접수된다. 클릭 시점 프론트 재검증이
+    # 놓치는 '폼 작성 중 교체' 창을 서버가 최종 차단한다.
+    expected_asset = payload.get("expected_floorplan_asset_id")
+    if expected_asset is not None and lead_values.get("session_id") is not None:
+        inputs = await main_flow.get_session_inputs(lead_values["session_id"])
+        current_asset = inputs[0] if inputs is not None else None
+        if current_asset != expected_asset:
+            raise ZippinException(
+                "Selected floorplan changed since this result was issued.",
+                code="LEAD_FLOORPLAN_STALE",
+                http_status=409,
+            )
+
     attachments = _validate_attachments(
         list(payload.get("attachments") or []),
         user_id=user_id,

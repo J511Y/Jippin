@@ -290,6 +290,9 @@ export function JudgmentSummaryCard({
             fromSession={
               typeof payload.session_id === 'string' ? payload.session_id : undefined
             }
+            expectedFloorplanAssetId={
+              typeof payload.asset_id === 'string' ? payload.asset_id : undefined
+            }
             ctaId="precheck_report"
             onSubmitted={() => setConsultSubmitted(true)}
           />
