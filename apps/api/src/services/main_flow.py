@@ -782,7 +782,16 @@ async def _db_link_session_floorplan_asset(
         ).one_or_none()
         if row0 is None:
             return None, False
-        values: dict[str, Any] = {"selected_floorplan_asset_id": asset_id}
+        # 직접 업로드 asset 이 곧 세션의 도면 소스다 — 다른 소스 포인터(카탈로그
+        # selected_floorplan_id / 업로드 메타 selected_floorplan_upload_id)는 함께
+        # 비워 단일 소스 불변식을 지킨다(#single-floorplan-source). 현재는 이 포인터들을
+        # 쓰는 흐름이 없어 no-op 이지만, 카탈로그 선택 흐름이 생겨도 직접 업로드가
+        # 이전 소스의 분석·선택을 물려받는 구멍이 열리지 않는다.
+        values: dict[str, Any] = {
+            "selected_floorplan_asset_id": asset_id,
+            "selected_floorplan_id": None,
+            "selected_floorplan_upload_id": None,
+        }
         prior = row0.selected_floorplan_asset_id
         replaced = prior is not None and prior != asset_id
         if replaced:

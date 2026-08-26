@@ -667,6 +667,9 @@ class FakeMainFlowDb:
         prior = row.get("selected_floorplan_asset_id")
         replaced = prior is not None and prior != asset_id
         row["selected_floorplan_asset_id"] = asset_id
+        # 단일 소스 불변식(real seam 미러, #single-floorplan-source).
+        row["selected_floorplan_id"] = None
+        row["selected_floorplan_upload_id"] = None
         if prior != asset_id:
             # 재업로드(다른 asset 에서 갈아타기) — 이전 도면의 분석 산출을 제거한다
             # (real seam 미러, #floorplan-replace-reset). 첫 연결(None→asset)엔 지울

@@ -964,6 +964,63 @@ async def test_session_stale_before_advance_keeps_reopened_status(monkeypatch) -
     assert not any(e["to_status"] == "analyzing" for e in fake.session_status_events)
 
 
+async def test_session_space_only_regions_suppress_overlay(monkeypatch) -> None:
+    # 공간만 잡히고 벽·창호가 0 인 도면(운영 943bde33 케이스) — 비인터랙티브 오버레이를
+    # 내지 않고, 빈 분석 영속 + 도면 선택 단계 재개로 재업로드 흐름과 화면을 일치시킨다
+    # (#no-overlay-for-empty-analysis 의 방출 쪽 짝).
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "image": {"width": 1000, "height": 800},
+                "predictions": [
+                    {
+                        "region_id": "pred:25",
+                        "class_name": "space_living_room",
+                        "score": 0.8,
+                        "polygon": [0, 0, 40, 0, 40, 40, 0, 40],
+                    }
+                ],
+            },
+        )
+
+    ctx = RunContext()
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    assert res["ok"] is True
+    assert res["overlay_emitted"] is False
+    ui, _snapshot = ctx.drain_ui()
+    assert ui == []
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    js = session["judgment_schema"]
+    assert js["wall_objects"] == []
+    assert len(js["space_objects"]) == 1
+    # 배지는 '오버레이 대기'가 아니라 도면 선택 단계로 남는다.
+    assert session["status"] == "floorplan_selected"
+
+
 async def test_session_analysis_fingerprint_tracks_latest_attempt(monkeypatch) -> None:
     # #analysis-inputs-latest-attempt: 같은 런에서 STALE_INPUT 후 교체된 도면을
     # 재분석하면 지문이 최신 시도(asset)로 갱신된다 — 카드 스탬프·verdict 지문이 이번

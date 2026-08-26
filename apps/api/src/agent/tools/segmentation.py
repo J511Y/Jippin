@@ -1439,7 +1439,17 @@ async def segment_session_floorplan(
         log.warning("segmentation_judgment_persist_failed", session_id=str(session_id))
 
     overlay_emitted = False
-    if judgment_persisted and run_context is not None and run_id is not None:
+    # 벽·창호(선택 가능 객체)가 하나도 없으면 오버레이를 내지 않는다 — 공간만 잡힌
+    # 도면에 비인터랙티브 오버레이를 띄우면, 같은 턴의 재업로드 안내(#no-overlay-for-
+    # empty-analysis)와 화면이 모순되고 에이전트도 overlay_emitted=true 를 '고를 수
+    # 있는 카드가 떴다'로 오독한다. 검출 상세는 요약·세션 상태로 충분하다.
+    selectable_found = bool(walls or windows)
+    if (
+        judgment_persisted
+        and selectable_found
+        and run_context is not None
+        and run_id is not None
+    ):
         from .domain import emit_ui_component_impl
 
         # 오버레이는 머지된(VLM 교정 반영) regions 로 띄운다.
