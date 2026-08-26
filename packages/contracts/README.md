@@ -11,7 +11,7 @@
 
 | 파일 | 컨트랙트 | 근거 |
 |---|---|---|
-| `common-judgment-schema.schema.json` | `CommonJudgmentSchema` | SDD §5.2 핵심 컨트랙트 |
+| `common-judgment-schema.schema.json` | `CommonJudgmentSchema` (**1.3.0** — `vlm_supplement` null 허용 명문화) | SDD §5.2 핵심 컨트랙트. 도면 재제출 VLM 신선도(PR #185) |
 | `completion-decision.schema.json` | `CompletionDecision { ASK_MORE / REQUEST_OVERLAY_REVIEW / PROCEED_RULE / HOLD_OR_HANDOFF }` | SDD §4.7·§5.1 (FLOW_GUARD) |
 | `rule-eval-result.schema.json` | `RuleEvalResult` | SDD §4.8 (RULE) |
 | `estimate-result.schema.json` | `EstimateResult` | SDD §4.9 REPORT.estimate / §6.3 |

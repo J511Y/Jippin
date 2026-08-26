@@ -31,6 +31,7 @@ import { LEGAL_NOTICE_TEXT } from '@/components/LegalNotice';
 import { useChatActions } from '@/components/agent/chat-actions';
 import { QuickPrecheckConsultForm } from '@/components/leads/QuickPrecheckConsultForm';
 import { CtaButton } from '@/components/ui';
+import { getSession } from '@/lib/sessions/api';
 
 import { type CardAccent, CardHeader, CardRule, CardShell } from './CardShell';
 
@@ -169,12 +170,41 @@ export function JudgmentSummaryCard({
   // 브로드캐스트, #floorplan-cards-broadcast)이 다르면 '이전 도면 기준 결과'다. 이때
   // 상담 CTA 를 막아, A 도면의 결론에 B 도면이 자동 첨부되어 나가는 상담 인입을
   // 차단한다(#judgment-asset-stamp). 둘 중 하나라도 모르면(구 카드/브로드캐스트 부재)
-  // 종전 동작 유지.
-  const currentAssetId = useChatActions()?.selectedFloorplanAssetId;
+  // 종전 동작 유지. 브로드캐스트는 같은 탭의 교체만 보므로, **다른 탭**의 교체는 CTA
+  // 클릭 시점의 신선한 재검증(staleOverride)이 잡는다(#judgment-cta-revalidate).
+  const actions = useChatActions();
+  const currentAssetId = actions?.selectedFloorplanAssetId;
+  const [staleOverride, setStaleOverride] = useState(false);
+  const [checkingConsult, setCheckingConsult] = useState(false);
   const staleFloorplan =
-    typeof payload.asset_id === 'string' &&
-    typeof currentAssetId === 'string' &&
-    currentAssetId !== payload.asset_id;
+    staleOverride ||
+    (typeof payload.asset_id === 'string' &&
+      typeof currentAssetId === 'string' &&
+      currentAssetId !== payload.asset_id);
+
+  // CTA 클릭 시점 재검증 — 서버의 현재 선택 도면을 새로 읽어 스탬프와 대조한다.
+  // 확인 실패(네트워크)는 상담을 막지 않는다(전환 크리티컬 CTA, best-effort 가드).
+  async function handleConsultClick() {
+    const sid =
+      actions?.sessionId ??
+      (typeof payload.session_id === 'string' ? payload.session_id : undefined);
+    if (typeof payload.asset_id === 'string' && sid) {
+      setCheckingConsult(true);
+      try {
+        const row = await getSession(sid);
+        const live = row.selected_floorplan_asset_id;
+        if (live != null && live !== payload.asset_id) {
+          setStaleOverride(true);
+          return;
+        }
+      } catch {
+        /* 확인 실패 — 진행(브로드캐스트/서버측 세션 상태가 최종 방어선) */
+      } finally {
+        setCheckingConsult(false);
+      }
+    }
+    setShowConsult(true);
+  }
 
   return (
     <CardShell accent={style.accent} labelledBy={titleId}>
@@ -270,7 +300,8 @@ export function JudgmentSummaryCard({
           fullWidth
           mb="sm"
           leftSection={<IconHeadset size={18} aria-hidden />}
-          onClick={() => setShowConsult(true)}
+          onClick={() => void handleConsultClick()}
+          disabled={checkingConsult}
         >
           전문가 상담 신청하기
         </CtaButton>

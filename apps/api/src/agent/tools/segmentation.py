@@ -1213,22 +1213,25 @@ async def segment_session_floorplan(
             error_code="SEGMENTATION_NO_IMAGE",
             summary="분석할 도면이 아직 업로드되지 않았습니다. 도면을 먼저 올려 주세요.",
         )
-    # 분석 입력 지문을 한 번만 기록(첫 분석 도구). 도면을 분석하는 시점의 (asset, address).
-    # resume 로 RunContext 가 비어 새로 생긴 경우 런너가 내구 지문을 복원하므로
-    # analysis_inputs 가 이미 채워져 있어 재기록하지 않는다.
-    if (
-        run_context is not None
-        and getattr(run_context, "analysis_inputs", None) is None
-    ):
-        inputs = await main_flow.get_session_inputs(session_id)
-        if inputs is not None:
-            run_context.analysis_inputs = inputs
-            if run_id is not None:
-                await main_flow.set_run_analysis_inputs(
-                    run_id=run_id,
-                    asset_id=inputs[0],
-                    address_id=inputs[1],
-                )
+    # 분석 입력 지문을 기록 — 도면을 분석하는 시점의 (asset, address). resume 로
+    # RunContext 가 비어 새로 생긴 경우 런너가 내구 지문을 복원하므로, **같은 asset**
+    # 이면 재기록하지 않는다. 단 지문의 asset 이 지금 분석하는 asset 과 다르면(같은
+    # 런에서 STALE_INPUT 후 교체된 도면을 재분석하는 경우) **최신 시도로 갱신**한다 —
+    # 안 그러면 이후 카드 스탬프·verdict 지문이 이번 런의 첫 asset 에 묶여, 재요청
+    # 카드가 '이미 이행됨'으로 잠기고 새 분석의 판정 영속이 거부된다
+    # (#analysis-inputs-latest-attempt).
+    if run_context is not None:
+        existing = getattr(run_context, "analysis_inputs", None)
+        if existing is None or existing[0] != asset["id"]:
+            inputs = await main_flow.get_session_inputs(session_id)
+            if inputs is not None:
+                run_context.analysis_inputs = inputs
+                if run_id is not None:
+                    await main_flow.set_run_analysis_inputs(
+                        run_id=run_id,
+                        asset_id=inputs[0],
+                        address_id=inputs[1],
+                    )
     # 보안 스캔 가드: 사용자 업로드 원본은 clean(또는 not_required)일 때만 분석한다.
     # pending 은 설정(agent_allow_unscanned_floorplans)이 허용할 때만. infected 등은 항상
     # 차단 — 미검사 콘텐츠를 HF 로 전달하지 않는다(#scan-gate).

@@ -964,6 +964,47 @@ async def test_session_stale_before_advance_keeps_reopened_status(monkeypatch) -
     assert not any(e["to_status"] == "analyzing" for e in fake.session_status_events)
 
 
+async def test_session_analysis_fingerprint_tracks_latest_attempt(monkeypatch) -> None:
+    # #analysis-inputs-latest-attempt: 같은 런에서 STALE_INPUT 후 교체된 도면을
+    # 재분석하면 지문이 최신 시도(asset)로 갱신된다 — 카드 스탬프·verdict 지문이 이번
+    # 런의 첫 asset 에 묶여 재요청 카드가 '이미 이행됨'으로 잠기지 않게.
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"predictions": []})
+
+    ctx = RunContext()
+    ctx.analysis_inputs = (uuid.uuid4(), None)  # 이전(교체 전) 시도의 지문.
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    assert res["ok"] is True
+    inputs = await main_flow.get_session_inputs(session_id)
+    assert inputs is not None
+    assert ctx.analysis_inputs is not None
+    assert ctx.analysis_inputs[0] == inputs[0]
+    # 내구 지문도 최신 시도로 갱신된다(resume 복원 대비).
+    durable = await main_flow.get_run_analysis_inputs(run_id=run["id"])
+    assert durable is not None and durable[0] == inputs[0]
+
+
 async def test_session_zero_regions_stale_returns_stale_input(monkeypatch) -> None:
     # #empty-analysis-persist × #analysis-merge-fingerprint: 검출 0 결과도 교체 뒤에
     # 도착하면 '후보 0' 성공으로 돌리지 않고 stale 로 degrade — 에이전트가 멀쩡한 새
