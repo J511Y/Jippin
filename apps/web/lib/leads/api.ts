@@ -38,6 +38,9 @@ export interface LeadPayload {
   home_check_id?: string | null;
   /** 사전검토 인입이면 원천 세션 id — 백엔드가 consultation_leads.session_id 연결 + 주소 폴백. */
   session_id?: string | null;
+  /** 사전검토 결과 카드 유래 상담이면 그 결과의 도면 asset — 백엔드가 세션의 현재
+   *  도면과 대조해 다르면 409(LEAD_FLOORPLAN_STALE)로 거절한다(#judgment-cta-revalidate). */
+  expected_floorplan_asset_id?: string | null;
   attachments?: UploadedAttachment[];
 }
 

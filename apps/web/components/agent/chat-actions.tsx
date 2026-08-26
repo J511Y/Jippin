@@ -19,6 +19,14 @@ export interface ChatActions {
   refreshSession?: () => void | Promise<void>;
   /** 스트리밍 중 여부 — 카드가 액션 버튼 비활성 판단에 쓴다. */
   busy: boolean;
+  /**
+   * 현재 세션의 선택 도면 asset id(없으면 null, 아직 조회 전이면 undefined).
+   * 업로드/교체 후 refreshSession 이 갱신한다 — 스레드에 도면 카드가 여러 장일 때,
+   * 한 카드의 업로드를 **다른 카드들도** 이 값 변화로 감지해 상태를 재조정한다
+   * (#floorplan-cards-broadcast). 값을 못 주는 호스트(테스트 등)에서는 카드가
+   * 자체 조회로 폴백한다.
+   */
+  selectedFloorplanAssetId?: string | null;
 }
 
 const ChatActionsContext = createContext<ChatActions | null>(null);

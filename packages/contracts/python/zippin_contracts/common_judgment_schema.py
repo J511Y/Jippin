@@ -350,9 +350,9 @@ class CommonJudgmentSchema(BaseModel):
     """
     AI 분석 시점 (ISO-8601).
     """
-    schema_version: Literal["1.2.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.3.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영).
+    스키마 버전 (semver). 1.3.0: vlm_supplement 의 null 허용을 스키마에 명문화(설명은 원래 'null 또는 부재'였으나 타입이 미인코딩 — 이번 런에 VLM 산출이 없음을 null 로 영속하는 #vlm-freshness 경로 지원). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영).
     """
     building_info: BuildingInfo
     space_objects: list[SpaceObject]
@@ -369,7 +369,7 @@ class CommonJudgmentSchema(BaseModel):
     """
     vlm_supplement: VlmSupplement | None = None
     """
-    VLM 재분류·주석 결과. 분석이 보류된 경우 null 또는 부재.
+    VLM 재분류·주석 결과. 분석이 보류됐거나 이번 런에 VLM 산출이 없으면 null 또는 부재 (1.3.0 에서 null 허용 명문화).
     """
     register_supplement: RegisterSupplement | None = None
     """

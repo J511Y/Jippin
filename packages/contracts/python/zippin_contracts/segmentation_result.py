@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class ErrorCode(Enum):
     """
-    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE, VLM 이 평면도가 아니라고 판정=NOT_FLOORPLAN 등.
+    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE, VLM 이 평면도가 아니라고 판정=NOT_FLOORPLAN, 분석 도중 선택 도면 교체(산출 미영속)=STALE_INPUT 등.
     """
 
     SEGMENTATION_ENDPOINT_UNAVAILABLE = "SEGMENTATION_ENDPOINT_UNAVAILABLE"
@@ -27,6 +27,7 @@ class ErrorCode(Enum):
     SEGMENTATION_NO_IMAGE = "SEGMENTATION_NO_IMAGE"
     SEGMENTATION_NOT_SCANNED = "SEGMENTATION_NOT_SCANNED"
     SEGMENTATION_NOT_FLOORPLAN = "SEGMENTATION_NOT_FLOORPLAN"
+    SEGMENTATION_STALE_INPUT = "SEGMENTATION_STALE_INPUT"
     NoneType_None = None
 
 
@@ -122,15 +123,15 @@ class Region(BaseModel):
 
 class SegmentationResult(BaseModel):
     """
-    평면도 세그멘테이션 도구(HuggingFace Inference Endpoint) 의 구조화 결과. 도구는 절대 raise 하지 않고 본 형태를 반환한다 — 엔드포인트 미배포/콜드스타트/타임아웃도 ok=false 로 표현된다. 1.4.0: v4(원본 해상도 타일) 모델의 19클래스 어휘 + 타일 메타(tile_index/touches_tile_border). 1.2.0: 오버레이 렌더용 image + regions(좌표) 추가(추가형, 하위호환).
+    평면도 세그멘테이션 도구(HuggingFace Inference Endpoint) 의 구조화 결과. 도구는 절대 raise 하지 않고 본 형태를 반환한다 — 엔드포인트 미배포/콜드스타트/타임아웃도 ok=false 로 표현된다. 1.5.0: error_code 에 STALE_INPUT(분석 중 도면 교체 — 산출 미영속, 동시성 가드) 추가. 1.4.0: v4(원본 해상도 타일) 모델의 19클래스 어휘 + 타일 메타(tile_index/touches_tile_border). 1.2.0: 오버레이 렌더용 image + regions(좌표) 추가(추가형, 하위호환).
     """
 
     model_config = ConfigDict(
         extra="forbid",
     )
-    schema_version: Literal["1.4.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.5.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 1.4.0: Label 에 wall_nonbearing(확정 비내력벽) 추가 + Region 에 tile_index/touches_tile_border(원본 해상도 타일 추론 메타) 추가. 1.3.0: error_code 에 NOT_FLOORPLAN 추가(코드-스키마 드리프트 정리). 1.2.0: image/regions(오버레이 좌표) 추가. 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가.
+    스키마 버전 (semver). 1.5.0: error_code 에 SEGMENTATION_STALE_INPUT(분석 도중 선택 도면이 교체되어 이 분석의 산출을 영속하지 않음 — 동시성 가드) 추가. 1.4.0: Label 에 wall_nonbearing(확정 비내력벽) 추가 + Region 에 tile_index/touches_tile_border(원본 해상도 타일 추론 메타) 추가. 1.3.0: error_code 에 NOT_FLOORPLAN 추가(코드-스키마 드리프트 정리). 1.2.0: image/regions(오버레이 좌표) 추가. 1.1.0: error_code 에 NO_IMAGE/NOT_SCANNED 추가.
     """
     ok: bool
     """
@@ -138,7 +139,7 @@ class SegmentationResult(BaseModel):
     """
     error_code: ErrorCode | None = None
     """
-    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE, VLM 이 평면도가 아니라고 판정=NOT_FLOORPLAN 등.
+    ok=false 시 안정적 에러 코드. 미배포/DNS/404=ENDPOINT_UNAVAILABLE, 503=COLD_START_TIMEOUT, 세션에 도면 미업로드=NO_IMAGE, VLM 이 평면도가 아니라고 판정=NOT_FLOORPLAN, 분석 도중 선택 도면 교체(산출 미영속)=STALE_INPUT 등.
     """
     mask_asset_id: UUID | None = None
     """
