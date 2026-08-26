@@ -205,18 +205,23 @@ export async function getFloorplanAssetSignedUrl(
 /**
  * OVERLAY-002: 사용자가 선택한 철거 희망 비내력벽·창호 region_id 목록을 판단스키마에 기록.
  * `windowRegionIds` 를 생략하면 창호 선택은 건드리지 않는다(하위호환).
+ * `assetId`(카드가 유래한 도면)를 주면 서버가 현재 선택 도면과 대조해, 도면이 교체된
+ * 뒤의 옛 카드 제출을 409 로 거절한다 — region id 는 다른 도면에서도 재사용되므로
+ * id 존재 검증만으로는 다른 도면의 벽이 선택될 수 있다(#overlay-asset-fingerprint).
  */
 export async function updateSelectedWalls(
   sessionId: string,
   regionIds: string[],
-  windowRegionIds?: string[]
+  windowRegionIds?: string[],
+  assetId?: string
 ): Promise<{ selected_walls: string[]; selected_windows: string[] }> {
   const res = await apiClient.patch<{
     selected_walls: string[];
     selected_windows?: string[];
   }>(`/sessions/${sessionId}/selected-walls`, {
     region_ids: regionIds,
-    ...(windowRegionIds !== undefined ? { window_region_ids: windowRegionIds } : {})
+    ...(windowRegionIds !== undefined ? { window_region_ids: windowRegionIds } : {}),
+    ...(assetId !== undefined ? { asset_id: assetId } : {})
   });
   return {
     selected_walls: res.data.selected_walls,

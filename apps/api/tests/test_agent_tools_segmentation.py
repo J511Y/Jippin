@@ -808,6 +808,9 @@ async def test_session_zero_regions_persists_empty_analysis(monkeypatch) -> None
     assert js["wall_objects"] == []
     assert js["window_objects"] == []
     assert js["space_objects"] == []
+    # 고를 게 없는 빈 분석은 '오버레이 대기'로 전진하지 않는다
+    # (#no-overlay-for-empty-analysis) — 재업로드 흐름이 잇는 상태 그대로.
+    assert session["status"] == "floorplan_selected"
 
 
 async def test_session_stale_asset_discards_merge(monkeypatch) -> None:

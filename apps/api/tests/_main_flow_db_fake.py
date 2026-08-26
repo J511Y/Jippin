@@ -219,13 +219,15 @@ class FakeMainFlowDb:
         reason: str | None,
         only_if_no_selection: bool = False,
         clear_rule_eval: bool = False,
+        only_if_selected_asset: Any = main_flow._UNSET,
     ) -> dict[str, Any] | None:
         """status 명시적 후퇴(재개 전용, real seam 미러) — 재개 이벤트는 매번 기록.
 
         종료 상태와 handoff 는 건드리지 않고, 현재가 target 이하면 no-op(None).
         only_if_no_selection 이면 현재 judgment_schema 에 살아 있는 선택이 있을 때
         되돌리지 않는다(동시 PATCH 방어). clear_rule_eval 이면 되돌리며 stale 판정도
-        함께 비운다(real seam 미러).
+        함께 비운다. only_if_selected_asset 이 오면 선택 도면이 다를 때 되돌리지
+        않는다(real seam 미러).
         """
 
         rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
@@ -237,6 +239,11 @@ class FakeMainFlowDb:
             return None
         if only_if_no_selection and main_flow._has_live_selection(
             row.get("judgment_schema")
+        ):
+            return None
+        if (
+            only_if_selected_asset is not main_flow._UNSET
+            and row.get("selected_floorplan_asset_id") != only_if_selected_asset
         ):
             return None
         self.session_status_events.append(

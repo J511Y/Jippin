@@ -320,6 +320,7 @@ async def _db_regress_session_status(
     reason: str | None,
     only_if_no_selection: bool = False,
     clear_rule_eval: bool = False,
+    only_if_selected_asset: Any = _UNSET,
 ) -> dict[str, Any] | None:
     """status 를 명시적으로 **뒤로** 되돌린다(재개 전용, 단일 트랜잭션).
 
@@ -338,13 +339,22 @@ async def _db_regress_session_status(
     병합(verdict 소거)과 이 재개 사이에 set_session_verdict 가 끼어들어 무효화된 선택
     기준의 판정을 다시 써 놓았을 수 있다(#reopen-clears-verdict). 오버레이를 다시
     골라야 하는 세션에서 GET /report 가 그 stale 판정을 제공하지 않게 한다.
+
+    ``only_if_selected_asset`` 이 오면 같은 트랜잭션에서 ``selected_floorplan_asset_id``
+    를 재확인해 다르면 되돌리지 않는다 — 교체 링크와 이 지연된 재개 사이에 **또 다른**
+    교체·분석이 끼어든 경우, 그 최신 도면의 유효한 진행 배지를 옛 교체의 재개가
+    후퇴시키지 않는다(#advance-recheck-asset 의 재개 쪽 대칭).
     """
 
     target_rank = _STATUS_RANK[target]
     async with get_engine().begin() as conn:
         row0 = (
             await conn.execute(
-                sa.select(_SESSIONS.c.status, _SESSIONS.c.judgment_schema)
+                sa.select(
+                    _SESSIONS.c.status,
+                    _SESSIONS.c.judgment_schema,
+                    _SESSIONS.c.selected_floorplan_asset_id,
+                )
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
             )
@@ -357,6 +367,11 @@ async def _db_regress_session_status(
         if _STATUS_RANK.get(current, -1) <= target_rank:
             return None
         if only_if_no_selection and _has_live_selection(row0.judgment_schema):
+            return None
+        if (
+            only_if_selected_asset is not _UNSET
+            and row0.selected_floorplan_asset_id != only_if_selected_asset
+        ):
             return None
         await conn.execute(
             sa.insert(_SESSION_STATUS_EVENTS).values(
@@ -393,6 +408,7 @@ async def reopen_session_status(
     reason: str | None = None,
     only_if_no_selection: bool = False,
     clear_rule_eval: bool = False,
+    only_if_selected_asset: Any = _UNSET,
 ) -> dict[str, Any] | None:
     """세션 status 를 이전 단계로 재개한다(best-effort, runtime-only).
 
@@ -400,8 +416,9 @@ async def reopen_session_status(
     수행해야 할 때만 쓴다(#selection-invalidation-reopen). 실패는 삼킨다(status 는
     진행 상황의 투영일 뿐 정본 데이터가 아니다). ``only_if_no_selection`` 은 되돌리기
     직전 같은 트랜잭션에서 선택이 여전히 비어 있는지 재확인하고(동시 PATCH 방어),
-    ``clear_rule_eval`` 은 같은 트랜잭션에서 stale 판정도 함께 비운다
-    (#reopen-clears-verdict).
+    ``clear_rule_eval`` 은 같은 트랜잭션에서 stale 판정도 함께 비우며
+    (#reopen-clears-verdict), ``only_if_selected_asset`` 은 선택 도면이 그대로일
+    때만 되돌린다(#advance-recheck-asset 의 재개 쪽 대칭).
     """
 
     if target not in _STATUS_RANK:
@@ -413,6 +430,7 @@ async def reopen_session_status(
             reason=reason,
             only_if_no_selection=only_if_no_selection,
             clear_rule_eval=clear_rule_eval,
+            only_if_selected_asset=only_if_selected_asset,
         )
     except Exception:  # noqa: BLE001 - 상태 재개 실패는 플로우를 막지 않는다
         _log.warning(
@@ -1324,7 +1342,13 @@ async def merge_judgment_schema(
             reason="walls_selected",
             only_if_live_selection=True,
         )
-    elif "wall_objects" in patch:
+    elif "wall_objects" in patch and (
+        patch.get("wall_objects") or patch.get("window_objects")
+    ):
+        # 빈 분석(벽·창호 후보 0)은 고를 게 없다 — 오버레이 카드도 안 뜨는데 배지만
+        # '오버레이 대기'로 전진하면 관리 목록이 선택 가능한 세션처럼 표시한다. 이 경우
+        # 전진을 생략하고 재업로드 흐름(세션 상태 예외 안내)이 잇는다
+        # (#no-overlay-for-empty-analysis).
         # 분석 영속 경로가 지문을 줬으면 지연된 전진에도 같은 가드를 건다 — 병합 커밋과
         # 이 전진 사이에 도면이 교체되면 새 도면의 배지를 밀어 올리지 않는다
         # (#advance-recheck-asset).
@@ -1638,11 +1662,14 @@ async def create_floorplan_asset(
         # 분석 산출·판정이 방금 무효화됐는데 배지가 awaiting_overlay/report_ready 등에
         # 남아 있으면 관리 목록·필터가 무효 세션을 진행/완료로 계속 표시한다 — 도면
         # 선택 직후 단계로 재개한다(forward-only 의 sanctioned 역방향, 이미 그 이하면
-        # no-op, handoff/종료 상태는 건드리지 않음).
+        # no-op, handoff/종료 상태는 건드리지 않음). 이 업로드의 asset 이 여전히 선택돼
+        # 있을 때만 — 링크와 이 재개 사이에 또 다른 교체·분석이 끝났으면 그 최신
+        # 도면의 유효한 배지를 후퇴시키지 않는다(#advance-recheck-asset 대칭).
         await reopen_session_status(
             session_id=session_id,
             target="floorplan_selected",
             reason="floorplan_replaced",
+            only_if_selected_asset=asset["id"],
         )
     # 도면 asset 이 세션에 연결됐으니 status 를 floorplan_selected 로 전진.
     await advance_session_status(

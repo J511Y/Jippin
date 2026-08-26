@@ -791,6 +791,109 @@ async def test_selected_walls_validates_against_latest_objects(fake_db):
     assert res.selected_walls == []
 
 
+async def test_selected_walls_rejects_replaced_asset_card(fake_db):
+    # #overlay-asset-fingerprint: region id(pred:N)는 도면이 달라도 재사용된다 — 도면
+    # 교체 뒤 옛 카드의 제출은 id 존재 검증을 우연히 통과할 수 있으므로, 카드가 유래한
+    # asset 지문으로 거절한다. 새 카드(현재 asset)의 제출은 통과.
+    from types import SimpleNamespace
+
+    from src.routers.floorplans import SelectedWallsRequest, update_selected_walls
+
+    session_id, owner = await _create_session_direct()
+    requester = SimpleNamespace(user_id=owner, is_anonymous=False)
+
+    async def attach(name: str):
+        return await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=owner,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{owner}/{session_id}/{name}",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+
+    a1 = await attach("a1.png")
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}]},
+        expected_asset_id=a1["id"],
+    )
+    a2 = await attach("a2.png")  # 교체 — a1 분석 초기화.
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        # 새 도면 분석도 같은 id 를 재사용하는 상황(id 충돌).
+        patch={"wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}]},
+        expected_asset_id=a2["id"],
+    )
+
+    # 옛 카드(a1 유래)의 제출 — id 는 존재하지만 asset 지문 불일치 → 409, 세션 무변경.
+    with pytest.raises(ZippinException) as exc:
+        await update_selected_walls(
+            SelectedWallsRequest(region_ids=["pred:1"], asset_id=a1["id"]),
+            session_id=session_id,
+            requester=requester,
+        )
+    assert exc.value.code == "ANALYSIS_INPUT_STALE"
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    assert session["judgment_schema"].get("selected_walls") in (None, [])
+
+    # 현재 카드(a2 유래)의 제출은 통과한다.
+    res = await update_selected_walls(
+        SelectedWallsRequest(region_ids=["pred:1"], asset_id=a2["id"]),
+        session_id=session_id,
+        requester=requester,
+    )
+    assert res.selected_walls == ["pred:1"]
+
+
+async def test_replacement_reopen_skips_when_asset_changed_again(fake_db):
+    """#advance-recheck-asset(재개 대칭): B 교체의 지연된 재개가 도착하기 전에 또 다른
+    교체·분석(C)이 끝났으면, C 의 유효한 awaiting_overlay 배지를 후퇴시키지 않는다."""
+
+    session_id, subject = await _create_session_direct()
+
+    async def attach(name: str):
+        return await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=subject,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{subject}/{session_id}/{name}",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+
+    await attach("a.png")
+    b = await attach("b.png")
+    c = await attach("c.png")
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=subject,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}]},
+        expected_asset_id=c["id"],
+    )
+    assert fake_db.sessions[session_id]["status"] == "awaiting_overlay"
+
+    # B 링크 트랜잭션의 지연된 재개가 이제야 도착 — 선택 asset 이 이미 C 라 no-op.
+    await main_flow.reopen_session_status(
+        session_id=session_id,
+        target="floorplan_selected",
+        reason="floorplan_replaced",
+        only_if_selected_asset=b["id"],
+    )
+    assert fake_db.sessions[session_id]["status"] == "awaiting_overlay"
+
+
 async def test_verdict_write_requires_matching_selection(fake_db):
     # #verdict-selection-fingerprint: 평가가 읽은 선택 스냅숏과 현재 저장 선택이 같을
     # 때만 verdict 를 영속한다 — 평가와 영속 사이에 재분석 프루닝/재선택이 끼면 stale

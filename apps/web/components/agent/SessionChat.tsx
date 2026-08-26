@@ -50,6 +50,11 @@ function Conversation({
   const { messages, streamingText, activity, plan, status, error, send } =
     useAgentStream(sessionId);
   const [hasReport, setHasReport] = useState(false);
+  // 선택 도면 asset — 컨텍스트로 카드들에 브로드캐스트한다(#floorplan-cards-broadcast).
+  // undefined = 아직 조회 전(카드가 자체 조회로 폴백).
+  const [selectedFloorplanAssetId, setSelectedFloorplanAssetId] = useState<
+    string | null | undefined
+  >(undefined);
 
   const busy = status === 'streaming';
   const hasPlan = plan.length > 0;
@@ -96,21 +101,25 @@ function Conversation({
     try {
       const row = await getSession(sessionId);
       setHasReport(row.has_report);
+      setSelectedFloorplanAssetId(row.selected_floorplan_asset_id ?? null);
     } catch {
-      /* 조용히 무시 — 헤더 링크만 영향 */
+      /* 조용히 무시 — 헤더 링크·카드 브로드캐스트만 영향 */
     }
   }, [sessionId]);
 
-  // has_report 여부를 조용히 조회한다(리포트 링크 노출용). setState 는 await 이후라
-  // cascading render 가 아니다 — effect 안에서 inline 으로 처리해 lint 규약도 만족한다.
+  // has_report·선택 도면을 조용히 조회한다(리포트 링크 + 카드 브로드캐스트용). setState
+  // 는 await 이후라 cascading render 가 아니다 — effect 안에서 inline 으로 처리해 lint
+  // 규약도 만족한다.
   useEffect(() => {
     let ignore = false;
     void (async () => {
       try {
         const row = await getSession(sessionId);
-        if (!ignore) setHasReport(row.has_report);
+        if (ignore) return;
+        setHasReport(row.has_report);
+        setSelectedFloorplanAssetId(row.selected_floorplan_asset_id ?? null);
       } catch {
-        /* 조용히 무시 — 헤더 링크만 영향 */
+        /* 조용히 무시 — 헤더 링크·카드 브로드캐스트만 영향 */
       }
     })();
     return () => {
@@ -119,7 +128,15 @@ function Conversation({
   }, [sessionId]);
 
   return (
-    <ChatActionsProvider value={{ sessionId, sendMessage: send, busy, refreshSession }}>
+    <ChatActionsProvider
+      value={{
+        sessionId,
+        sendMessage: send,
+        busy,
+        refreshSession,
+        selectedFloorplanAssetId
+      }}
+    >
       <Box className="chat-shell">
         <Box className="chat-main">
           {hasReport ? (

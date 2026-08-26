@@ -369,13 +369,18 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
       const winIds = [...selected].filter((id) => windowIds.has(id));
       if (sessionId) {
         try {
-          await updateSelectedWalls(sessionId, wallIds, winIds);
+          // 카드가 유래한 asset 지문을 함께 보낸다 — 도면 교체 뒤 이 옛 카드의 제출이
+          // 재사용된 region id(pred:N)로 새 도면의 엉뚱한 벽을 선택하지 않게 서버가
+          // 거절한다(#overlay-asset-fingerprint).
+          await updateSelectedWalls(sessionId, wallIds, winIds, assetId);
         } catch (err) {
-          // 옛 분석 카드 제출(409 SELECTION_STALE): 서버가 세션을 바꾸지 않았다 —
-          // 여기서 성공한 척 메시지를 보내면 에이전트가 실제 저장 상태(비었거나 더
-          // 새로운 선택)와 어긋난 채 진행한다. 카드를 만료 표시하고 최신 카드로
-          // 유도하며, 메시지는 발화하지 않는다(#stale-overlay-submission).
-          if (parseApiError(err).code === 'SELECTION_STALE') {
+          // 옛 분석 카드 제출(409 SELECTION_STALE: 재분석으로 id 무효 /
+          // ANALYSIS_INPUT_STALE: 도면 교체로 asset 지문 불일치): 서버가 세션을
+          // 바꾸지 않았다 — 여기서 성공한 척 메시지를 보내면 에이전트가 실제 저장
+          // 상태(비었거나 더 새로운 선택)와 어긋난 채 진행한다. 카드를 만료 표시하고
+          // 최신 카드로 유도하며, 메시지는 발화하지 않는다(#stale-overlay-submission).
+          const code = parseApiError(err).code;
+          if (code === 'SELECTION_STALE' || code === 'ANALYSIS_INPUT_STALE') {
             setStale(true);
             return;
           }
@@ -400,7 +405,7 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     } finally {
       setSubmitting(false);
     }
-  }, [actions, sessionId, selected, windowIds, uncertainWallIds, submitting, streaming]);
+  }, [actions, sessionId, assetId, selected, windowIds, uncertainWallIds, submitting, streaming]);
 
   const hasSelectable = selectableRegions.length > 0;
   const submitDisabled =

@@ -116,6 +116,58 @@ describe('FloorplanRequestCard 재업로드 판정 (#floorplan-request-prior-ass
   });
 });
 
+describe('FloorplanRequestCard 형제 카드 동기화 (#floorplan-cards-broadcast)', () => {
+  function BroadcastCard({
+    assetId,
+    payload
+  }: {
+    assetId: string | null;
+    payload: FloorplanRequestPayload;
+  }) {
+    return (
+      <ChatActionsProvider
+        value={{
+          sessionId: 'session-1',
+          busy: false,
+          sendMessage: vi.fn(),
+          selectedFloorplanAssetId: assetId
+        }}
+      >
+        <FloorplanRequestCard payload={payload} />
+      </ChatActionsProvider>
+    );
+  }
+
+  it('컨텍스트가 asset 을 주면 자체 세션 조회 없이 그 값으로 판정한다', async () => {
+    render(<BroadcastCard assetId="asset-1" payload={{ prior_asset_id: 'asset-1' }} />);
+
+    // 재요청 카드(prior == current) — 폼 유지, 자체 getSession 호출 없음.
+    await waitFor(() =>
+      expect(
+        screen.getByText('새 도면을 올리면 이전 도면 대신 새 도면으로 다시 분석해요.')
+      ).toBeTruthy()
+    );
+    expect(screen.getByText('평면도를 올려 주세요')).toBeTruthy();
+    expect(apiMocks.getSession).not.toHaveBeenCalled();
+  });
+
+  it('형제 카드가 올린 새 asset 이 브로드캐스트되면 폼 상태 카드도 첨부 완료로 재조정된다', async () => {
+    const view = render(
+      <BroadcastCard assetId="asset-1" payload={{ prior_asset_id: 'asset-1' }} />
+    );
+    expect(screen.getByText('평면도를 올려 주세요')).toBeTruthy();
+
+    // 다른 카드의 업로드 → refreshSession → 컨텍스트 값이 asset-2 로 갱신.
+    view.rerender(
+      <BroadcastCard assetId="asset-2" payload={{ prior_asset_id: 'asset-1' }} />
+    );
+    await waitFor(() =>
+      expect(screen.getByText('평면도를 받았어요')).toBeTruthy()
+    );
+    expect(apiMocks.getSession).not.toHaveBeenCalled();
+  });
+});
+
 describe('isFloorplanRequestPayload', () => {
   it('prior_asset_id 는 string/null/생략만 허용한다', () => {
     expect(isFloorplanRequestPayload({})).toBe(true);
