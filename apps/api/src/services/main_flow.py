@@ -160,6 +160,7 @@ async def _db_advance_session_status(
     run_id: uuid.UUID | None,
     only_if_live_selection: bool = False,
     only_if_rule_eval: bool = False,
+    only_if_selected_asset: Any = _UNSET,
 ) -> dict[str, Any] | None:
     """마일스톤 도달을 기록하고 status 를 forward-only 로 전이한다(단일 트랜잭션).
 
@@ -181,6 +182,11 @@ async def _db_advance_session_status(
     비어 있으면 생략한다 — verdict 쓰기와 이 지연된 report_ready 전진 사이에 재분석
     병합이 판정을 소거한 경우, 리포트 없는 세션이 report_ready 배지를 달지 않는다
     (#advance-recheck-verdict; GET /report 의 준비 기준 = rule_eval_result 존재).
+
+    ``only_if_selected_asset`` 이 오면 같은 트랜잭션에서 ``selected_floorplan_asset_id``
+    를 다시 읽어 다르면 이벤트·전진 모두 생략한다 — 분석이 도는 동안 도면이 교체된
+    경우, 그 stale 분석의 전이가 교체 재개(floorplan_selected) 뒤에 도착해 새 도면의
+    배지를 다시 밀어 올리지 않는다(#advance-recheck-asset, merge 지문과 대칭 가드).
     """
 
     target_rank = _STATUS_RANK[target]
@@ -194,6 +200,7 @@ async def _db_advance_session_status(
                     _SESSIONS.c.status,
                     _SESSIONS.c.judgment_schema,
                     _SESSIONS.c.rule_eval_result,
+                    _SESSIONS.c.selected_floorplan_asset_id,
                 )
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
@@ -207,6 +214,11 @@ async def _db_advance_session_status(
         if only_if_live_selection and not _has_live_selection(row0.judgment_schema):
             return None
         if only_if_rule_eval and row0.rule_eval_result is None:
+            return None
+        if (
+            only_if_selected_asset is not _UNSET
+            and row0.selected_floorplan_asset_id != only_if_selected_asset
+        ):
             return None
 
         # 마일스톤 이벤트 — 단계별 1회(중복 방지). status 전진 여부와 무관하게 기록한다.
@@ -257,6 +269,7 @@ async def advance_session_status(
     run_id: uuid.UUID | None = None,
     only_if_live_selection: bool = False,
     only_if_rule_eval: bool = False,
+    only_if_selected_asset: Any = _UNSET,
 ) -> dict[str, Any] | None:
     """도구/플로우 마일스톤에서 세션 status 를 한 단계 전진시킨다(best-effort, runtime-only).
 
@@ -265,7 +278,9 @@ async def advance_session_status(
     예외를 삼키고 None 을 반환한다 — status 는 진행 상황의 투영일 뿐 정본 데이터가 아니다.
     실제 전이가 일어났으면 갱신된 세션 row 를 반환한다. ``only_if_live_selection`` 은
     전진 직전 같은 트랜잭션에서 살아 있는 선택을(#advance-recheck-selection),
-    ``only_if_rule_eval`` 은 판정 존재를(#advance-recheck-verdict) 재확인한다.
+    ``only_if_rule_eval`` 은 판정 존재를(#advance-recheck-verdict),
+    ``only_if_selected_asset`` 은 선택 도면이 그대로인지를(#advance-recheck-asset)
+    재확인한다.
     """
 
     if target not in _STATUS_RANK:
@@ -278,6 +293,7 @@ async def advance_session_status(
             run_id=run_id,
             only_if_live_selection=only_if_live_selection,
             only_if_rule_eval=only_if_rule_eval,
+            only_if_selected_asset=only_if_selected_asset,
         )
     except Exception:  # noqa: BLE001 - 상태 전이 실패는 도구/플로우를 막지 않는다
         _log.warning(
@@ -1309,8 +1325,14 @@ async def merge_judgment_schema(
             only_if_live_selection=True,
         )
     elif "wall_objects" in patch:
+        # 분석 영속 경로가 지문을 줬으면 지연된 전진에도 같은 가드를 건다 — 병합 커밋과
+        # 이 전진 사이에 도면이 교체되면 새 도면의 배지를 밀어 올리지 않는다
+        # (#advance-recheck-asset).
         await advance_session_status(
-            session_id=session_id, target="awaiting_overlay", reason="analysis_complete"
+            session_id=session_id,
+            target="awaiting_overlay",
+            reason="analysis_complete",
+            only_if_selected_asset=expected_asset_id,
         )
     if (patched_selection or selection_pruned) and not any(
         _nonempty_selection(merged.get(k)) for k in selection_keys

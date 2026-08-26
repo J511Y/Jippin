@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 
 log = get_logger("zippin.agent.tools.segmentation")
 
-SCHEMA_VERSION = "1.4.0"
+SCHEMA_VERSION = "1.5.0"
 
 # segmentation-result 계약의 라벨 enum(검증·요약용).
 _KNOWN_LABELS: frozenset[str] = frozenset(
@@ -1269,8 +1269,7 @@ async def segment_session_floorplan(
         # wall_objects 키가 없으면 다음 턴 세션 상태가 '분석 진행/대기(재요청 금지)'로
         # 오인해, 같은 턴 재요청이 유실됐을 때 사용자가 갇힌다. asset 지문으로 조건부
         # 병합해(#analysis-merge-fingerprint) 그 사이 교체된 새 도면을 덮지 않는다.
-        # 실패는 삼킨다 — 요약만으로도 같은 턴 흐름은 유지된다(best-effort).
-        with contextlib.suppress(Exception):
+        try:
             await main_flow.merge_judgment_schema(
                 session_id=session_id,
                 owner_user_id=owner_user_id,
@@ -1281,6 +1280,26 @@ async def segment_session_floorplan(
                     "window_objects": [],
                 },
                 expected_asset_id=asset["id"],
+            )
+        except ZippinException as exc:
+            if exc.code == "ANALYSIS_INPUT_STALE":
+                # 검출 0 은 이미 교체된 옛 도면의 결과다 — '후보 0' 요약을 돌려주면
+                # 에이전트가 멀쩡한 새 도면을 두고 또 재업로드를 요청한다. 새 도면
+                # 재분석 흐름으로 유도한다(비어 있지 않은 분기와 동일 처리).
+                return _result(
+                    False,
+                    error_code="SEGMENTATION_STALE_INPUT",
+                    summary=(
+                        "분석 중에 도면이 새 도면으로 교체되어 이 결과는 저장하지 "
+                        "않았어요. 새 도면으로 다시 분석해 주세요."
+                    ),
+                )
+            log.warning(
+                "segmentation_judgment_persist_failed", session_id=str(session_id)
+            )
+        except Exception:  # noqa: BLE001 - 영속 실패는 분석 자체를 무르지 않는다
+            log.warning(
+                "segmentation_judgment_persist_failed", session_id=str(session_id)
             )
         return result
     # 분석 성공 — 오버레이 카드 방출 + 공통 판단 스키마(wall/space objects) 누적 + LLM
@@ -1321,8 +1340,13 @@ async def segment_session_floorplan(
     # 분석 성공(세그멘테이션 + VLM 평면도 검증 통과) 시에만 status 를 analyzing 으로 전진한다 —
     # 서명/엔드포인트/도면판정/not-floorplan 실패로 early-return 하는 경로에서 배지가 analyzing
     # 에 stuck 되지 않게(리뷰 지적). 직후 merge_judgment_schema 가 awaiting_overlay 로 전진한다.
+    # 분석하던 asset 이 여전히 선택돼 있을 때만 — 분석 중 교체가 재개(floorplan_selected)한
+    # 배지를 이 stale 전이가 다시 밀어 올리지 않게(#advance-recheck-asset).
     await main_flow.advance_session_status(
-        session_id=session_id, target="analyzing", reason="segmentation_succeeded"
+        session_id=session_id,
+        target="analyzing",
+        reason="segmentation_succeeded",
+        only_if_selected_asset=asset["id"],
     )
 
     # AI-003 정합성 검증·정규화 — VLM 교정(reclassifications)을 regions 에 머지한다.

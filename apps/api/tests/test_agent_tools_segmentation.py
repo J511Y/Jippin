@@ -876,7 +876,133 @@ async def test_session_stale_asset_discards_merge(monkeypatch) -> None:
     # 오버레이 카드도 방출되지 않는다(persist-before-emit).
     ui, _snapshot = ctx.drain_ui()
     assert ui == []
-    # 옛 도면의 wall_objects 가 새 도면에 붙지 않았다(교체 초기화 상태 그대로).
+    # 옛 도면의 wall_objects 가 새 도면에 붙지 않았고, 교체 재개가 배지도 도면 선택
+    # 직후로 되돌렸다(analyzing 잔류 없음).
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    assert "wall_objects" not in session["judgment_schema"]
+    assert session["status"] == "floorplan_selected"
+
+
+async def test_session_stale_before_advance_keeps_reopened_status(monkeypatch) -> None:
+    # #advance-recheck-asset: 교체가 analyzing 전진보다 **먼저** 일어나면(교체 재개로
+    # floorplan_selected 로 되돌아간 상태), 뒤늦게 도착한 옛 분석의 전진이 배지를 다시
+    # 밀어 올리지 않는다.
+    import src.agent.tools.vlm as vlm_mod
+
+    fake = db_fake.install_main_flow_fake(monkeypatch)
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    session_id = session["id"]
+    asset = await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/a.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    fake.floorplan_assets[asset["id"]]["scan_status"] = "clean"
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    # VLM 단계(advance 직전)에서 다른 탭의 교체가 끼어든 상황을 재현.
+    async def replace_during_vlm(**_kwargs):
+        await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=owner,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{owner}/{session_id}/replaced.png",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+        return None
+
+    monkeypatch.setattr(vlm_mod, "interpret_floorplan_impl", replace_during_vlm)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.9,
+                        "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                    }
+                ]
+            },
+        )
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_STALE_INPUT"
+    # 배지는 교체 재개 상태 그대로 — stale 전진이 analyzing 으로 밀어 올리지 않았고,
+    # analyzing 마일스톤 이벤트도 남지 않았다.
+    assert fake.sessions[session_id]["status"] == "floorplan_selected"
+    assert not any(e["to_status"] == "analyzing" for e in fake.session_status_events)
+
+
+async def test_session_zero_regions_stale_returns_stale_input(monkeypatch) -> None:
+    # #empty-analysis-persist × #analysis-merge-fingerprint: 검출 0 결과도 교체 뒤에
+    # 도착하면 '후보 0' 성공으로 돌리지 않고 stale 로 degrade — 에이전트가 멀쩡한 새
+    # 도면을 두고 또 재업로드를 요청하지 않게 한다.
+    session_id, owner = await _session_with_asset(monkeypatch)
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"predictions": []})
+
+    real_merge = main_flow.merge_judgment_schema
+
+    async def replace_then_merge(**kwargs):
+        await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=owner,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{owner}/{session_id}/replaced.png",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+        return await real_merge(**kwargs)
+
+    monkeypatch.setattr(main_flow, "merge_judgment_schema", replace_then_merge)
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_STALE_INPUT"
+    # 옛 도면의 빈 분석이 새 도면의 판단스키마를 덮지 않았다.
     session = await main_flow.get_owned_session(
         session_id, owner_user_id=owner, owner_is_anonymous=False
     )

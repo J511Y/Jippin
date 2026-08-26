@@ -163,13 +163,15 @@ class FakeMainFlowDb:
         run_id: uuid.UUID | None,
         only_if_live_selection: bool = False,
         only_if_rule_eval: bool = False,
+        only_if_selected_asset: Any = main_flow._UNSET,
     ) -> dict[str, Any] | None:
         """마일스톤 이벤트(단계별 1회) + forward-only status(real seam 미러).
 
         reference-scope 트리거는 미적용. status 가 이미 더 높아도 마일스톤 이벤트는
         단계별 1회 기록하고(중복 방지), status 는 더 높을 때만 전진한다.
-        only_if_live_selection(선택 생존)/only_if_rule_eval(판정 존재) 가드는
-        real seam 미러 — 조건 미충족이면 이벤트·전진 모두 생략.
+        only_if_live_selection(선택 생존)/only_if_rule_eval(판정 존재)/
+        only_if_selected_asset(선택 도면 불변) 가드는 real seam 미러 — 조건 미충족이면
+        이벤트·전진 모두 생략.
         """
 
         rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
@@ -181,6 +183,11 @@ class FakeMainFlowDb:
         ):
             return None
         if only_if_rule_eval and row.get("rule_eval_result") is None:
+            return None
+        if (
+            only_if_selected_asset is not main_flow._UNSET
+            and row.get("selected_floorplan_asset_id") != only_if_selected_asset
+        ):
             return None
         from_status = row["status"]
         already = any(

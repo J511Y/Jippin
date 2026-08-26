@@ -20,9 +20,9 @@
 | `agent-run-status.schema.json` | `AgentRunStatusValue` (런 상태 enum) | 에이전트 런 수명주기 |
 | `agent-sse-event.schema.json` | SSE 이벤트 — `StateChangeDecision`·`StateChangeEvent`·`SessionStatus`·`RunStatus`·`ToolStepEvent`·`ToolKind` | 세션 상태 전이 머신 + 에이전트 스트림 |
 | `home-check.schema.json` | 우리집 체크 — `HomeCheckJob`·`HomeCheckReport`·`Violation`·`ExtensionCheck`·`ExtensionVerdict` | ADR-0008/0009. 별도 building-register 스키마 파일은 없다 — 이 파일이 해당 도메인 정본 |
-| `segmentation-result.schema.json` | `SegmentationResult`·`Instance`·`Region`·`Label` (**1.4.0** — 19클래스 벽 어휘 + 타일 메타) | 도면 세그멘테이션 (HF Mask2Former). **ADR-0010** |
+| `segmentation-result.schema.json` | `SegmentationResult`·`Instance`·`Region`·`Label` (**1.5.0** — error_code 에 `SEGMENTATION_STALE_INPUT`(분석 중 도면 교체 시 산출 미영속) 추가) | 도면 세그멘테이션 (HF Mask2Former). **ADR-0010**, 도면 재제출 동시성 가드(PR #185) |
 
-스키마는 `schema_version`을 1.0.0으로 시작한다(현재 `home-check`=1.3.0, `segmentation-result`=1.4.0). 변경 시 PR 체크리스트(AGENTS.md §4.3)에 따라 bump하고, **본 README의 표 + ADR + SDD §5** 세 곳을 동시에 갱신한다 — 표에는 bump된 버전과 근거 ADR을 함께 남겨, 생성물만 보고는 알 수 없는 **의미 변화와 호환 경계**를 추적할 수 있게 한다. `evaluated_at` 류 타임스탬프 필드는 직렬화 시점에 주입한다 (스키마에 하드코딩 금지).
+스키마는 `schema_version`을 1.0.0으로 시작한다(현재 `home-check`=1.3.0, `segmentation-result`=1.5.0). 변경 시 PR 체크리스트(AGENTS.md §4.3)에 따라 bump하고, **본 README의 표 + ADR + SDD §5** 세 곳을 동시에 갱신한다 — 표에는 bump된 버전과 근거 ADR을 함께 남겨, 생성물만 보고는 알 수 없는 **의미 변화와 호환 경계**를 추적할 수 있게 한다. `evaluated_at` 류 타임스탬프 필드는 직렬화 시점에 주입한다 (스키마에 하드코딩 금지).
 
 ## 2. 사용법
 
