@@ -37,6 +37,10 @@ const GREETING = '우리집 구조, 무엇이든 물어보세요';
 const SUBGREETING =
   '주소와 도면을 바탕으로 벽 철거·확장 같은 리모델링 가능성을 함께 확인해 드려요.';
 
+// 도면 추론 엔드포인트 keep-alive 재핑 간격 — 서버 scale-to-zero idle(15분)보다 짧게
+// 잡아 세션이 활성인 동안 잠들지 않게 한다(백엔드 /health 핑이 idle 타이머를 리셋).
+const WARMUP_KEEPALIVE_INTERVAL_MS = 10 * 60 * 1000;
+
 /** 활성 세션의 대화 레이아웃 — useAgentStream 을 소비한다. key={sessionId} 로 마운트. */
 function Conversation({
   sessionId,
@@ -287,11 +291,26 @@ export function SessionChat({ sessionId }: { sessionId?: string }) {
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
-  // /sessions/* 진입 시 HF 세그멘테이션 엔드포인트를 미리 깨운다(콜드스타트 체감 제거).
-  // 사용자가 도면을 올리기 전에 replica 가 warm 이도록. best-effort + 백엔드 스로틀.
+  // /sessions/* 진입 시 도면 추론 엔드포인트를 미리 깨운다(콜드스타트 ~26초 체감 제거).
+  // 세션이 활성인 동안(대화 화면 + 탭이 보이는 동안)은 10분 간격으로 재핑해 scale-to-
+  // zero(15분)로 잠들지 않게 유지한다 — 깨어 있는 시간이 곧 GPU 과금 시간이라 숨김
+  // 탭에서는 보내지 않고, 세션을 떠나면(언마운트) 중단해 15분 뒤 자연히 잠들게 한다.
+  // best-effort + 백엔드 스로틀. HF 토큰은 백엔드만 가진다(브라우저 비노출).
   useEffect(() => {
-    void warmupSegmentation();
-  }, []);
+    const ping = () => {
+      if (document.visibilityState !== 'hidden') void warmupSegmentation();
+    };
+    ping(); // 진입/세션 시작 시 1회
+    if (activeId == null) return undefined; // compose 화면: 진입 핑만, keep-alive 없음
+    const intervalId = window.setInterval(ping, WARMUP_KEEPALIVE_INTERVAL_MS);
+    // 백그라운드에 있다가 돌아오면 다음 interval 을 기다리지 않고 즉시 재핑 — 자리를
+    // 비운 사이 잠들었어도 도면을 만지기 시작할 때는 이미 웨이크가 진행 중이도록.
+    document.addEventListener('visibilitychange', ping);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', ping);
+    };
+  }, [activeId]);
 
   // 첫 전송: 익명 세션 보장 → 세션 생성 → URL 교체(리마운트 없음) → 대화 전환.
   const handleFirstSend = useCallback(

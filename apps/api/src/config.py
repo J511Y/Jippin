@@ -140,9 +140,9 @@ class Settings(BaseSettings):
     # 모델이지만 설정은 vlm_model 과 분리 유지 — 독립적으로 되돌릴 수 있게).
     agent_model: str = Field(default="openai:gpt-5.6-luna")
     # 단일 런 wall-clock 상한 — 초과 시 done/error 로 마감하고 체크포인터에 보존.
-    # 도면 분석 런은 세그멘테이션이 지배한다: 콜드스타트 폴링 300s + 타일 추론 최대 600s.
-    # 여기에 VLM(60s)·에이전트 왕복 여유를 더해 1200s 로 잡는다 — 바깥 예산이 이보다 짧으면
-    # 안쪽에서 아직 기다릴 수 있는 콜드스타트/추론을 런너가 먼저 끊는다(#v4-latency).
+    # GPU 전환(2026-08-26) 후 세그멘테이션은 콜드스타트 폴링 ≤60s + 추론 ≤60s 로 줄었지만,
+    # VLM(60s)·에이전트 왕복·멀티턴 여유로 1200s 를 유지한다 — 바깥 예산이 안쪽 대기
+    # (콜드스타트/추론)보다 짧으면 아직 기다릴 수 있는 작업을 런너가 먼저 끊는다.
     agent_run_wallclock_timeout_seconds: int = Field(default=1200)
 
     # AI-002 VLM 도면 문맥 해석(SDD §4.4). Mask2Former 레이블을 OpenAI Vision 으로 보완·
@@ -188,22 +188,18 @@ class Settings(BaseSettings):
     # SEGMENTATION_ENDPOINT_UNAVAILABLE 로 degrade 한다(에이전트 흐름은 유지).
     hf_segmentation_endpoint_url: str | None = Field(default=None)
     hf_segmentation_token: str | None = Field(default=None)
-    # 배포가 CPU(intel-spr) + scale-to-zero(15분) 라, 유휴 후 첫 요청은 콜드스타트로
-    # TTFB 가 수십 초~수 분이다(모델 카드: "long request timeout"). 전용 엔드포인트는
-    # 보통 503 재시도가 아니라 연결을 잡고 늘어지므로 per-request timeout 을 넉넉히 잡는다
-    # (run wall-clock 이내). 503 재시도는 폴백으로 둔다.
-    #
-    # v4(원본 해상도 타일)부터는 **추론 자체가** 도면당 타일 수만큼 forward 를 돈다
-    # (4963×3509 기준 약 12회). CPU 인스턴스에서 도면당 수 분이 될 수 있어 상한을 올렸다.
-    # 근본 해법은 비동기 처리(작업 큐 + 완료 알림) 또는 GPU 전환이다(#v4-latency).
-    hf_segmentation_timeout_seconds: int = Field(default=600)
-    # 이 전용 엔드포인트는 scale-to-zero 에서 깨어나는 동안 **503** 을 즉시 돌려준다
-    # (Retry-After/estimated_time 힌트 없음). CPU 스케일업이 수 분 걸릴 수 있어, 고정
-    # 폴링 간격으로 준비될 때까지 재시도한다 — max_retries × poll = 30 × 10s = **300s**.
-    # 이 창은 v4 이전부터 지원하던 값이라 줄이지 않는다(200~300s 만에 깨어나던 콜드스타트가
-    # 갑자기 COLD_START_TIMEOUT 이 된다). 대신 바깥 예산(run wall-clock)을 늘려 맞춘다.
-    hf_segmentation_cold_start_max_retries: int = Field(default=30)
-    hf_segmentation_cold_start_poll_seconds: int = Field(default=10)
+    # 2026-08-26 GPU(nvidia-l4) 전환 — URL·인증·요청 스키마는 CPU 시절과 동일. 웜 상태
+    # 추론은 도면 1장에 서버 5~6초, 12타일급 대형 도면도 10초를 조금 넘기는 수준이라
+    # CPU 시절 상한(600s)을 60s 로 되돌린다. 엔드포인트를 CPU 로 되돌리면(비상 롤백)
+    # 도면당 수 분이 될 수 있으니 이 값도 같이 되올려야 한다.
+    hf_segmentation_timeout_seconds: int = Field(default=60)
+    # scale-to-zero(15분)에서 깨어나는 동안 추론 POST 는 대기 없이 **즉시 503** 을
+    # 돌려주고, 서빙 가능까지 약 26초 걸린다(실측). 세션 시작 웨이크업 핑(agent/warmup.py)
+    # 이후 26초가 지나기 전에 도면이 제출되는 창을 3초 간격 폴링으로 흡수한다 — 재시도
+    # 예산은 첫 503 부터 **wall-clock 60초**(26초 웨이크의 2배 여유). Retry-After/
+    # estimated_time 힌트가 오면 폴링 간격 대신 그 값을 따른다(상한 캡).
+    hf_segmentation_cold_start_max_wait_seconds: int = Field(default=60)
+    hf_segmentation_cold_start_poll_seconds: int = Field(default=3)
     # 배포된 엔드포인트가 서빙하는 모델의 어휘 세대(3|4). **요청 파라미터는 응답을 보기
     # 전에 정해야 하므로**, 응답으로 어휘를 판별하는 것만으로는 threshold 를 맞출 수 없다
     # (#threshold-cutover). 엔드포인트 모델 교체는 앱 배포와 별개의 수동 작업이라, 교체와

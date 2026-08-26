@@ -230,8 +230,10 @@ export async function updateSelectedWalls(
 }
 
 /**
- * 세션 진입 시 HF 세그멘테이션 엔드포인트를 미리 깨운다(콜드스타트 체감 제거).
- * best-effort — 실패해도 무시하고, 백엔드가 스로틀하므로 자주 불러도 안전하다.
+ * 도면 추론(HF) 엔드포인트 웨이크업 핑 — 세션 진입 1회 + 세션 활성 동안 10분 간격
+ * keep-alive(SessionChat). 백엔드가 GET /health 를 보낸다: 잠들어 있으면 스케일업
+ * 시작(~26초 뒤 서빙), 웜이면 idle 타이머(15분) 리셋. best-effort — 실패해도
+ * 무시하고, 백엔드가 스로틀하므로 자주 불러도 안전하다.
  */
 export async function warmupSegmentation(): Promise<void> {
   try {
