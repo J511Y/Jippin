@@ -136,7 +136,7 @@ async def _attachment_already_linked(bucket: str, object_path: str) -> bool:
 
 async def _session_floorplan_attachment(
     session_id: uuid.UUID,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, uuid.UUID | None]:
     """세션에 첨부된 도면 asset 을 리드 첨부 row 값으로 환산한다(best-effort).
 
     사전검토 대화 중 업로드된 도면(sessions.selected_floorplan_asset_id)은 상담 인입
@@ -146,14 +146,20 @@ async def _session_floorplan_attachment(
     기준이라 그대로 동작). 조회/중복확인 실패는 첨부만 생략하고 상담 접수를 막지
     않는다 — 확인 못 한 채 밀어 넣으면 전역 유니크 위반이 리드 INSERT 를 통째로
     굴리기(롤백) 때문이다.
+
+    반환은 ``(attachment | None, 읽은 selected asset id | None)`` — 두 값이 **같은
+    읽기**에서 나온다. 호출자의 도면 지문 검증(#judgment-cta-revalidate)이 이 asset id
+    를 쓰면, 별도 선행 조회와 첨부 조회 사이에 교체가 끼는 check-then-attach TOCTOU
+    창이 없다(스캔 게이트/중복 등으로 첨부만 생략된 경우에도 검증은 가능).
     """
 
     try:
         asset = await main_flow._db_select_selected_floorplan_asset(session_id)
     except Exception:  # noqa: BLE001 - 자동 첨부 실패는 상담 접수를 막지 않는다
-        return None
+        return None, None
     if not asset:
-        return None
+        return None, None
+    asset_id = asset.get("id")
     # 스캔 경계 — 세그멘테이션 분석 게이트(#scan-gate)와 동일한 **허용목록**:
     # clean/not_required 는 항상, pending 은 설정(agent_allow_unscanned_floorplans,
     # 스캐너 미가동 환경 기본 허용)이 켜져 있을 때만 인계한다. infected/failed 는 항상
@@ -168,23 +174,23 @@ async def _session_floorplan_attachment(
         scan_status in ("clean", "not_required")
         or (scan_status == "pending" and allow_unscanned)
     ):
-        return None
+        return None, asset_id
     object_key = str(asset.get("object_key") or "").strip()
     bucket = str(asset.get("bucket") or "").strip()
     if not object_key or not bucket:
-        return None
+        return None, asset_id
     try:
         if await _attachment_already_linked(bucket, object_key):
-            return None
+            return None, asset_id
     except Exception:  # noqa: BLE001 - 확인 불가면 보수적으로 생략(무결성 롤백 방지)
-        return None
+        return None, asset_id
     return {
         "bucket": bucket,
         "object_path": object_key,
         "file_name": _strip_upload_uuid_prefix(object_key.rsplit("/", 1)[-1]),
         "content_type": asset.get("content_type"),
         "byte_size": asset.get("byte_size"),
-    }
+    }, asset_id
 
 
 def _validate_attachments(
@@ -292,22 +298,6 @@ async def create_lead(
             ):
                 lead_values["road_addr_part1"] = address_fallback
 
-    # 결과 카드 유래 상담의 도면 지문 검증(#judgment-cta-revalidate 서버측 마무리) —
-    # 카드가 발급된 도면과 세션의 **현재** 도면이 다르면 lead 를 만들지 않는다. 아래
-    # 자동 첨부(#session-floorplan-carryover)가 현재 도면을 실어 보내므로, 여기서 막지
-    # 않으면 옛 결론 + 새 도면이 결합된 상담이 접수된다. 클릭 시점 프론트 재검증이
-    # 놓치는 '폼 작성 중 교체' 창을 서버가 최종 차단한다.
-    expected_asset = payload.get("expected_floorplan_asset_id")
-    if expected_asset is not None and lead_values.get("session_id") is not None:
-        inputs = await main_flow.get_session_inputs(lead_values["session_id"])
-        current_asset = inputs[0] if inputs is not None else None
-        if current_asset != expected_asset:
-            raise ZippinException(
-                "Selected floorplan changed since this result was issued.",
-                code="LEAD_FLOORPLAN_STALE",
-                http_status=409,
-            )
-
     attachments = _validate_attachments(
         list(payload.get("attachments") or []),
         user_id=user_id,
@@ -316,8 +306,27 @@ async def create_lead(
     # 세션 귀속 리드는 세션에 선택된 도면을 자동 첨부한다 — 대화 중 업로드한 도면이
     # 상담/어드민으로 이어지게(#session-floorplan-carryover). 클라이언트가 같은 파일을
     # 이미 실었으면 중복 첨부하지 않는다.
+    expected_asset = payload.get("expected_floorplan_asset_id")
     if lead_values.get("session_id") is not None:
-        auto = await _session_floorplan_attachment(lead_values["session_id"])
+        auto, session_asset_id = await _session_floorplan_attachment(
+            lead_values["session_id"]
+        )
+        # 결과 카드 유래 상담의 도면 지문 검증(#judgment-cta-revalidate 서버측 마무리) —
+        # **첨부 결정에 쓴 같은 읽기**의 asset 과 카드 스탬프를 대조한다. 별도 선행
+        # 조회로 검사하면 그 읽기와 첨부 읽기 사이에 교체가 끼는 check-then-attach
+        # TOCTOU 창이 생긴다(리뷰 지적). 여기서 통과한 직후 교체가 커밋돼도 리드는
+        # 스탬프된 도면(=검증한 읽기)의 첨부로 남아 '옛 결론 + 새 도면' 혼합은 없다.
+        # 읽기 실패(session_asset_id=None)는 첨부와 같이 fail-open — 접수를 막지 않는다.
+        if (
+            expected_asset is not None
+            and session_asset_id is not None
+            and session_asset_id != expected_asset
+        ):
+            raise ZippinException(
+                "Selected floorplan changed since this result was issued.",
+                code="LEAD_FLOORPLAN_STALE",
+                http_status=409,
+            )
         if auto is not None and not any(
             att["bucket"] == auto["bucket"]
             and att["object_path"] == auto["object_path"]
