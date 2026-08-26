@@ -26,10 +26,13 @@ mask_threshold, max_tiles}}``. tile_size/tile_overlap 은 학습값이라 넘기
 touches_tile_border…) — 여기서 라벨별 count + score 평균으로 집계해
 segmentation-result 계약(instances)으로 환원한다(좌표는 계약상 미포함).
 
-엔드포인트는 CPU + scale-to-zero(15분)라 유휴 후 첫 요청은 **503 으로 스케일업**되며
-수 분 걸릴 수 있다 — 폴링 재시도로 흡수한다. 어떤 실패도 **절대 uncaught raise 하지
-않고** 구조화 dict 를 반환한다(미배포/콜드스타트/타임아웃 모두 ok=false). 에이전트는
-ok=false 면 ASK_MORE 로 degrade, 반복 실패 시 HOLD_OR_HANDOFF 한다.
+엔드포인트는 GPU(nvidia-l4, 2026-08-26 전환) + scale-to-zero(15분)라 유휴 후 첫 요청은
+**즉시 503** 으로 반환되며 스케일업이 시작되고, 서빙 가능까지 약 26초 걸린다(실측).
+세션 시작 시 웨이크업 핑(agent/warmup.py)이 미리 깨워 두지만, 핑 후 26초가 지나기 전에
+도면이 제출되는 창은 3초 간격 폴링(첫 503 부터 wall-clock 60초 예산)으로 흡수한다.
+어떤 실패도 **절대 uncaught raise 하지 않고** 구조화 dict 를 반환한다(미배포/콜드스타트/
+타임아웃 모두 ok=false). 에이전트는 ok=false 면 ASK_MORE 로 degrade, 반복 실패 시
+HOLD_OR_HANDOFF 한다.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ import asyncio
 import contextlib
 import hashlib
 import ipaddress
+import time
 import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -84,7 +88,8 @@ _KNOWN_LABELS: frozenset[str] = frozenset(
 # 높은 벽들. wall_other 는 v4 의 '판단 보류' 벽, wall_unknown 은 v3 이하 과거 데이터.
 _UNCERTAIN_WALL_LABELS: frozenset[str] = frozenset({"wall_other", "wall_unknown"})
 
-# 콜드스타트(503) 재시도 대기 상한(초). Retry-After 가 더 커도 이 값으로 캡한다.
+# 콜드스타트(503) 재시도 1회 대기 상한(초). Retry-After/estimated_time 힌트가 더 커도
+# 이 값으로 캡한다 — GPU 웨이크가 약 26초라 정상 힌트는 이 안에 들어온다.
 _MAX_RETRY_DELAY_SECONDS = 30.0
 
 # 핸들러가 "입력이 학습 해상도보다 작다"고 알리는 note 키. 이 값이 오면 앱이 도면을
@@ -1531,12 +1536,15 @@ async def segment_floorplan_impl(
     if settings.hf_segmentation_token:
         headers["Authorization"] = f"Bearer {settings.hf_segmentation_token}"
 
-    max_retries = settings.hf_segmentation_cold_start_max_retries
+    max_wait = settings.hf_segmentation_cold_start_max_wait_seconds
     owns_client = client is None
     if client is None:
         client = httpx.AsyncClient(timeout=settings.hf_segmentation_timeout_seconds)
     try:
-        attempt = 0
+        # 콜드스타트 재시도 예산은 **첫 503 부터의 wall-clock**(기본 60초)이다 — 횟수
+        # 예산은 Retry-After 힌트가 개입하면 실제 대기 시간이 불투명해진다. GPU 웨이크가
+        # 약 26초이므로 세션 시작 핑 직후 제출돼도 이 예산 안에서 서빙이 시작된다.
+        cold_start_deadline: float | None = None
         while True:
             try:
                 # 모델 카드 계약: inputs 는 data URL/base64/HTTP(S) URL 중 하나. 우리는
@@ -1594,16 +1602,20 @@ async def segment_floorplan_impl(
                     summary="엔드포인트가 아직 배포되지 않았습니다(404).",
                 )
             if status == 503:
-                if attempt >= max_retries:
+                now = time.monotonic()
+                if cold_start_deadline is None:
+                    cold_start_deadline = now + max_wait
+                if now >= cold_start_deadline:
                     return _result(
                         False,
                         error_code="SEGMENTATION_COLD_START_TIMEOUT",
                         summary="콜드스타트 대기 한도를 초과했습니다.",
                     )
-                attempt += 1
-                await asyncio.sleep(
-                    _retry_delay(resp, settings.hf_segmentation_cold_start_poll_seconds)
+                delay = _retry_delay(
+                    resp, settings.hf_segmentation_cold_start_poll_seconds
                 )
+                # 남은 예산 이내로 캡 — 마지막 재시도가 예산 끝에서 한 번 더 나간다.
+                await asyncio.sleep(min(delay, cold_start_deadline - now))
                 continue
             if status in (400, 422):
                 return _result(

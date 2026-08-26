@@ -88,6 +88,34 @@ def test_create_session_allows_anonymous_supabase_token(monkeypatch):
     assert "is_anonymous_owner" not in body
 
 
+def test_create_session_fires_segmentation_wakeup_ping(monkeypatch):
+    """사전검토 세션 시작 = 도면 추론 엔드포인트 웨이크업 핑 트리거.
+
+    scale-to-zero 콜드스타트(~26초)를 도면 제출 전에 미리 소진하는 시작점이다.
+    fire-and-forget — 핑 결과와 무관하게 201 이어야 한다(테스트 env 는 엔드포인트
+    미설정이라 실제 핑은 안 나가므로, 라우터가 게이트 함수를 부르는지만 검증한다).
+    """
+
+    from src.routers import sessions as sessions_router
+
+    warmed: list[object] = []
+    monkeypatch.setattr(
+        sessions_router,
+        "maybe_warm_segmentation",
+        lambda settings: (warmed.append(settings), True)[1],
+    )
+    client, pem, kid, _ = _client(monkeypatch)
+    token, _subject = helpers.mint_token(pem, kid, is_anonymous=False)
+    with client:
+        response = client.post(
+            "/sessions",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+        )
+    assert response.status_code == 201
+    assert len(warmed) == 1
+
+
 def test_anonymous_session_has_expires_at_from_ttl_setting(monkeypatch):
     """익명 사전검토 세션은 ``ANON_SESSION_TTL_DAYS`` 만큼 expires_at 가 잡힌다.
 

@@ -19,7 +19,9 @@ from fastapi import APIRouter, Depends, Path, Request
 from fastapi.responses import StreamingResponse
 
 from ..agent.runner import AgentRunner
+from ..agent.warmup import maybe_warm_segmentation
 from ..auth.request_token import RequestUser, require_supabase_request_user
+from ..config import get_settings
 from ..errors import ZippinException
 from ..logging import get_logger
 from ..schemas.agent import (
@@ -61,6 +63,9 @@ async def start_agent_run(
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> StreamingResponse:
     _require_agent_ready(request)
+    # 런 시작 = 세션이 활성이라는 확실한 신호 — 웨이크업 핑으로 도면 추론 엔드포인트를
+    # 깨워 두거나 idle 타이머를 리셋한다(스로틀·fire-and-forget, 런 흐름 비블로킹).
+    maybe_warm_segmentation(get_settings())
     # 활성 런 빠른 409 사전판정(읽기). 실제 row 는 generator 안에서 만든다 — 스트림이
     # 시작 안 되면(클라이언트가 본문 iterate 전에 끊김) row 를 미리 만들어 두면 generator
     # 의 try/finally 가 안 돌아 pending 고아가 남아 다음 send 를 막는다(#pre-stream-orphan).
@@ -111,6 +116,8 @@ async def resume_agent_run(
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> StreamingResponse:
     _require_agent_ready(request)
+    # 런 재개도 세션 활성 신호 — start_agent_run 과 같은 웨이크업 핑(스로틀).
+    maybe_warm_segmentation(get_settings())
     # 빠른 사전판정(읽기) — resumable 아니거나 없으면 409/404. 실제 원자적 점유는
     # generator 안에서 한다(claim_resumable_agent_run) — 스트림이 시작 안 되면
     # finally 가 running 으로 남은 row 를 풀어 주도록(#resume-claim-orphan). 동시
@@ -234,15 +241,17 @@ async def get_agent_run_status(
 async def warmup_segmentation(
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> dict[str, bool]:
-    """세션 진입 시 HF 세그멘테이션 엔드포인트를 미리 깨운다(콜드스타트 체감 제거).
+    """HF 세그멘테이션 엔드포인트 웨이크업 핑(콜드스타트 체감 제거 + 세션 웜 유지).
+
+    프론트(SessionChat)가 두 시점에 부른다 — (1) /sessions/* 진입 1회, (2) 세션이
+    활성인 동안(탭이 보이는 동안) 10분 간격 keep-alive. /health 200 이 idle 타이머
+    (15분)를 리셋하므로 실추론 없이 세션 동안 웜이 유지되고, 세션을 떠나면 호출이
+    멈춰 15분 뒤 자연히 잠든다(scale-to-zero 과금 경계).
 
     정적 경로(`/sessions/agent/warmup`)라 `/{session_id}/agent/...` 와 충돌하지 않는다.
     인증만 요구(익명 허용)하고 세션 소유권은 보지 않는다 — 부수효과는 HF 스케일업
-    트리거뿐이며 스로틀로 비용을 제한한다. fire-and-forget 이라 즉시 반환한다.
+    트리거/idle 리셋뿐이며 스로틀로 비용을 제한한다. fire-and-forget 이라 즉시 반환한다.
     """
-
-    from ..agent.warmup import maybe_warm_segmentation
-    from ..config import get_settings
 
     warmed = maybe_warm_segmentation(get_settings())
     return {"warmed": warmed}

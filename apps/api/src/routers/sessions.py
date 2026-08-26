@@ -12,7 +12,9 @@ import uuid
 
 from fastapi import APIRouter, Depends, Path
 
+from ..agent.warmup import maybe_warm_segmentation
 from ..auth.request_token import RequestUser, require_supabase_request_user
+from ..config import get_settings
 from ..logging import get_logger
 from ..schemas.sessions import (
     SessionAddressInput,
@@ -33,6 +35,10 @@ async def create_session(
     payload: SessionCreateRequest,
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> SessionResponse:
+    # 사전검토 세션 시작 = 도면 추론(HF) 엔드포인트 웨이크업 핑 — scale-to-zero
+    # 콜드스타트(~26초)를 사용자가 도면 제출 시점에 겪지 않게 미리 깨운다.
+    # fire-and-forget + 절대 raise 하지 않으므로 세션 생성 흐름을 막지 않는다.
+    maybe_warm_segmentation(get_settings())
     row = await main_flow.create_session(
         user_id=requester.user_id,
         is_anonymous_owner=requester.is_anonymous,

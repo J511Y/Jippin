@@ -30,8 +30,9 @@ def _settings(**override: object) -> SimpleNamespace:
         "hf_segmentation_endpoint_url": "https://hf.example/seg",
         "hf_segmentation_token": "tok",
         "hf_segmentation_timeout_seconds": 5,
-        "hf_segmentation_cold_start_max_retries": 0,
-        "hf_segmentation_cold_start_poll_seconds": 10,
+        # 예산 0 = 첫 503 이 곧바로 COLD_START_TIMEOUT — 테스트가 폴링을 기다리지 않게.
+        "hf_segmentation_cold_start_max_wait_seconds": 0,
+        "hf_segmentation_cold_start_poll_seconds": 3,
         # 어휘 세대는 v4(교체 완료) 기준 — threshold 는 세대 기본값(0.35)으로 결정된다.
         "hf_segmentation_expected_vocab_version": 4,
         "hf_segmentation_threshold": None,
@@ -71,12 +72,39 @@ async def test_404_is_unavailable() -> None:
     assert res["error_code"] == "SEGMENTATION_ENDPOINT_UNAVAILABLE"
 
 
-async def test_503_cold_start_timeout_when_no_retries() -> None:
+async def test_503_cold_start_timeout_when_budget_exhausted() -> None:
+    # 재시도 예산은 첫 503 부터의 wall-clock — 예산 0 이면 즉시 COLD_START_TIMEOUT.
     async with _client(lambda req: httpx.Response(503)) as client:
         res = await segment_floorplan_impl(
             image_url=_IMG, settings=_settings(), client=client
         )
     assert res["error_code"] == "SEGMENTATION_COLD_START_TIMEOUT"
+
+
+async def test_503_retries_until_scale_up_completes() -> None:
+    # 콜드스타트 503 은 즉시 실패가 아니다 — 폴링 간격으로 재시도해 replica 가 깨어나면
+    # (웨이크 ~26초) 그대로 이어 간다. 세션 시작 핑 후 26초가 지나기 전에 도면이 제출되는
+    # 창을 흡수하는 경로다.
+    attempts = 0
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"predictions": []})
+
+    async with _client(handler) as client:
+        res = await segment_floorplan_impl(
+            image_url=_IMG,
+            settings=_settings(
+                hf_segmentation_cold_start_max_wait_seconds=30,
+                hf_segmentation_cold_start_poll_seconds=0.01,  # 테스트 즉시 진행
+            ),
+            client=client,
+        )
+    assert res["ok"] is True
+    assert attempts == 3
 
 
 async def test_read_timeout_is_timeout() -> None:
