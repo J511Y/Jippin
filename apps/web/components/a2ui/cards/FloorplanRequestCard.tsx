@@ -211,12 +211,13 @@ export function FloorplanRequestCard({
             도면을 첨부했어요. 이어서 비내력벽 후보를 분석할게요.
           </Text>
           {/* 재제출 — 첨부 완료로 잠긴 카드에서도 폼을 되열어 다른 도면을 올릴 수 있다.
-              기존 도면은 삭제되지 않고 새 도면이 대체한다(분석도 새 도면 기준으로 재실행). */}
+              기존 도면은 삭제되지 않고 새 도면이 대체한다(분석도 새 도면 기준으로 재실행).
+              3차 액션이라 subtle, 단 모바일 터치 타깃 ≥44px(AGENTS.md)는 minHeight 로 보장. */}
           {interactive ? (
             <Button
               variant="subtle"
               color="jippin"
-              size="compact-sm"
+              size="sm"
               leftSection={<IconPhotoUp size={14} />}
               onClick={() => {
                 setAttached(false);
@@ -224,7 +225,7 @@ export function FloorplanRequestCard({
                 setError(null);
               }}
               disabled={busy || streaming}
-              styles={{ root: { alignSelf: 'flex-start' } }}
+              styles={{ root: { alignSelf: 'flex-start', minHeight: 44 } }}
             >
               다른 도면으로 다시 올리기
             </Button>

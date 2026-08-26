@@ -45,6 +45,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ...errors import ZippinException
 from ...logging import get_logger
 
 if TYPE_CHECKING:
@@ -1261,7 +1262,26 @@ async def segment_session_floorplan(
     result = await segment_floorplan_impl(
         image_url=signed, settings=settings, client=client
     )
-    if not result.get("ok") or not result.get("regions"):
+    if not result.get("ok"):
+        return result
+    if not result.get("regions"):
+        # 검출 0 인 **완료된** 분석도 빈 산출로 영속한다(#empty-analysis-persist) —
+        # wall_objects 키가 없으면 다음 턴 세션 상태가 '분석 진행/대기(재요청 금지)'로
+        # 오인해, 같은 턴 재요청이 유실됐을 때 사용자가 갇힌다. asset 지문으로 조건부
+        # 병합해(#analysis-merge-fingerprint) 그 사이 교체된 새 도면을 덮지 않는다.
+        # 실패는 삼킨다 — 요약만으로도 같은 턴 흐름은 유지된다(best-effort).
+        with contextlib.suppress(Exception):
+            await main_flow.merge_judgment_schema(
+                session_id=session_id,
+                owner_user_id=owner_user_id,
+                owner_is_anonymous=owner_is_anonymous,
+                patch={
+                    "wall_objects": [],
+                    "space_objects": [],
+                    "window_objects": [],
+                },
+                expected_asset_id=asset["id"],
+            )
         return result
     # 분석 성공 — 오버레이 카드 방출 + 공통 판단 스키마(wall/space objects) 누적 + LLM
     # 반환분에서 좌표 제거(컨텍스트 leanness). 카드 방출/판단 누적 실패는 분석 자체를
@@ -1363,7 +1383,24 @@ async def segment_session_floorplan(
             owner_user_id=owner_user_id,
             owner_is_anonymous=owner_is_anonymous,
             patch=patch,
+            # 분석이 도는 동안(수 분) 다른 탭/재제출 카드가 도면을 교체했을 수 있다 —
+            # 분석을 시작한 asset 이 여전히 선택돼 있을 때만 산출을 영속한다
+            # (#analysis-merge-fingerprint). 교체됐으면 이 결과는 옛 도면의 것이므로
+            # 버리고, 에이전트에게 재분석을 유도한다.
+            expected_asset_id=asset["id"],
         )
+    except ZippinException as exc:
+        if exc.code == "ANALYSIS_INPUT_STALE":
+            return _result(
+                False,
+                error_code="SEGMENTATION_STALE_INPUT",
+                summary=(
+                    "분석 중에 도면이 새 도면으로 교체되어 이 결과는 저장하지 "
+                    "않았어요. 새 도면으로 다시 분석해 주세요."
+                ),
+            )
+        judgment_persisted = False
+        log.warning("segmentation_judgment_persist_failed", session_id=str(session_id))
     except Exception:  # noqa: BLE001 - 영속 실패는 분석 자체를 무르지 않는다(best-effort)
         judgment_persisted = False
         log.warning("segmentation_judgment_persist_failed", session_id=str(session_id))

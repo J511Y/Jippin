@@ -336,6 +336,71 @@ async def test_replacing_floorplan_resets_prior_analysis(fake_db):
     assert js.get("judgment_values") == {"floor_count": 6}
 
 
+async def test_replacing_floorplan_reopens_status(fake_db):
+    """교체는 배지도 floorplan_selected 로 재개한다 — 분석·판정이 무효화됐는데
+    awaiting_overlay/report_ready 등으로 남아 관리 목록이 무효 세션을 진행/완료로
+    표시하지 않게(#floorplan-replace-reset 의 status 짝)."""
+
+    session_id, subject = await _create_session_direct()
+
+    async def attach(name: str):
+        return await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=subject,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{subject}/{session_id}/{name}",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+
+    await attach("a1.png")
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=subject,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}]},
+    )
+    assert fake_db.sessions[session_id]["status"] == "awaiting_overlay"
+
+    await attach("a2.png")
+    assert fake_db.sessions[session_id]["status"] == "floorplan_selected"
+
+
+async def test_merge_rejects_stale_expected_asset(fake_db):
+    """#analysis-merge-fingerprint: 분석 시작 asset 이 더는 선택돼 있지 않으면 병합을
+    쓰기 없이 409(ANALYSIS_INPUT_STALE)로 거부 — 옛 도면 산출이 새 도면에 안 붙는다."""
+
+    session_id, subject = await _create_session_direct()
+
+    async def attach(name: str):
+        return await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=subject,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{subject}/{session_id}/{name}",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+
+    a1 = await attach("a1.png")
+    await attach("a2.png")  # a1 분석이 도는 사이 교체됐다고 가정.
+
+    with pytest.raises(ZippinException) as ei:
+        await main_flow.merge_judgment_schema(
+            session_id=session_id,
+            owner_user_id=subject,
+            owner_is_anonymous=False,
+            patch={"wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}]},
+            expected_asset_id=a1["id"],
+        )
+    assert ei.value.code == "ANALYSIS_INPUT_STALE"
+    assert "wall_objects" not in fake_db.sessions[session_id]["judgment_schema"]
+
+
 async def test_set_session_verdict_skips_on_input_change(fake_db):
     """#stale-verdict-write: 분석 시작 때 본 입력과 현재 입력이 다르면 verdict 를 쓰지
     않고 None 반환(분석 도중 도면 교체 race)."""

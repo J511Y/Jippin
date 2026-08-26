@@ -722,7 +722,7 @@ _FLOORPLAN_ANALYSIS_KEYS: tuple[str, ...] = (
 
 async def _db_link_session_floorplan_asset(
     session_id: uuid.UUID, asset_id: uuid.UUID
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, bool]:
     """세션 포인터를 새 asset 으로 연결하고, **다른 asset 에서 갈아타는 경우** 이전
     분석 산출을 같은 행잠금 트랜잭션에서 제거한다(#floorplan-replace-reset).
 
@@ -730,6 +730,9 @@ async def _db_link_session_floorplan_asset(
     '분석 완료'로 오인해 재분석을 건너뛰거나 옛 벽 판정을 새 도면 위에 설명하는 오류가
     난다. verdict/completion_decision 무효화는 0016 트리거가(역할 무관) 처리하므로
     여기서 중복하지 않는다.
+
+    반환은 (updated_row | None, replaced) — ``replaced`` 는 기존의 **다른** asset 에서
+    갈아탔는지(호출자가 status 재개 여부를 결정하는 근거).
     """
 
     async with get_engine().begin() as conn:
@@ -744,10 +747,11 @@ async def _db_link_session_floorplan_asset(
             )
         ).one_or_none()
         if row0 is None:
-            return None
+            return None, False
         values: dict[str, Any] = {"selected_floorplan_asset_id": asset_id}
         prior = row0.selected_floorplan_asset_id
-        if prior is not None and prior != asset_id:
+        replaced = prior is not None and prior != asset_id
+        if replaced:
             js = row0.judgment_schema if isinstance(row0.judgment_schema, dict) else {}
             reset = {k: v for k, v in js.items() if k not in _FLOORPLAN_ANALYSIS_KEYS}
             if reset != js:
@@ -764,7 +768,7 @@ async def _db_link_session_floorplan_asset(
                 .returning(*_SESSIONS.c)
             )
         ).one_or_none()
-    return dict(row._mapping) if row is not None else None
+    return (dict(row._mapping) if row is not None else None), replaced
 
 
 async def _db_insert_agent_run(values: dict[str, Any]) -> dict[str, Any] | None:
@@ -1131,10 +1135,16 @@ def _prune_selections_inplace(merged: dict[str, Any]) -> bool:
 
 #: _db_merge_judgment_schema 의 검증 실패 sentinel — 쓰기 없이 중단됐음을 알린다.
 _MERGE_SELECTION_STALE = "selection_stale"
+#: 분석 입력(선택 asset)이 분석 시작 시점과 달라져 병합을 중단한 sentinel.
+_MERGE_INPUT_STALE = "analysis_input_stale"
 
 
 async def _db_merge_judgment_schema(
-    session_id: uuid.UUID, *, patch: dict[str, Any], validate_selection: bool = False
+    session_id: uuid.UUID,
+    *,
+    patch: dict[str, Any],
+    validate_selection: bool = False,
+    expected_asset_id: Any = _UNSET,
 ) -> tuple[dict[str, Any], bool] | str | None:
     """판단스키마 병합 + 선택 검증/프루닝 + rule_eval 무효화를 **단일 행잠금 트랜잭션**으로.
 
@@ -1146,6 +1156,11 @@ async def _db_merge_judgment_schema(
     ``validate_selection`` 이면 patch 에 실린 선택 id 를 **잠근 행의 현행 객체**와
     대조해, 하나라도 어긋나면 아무것도 쓰지 않고 ``_MERGE_SELECTION_STALE`` 을
     돌려준다 — 스냅숏 검증과 영속 사이의 재분석 커밋 창 제거(#stale-overlay-submission).
+
+    ``expected_asset_id`` 가 오면 **잠근 행의 현재 선택 asset** 과 대조해, 다르면
+    아무것도 쓰지 않고 ``_MERGE_INPUT_STALE`` 을 돌려준다 — 분석이 도는 동안 도면이
+    교체되면(#floorplan-replace-reset 직후) 옛 도면의 분석 산출이 새 도면에 붙는 창을
+    행잠금 안에서 막는다(#analysis-merge-fingerprint).
 
     반환은 (merged, selection_pruned) / 검증 실패 sentinel / 행 부재 None(호출자
     owner-gate 이후의 삭제 race).
@@ -1164,13 +1179,22 @@ async def _db_merge_judgment_schema(
     async with get_engine().begin() as conn:
         row0 = (
             await conn.execute(
-                sa.select(_SESSIONS.c.id, _SESSIONS.c.judgment_schema)
+                sa.select(
+                    _SESSIONS.c.id,
+                    _SESSIONS.c.judgment_schema,
+                    _SESSIONS.c.selected_floorplan_asset_id,
+                )
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
             )
         ).one_or_none()
         if row0 is None:
             return None
+        if (
+            expected_asset_id is not _UNSET
+            and row0.selected_floorplan_asset_id != expected_asset_id
+        ):
+            return _MERGE_INPUT_STALE  # 쓰기 전 중단 — 세션 무변경.
         current = row0.judgment_schema
         merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
         merged.update(patch)
@@ -1211,6 +1235,7 @@ async def merge_judgment_schema(
     owner_is_anonymous: bool,
     patch: dict[str, Any],
     validate_selection: bool = False,
+    expected_asset_id: Any = _UNSET,
 ) -> dict[str, Any]:
     """공통 판단 스키마(JSONB)에 top-level 키를 병합한다(owner-gated).
 
@@ -1227,6 +1252,10 @@ async def merge_judgment_schema(
     현행 객체와 대조해, 어긋나면 아무것도 쓰지 않고 409(SELECTION_STALE)를 던진다 —
     스냅숏 검증으로는 재분석 커밋이 사이에 끼는 TOCTOU 를 못 막는다
     (#stale-overlay-submission).
+
+    ``expected_asset_id``(분석 영속 경로)가 오면 병합 시점의 선택 asset 이 그 값과
+    다를 때 아무것도 쓰지 않고 409(ANALYSIS_INPUT_STALE)를 던진다 — 분석 도중 도면이
+    교체되면 옛 도면의 산출이 새 도면에 붙지 않게 한다(#analysis-merge-fingerprint).
     """
 
     await _resolve_owner_session(
@@ -1235,11 +1264,19 @@ async def merge_judgment_schema(
         owner_is_anonymous=owner_is_anonymous,
     )
     result = await _db_merge_judgment_schema(
-        session_id, patch=patch, validate_selection=validate_selection
+        session_id,
+        patch=patch,
+        validate_selection=validate_selection,
+        expected_asset_id=expected_asset_id,
     )
     if result is None:
         # owner-gate 통과 직후의 삭제 race — 부재 세션과 동일하게 취급.
         raise _not_found("Session not found.")
+    if result == _MERGE_INPUT_STALE:
+        raise _conflict(
+            "Selected floorplan changed since this analysis started.",
+            "ANALYSIS_INPUT_STALE",
+        )
     if isinstance(result, str):
         raise _conflict(
             "Selection does not match the latest analysis objects.",
@@ -1574,7 +1611,17 @@ async def create_floorplan_asset(
     # 도 통과한다(상태 전이는 강제하지 않음 — 에이전트 플로우가 status 를 진행).
     # 재업로드(기존 asset 에서 갈아타기)면 이전 도면의 분석 산출도 같은 트랜잭션에서
     # 제거된다(#floorplan-replace-reset) — 이전 도면 자체(asset row/파일)는 남는다.
-    await _db_link_session_floorplan_asset(session_id, asset["id"])
+    _, replaced = await _db_link_session_floorplan_asset(session_id, asset["id"])
+    if replaced:
+        # 분석 산출·판정이 방금 무효화됐는데 배지가 awaiting_overlay/report_ready 등에
+        # 남아 있으면 관리 목록·필터가 무효 세션을 진행/완료로 계속 표시한다 — 도면
+        # 선택 직후 단계로 재개한다(forward-only 의 sanctioned 역방향, 이미 그 이하면
+        # no-op, handoff/종료 상태는 건드리지 않음).
+        await reopen_session_status(
+            session_id=session_id,
+            target="floorplan_selected",
+            reason="floorplan_replaced",
+        )
     # 도면 asset 이 세션에 연결됐으니 status 를 floorplan_selected 로 전진.
     await advance_session_status(
         session_id=session_id, target="floorplan_selected", reason="floorplan_selected"

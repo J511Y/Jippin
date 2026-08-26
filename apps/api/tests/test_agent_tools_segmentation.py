@@ -779,6 +779,110 @@ async def test_session_floorplan_emits_overlay_and_persists_objects(
     assert {s["id"] for s in js["space_objects"]} == {"pred:3"}
 
 
+async def test_session_zero_regions_persists_empty_analysis(monkeypatch) -> None:
+    # #empty-analysis-persist: 검출 0 인 완료된 분석도 빈 산출로 영속한다 — 다음 턴
+    # 세션 상태가 '분석 진행/대기'가 아니라 '분석 완료·후보 0(재업로드 예외)'을 준다.
+    session_id, owner = await _session_with_asset(monkeypatch)
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"predictions": []})
+
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+        )
+    assert res["ok"] is True
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    js = session["judgment_schema"]
+    assert js["wall_objects"] == []
+    assert js["window_objects"] == []
+    assert js["space_objects"] == []
+
+
+async def test_session_stale_asset_discards_merge(monkeypatch) -> None:
+    # #analysis-merge-fingerprint: 분석 도중 도면이 교체되면 산출을 영속하지 않고
+    # SEGMENTATION_STALE_INPUT 으로 degrade — 옛 도면 결과·오버레이가 새 도면에 붙지
+    # 않는다(재제출 카드가 열어 준 동시 업로드 경로).
+    from src.agent.tools.domain import RunContext
+
+    session_id, owner = await _session_with_asset(monkeypatch)
+    run = await main_flow.create_agent_run(
+        session_id=session_id, owner_user_id=owner, model="openai:gpt-5.4-mini"
+    )
+
+    async def fake_sign(settings, *, bucket, object_path, **_: object) -> str:
+        return f"https://signed.example/{object_path}"
+
+    monkeypatch.setattr(storage, "sign_object_url", fake_sign)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "predictions": [
+                    {
+                        "region_id": "pred:1",
+                        "class_name": "wall_nonbearing",
+                        "score": 0.9,
+                        "polygon": [0, 0, 10, 0, 10, 10, 0, 10],
+                    }
+                ]
+            },
+        )
+
+    # 병합 직전에 다른 탭의 재업로드가 끼어든 상황을 재현 — 첫 merge 호출 전에 새
+    # asset 으로 교체한 뒤 실제 merge 로 위임한다.
+    real_merge = main_flow.merge_judgment_schema
+
+    async def replace_then_merge(**kwargs):
+        await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=owner,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{owner}/{session_id}/replaced.png",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+        return await real_merge(**kwargs)
+
+    monkeypatch.setattr(main_flow, "merge_judgment_schema", replace_then_merge)
+
+    ctx = RunContext()
+    async with _client(handler) as client:
+        res = await segment_session_floorplan(
+            session_id=session_id,
+            owner_user_id=owner,
+            owner_is_anonymous=False,
+            settings=_settings(),
+            client=client,
+            run_context=ctx,
+            run_id=run["id"],
+        )
+    assert res["ok"] is False
+    assert res["error_code"] == "SEGMENTATION_STALE_INPUT"
+    # 오버레이 카드도 방출되지 않는다(persist-before-emit).
+    ui, _snapshot = ctx.drain_ui()
+    assert ui == []
+    # 옛 도면의 wall_objects 가 새 도면에 붙지 않았다(교체 초기화 상태 그대로).
+    session = await main_flow.get_owned_session(
+        session_id, owner_user_id=owner, owner_is_anonymous=False
+    )
+    assert "wall_objects" not in session["judgment_schema"]
+
+
 def test_build_judgment_objects_maps_wall_vocabulary() -> None:
     # v4 어휘: 확정 비내력(wall_nonbearing)만 NON_LOAD_BEARING 으로 승격하고, 판단 보류
     # (wall_other)·과거 데이터(wall_unknown)는 UNKNOWN 으로 둬 룰엔진 HOLD(확인 필요)

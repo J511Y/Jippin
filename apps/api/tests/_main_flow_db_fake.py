@@ -255,16 +255,23 @@ class FakeMainFlowDb:
         *,
         patch: dict[str, Any],
         validate_selection: bool = False,
+        expected_asset_id: Any = main_flow._UNSET,
     ) -> tuple[dict[str, Any], bool] | str | None:
         """판단스키마 병합 + 원자 선택 검증/프루닝 + rule_eval 무효화(real seam 미러).
 
         real 은 FOR UPDATE 단일 트랜잭션 — fake 는 단일 스레드라 그대로 순차 수행.
-        validate_selection 검증 실패는 쓰기 없이 sentinel 반환(real 과 동일).
+        validate_selection / expected_asset_id 검증 실패는 쓰기 없이 sentinel 반환
+        (real 과 동일).
         """
 
         row = self.sessions.get(session_id)
         if row is None:
             return None
+        if (
+            expected_asset_id is not main_flow._UNSET
+            and row.get("selected_floorplan_asset_id") != expected_asset_id
+        ):
+            return main_flow._MERGE_INPUT_STALE
         current = row.get("judgment_schema")
         merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
         merged.update(patch)
@@ -639,18 +646,19 @@ class FakeMainFlowDb:
 
     async def _db_link_session_floorplan_asset(
         self, session_id: uuid.UUID, asset_id: uuid.UUID
-    ) -> dict[str, Any] | None:
+    ) -> tuple[dict[str, Any] | None, bool]:
         row = self.sessions.get(session_id)
         if row is None:
-            return None
+            return None, False
         prior = row.get("selected_floorplan_asset_id")
+        replaced = prior is not None and prior != asset_id
         row["selected_floorplan_asset_id"] = asset_id
         if prior != asset_id:
             # 재업로드(다른 asset 에서 갈아타기) — 이전 도면의 분석 산출을 제거한다
             # (real seam 미러, #floorplan-replace-reset). 첫 연결(None→asset)엔 지울
             # 분석이 없다.
             js = row.get("judgment_schema")
-            if prior is not None and isinstance(js, dict):
+            if replaced and isinstance(js, dict):
                 row["judgment_schema"] = {
                     k: v
                     for k, v in js.items()
@@ -661,7 +669,7 @@ class FakeMainFlowDb:
             row["rule_evaluated_at"] = None
             row["completion_decision"] = None
         self._touch_session(session_id)
-        return dict(row)
+        return dict(row), replaced
 
     async def _db_set_session_verdict_if_inputs(
         self,
