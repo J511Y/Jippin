@@ -28,6 +28,7 @@ import {
 import { useId, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { LEGAL_NOTICE_TEXT } from '@/components/LegalNotice';
+import { useChatActions } from '@/components/agent/chat-actions';
 import { QuickPrecheckConsultForm } from '@/components/leads/QuickPrecheckConsultForm';
 import { CtaButton } from '@/components/ui';
 
@@ -49,6 +50,9 @@ export type JudgmentSummaryPayload = {
   /** 하단 상담 CTA → 빠른 상담폼 prefill 용. */
   session_id?: string;
   prefill_address?: string;
+  /** 이 결과가 유래한 도면 asset(서버 스탬프) — 도면이 교체되면 '이전 도면 기준
+   *  결과'로 표시하고 상담 CTA 를 막는다(#judgment-asset-stamp). 구 카드는 미지정. */
+  asset_id?: string;
 };
 
 const KNOWN_DECISIONS: readonly JudgmentDecision[] = [
@@ -161,6 +165,16 @@ export function JudgmentSummaryCard({
   const [consultSubmitted, setConsultSubmitted] = useState(false);
   const prefillAddress =
     typeof payload.prefill_address === 'string' ? payload.prefill_address : undefined;
+  // 도면 교체 감지 — 이 결과가 유래한 asset(서버 스탬프)과 현재 선택 asset(컨텍스트
+  // 브로드캐스트, #floorplan-cards-broadcast)이 다르면 '이전 도면 기준 결과'다. 이때
+  // 상담 CTA 를 막아, A 도면의 결론에 B 도면이 자동 첨부되어 나가는 상담 인입을
+  // 차단한다(#judgment-asset-stamp). 둘 중 하나라도 모르면(구 카드/브로드캐스트 부재)
+  // 종전 동작 유지.
+  const currentAssetId = useChatActions()?.selectedFloorplanAssetId;
+  const staleFloorplan =
+    typeof payload.asset_id === 'string' &&
+    typeof currentAssetId === 'string' &&
+    currentAssetId !== payload.asset_id;
 
   return (
     <CardShell accent={style.accent} labelledBy={titleId}>
@@ -182,11 +196,14 @@ export function JudgmentSummaryCard({
       </div>
 
       {/* 판정 근거 투명성 — 법령 기준 검토를 거친 결과인지, 그 전 예비 관찰인지 한 줄로
-          밝힌다. B2C 카피라 '룰엔진' 등 내부 용어는 노출하지 않는다. */}
+          밝힌다. B2C 카피라 '룰엔진' 등 내부 용어는 노출하지 않는다. 도면이 교체됐으면
+          어느 쪽이든 '이전 도면 기준'임을 우선해 밝힌다. */}
       <Text size="11px" c="dimmed" mt={6} style={{ lineHeight: 1.4 }}>
-        {payload.rule_backed
-          ? '※ 법령 기준으로 검토한 결과예요.'
-          : '※ 자동 분석 기반 예비 관찰이에요. 검토에 필요한 정보가 모이면 더 정확히 봐 드려요.'}
+        {staleFloorplan
+          ? '※ 이 결과는 이전에 올렸던 도면 기준이에요. 새 도면으로 다시 검토하면 결과가 달라질 수 있어요.'
+          : payload.rule_backed
+            ? '※ 법령 기준으로 검토한 결과예요.'
+            : '※ 자동 분석 기반 예비 관찰이에요. 검토에 필요한 정보가 모이면 더 정확히 봐 드려요.'}
       </Text>
 
       <Text
@@ -221,8 +238,15 @@ export function JudgmentSummaryCard({
       <CardRule />
 
       {/* 상담 인입 — 결과를 본 직후 전문가 상담으로 자연스럽게 잇는다. 클릭하면 같은
-          대화 화면에서 빠른 상담폼이 펼쳐지고, 주소 등은 이미 세션이 알고 있어 바로 제출. */}
-      {consultSubmitted ? (
+          대화 화면에서 빠른 상담폼이 펼쳐지고, 주소 등은 이미 세션이 알고 있어 바로 제출.
+          도면이 교체된 옛 결과 카드에서는 CTA 를 막는다 — 상담 lead 에는 세션의 **현재**
+          도면이 자동 첨부되므로, 옛 결론 + 새 도면이 섞여 나가는 인입을 차단한다
+          (#judgment-asset-stamp). 새 검토를 마친 최신 결과 카드가 CTA 를 잇는다. */}
+      {staleFloorplan ? (
+        <Text size="sm" c="dimmed" mb="sm" style={{ lineHeight: 1.55 }}>
+          새 도면 기준 검토를 마치면, 새 결과 카드에서 상담을 신청할 수 있어요.
+        </Text>
+      ) : consultSubmitted ? (
         <Text size="sm" c="var(--jippin-brand-copy)" mb="sm" style={{ lineHeight: 1.55 }}>
           상담 신청이 접수되었어요. 담당자가 영업일 기준 1일 이내에 연락드릴게요.
         </Text>

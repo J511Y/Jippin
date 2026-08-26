@@ -959,6 +959,66 @@ async def test_emit_floorplan_request_stamps_prior_asset(monkeypatch) -> None:
     assert second["reason"] == "재요청"
 
 
+async def test_emit_floorplan_request_prefers_analysis_fingerprint(
+    monkeypatch,
+) -> None:
+    # 방출 직전 다른 탭이 도면을 교체해도, 카드는 **이 턴 분석이 실제로 본 asset**
+    # (재요청의 원인)을 prior 로 가리킨다 — 살아 있는 현재값을 스탬프하면 방금 올라온
+    # 새 도면(B)에 대해 열린 폼이 떠 B 가 분석 없이 또 교체될 수 있다.
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+
+    async def attach(name: str):
+        return await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=owner,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{owner}/{session_id}/{name}",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+
+    a1 = await attach("a1.png")
+    ctx.analysis_inputs = (a1["id"], None)  # 이 턴 분석이 본 asset = a1.
+    await attach("b.png")  # 방출 직전 교체.
+
+    await domain.emit_floorplan_request_impl(
+        run_context=ctx, run_id=run_id, session_id=session_id, reason="재요청"
+    )
+    ui, _snap = ctx.drain_ui()
+    assert ui[0]["elements"]["fp"]["props"]["prior_asset_id"] == str(a1["id"])
+
+
+async def test_judgment_summary_stamps_source_asset(monkeypatch) -> None:
+    # #judgment-asset-stamp: 결과 카드에 유래 도면 asset 을 실어, 교체 뒤 프론트가
+    # '이전 도면 기준 결과'로 표시하고 상담 CTA 를 막을 수 있게 한다.
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    asset = await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/a.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    res = await domain.emit_judgment_summary_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        decision="conditional",
+        title="검토 결과",
+        summary="요약",
+    )
+    assert res["ok"] is True
+    ui, _snap = ctx.drain_ui()
+    assert ui[0]["elements"]["j"]["props"]["asset_id"] == str(asset["id"])
+
+
 async def test_emit_floorplan_request_survives_stamp_failure(monkeypatch) -> None:
     # 스탬프 조회 실패는 카드 방출을 막지 않는다 — prior_asset_id 없이(구 카드와 같은
     # 보수적 동작) 방출된다.

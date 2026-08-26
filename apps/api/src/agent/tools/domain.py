@@ -797,6 +797,34 @@ async def emit_ui_component_impl(
     return _ok(buffered=len(run_context.pending_ui_components))
 
 
+async def _card_asset_stamp(
+    *,
+    run_context: "RunContext | None",
+    session_id: uuid.UUID | None,
+) -> tuple[bool, str | None]:
+    """카드에 스탬프할 asset id 를 정한다 — ``(ok, asset_id)``.
+
+    **이 턴 분석이 실제로 본 asset**(RunContext.analysis_inputs 지문)을 우선한다:
+    분석 결과가 카드 방출의 원인이므로, 방출 직전에 다른 탭이 도면을 교체해도 카드는
+    원인이 된 asset 을 가리켜야 한다(#floorplan-request-prior-asset 의 지문 우선).
+    지문이 없으면(이 턴에 분석 없음 — 사용자가 재업로드만 요청 등) 현재 선택 asset 을
+    조회한다. ok=False 면 조회 실패 — 호출자는 스탬프를 생략한다(보수적 폴백).
+    """
+
+    inputs = getattr(run_context, "analysis_inputs", None) if run_context else None
+    if inputs is not None:
+        return True, (str(inputs[0]) if inputs[0] is not None else None)
+    if session_id is None:
+        return False, None
+    try:
+        live = await main_flow.get_session_inputs(session_id)
+    except Exception:  # noqa: BLE001 - 스탬프 실패가 카드 방출을 막으면 안 된다
+        return False, None
+    if live is None:
+        return False, None
+    return True, (str(live[0]) if live[0] is not None else None)
+
+
 async def emit_floorplan_request_impl(
     *,
     run_context: "RunContext",
@@ -811,24 +839,21 @@ async def emit_floorplan_request_impl(
     설명하는 대신 이 도구를 호출하면 프론트가 실제 업로드 컨트롤을 보여 준다. 미리 만든
     json-render 스펙을 emit_ui_component 버퍼에 넣을 뿐이라 LLM 이 스펙을 구성할 필요가 없다.
 
-    카드엔 발행 시점의 ``selected_floorplan_asset_id`` 를 ``prior_asset_id`` 로 스탬프
-    한다 — 프론트 카드는 "세션에 도면이 하나라도 있으면 첨부 완료"가 아니라 "이 카드
-    발행 **이후** 새 asset 이 붙었는가"로 완료를 판정해, 재업로드 요청 카드가 뜨자마자
-    '받았어요'로 잠기는 문제를 막는다(#floorplan-request-prior-asset). 조회 실패 시엔
-    스탬프를 생략한다(구 카드와 같은 보수적 동작으로 폴백).
+    카드엔 발행 원인이 된 asset(이 턴 분석 지문, 없으면 현재 선택)을 ``prior_asset_id``
+    로 스탬프한다 — 프론트 카드는 "세션에 도면이 하나라도 있으면 첨부 완료"가 아니라
+    "이 카드 발행 **이후** 새 asset 이 붙었는가"로 완료를 판정해, 재업로드 요청 카드가
+    뜨자마자 '받았어요'로 잠기는 문제를 막는다(#floorplan-request-prior-asset). 조회
+    실패 시엔 스탬프를 생략한다(구 카드와 같은 보수적 동작으로 폴백).
     """
 
     props: dict[str, Any] = {}
     if isinstance(reason, str) and reason.strip():
         props["reason"] = reason.strip()
-    if session_id is not None:
-        try:
-            inputs = await main_flow.get_session_inputs(session_id)
-        except Exception:  # noqa: BLE001 - 스탬프 실패가 카드 방출을 막으면 안 된다
-            inputs = None
-        if inputs is not None:
-            asset_id = inputs[0]
-            props["prior_asset_id"] = str(asset_id) if asset_id is not None else None
+    ok, asset_id = await _card_asset_stamp(
+        run_context=run_context, session_id=session_id
+    )
+    if ok:
+        props["prior_asset_id"] = asset_id
     spec = {
         "root": "fp",
         "elements": {"fp": {"type": "FloorplanRequest", "props": props}},
@@ -932,6 +957,12 @@ async def emit_judgment_summary_impl(
     }
     if risks:
         props["risks"] = [str(r) for r in risks]
+    # 이 결과가 유래한 도면 asset 스탬프 — 도면이 **교체**되면 프론트가 이 카드를
+    # '이전 도면 기준 결과'로 표시하고 상담 CTA 를 막아, A 도면의 결론에 B 도면이
+    # 붙어 나가는 상담 인입을 차단한다(#judgment-asset-stamp).
+    ok, stamp = await _card_asset_stamp(run_context=run_context, session_id=session_id)
+    if ok and stamp is not None:
+        props["asset_id"] = stamp
     # 판정 카드 하단 상담 CTA(빠른 상담폼)에서 현장 주소를 prefill 할 수 있게 확정 주소를 싣는다.
     # 도로명/지번이 없으면 아파트명+동+호로 폴백한다(0019).
     try:

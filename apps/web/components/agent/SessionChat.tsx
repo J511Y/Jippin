@@ -97,27 +97,41 @@ function Conversation({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingFirstMessage, send]);
 
-  const refreshSession = useCallback(async () => {
-    try {
-      const row = await getSession(sessionId);
+  // 겹친 세션 조회의 역전 방어 — 늦게 시작한 조회가 먼저 저장된 뒤, 먼저 시작한(더
+  // 낡은) 응답이 나중에 도착해 브로드캐스트를 되감지 않게 시퀀스로 최신 요청만 반영한다
+  // (#session-refresh-sequencing). 카드 두 장이 연달아 업로드하면 refreshSession 이
+  // 겹칠 수 있다.
+  const sessionFetchSeq = useRef(0);
+  const applySessionRow = useCallback(
+    (seq: number, row: Awaited<ReturnType<typeof getSession>>) => {
+      if (seq !== sessionFetchSeq.current) return; // 더 새 조회가 이미 시작됨 — 폐기.
       setHasReport(row.has_report);
       setSelectedFloorplanAssetId(row.selected_floorplan_asset_id ?? null);
+    },
+    []
+  );
+
+  const refreshSession = useCallback(async () => {
+    const seq = ++sessionFetchSeq.current;
+    try {
+      const row = await getSession(sessionId);
+      applySessionRow(seq, row);
     } catch {
       /* 조용히 무시 — 헤더 링크·카드 브로드캐스트만 영향 */
     }
-  }, [sessionId]);
+  }, [sessionId, applySessionRow]);
 
   // has_report·선택 도면을 조용히 조회한다(리포트 링크 + 카드 브로드캐스트용). setState
   // 는 await 이후라 cascading render 가 아니다 — effect 안에서 inline 으로 처리해 lint
   // 규약도 만족한다.
   useEffect(() => {
     let ignore = false;
+    const seq = ++sessionFetchSeq.current;
     void (async () => {
       try {
         const row = await getSession(sessionId);
         if (ignore) return;
-        setHasReport(row.has_report);
-        setSelectedFloorplanAssetId(row.selected_floorplan_asset_id ?? null);
+        applySessionRow(seq, row);
       } catch {
         /* 조용히 무시 — 헤더 링크·카드 브로드캐스트만 영향 */
       }
@@ -125,7 +139,7 @@ function Conversation({
     return () => {
       ignore = true;
     };
-  }, [sessionId]);
+  }, [sessionId, applySessionRow]);
 
   return (
     <ChatActionsProvider

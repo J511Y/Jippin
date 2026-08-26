@@ -854,6 +854,52 @@ async def test_selected_walls_rejects_replaced_asset_card(fake_db):
     assert res.selected_walls == ["pred:1"]
 
 
+async def test_empty_reanalysis_reopens_to_floorplan_selected(fake_db):
+    """#no-overlay-for-empty-analysis: 같은 asset 재분석이 후보를 전부 잃으면(벽·창호 0)
+    awaiting_overlay 에 머물지 않고 도면 선택 단계로 재개하며, 이전 런의 VLM 관찰도
+    이번(빈) 런 기준으로 소거된다(#vlm-freshness)."""
+
+    session_id, subject = await _create_session_direct()
+    a1 = await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=subject,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{subject}/{session_id}/a1.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=subject,
+        owner_is_anonymous=False,
+        patch={
+            "wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}],
+            "vlm_supplement": {"notes": ["관찰"]},
+        },
+        expected_asset_id=a1["id"],
+    )
+    assert fake_db.sessions[session_id]["status"] == "awaiting_overlay"
+
+    # 같은 도면 재분석 — 이번엔 아무 후보도 못 찾음(빈 산출 + VLM 없음).
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=subject,
+        owner_is_anonymous=False,
+        patch={
+            "wall_objects": [],
+            "space_objects": [],
+            "window_objects": [],
+            "vlm_supplement": None,
+        },
+        expected_asset_id=a1["id"],
+    )
+    row = fake_db.sessions[session_id]
+    assert row["status"] == "floorplan_selected"
+    assert row["judgment_schema"]["vlm_supplement"] is None
+
+
 async def test_replacement_reopen_skips_when_asset_changed_again(fake_db):
     """#advance-recheck-asset(재개 대칭): B 교체의 지연된 재개가 도착하기 전에 또 다른
     교체·분석(C)이 끝났으면, C 의 유효한 awaiting_overlay 배지를 후퇴시키지 않는다."""

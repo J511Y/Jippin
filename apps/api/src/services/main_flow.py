@@ -1345,10 +1345,6 @@ async def merge_judgment_schema(
     elif "wall_objects" in patch and (
         patch.get("wall_objects") or patch.get("window_objects")
     ):
-        # 빈 분석(벽·창호 후보 0)은 고를 게 없다 — 오버레이 카드도 안 뜨는데 배지만
-        # '오버레이 대기'로 전진하면 관리 목록이 선택 가능한 세션처럼 표시한다. 이 경우
-        # 전진을 생략하고 재업로드 흐름(세션 상태 예외 안내)이 잇는다
-        # (#no-overlay-for-empty-analysis).
         # 분석 영속 경로가 지문을 줬으면 지연된 전진에도 같은 가드를 건다 — 병합 커밋과
         # 이 전진 사이에 도면이 교체되면 새 도면의 배지를 밀어 올리지 않는다
         # (#advance-recheck-asset).
@@ -1356,6 +1352,19 @@ async def merge_judgment_schema(
             session_id=session_id,
             target="awaiting_overlay",
             reason="analysis_complete",
+            only_if_selected_asset=expected_asset_id,
+        )
+    elif "wall_objects" in patch:
+        # 빈 분석(벽·창호 후보 0)은 고를 게 없다 — 오버레이 카드도 안 뜨는데 배지가
+        # '오버레이 대기'면 관리 목록이 선택 가능한 세션처럼 표시한다. 첫 분석이면
+        # 전진 생략으로 충분하지만, **재분석이 후보를 전부 잃은** 경우엔 이미
+        # awaiting_overlay 이므로 도면 선택 단계로 재개한다(이미 그 이하면 no-op,
+        # 아래 프루닝 재개(awaiting_overlay)는 낮아진 배지에서 no-op 이 된다)
+        # (#no-overlay-for-empty-analysis).
+        await reopen_session_status(
+            session_id=session_id,
+            target="floorplan_selected",
+            reason="analysis_empty",
             only_if_selected_asset=expected_asset_id,
         )
     if (patched_selection or selection_pruned) and not any(

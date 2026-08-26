@@ -82,10 +82,14 @@ export const a2uiCatalog = defineCatalog(schema, {
         risks: z.array(z.string()).optional(),
         rule_backed: z.boolean().optional(),
         session_id: z.string().optional(),
-        prefill_address: z.string().optional()
+        prefill_address: z.string().optional(),
+        // 이 결과가 유래한 도면 asset(서버 스탬프) — 도면 교체 시 '이전 도면 기준'
+        // 표시 + 상담 CTA 차단 근거(#judgment-asset-stamp). 카탈로그에 선언해야
+        // Zod 가 strip 하지 않는다.
+        asset_id: z.string().optional()
       }),
       description:
-        '최종 판단 요약 카드. decision: possible|conditional|not_possible|needs_expert. rule_backed=룰엔진 판정 기반 여부. 하단 상담 CTA(빠른 상담폼) 포함.'
+        '최종 판단 요약 카드. decision: possible|conditional|not_possible|needs_expert. rule_backed=룰엔진 판정 기반 여부. asset_id=결과가 유래한 도면(교체 감지용). 하단 상담 CTA(빠른 상담폼) 포함.'
     },
     FloorplanConfirm: {
       props: z.object({

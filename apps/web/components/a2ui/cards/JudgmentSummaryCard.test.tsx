@@ -2,6 +2,8 @@ import { cleanup, render, screen } from '@/test-utils';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { ChatActionsProvider } from '@/components/agent/chat-actions';
+
 vi.mock('@/components/leads/QuickPrecheckConsultForm', () => ({
   QuickPrecheckConsultForm: ({
     prefillAddress,
@@ -44,5 +46,57 @@ describe('JudgmentSummaryCard 상담 전환', () => {
     expect(form.getAttribute('data-address')).toBe('서울특별시 강남구 테헤란로 12');
     expect(form.getAttribute('data-session')).toBe('session-1');
     expect(screen.queryByRole('button', { name: '전문가 상담 신청하기' })).toBeNull();
+  });
+});
+
+describe('JudgmentSummaryCard 도면 교체 감지 (#judgment-asset-stamp)', () => {
+  function Card({
+    currentAssetId,
+    stampedAssetId
+  }: {
+    currentAssetId: string;
+    stampedAssetId: string;
+  }) {
+    return (
+      <ChatActionsProvider
+        value={{
+          sessionId: 'session-1',
+          busy: false,
+          sendMessage: vi.fn(),
+          selectedFloorplanAssetId: currentAssetId
+        }}
+      >
+        <JudgmentSummaryCard
+          payload={{
+            decision: 'possible',
+            title: '검토 결과',
+            summary: '요약이에요.',
+            rule_backed: true,
+            asset_id: stampedAssetId
+          }}
+        />
+      </ChatActionsProvider>
+    );
+  }
+
+  it('결과가 유래한 도면과 현재 도면이 다르면 이전 도면 기준으로 표시하고 상담 CTA 를 막는다', () => {
+    render(<Card currentAssetId="asset-2" stampedAssetId="asset-1" />);
+
+    expect(screen.getByText(/이전에 올렸던 도면 기준/)).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: '전문가 상담 신청하기' })
+    ).toBeNull();
+    expect(
+      screen.getByText('새 도면 기준 검토를 마치면, 새 결과 카드에서 상담을 신청할 수 있어요.')
+    ).toBeTruthy();
+  });
+
+  it('같은 도면이면 상담 CTA 를 그대로 노출한다', () => {
+    render(<Card currentAssetId="asset-1" stampedAssetId="asset-1" />);
+
+    expect(
+      screen.getByRole('button', { name: '전문가 상담 신청하기' })
+    ).toBeTruthy();
+    expect(screen.queryByText(/이전에 올렸던 도면 기준/)).toBeNull();
   });
 });

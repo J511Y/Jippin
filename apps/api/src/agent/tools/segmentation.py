@@ -1278,6 +1278,10 @@ async def segment_session_floorplan(
                     "wall_objects": [],
                     "space_objects": [],
                     "window_objects": [],
+                    # 같은 asset 의 이전 분석이 남긴 VLM 관찰도 이번(빈) 런 기준으로
+                    # 소거한다 — 아무것도 못 찾은 분석에 옛 관찰이 붙지 않게
+                    # (#vlm-freshness).
+                    "vlm_supplement": None,
                 },
                 expected_asset_id=asset["id"],
             )
@@ -1393,8 +1397,10 @@ async def segment_session_floorplan(
     # 트랜잭션에서** 새 선택 가능 id 와의 교집합으로 줄인다(#atomic-merge-prune).
     # 도구 쪽에서 미리 읽어 patch 에 실으면, 그 스냅숏과 영속 사이에 옛 카드 제출이
     # 끼어드는 창이 생긴다(#stale-overlay-submission 의 잔여 race).
-    if supplement is not None:
-        patch["vlm_supplement"] = supplement
+    # VLM 산출은 **항상** patch 에 싣는다(None 포함, 계약상 nullable) — 같은 asset 의
+    # 재분석에서 이번 런에 VLM 이 없었는데 이전 런의 관찰/보정이 남아 있으면, 세션
+    # 상태·룰 힌트가 서로 다른 런의 산출을 섞어 쓴다(#vlm-freshness).
+    patch["vlm_supplement"] = supplement
     # **판단객체를 먼저 영속하고, 성공했을 때만 오버레이 카드를 방출한다**
     # (#persist-before-emit). 카드를 먼저 내보내면 사용자가 즉시 제출했을 때
     # PATCH /selected-walls 가 아직 옛 wall_objects 로 검증해 새 카드가
