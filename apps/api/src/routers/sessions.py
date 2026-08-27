@@ -69,7 +69,9 @@ async def get_session(
     session_id: uuid.UUID = Path(...),
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> SessionResponse:
-    row = await main_flow.get_owned_session(
+    # 단건 GET 은 표시 파생 필드(floorplan_replaced)까지 붙는 view 를 쓴다 — 레거시
+    # 결과 카드의 상담 CTA 신선도 판정 재료(#legacy-judgment-freshness).
+    row = await main_flow.get_owned_session_view(
         session_id,
         owner_user_id=requester.user_id,
         owner_is_anonymous=requester.is_anonymous,

@@ -151,6 +151,12 @@ class SessionResponse(BaseModel):
     # 이 값으로 리포트 단계 완료를 표시해야 한다(completion_decision 은 ASK_MORE 등에도
     # 채워져 report-ready 와 무관하므로 쓰면 안 됨, #report-readiness).
     has_report: bool = False
+    # 도면 교체 이력(#legacy-judgment-freshness) — 이 세션에서 도면이 한 번이라도 다른
+    # asset 으로 대체됐는가. asset row 수(업로드마다 누적, 교체는 삭제 없는 대체)로
+    # **단건 GET 에서만** 파생한다 — 목록/생성 응답에서는 None(미계산). has_report/분석
+    # 키와 달리 새 도면의 재검토가 완료돼도 되돌아가지 않는 단조 신호라, 스탬프 없는
+    # 레거시 결과 카드의 상담 CTA 신선도 판정에 쓴다.
+    floorplan_replaced: bool | None = None
     last_activity_at: datetime
     expires_at: datetime | None
     created_at: datetime

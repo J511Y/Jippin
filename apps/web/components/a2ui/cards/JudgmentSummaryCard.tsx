@@ -119,16 +119,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** 도면 교체 시 judgment_schema 에서 통째로 리셋되는 분석 산출 키(#floorplan-replace-
- *  reset 의 프론트 미러) — 레거시(스탬프 없는) 예비 관찰 카드의 신선도 지문으로 쓴다.
- *  하나라도 남아 있으면 현재 도면 기준 분석이 존재한다는 뜻이다. */
-const LEGACY_ANALYSIS_KEYS = [
-  'wall_objects',
-  'space_objects',
-  'window_objects',
-  'vlm_supplement'
-] as const;
-
 export function isJudgmentSummaryPayload(
   payload: unknown
 ): payload is JudgmentSummaryPayload {
@@ -186,6 +176,11 @@ export function JudgmentSummaryCard({
   const currentAssetId = actions?.selectedFloorplanAssetId;
   const [staleOverride, setStaleOverride] = useState(false);
   const [checkingConsult, setCheckingConsult] = useState(false);
+  // 레거시(스탬프 없는) 카드가 게이트를 통과한 시점의 현재 선택 도면 — 폼의 서버측
+  // stale 재검증 지문으로 쓴다(#legacy-judgment-freshness).
+  const [legacyExpectedAssetId, setLegacyExpectedAssetId] = useState<
+    string | undefined
+  >(undefined);
   const staleFloorplan =
     staleOverride ||
     (typeof payload.asset_id === 'string' &&
@@ -210,28 +205,23 @@ export function JudgmentSummaryCard({
             setStaleOverride(true);
             return;
           }
-        } else if (payload.rule_backed) {
-          // 레거시(스탬프 없는) 법령 검토 결과 — 세션의 판정(rule_eval_result)이
-          // 소거됐으면(도면 교체·재분석의 입력 무효화) 이 카드는 지금 기준의 결론이
-          // 아니다. 상담 lead 에 세션의 **현재** 도면이 자동 첨부되므로, 옛 결론 +
-          // 새 도면이 섞여 나가는 인입을 보수적으로 차단한다(#legacy-judgment-
-          // freshness — 스탬프가 없어 asset 대조가 불가한 구 카드의 대체 지문).
-          if (row.has_report === false) {
+        } else {
+          // 레거시(스탬프 없는) 결과 카드 — 세션에 도면 교체 이력이 있으면 이 카드는
+          // 그 이전 결론일 수 있어 보수적으로 차단한다(#legacy-judgment-freshness).
+          // 교체 이력은 새 도면의 분석·판정이 **완료돼도 되돌아가지 않는 단조 신호**라,
+          // has_report/분석 키처럼 재검토 뒤 옛 카드가 다시 통과하는 구멍이 없다.
+          // 도면 없이 발행되는 LLM-only 예비 결과(분석 키 부재가 정상)도 교체 이력이
+          // 없으면 종전대로 상담을 연다. 필드 부재(구 API·테스트)는 통과(best-effort).
+          if (row.floorplan_replaced === true) {
             setStaleOverride(true);
             return;
           }
-        } else {
-          // 레거시 예비 관찰 — 분석 산출이 세션에 남아 있어야 지금 도면 기준이다.
-          // 교체 직후에는 분석 키가 통째로 리셋되고(#floorplan-replace-reset), 빈
-          // 검출도 '분석 완료'면 키는 남는다(#empty-analysis-persist) — 즉 키 전부
-          // 부재만이 리셋(교체) 신호다. 응답 형태를 모르면(테스트/구 API) 통과.
-          const js = row.judgment_schema;
-          if (
-            isPlainObject(js) &&
-            !LEGACY_ANALYSIS_KEYS.some((key) => key in js)
-          ) {
-            setStaleOverride(true);
-            return;
+          // 통과한 레거시 카드도 클릭 시점의 현재 도면을 지문으로 폼에 실어, 폼 작성
+          // 중 교체를 서버가 409(LEAD_FLOORPLAN_STALE)로 잡게 한다 — 스탬프 카드와
+          // 같은 마감. 도면 없는 세션(LLM-only)은 실을 지문이 없어 종전 동작.
+          const live = row.selected_floorplan_asset_id;
+          if (typeof live === 'string') {
+            setLegacyExpectedAssetId(live);
           }
         }
       } catch {
@@ -328,7 +318,9 @@ export function JudgmentSummaryCard({
               typeof payload.session_id === 'string' ? payload.session_id : undefined
             }
             expectedFloorplanAssetId={
-              typeof payload.asset_id === 'string' ? payload.asset_id : undefined
+              typeof payload.asset_id === 'string'
+                ? payload.asset_id
+                : legacyExpectedAssetId
             }
             ctaId="precheck_report"
             onSubmitted={() => setConsultSubmitted(true)}

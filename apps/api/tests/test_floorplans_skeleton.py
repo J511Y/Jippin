@@ -388,6 +388,46 @@ async def test_replacing_floorplan_reopens_status(fake_db, monkeypatch):
     )
 
 
+async def test_session_view_derives_floorplan_replaced(fake_db):
+    """#legacy-judgment-freshness: 단건 GET view 는 asset row 수로 교체 이력을 파생한다
+    — 0~1개면 False(도면 없음/최초 업로드), 2개째부터 True. 교체 이력은 새 도면의
+    재검토가 완료돼도 되돌아가지 않는 단조 신호다(레거시 결과 카드 CTA 의 근거)."""
+
+    session_id, subject = await _create_session_direct()
+
+    async def view():
+        return await main_flow.get_owned_session_view(session_id, owner_user_id=subject)
+
+    assert (await view())["floorplan_replaced"] is False
+
+    async def attach(name: str):
+        return await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=subject,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{subject}/{session_id}/{name}",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+
+    await attach("a1.png")
+    assert (await view())["floorplan_replaced"] is False
+
+    await attach("a2.png")
+    assert (await view())["floorplan_replaced"] is True
+
+    # 새 도면의 분석·판정이 완료돼도(True 로 되살아나는 has_report 와 달리) 유지된다.
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=subject,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}]},
+    )
+    assert (await view())["floorplan_replaced"] is True
+
+
 async def test_merge_rejects_stale_expected_asset(fake_db):
     """#analysis-merge-fingerprint: 분석 시작 asset 이 더는 선택돼 있지 않으면 병합을
     쓰기 없이 409(ANALYSIS_INPUT_STALE)로 거부 — 옛 도면 산출이 새 도면에 안 붙는다."""

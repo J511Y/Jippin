@@ -18,12 +18,19 @@ vi.mock('@/lib/sessions/api', () => apiMocks);
 vi.mock('@/components/leads/QuickPrecheckConsultForm', () => ({
   QuickPrecheckConsultForm: ({
     prefillAddress,
-    fromSession
+    fromSession,
+    expectedFloorplanAssetId
   }: {
     prefillAddress?: string;
     fromSession?: string;
+    expectedFloorplanAssetId?: string;
   }) => (
-    <div data-testid="quick-consult-form" data-address={prefillAddress} data-session={fromSession}>
+    <div
+      data-testid="quick-consult-form"
+      data-address={prefillAddress}
+      data-session={fromSession}
+      data-expected-asset={expectedFloorplanAssetId}
+    >
       상담 정보 입력
     </div>
   )
@@ -147,7 +154,9 @@ describe('JudgmentSummaryCard 도면 교체 감지 (#judgment-asset-stamp)', () 
 describe('JudgmentSummaryCard 레거시(스탬프 없는) 카드 신선도 (#legacy-judgment-freshness)', () => {
   function legacyPayload(ruleBacked: boolean) {
     // asset_id 미지정 = #185 이전에 저장된 결과 카드. 도면 교체 뒤에도 asset 대조가
-    // 불가하므로, CTA 클릭 시점에 세션의 판정/분석 잔존으로 신선도를 가른다.
+    // 불가하므로, CTA 클릭 시점에 세션의 **교체 이력**(floorplan_replaced)으로
+    // 신선도를 가른다 — has_report/분석 키는 새 도면의 재검토가 완료되면 되살아나
+    // 옛 카드가 다시 통과하는 구멍이 있다.
     return {
       decision: 'possible' as const,
       title: '검토 결과',
@@ -157,11 +166,14 @@ describe('JudgmentSummaryCard 레거시(스탬프 없는) 카드 신선도 (#leg
     };
   }
 
-  it('법령 검토 결과인데 세션 판정이 소거됐으면(도면 교체) 폼 대신 이전 도면 안내로 전환한다', async () => {
+  it('교체 이력이 있으면 새 도면의 판정이 완료돼 있어도 차단한다', async () => {
+    // 교체 뒤 새 도면(asset-2)의 재검토까지 끝난 세션 — has_report 가 true 로
+    // 되살아나도, 옛 카드는 교체 이력만으로 계속 막혀야 한다.
     const user = userEvent.setup();
     apiMocks.getSession.mockResolvedValueOnce({
       selected_floorplan_asset_id: 'asset-2',
-      has_report: false
+      has_report: true,
+      floorplan_replaced: true
     });
     render(<JudgmentSummaryCard payload={legacyPayload(true)} />);
 
@@ -171,24 +183,43 @@ describe('JudgmentSummaryCard 레거시(스탬프 없는) 카드 신선도 (#leg
     expect(screen.queryByTestId('quick-consult-form')).toBeNull();
   });
 
-  it('법령 검토 결과이고 세션 판정이 살아 있으면 폼을 연다', async () => {
+  it('교체 이력이 없으면 폼을 열고, 클릭 시점 도면을 서버 재검증 지문으로 싣는다', async () => {
     const user = userEvent.setup();
     apiMocks.getSession.mockResolvedValueOnce({
       selected_floorplan_asset_id: 'asset-1',
-      has_report: true
+      floorplan_replaced: false
     });
     render(<JudgmentSummaryCard payload={legacyPayload(true)} />);
 
     await user.click(screen.getByRole('button', { name: '전문가 상담 신청하기' }));
 
-    expect(await screen.findByTestId('quick-consult-form')).toBeTruthy();
+    const form = await screen.findByTestId('quick-consult-form');
+    expect(form.getAttribute('data-expected-asset')).toBe('asset-1');
   });
 
-  it('예비 관찰인데 분석 산출이 전부 리셋됐으면(교체 직후) 차단한다', async () => {
+  it('도면 없이 발행된 LLM-only 예비 결과는 교체 이력이 없으면 종전대로 폼을 연다', async () => {
+    // 분석 키 부재(judgment_schema 빈 객체)는 이 세션에선 정상 — 교체의 증거가
+    // 아니다. 지문으로 실을 도면도 없으므로 expected 없이 폼이 열린다(종전 동작).
+    const user = userEvent.setup();
+    apiMocks.getSession.mockResolvedValueOnce({
+      selected_floorplan_asset_id: null,
+      judgment_schema: {},
+      floorplan_replaced: false
+    });
+    render(<JudgmentSummaryCard payload={legacyPayload(false)} />);
+
+    await user.click(screen.getByRole('button', { name: '전문가 상담 신청하기' }));
+
+    const form = await screen.findByTestId('quick-consult-form');
+    expect(form.getAttribute('data-expected-asset')).toBeNull();
+  });
+
+  it('예비 관찰도 교체 이력이 있으면 차단한다', async () => {
     const user = userEvent.setup();
     apiMocks.getSession.mockResolvedValueOnce({
       selected_floorplan_asset_id: 'asset-2',
-      judgment_schema: { judgment_values: { floor_count: 6 } }
+      judgment_schema: { wall_objects: [{ id: 'pred:1' }] },
+      floorplan_replaced: true
     });
     render(<JudgmentSummaryCard payload={legacyPayload(false)} />);
 
@@ -196,18 +227,5 @@ describe('JudgmentSummaryCard 레거시(스탬프 없는) 카드 신선도 (#leg
 
     expect(await screen.findByText(/이전에 올렸던 도면 기준/)).toBeTruthy();
     expect(screen.queryByTestId('quick-consult-form')).toBeNull();
-  });
-
-  it('예비 관찰이고 분석 산출이 남아 있으면(빈 검출 포함) 폼을 연다', async () => {
-    const user = userEvent.setup();
-    apiMocks.getSession.mockResolvedValueOnce({
-      selected_floorplan_asset_id: 'asset-1',
-      judgment_schema: { wall_objects: [] }
-    });
-    render(<JudgmentSummaryCard payload={legacyPayload(false)} />);
-
-    await user.click(screen.getByRole('button', { name: '전문가 상담 신청하기' }));
-
-    expect(await screen.findByTestId('quick-consult-form')).toBeTruthy();
   });
 });

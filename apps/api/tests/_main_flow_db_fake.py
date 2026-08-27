@@ -39,6 +39,7 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_insert_floorplan_upload",
     "_db_insert_floorplan_asset",
     "_db_select_selected_floorplan_asset",
+    "_db_count_session_floorplan_assets",
     "_db_search_floorplan_catalog",
     "_db_select_candidate_revision_keys",
     "_db_insert_floorplan_candidates",
@@ -469,6 +470,13 @@ class FakeMainFlowDb:
             return None
         row = self.floorplan_assets.get(asset_id)
         return dict(row) if row is not None else None
+
+    async def _db_count_session_floorplan_assets(self, session_id: uuid.UUID) -> int:
+        # 세션의 asset row 수(real seam 미러) — 교체는 삭제 없는 대체라 업로드마다
+        # 누적되고, 2개째부터가 곧 교체 이력이다(#legacy-judgment-freshness).
+        return sum(
+            1 for a in self.floorplan_assets.values() if a["session_id"] == session_id
+        )
 
     async def _db_search_floorplan_catalog(
         self, *, apartment_name: str, building_dong: str | None, limit: int

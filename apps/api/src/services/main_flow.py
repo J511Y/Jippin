@@ -1099,6 +1099,42 @@ async def get_owned_session(
     )
 
 
+async def _db_count_session_floorplan_assets(session_id: uuid.UUID) -> int:
+    async with get_engine().begin() as conn:
+        count = (
+            await conn.execute(
+                sa.select(sa.func.count())
+                .select_from(_FLOORPLAN_ASSETS)
+                .where(_FLOORPLAN_ASSETS.c.session_id == session_id)
+            )
+        ).scalar()
+    return int(count or 0)
+
+
+async def get_owned_session_view(
+    session_id: uuid.UUID,
+    *,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """``GET /sessions/{id}`` 응답용 — 소유 세션 row 에 표시 파생 필드를 붙인다.
+
+    ``floorplan_replaced``(#legacy-judgment-freshness): asset row 는 업로드마다 쌓이고
+    교체는 삭제 없는 대체라(#floorplan-replace-reset), 두 번째 row 부터가 곧 교체 이력
+    이다. has_report/분석 키와 달리 새 도면의 재검토가 완료돼도 **되돌아가지 않는 단조
+    신호**라, 스탬프 없는 레거시 결과 카드의 상담 CTA 가 이 값으로 신선도를 가른다.
+    runner 등 내부 경로는 count 비용 없는 ``get_owned_session`` 을 그대로 쓴다.
+    """
+
+    row = await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    count = await _db_count_session_floorplan_assets(session_id)
+    return {**row, "floorplan_replaced": count >= 2}
+
+
 async def get_session_address(session_id: uuid.UUID) -> dict[str, Any] | None:
     """세션 주소 row 를 반환(없으면 None). 에이전트 세션 컨텍스트 스냅샷용 — 호출자가
     이미 owner-gated 세션을 들고 있으므로 추가 소유권 검사는 하지 않는다."""
