@@ -428,6 +428,32 @@ async def test_session_view_derives_floorplan_replaced(fake_db):
     assert (await view())["floorplan_replaced"] is True
 
 
+async def test_insert_and_link_atomic_no_orphan_on_missing_session(fake_db):
+    """#atomic-asset-link: 세션이 없으면 asset insert 없이 404(전체 롤백 미러) —
+    링크된 적 없는 고아 asset row 가 floorplan_replaced 파생(row 수)을 오염시켜
+    교체 없는 세션을 영구 '교체됨'으로 만드는 경로를 봉인한다."""
+
+    ghost_session = uuid.uuid4()
+    with pytest.raises(ZippinException) as ei:
+        await main_flow._db_insert_and_link_floorplan_asset(
+            ghost_session,
+            {
+                "session_id": ghost_session,
+                "owner_user_id": uuid.uuid4(),
+                "kind": "original",
+                "storage_provider": "s3",
+                "bucket": "session-floorplans",
+                "object_key": "x/y/z.png",
+                "content_type": "image/png",
+                "byte_size": 10,
+                "sha256_hex": None,
+                "scan_status": "pending",
+            },
+        )
+    assert ei.value.code == "SESSION_NOT_FOUND"
+    assert fake_db.floorplan_assets == {}
+
+
 async def test_merge_rejects_stale_expected_asset(fake_db):
     """#analysis-merge-fingerprint: 분석 시작 asset 이 더는 선택돼 있지 않으면 병합을
     쓰기 없이 409(ANALYSIS_INPUT_STALE)로 거부 — 옛 도면 산출이 새 도면에 안 붙는다."""
