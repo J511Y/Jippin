@@ -5,8 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatActionsProvider } from '@/components/agent/chat-actions';
 
 const apiMocks = vi.hoisted(() => ({
-  getSession: vi.fn(() =>
-    Promise.resolve({ selected_floorplan_asset_id: null as string | null })
+  // 실제 SessionRow 의 부분집합만 흉내낸다 — 게이트는 필드 부재 시 통과(best-effort)
+  // 하므로, 각 테스트가 필요한 필드만 명시한다.
+  getSession: vi.fn(
+    (): Promise<Record<string, unknown>> =>
+      Promise.resolve({ selected_floorplan_asset_id: null })
   )
 }));
 
@@ -28,7 +31,12 @@ vi.mock('@/components/leads/QuickPrecheckConsultForm', () => ({
 
 import { JudgmentSummaryCard } from './JudgmentSummaryCard';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // 레거시 게이트가 CTA 클릭마다 getSession 을 부르므로, 호출 수 단언이 테스트 간
+  // 누적되지 않게 초기화한다(구현은 유지 — clear 는 calls 만 비운다).
+  vi.clearAllMocks();
+});
 
 describe('JudgmentSummaryCard 상담 전환', () => {
   it('결과를 먼저 보여 주고 CTA를 누른 뒤 세션 주소를 유지한 상담 폼을 연다', async () => {
@@ -129,6 +137,74 @@ describe('JudgmentSummaryCard 도면 교체 감지 (#judgment-asset-stamp)', () 
       selected_floorplan_asset_id: 'asset-1'
     });
     render(<Card currentAssetId="asset-1" stampedAssetId="asset-1" />);
+
+    await user.click(screen.getByRole('button', { name: '전문가 상담 신청하기' }));
+
+    expect(await screen.findByTestId('quick-consult-form')).toBeTruthy();
+  });
+});
+
+describe('JudgmentSummaryCard 레거시(스탬프 없는) 카드 신선도 (#legacy-judgment-freshness)', () => {
+  function legacyPayload(ruleBacked: boolean) {
+    // asset_id 미지정 = #185 이전에 저장된 결과 카드. 도면 교체 뒤에도 asset 대조가
+    // 불가하므로, CTA 클릭 시점에 세션의 판정/분석 잔존으로 신선도를 가른다.
+    return {
+      decision: 'possible' as const,
+      title: '검토 결과',
+      summary: '요약이에요.',
+      rule_backed: ruleBacked,
+      session_id: 'session-1'
+    };
+  }
+
+  it('법령 검토 결과인데 세션 판정이 소거됐으면(도면 교체) 폼 대신 이전 도면 안내로 전환한다', async () => {
+    const user = userEvent.setup();
+    apiMocks.getSession.mockResolvedValueOnce({
+      selected_floorplan_asset_id: 'asset-2',
+      has_report: false
+    });
+    render(<JudgmentSummaryCard payload={legacyPayload(true)} />);
+
+    await user.click(screen.getByRole('button', { name: '전문가 상담 신청하기' }));
+
+    expect(await screen.findByText(/이전에 올렸던 도면 기준/)).toBeTruthy();
+    expect(screen.queryByTestId('quick-consult-form')).toBeNull();
+  });
+
+  it('법령 검토 결과이고 세션 판정이 살아 있으면 폼을 연다', async () => {
+    const user = userEvent.setup();
+    apiMocks.getSession.mockResolvedValueOnce({
+      selected_floorplan_asset_id: 'asset-1',
+      has_report: true
+    });
+    render(<JudgmentSummaryCard payload={legacyPayload(true)} />);
+
+    await user.click(screen.getByRole('button', { name: '전문가 상담 신청하기' }));
+
+    expect(await screen.findByTestId('quick-consult-form')).toBeTruthy();
+  });
+
+  it('예비 관찰인데 분석 산출이 전부 리셋됐으면(교체 직후) 차단한다', async () => {
+    const user = userEvent.setup();
+    apiMocks.getSession.mockResolvedValueOnce({
+      selected_floorplan_asset_id: 'asset-2',
+      judgment_schema: { judgment_values: { floor_count: 6 } }
+    });
+    render(<JudgmentSummaryCard payload={legacyPayload(false)} />);
+
+    await user.click(screen.getByRole('button', { name: '전문가 상담 신청하기' }));
+
+    expect(await screen.findByText(/이전에 올렸던 도면 기준/)).toBeTruthy();
+    expect(screen.queryByTestId('quick-consult-form')).toBeNull();
+  });
+
+  it('예비 관찰이고 분석 산출이 남아 있으면(빈 검출 포함) 폼을 연다', async () => {
+    const user = userEvent.setup();
+    apiMocks.getSession.mockResolvedValueOnce({
+      selected_floorplan_asset_id: 'asset-1',
+      judgment_schema: { wall_objects: [] }
+    });
+    render(<JudgmentSummaryCard payload={legacyPayload(false)} />);
 
     await user.click(screen.getByRole('button', { name: '전문가 상담 신청하기' }));
 

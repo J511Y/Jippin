@@ -685,6 +685,27 @@ class FakeMainFlowDb:
             row["rule_eval_result"] = None
             row["rule_evaluated_at"] = None
             row["completion_decision"] = None
+        if replaced:
+            # 배지 재개도 링크와 같은 '트랜잭션'에서(real seam 미러, #atomic-replace-
+            # reopen) — 종료/handoff 불변, 현재가 floorplan_selected 이하면 no-op,
+            # 재개 이벤트는 매번 기록(_db_regress_session_status 와 같은 규칙).
+            rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
+            current = row["status"]
+            if (
+                current not in ("expired", "deleted", "handoff")
+                and rank.get(current, -1) > rank["floorplan_selected"]
+            ):
+                self.session_status_events.append(
+                    {
+                        "session_id": session_id,
+                        "from_status": current,
+                        "to_status": "floorplan_selected",
+                        "reason": "floorplan_replaced",
+                        "run_id": None,
+                        "occurred_at": _now(),
+                    }
+                )
+                row["status"] = "floorplan_selected"
         self._touch_session(session_id)
         return dict(row), replaced
 

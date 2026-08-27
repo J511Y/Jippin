@@ -758,15 +758,22 @@ async def _db_link_session_floorplan_asset(
     session_id: uuid.UUID, asset_id: uuid.UUID
 ) -> tuple[dict[str, Any] | None, bool]:
     """세션 포인터를 새 asset 으로 연결하고, **다른 asset 에서 갈아타는 경우** 이전
-    분석 산출을 같은 행잠금 트랜잭션에서 제거한다(#floorplan-replace-reset).
+    분석 산출 제거(#floorplan-replace-reset)와 배지 재개(floorplan_selected)를 모두
+    같은 행잠금 트랜잭션에서 수행한다(#atomic-replace-reopen).
 
     안 지우면 새 도면에 이전 도면의 wall_objects/selected_walls 가 남아, 에이전트가
     '분석 완료'로 오인해 재분석을 건너뛰거나 옛 벽 판정을 새 도면 위에 설명하는 오류가
     난다. verdict/completion_decision 무효화는 0016 트리거가(역할 무관) 처리하므로
     여기서 중복하지 않는다.
 
+    배지 재개를 별도 호출(reopen_session_status)로 미루면 링크 커밋과 재개 사이 창에서
+    **새 asset 의** 분석 완료가 전진시킨 유효한 awaiting_overlay 를, 지연된 재개가
+    (선택 asset 이 같아 only_if_selected_asset 가드로는 못 거른 채) 후퇴시킬 수 있다 —
+    행잠금 안에서 함께 커밋해 그 창 자체를 없앤다. 재개 규칙은 _db_regress_session_status
+    와 동일: 종료/handoff 불변, 현재가 target 이하면 no-op, 재개 이벤트는 매번 기록.
+
     반환은 (updated_row | None, replaced) — ``replaced`` 는 기존의 **다른** asset 에서
-    갈아탔는지(호출자가 status 재개 여부를 결정하는 근거).
+    갈아탔는지.
     """
 
     async with get_engine().begin() as conn:
@@ -775,6 +782,7 @@ async def _db_link_session_floorplan_asset(
                 sa.select(
                     _SESSIONS.c.selected_floorplan_asset_id,
                     _SESSIONS.c.judgment_schema,
+                    _SESSIONS.c.status,
                 )
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
@@ -799,6 +807,22 @@ async def _db_link_session_floorplan_asset(
             reset = {k: v for k, v in js.items() if k not in _FLOORPLAN_ANALYSIS_KEYS}
             if reset != js:
                 values["judgment_schema"] = reset
+            current = row0.status
+            if (
+                current not in _TERMINAL_STATUSES
+                and current != "handoff"
+                and _STATUS_RANK.get(current, -1) > _STATUS_RANK["floorplan_selected"]
+            ):
+                values["status"] = "floorplan_selected"
+                await conn.execute(
+                    sa.insert(_SESSION_STATUS_EVENTS).values(
+                        session_id=session_id,
+                        from_status=current,
+                        to_status="floorplan_selected",
+                        reason="floorplan_replaced",
+                        run_id=None,
+                    )
+                )
         row = (
             await conn.execute(
                 sa.update(_SESSIONS)
@@ -1673,22 +1697,10 @@ async def create_floorplan_asset(
     # 세션을 이 asset 으로 연결한다. main_flow 는 비-authenticated 풀러로 쓰므로 0008
     # client-guard 트리거는 early-return 하고, 같은 세션 소속 asset 이라 reference-scope
     # 도 통과한다(상태 전이는 강제하지 않음 — 에이전트 플로우가 status 를 진행).
-    # 재업로드(기존 asset 에서 갈아타기)면 이전 도면의 분석 산출도 같은 트랜잭션에서
-    # 제거된다(#floorplan-replace-reset) — 이전 도면 자체(asset row/파일)는 남는다.
-    _, replaced = await _db_link_session_floorplan_asset(session_id, asset["id"])
-    if replaced:
-        # 분석 산출·판정이 방금 무효화됐는데 배지가 awaiting_overlay/report_ready 등에
-        # 남아 있으면 관리 목록·필터가 무효 세션을 진행/완료로 계속 표시한다 — 도면
-        # 선택 직후 단계로 재개한다(forward-only 의 sanctioned 역방향, 이미 그 이하면
-        # no-op, handoff/종료 상태는 건드리지 않음). 이 업로드의 asset 이 여전히 선택돼
-        # 있을 때만 — 링크와 이 재개 사이에 또 다른 교체·분석이 끝났으면 그 최신
-        # 도면의 유효한 배지를 후퇴시키지 않는다(#advance-recheck-asset 대칭).
-        await reopen_session_status(
-            session_id=session_id,
-            target="floorplan_selected",
-            reason="floorplan_replaced",
-            only_if_selected_asset=asset["id"],
-        )
+    # 재업로드(기존 asset 에서 갈아타기)면 이전 도면의 분석 산출 제거와 배지 재개
+    # (floorplan_selected)가 모두 같은 행잠금 트랜잭션에서 일어난다(#floorplan-replace-
+    # reset, #atomic-replace-reopen) — 이전 도면 자체(asset row/파일)는 남는다.
+    await _db_link_session_floorplan_asset(session_id, asset["id"])
     # 도면 asset 이 세션에 연결됐으니 status 를 floorplan_selected 로 전진.
     await advance_session_status(
         session_id=session_id, target="floorplan_selected", reason="floorplan_selected"
