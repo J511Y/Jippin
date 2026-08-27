@@ -18,9 +18,9 @@ export interface CommonJudgmentSchema {
    */
   analyzed_at: string;
   /**
-   * 스키마 버전 (semver). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영).
+   * 스키마 버전 (semver). 1.3.0: vlm_supplement 의 null 허용을 스키마에 명문화(설명은 원래 'null 또는 부재'였으나 타입이 미인코딩 — 이번 런에 VLM 산출이 없음을 null 로 영속하는 #vlm-freshness 경로 지원). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영).
    */
-  schema_version: "1.2.0";
+  schema_version: "1.3.0";
   building_info: BuildingInfo;
   /**
    * 공간 객체 목록.
@@ -34,7 +34,10 @@ export interface CommonJudgmentSchema {
    * 창호 객체 목록 (1.1.0 추가). 오버레이의 창호 선택(발코니-실 경계 창호 철거 검토)을 지원한다.
    */
   window_objects?: WindowObject[];
-  vlm_supplement?: VlmSupplement;
+  /**
+   * VLM 재분류·주석 결과. 분석이 보류됐거나 이번 런에 VLM 산출이 없으면 null 또는 부재 (1.3.0 에서 null 허용 명문화).
+   */
+  vlm_supplement?: VlmSupplement | null;
   register_supplement?: RegisterSupplement;
   /**
    * OVERLAY 가 수집한 사용자 선택 철거 대상 벽체 region_id 목록. 기능명세서 §2.5 의 target_wall(단수)를 대체한다 — 복수 벽 동시 선택을 지원하는 정본.
@@ -154,9 +157,6 @@ export interface WindowObject {
   coords: [MaskCoord, MaskCoord, ...MaskCoord[]];
   source_engine: "MASK2FORMER" | "SAM2" | "VLM" | "HITL";
 }
-/**
- * VLM 재분류·주석 결과. 분석이 보류된 경우 null 또는 부재.
- */
 export interface VlmSupplement {
   /**
    * VLM 프로바이더 (ADR-0001 §7 의 VLMClient 인터페이스 호환).

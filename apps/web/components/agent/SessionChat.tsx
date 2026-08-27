@@ -37,6 +37,10 @@ const GREETING = '우리집 구조, 무엇이든 물어보세요';
 const SUBGREETING =
   '주소와 도면을 바탕으로 벽 철거·확장 같은 리모델링 가능성을 함께 확인해 드려요.';
 
+// 도면 추론 엔드포인트 keep-alive 재핑 간격 — 서버 scale-to-zero idle(15분)보다 짧게
+// 잡아 세션이 활성인 동안 잠들지 않게 한다(백엔드 /health 핑이 idle 타이머를 리셋).
+const WARMUP_KEEPALIVE_INTERVAL_MS = 10 * 60 * 1000;
+
 /** 활성 세션의 대화 레이아웃 — useAgentStream 을 소비한다. key={sessionId} 로 마운트. */
 function Conversation({
   sessionId,
@@ -50,6 +54,11 @@ function Conversation({
   const { messages, streamingText, activity, plan, status, error, send } =
     useAgentStream(sessionId);
   const [hasReport, setHasReport] = useState(false);
+  // 선택 도면 asset — 컨텍스트로 카드들에 브로드캐스트한다(#floorplan-cards-broadcast).
+  // undefined = 아직 조회 전(카드가 자체 조회로 폴백).
+  const [selectedFloorplanAssetId, setSelectedFloorplanAssetId] = useState<
+    string | null | undefined
+  >(undefined);
 
   const busy = status === 'streaming';
   const hasPlan = plan.length > 0;
@@ -92,34 +101,60 @@ function Conversation({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingFirstMessage, send]);
 
+  // 겹친 세션 조회의 역전 방어 — 늦게 시작한 조회가 먼저 저장된 뒤, 먼저 시작한(더
+  // 낡은) 응답이 나중에 도착해 브로드캐스트를 되감지 않게 시퀀스로 최신 요청만 반영한다
+  // (#session-refresh-sequencing). 카드 두 장이 연달아 업로드하면 refreshSession 이
+  // 겹칠 수 있다.
+  const sessionFetchSeq = useRef(0);
+  const applySessionRow = useCallback(
+    (seq: number, row: Awaited<ReturnType<typeof getSession>>) => {
+      if (seq !== sessionFetchSeq.current) return; // 더 새 조회가 이미 시작됨 — 폐기.
+      setHasReport(row.has_report);
+      setSelectedFloorplanAssetId(row.selected_floorplan_asset_id ?? null);
+    },
+    []
+  );
+
   const refreshSession = useCallback(async () => {
+    const seq = ++sessionFetchSeq.current;
     try {
       const row = await getSession(sessionId);
-      setHasReport(row.has_report);
+      applySessionRow(seq, row);
     } catch {
-      /* 조용히 무시 — 헤더 링크만 영향 */
+      /* 조용히 무시 — 헤더 링크·카드 브로드캐스트만 영향 */
     }
-  }, [sessionId]);
+  }, [sessionId, applySessionRow]);
 
-  // has_report 여부를 조용히 조회한다(리포트 링크 노출용). setState 는 await 이후라
-  // cascading render 가 아니다 — effect 안에서 inline 으로 처리해 lint 규약도 만족한다.
+  // has_report·선택 도면을 조용히 조회한다(리포트 링크 + 카드 브로드캐스트용). setState
+  // 는 await 이후라 cascading render 가 아니다 — effect 안에서 inline 으로 처리해 lint
+  // 규약도 만족한다.
   useEffect(() => {
     let ignore = false;
+    const seq = ++sessionFetchSeq.current;
     void (async () => {
       try {
         const row = await getSession(sessionId);
-        if (!ignore) setHasReport(row.has_report);
+        if (ignore) return;
+        applySessionRow(seq, row);
       } catch {
-        /* 조용히 무시 — 헤더 링크만 영향 */
+        /* 조용히 무시 — 헤더 링크·카드 브로드캐스트만 영향 */
       }
     })();
     return () => {
       ignore = true;
     };
-  }, [sessionId]);
+  }, [sessionId, applySessionRow]);
 
   return (
-    <ChatActionsProvider value={{ sessionId, sendMessage: send, busy, refreshSession }}>
+    <ChatActionsProvider
+      value={{
+        sessionId,
+        sendMessage: send,
+        busy,
+        refreshSession,
+        selectedFloorplanAssetId
+      }}
+    >
       <Box className="chat-shell">
         <Box className="chat-main">
           {hasReport ? (
@@ -256,11 +291,26 @@ export function SessionChat({ sessionId }: { sessionId?: string }) {
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
-  // /sessions/* 진입 시 HF 세그멘테이션 엔드포인트를 미리 깨운다(콜드스타트 체감 제거).
-  // 사용자가 도면을 올리기 전에 replica 가 warm 이도록. best-effort + 백엔드 스로틀.
+  // /sessions/* 진입 시 도면 추론 엔드포인트를 미리 깨운다(콜드스타트 ~26초 체감 제거).
+  // 세션이 활성인 동안(대화 화면 + 탭이 보이는 동안)은 10분 간격으로 재핑해 scale-to-
+  // zero(15분)로 잠들지 않게 유지한다 — 깨어 있는 시간이 곧 GPU 과금 시간이라 숨김
+  // 탭에서는 보내지 않고, 세션을 떠나면(언마운트) 중단해 15분 뒤 자연히 잠들게 한다.
+  // best-effort + 백엔드 스로틀. HF 토큰은 백엔드만 가진다(브라우저 비노출).
   useEffect(() => {
-    void warmupSegmentation();
-  }, []);
+    const ping = () => {
+      if (document.visibilityState !== 'hidden') void warmupSegmentation();
+    };
+    ping(); // 진입/세션 시작 시 1회
+    if (activeId == null) return undefined; // compose 화면: 진입 핑만, keep-alive 없음
+    const intervalId = window.setInterval(ping, WARMUP_KEEPALIVE_INTERVAL_MS);
+    // 백그라운드에 있다가 돌아오면 다음 interval 을 기다리지 않고 즉시 재핑 — 자리를
+    // 비운 사이 잠들었어도 도면을 만지기 시작할 때는 이미 웨이크가 진행 중이도록.
+    document.addEventListener('visibilitychange', ping);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', ping);
+    };
+  }, [activeId]);
 
   // 첫 전송: 익명 세션 보장 → 세션 생성 → URL 교체(리마운트 없음) → 대화 전환.
   const handleFirstSend = useCallback(

@@ -202,6 +202,11 @@ class SelectedWallsRequest(BaseModel):
     # 창호(발코니-실 경계 창호 철거 검토) 선택 — None 이면 기존 선택을 건드리지 않는다
     # (하위호환: 구 클라이언트는 이 필드를 보내지 않는다). 빈 목록은 선택 해제.
     window_region_ids: list[str] | None = Field(default=None, max_length=500)
+    # 이 선택이 유래한 오버레이 카드의 도면 asset — 도면이 **교체**된 뒤 옛 카드가
+    # 제출되면 거절하기 위한 지문(#overlay-asset-fingerprint). region id 는 도면이
+    # 달라도 재사용되므로(pred:N) id 존재 검증만으로는 다른 도면의 벽이 선택될 수
+    # 있다. None 이면 검사 생략(하위호환: asset_id 없는 옛 카드/클라이언트).
+    asset_id: uuid.UUID | None = None
 
 
 class SelectedWallsResponse(BaseModel):
@@ -241,6 +246,11 @@ async def update_selected_walls(
     선택 id 는 **최신 분석 산출**(wall_objects/window_objects)과 대조해, 존재하지 않거나
     선택 불가(내력벽)인 id 가 섞이면 409(SELECTION_STALE)로 거절한다 — 재분석 이전의
     옛 오버레이 카드 제출이 프루닝된 id 를 되살리는 경로 차단(#stale-overlay-submission).
+
+    ``asset_id`` 가 오면 **현재 선택 도면**과도 대조해, 다르면
+    409(ANALYSIS_INPUT_STALE)로 거절한다 — region id 는 다른 도면에서도 재사용되므로
+    (pred:N), 도면 교체 뒤 옛 카드의 제출이 id 존재 검증을 우연히 통과해 **다른
+    도면의 벽**을 선택하는 경로 차단(#overlay-asset-fingerprint).
     """
 
     clean_walls = _dedupe_region_ids(payload.region_ids)
@@ -256,13 +266,15 @@ async def update_selected_walls(
     # 트랜잭션 안에서** 수행한다(validate_selection) — 라우트에서 스냅숏으로 검증하면
     # 그 읽기와 영속 사이에 재분석 커밋이 끼어 옛 id 가 새 객체 옆에 살아남는 TOCTOU
     # 창이 생긴다. 어긋나면 409 SELECTION_STALE(세션 무변경), 빈 목록(선택 해제)은
-    # 검증 대상이 없다.
+    # 검증 대상이 없다. 카드의 asset 지문도 같은 행잠금에서 검사한다
+    # (#overlay-asset-fingerprint).
     merged = await main_flow.merge_judgment_schema(
         session_id=session_id,
         owner_user_id=requester.user_id,
         owner_is_anonymous=requester.is_anonymous,
         patch=patch,
         validate_selection=True,
+        **({"expected_asset_id": payload.asset_id} if payload.asset_id else {}),
     )
     walls = merged.get("selected_walls")
     windows = merged.get("selected_windows")

@@ -37,8 +37,9 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_select_session_address",
     "_db_upsert_session_address",
     "_db_insert_floorplan_upload",
-    "_db_insert_floorplan_asset",
+    "_db_insert_and_link_floorplan_asset",
     "_db_select_selected_floorplan_asset",
+    "_db_count_session_floorplan_assets",
     "_db_search_floorplan_catalog",
     "_db_select_candidate_revision_keys",
     "_db_insert_floorplan_candidates",
@@ -162,13 +163,15 @@ class FakeMainFlowDb:
         run_id: uuid.UUID | None,
         only_if_live_selection: bool = False,
         only_if_rule_eval: bool = False,
+        only_if_selected_asset: Any = main_flow._UNSET,
     ) -> dict[str, Any] | None:
         """마일스톤 이벤트(단계별 1회) + forward-only status(real seam 미러).
 
         reference-scope 트리거는 미적용. status 가 이미 더 높아도 마일스톤 이벤트는
         단계별 1회 기록하고(중복 방지), status 는 더 높을 때만 전진한다.
-        only_if_live_selection(선택 생존)/only_if_rule_eval(판정 존재) 가드는
-        real seam 미러 — 조건 미충족이면 이벤트·전진 모두 생략.
+        only_if_live_selection(선택 생존)/only_if_rule_eval(판정 존재)/
+        only_if_selected_asset(선택 도면 불변) 가드는 real seam 미러 — 조건 미충족이면
+        이벤트·전진 모두 생략.
         """
 
         rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
@@ -180,6 +183,11 @@ class FakeMainFlowDb:
         ):
             return None
         if only_if_rule_eval and row.get("rule_eval_result") is None:
+            return None
+        if (
+            only_if_selected_asset is not main_flow._UNSET
+            and row.get("selected_floorplan_asset_id") != only_if_selected_asset
+        ):
             return None
         from_status = row["status"]
         already = any(
@@ -211,13 +219,15 @@ class FakeMainFlowDb:
         reason: str | None,
         only_if_no_selection: bool = False,
         clear_rule_eval: bool = False,
+        only_if_selected_asset: Any = main_flow._UNSET,
     ) -> dict[str, Any] | None:
         """status 명시적 후퇴(재개 전용, real seam 미러) — 재개 이벤트는 매번 기록.
 
         종료 상태와 handoff 는 건드리지 않고, 현재가 target 이하면 no-op(None).
         only_if_no_selection 이면 현재 judgment_schema 에 살아 있는 선택이 있을 때
         되돌리지 않는다(동시 PATCH 방어). clear_rule_eval 이면 되돌리며 stale 판정도
-        함께 비운다(real seam 미러).
+        함께 비운다. only_if_selected_asset 이 오면 선택 도면이 다를 때 되돌리지
+        않는다(real seam 미러).
         """
 
         rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
@@ -229,6 +239,11 @@ class FakeMainFlowDb:
             return None
         if only_if_no_selection and main_flow._has_live_selection(
             row.get("judgment_schema")
+        ):
+            return None
+        if (
+            only_if_selected_asset is not main_flow._UNSET
+            and row.get("selected_floorplan_asset_id") != only_if_selected_asset
         ):
             return None
         self.session_status_events.append(
@@ -254,16 +269,23 @@ class FakeMainFlowDb:
         *,
         patch: dict[str, Any],
         validate_selection: bool = False,
+        expected_asset_id: Any = main_flow._UNSET,
     ) -> tuple[dict[str, Any], bool] | str | None:
         """판단스키마 병합 + 원자 선택 검증/프루닝 + rule_eval 무효화(real seam 미러).
 
         real 은 FOR UPDATE 단일 트랜잭션 — fake 는 단일 스레드라 그대로 순차 수행.
-        validate_selection 검증 실패는 쓰기 없이 sentinel 반환(real 과 동일).
+        validate_selection / expected_asset_id 검증 실패는 쓰기 없이 sentinel 반환
+        (real 과 동일).
         """
 
         row = self.sessions.get(session_id)
         if row is None:
             return None
+        if (
+            expected_asset_id is not main_flow._UNSET
+            and row.get("selected_floorplan_asset_id") != expected_asset_id
+        ):
+            return main_flow._MERGE_INPUT_STALE
         current = row.get("judgment_schema")
         merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
         merged.update(patch)
@@ -414,11 +436,19 @@ class FakeMainFlowDb:
 
     # -- floorplan_assets --------------------------------------------------
 
-    async def _db_insert_floorplan_asset(
-        self, values: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _db_insert_and_link_floorplan_asset(
+        self, session_id: uuid.UUID, asset_values: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        """asset insert + 세션 링크(+교체 리셋·배지 재개) 원자 수행(real seam 미러,
+        #atomic-asset-link) — 세션이 없으면 asset 을 남기지 않고 404(전체 롤백 미러).
+        링크된 적 없는 고아 asset row 가 없어야 floorplan_replaced 파생(row 수)이
+        건전하다."""
+
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise main_flow._not_found("Session not found.", code="SESSION_NOT_FOUND")
         now = _now()
-        row: dict[str, Any] = {
+        asset: dict[str, Any] = {
             "id": uuid.uuid4(),
             "floorplan_id": None,
             "floorplan_upload_id": None,
@@ -431,10 +461,61 @@ class FakeMainFlowDb:
             "scan_status": "pending",
             "created_at": now,
             "updated_at": now,
-            **values,
+            **asset_values,
         }
-        self.floorplan_assets[row["id"]] = row
-        return dict(row)
+        self.floorplan_assets[asset["id"]] = asset
+        replaced = self._link_session_floorplan_asset(session, asset["id"])
+        self._touch_session(session_id)
+        return dict(asset), replaced
+
+    def _link_session_floorplan_asset(
+        self, row: dict[str, Any], asset_id: uuid.UUID
+    ) -> bool:
+        """세션 포인터 링크 + 교체 리셋·배지 재개(real seam 의 링크 구간 미러)."""
+
+        prior = row.get("selected_floorplan_asset_id")
+        replaced = prior is not None and prior != asset_id
+        row["selected_floorplan_asset_id"] = asset_id
+        # 단일 소스 불변식(real seam 미러, #single-floorplan-source).
+        row["selected_floorplan_id"] = None
+        row["selected_floorplan_upload_id"] = None
+        if prior != asset_id:
+            # 재업로드(다른 asset 에서 갈아타기) — 이전 도면의 분석 산출을 제거한다
+            # (real seam 미러, #floorplan-replace-reset). 첫 연결(None→asset)엔 지울
+            # 분석이 없다.
+            js = row.get("judgment_schema")
+            if replaced and isinstance(js, dict):
+                row["judgment_schema"] = {
+                    k: v
+                    for k, v in js.items()
+                    if k not in main_flow._FLOORPLAN_ANALYSIS_KEYS
+                }
+            # migration 0016 trg_sessions_invalidate_verdict 미러(포인터 변경).
+            row["rule_eval_result"] = None
+            row["rule_evaluated_at"] = None
+            row["completion_decision"] = None
+        if replaced:
+            # 배지 재개도 링크와 같은 '트랜잭션'에서(real seam 미러, #atomic-replace-
+            # reopen) — 종료/handoff 불변, 현재가 floorplan_selected 이하면 no-op,
+            # 재개 이벤트는 매번 기록(_db_regress_session_status 와 같은 규칙).
+            rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
+            current = row["status"]
+            if (
+                current not in ("expired", "deleted", "handoff")
+                and rank.get(current, -1) > rank["floorplan_selected"]
+            ):
+                self.session_status_events.append(
+                    {
+                        "session_id": row["id"],
+                        "from_status": current,
+                        "to_status": "floorplan_selected",
+                        "reason": "floorplan_replaced",
+                        "run_id": None,
+                        "occurred_at": _now(),
+                    }
+                )
+                row["status"] = "floorplan_selected"
+        return replaced
 
     async def _db_select_selected_floorplan_asset(
         self, session_id: uuid.UUID
@@ -447,6 +528,13 @@ class FakeMainFlowDb:
             return None
         row = self.floorplan_assets.get(asset_id)
         return dict(row) if row is not None else None
+
+    async def _db_count_session_floorplan_assets(self, session_id: uuid.UUID) -> int:
+        # 세션의 asset row 수(real seam 미러) — 교체는 삭제 없는 대체라 업로드마다
+        # 누적되고, 2개째부터가 곧 교체 이력이다(#legacy-judgment-freshness).
+        return sum(
+            1 for a in self.floorplan_assets.values() if a["session_id"] == session_id
+        )
 
     async def _db_search_floorplan_catalog(
         self, *, apartment_name: str, building_dong: str | None, limit: int

@@ -276,8 +276,21 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  // 서버가 409 SELECTION_STALE 로 거절한 카드 — 재분석으로 대체된 옛 분석 결과다.
+  // 서버가 409 로 거절했거나(SELECTION_STALE/ANALYSIS_INPUT_STALE) 복원 시점에 도면
+  // 교체가 확인된 카드 — 대체된 옛 분석 결과다.
   const [stale, setStale] = useState(false);
+
+  // 도면 교체 감지(렌더 파생) — 이 카드가 유래한 asset(서버 스탬프)과 현재 선택
+  // asset(컨텍스트 브로드캐스트, #floorplan-cards-broadcast)이 다르면 이 오버레이는
+  // 이전 도면의 분석이다. region id(pred:N)는 도면이 달라도 재사용되므로 제출뿐
+  // 아니라 선택 표시도 신뢰할 수 없다(#overlay-asset-fingerprint 의 복원 짝).
+  // 스탬프나 브로드캐스트가 없으면(구 카드/호스트 미제공) 종전 동작 유지.
+  const broadcastAssetId = actions?.selectedFloorplanAssetId;
+  const replacedByBroadcast =
+    typeof assetId === 'string' &&
+    typeof broadcastAssetId === 'string' &&
+    broadcastAssetId !== assetId;
+  const effectiveStale = stale || replacedByBroadcast;
 
   const interactive = actions !== null;
   const streaming = actions?.busy ?? false;
@@ -313,6 +326,20 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
           setImageFailed(false);
         } else {
           setImageFailed(true);
+        }
+        // 복원 전 asset 지문 대조 — 이 카드 발행 뒤 도면이 교체됐으면, 세션에 저장된
+        // 선택은 **새 도면의 것**이다. region id(pred:N)가 도면 간 재사용되어 id
+        // 교집합만으로는 이 옛 카드에 남의 선택이 '제출됨'으로 되살아날 수 있으므로
+        // 복원하지 않고 만료 표시한다(#overlay-asset-fingerprint 의 복원 짝).
+        // 이미지(이 카드 자신의 도면)는 그대로 보여 준다. 스탬프 없는 구 카드는 종전 동작.
+        const liveAssetId = session?.selected_floorplan_asset_id;
+        if (
+          typeof assetId === 'string' &&
+          typeof liveAssetId === 'string' &&
+          liveAssetId !== assetId
+        ) {
+          setStale(true);
+          return;
         }
         const prevWalls = session?.judgment_schema?.selected_walls;
         const prevWindows = session?.judgment_schema?.selected_windows;
@@ -369,13 +396,18 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
       const winIds = [...selected].filter((id) => windowIds.has(id));
       if (sessionId) {
         try {
-          await updateSelectedWalls(sessionId, wallIds, winIds);
+          // 카드가 유래한 asset 지문을 함께 보낸다 — 도면 교체 뒤 이 옛 카드의 제출이
+          // 재사용된 region id(pred:N)로 새 도면의 엉뚱한 벽을 선택하지 않게 서버가
+          // 거절한다(#overlay-asset-fingerprint).
+          await updateSelectedWalls(sessionId, wallIds, winIds, assetId);
         } catch (err) {
-          // 옛 분석 카드 제출(409 SELECTION_STALE): 서버가 세션을 바꾸지 않았다 —
-          // 여기서 성공한 척 메시지를 보내면 에이전트가 실제 저장 상태(비었거나 더
-          // 새로운 선택)와 어긋난 채 진행한다. 카드를 만료 표시하고 최신 카드로
-          // 유도하며, 메시지는 발화하지 않는다(#stale-overlay-submission).
-          if (parseApiError(err).code === 'SELECTION_STALE') {
+          // 옛 분석 카드 제출(409 SELECTION_STALE: 재분석으로 id 무효 /
+          // ANALYSIS_INPUT_STALE: 도면 교체로 asset 지문 불일치): 서버가 세션을
+          // 바꾸지 않았다 — 여기서 성공한 척 메시지를 보내면 에이전트가 실제 저장
+          // 상태(비었거나 더 새로운 선택)와 어긋난 채 진행한다. 카드를 만료 표시하고
+          // 최신 카드로 유도하며, 메시지는 발화하지 않는다(#stale-overlay-submission).
+          const code = parseApiError(err).code;
+          if (code === 'SELECTION_STALE' || code === 'ANALYSIS_INPUT_STALE') {
             setStale(true);
             return;
           }
@@ -400,12 +432,17 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     } finally {
       setSubmitting(false);
     }
-  }, [actions, sessionId, selected, windowIds, uncertainWallIds, submitting, streaming]);
+  }, [actions, sessionId, assetId, selected, windowIds, uncertainWallIds, submitting, streaming]);
 
   const hasSelectable = selectableRegions.length > 0;
   const submitDisabled =
-    selected.size === 0 || submitting || submitted || streaming || !interactive || stale;
-  const submitLabel = stale
+    selected.size === 0 ||
+    submitting ||
+    submitted ||
+    streaming ||
+    !interactive ||
+    effectiveStale;
+  const submitLabel = effectiveStale
     ? '이 카드는 이전 분석 결과예요'
     : submitting
       ? '제출 중…'
@@ -536,10 +573,10 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
           ) : null}
         </Group>
 
-        {stale ? (
+        {effectiveStale ? (
           <Text size="sm" c="var(--mantine-color-warning-8)" style={{ lineHeight: 1.55 }}>
-            도면이 다시 분석되어 이 카드의 선택은 더 이상 쓸 수 없어요. 아래 최신 도면
-            분석 카드에서 다시 골라 주세요.
+            도면이 바뀌거나 다시 분석되어 이 카드의 선택은 더 이상 쓸 수 없어요. 최신
+            도면 분석 카드에서 다시 골라 주세요.
           </Text>
         ) : null}
 

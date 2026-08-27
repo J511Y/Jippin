@@ -28,8 +28,10 @@ import {
 import { useId, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { LEGAL_NOTICE_TEXT } from '@/components/LegalNotice';
+import { useChatActions } from '@/components/agent/chat-actions';
 import { QuickPrecheckConsultForm } from '@/components/leads/QuickPrecheckConsultForm';
 import { CtaButton } from '@/components/ui';
+import { getSession } from '@/lib/sessions/api';
 
 import { type CardAccent, CardHeader, CardRule, CardShell } from './CardShell';
 
@@ -49,6 +51,9 @@ export type JudgmentSummaryPayload = {
   /** 하단 상담 CTA → 빠른 상담폼 prefill 용. */
   session_id?: string;
   prefill_address?: string;
+  /** 이 결과가 유래한 도면 asset(서버 스탬프) — 도면이 교체되면 '이전 도면 기준
+   *  결과'로 표시하고 상담 CTA 를 막는다(#judgment-asset-stamp). 구 카드는 미지정. */
+  asset_id?: string;
 };
 
 const KNOWN_DECISIONS: readonly JudgmentDecision[] = [
@@ -161,6 +166,72 @@ export function JudgmentSummaryCard({
   const [consultSubmitted, setConsultSubmitted] = useState(false);
   const prefillAddress =
     typeof payload.prefill_address === 'string' ? payload.prefill_address : undefined;
+  // 도면 교체 감지 — 이 결과가 유래한 asset(서버 스탬프)과 현재 선택 asset(컨텍스트
+  // 브로드캐스트, #floorplan-cards-broadcast)이 다르면 '이전 도면 기준 결과'다. 이때
+  // 상담 CTA 를 막아, A 도면의 결론에 B 도면이 자동 첨부되어 나가는 상담 인입을
+  // 차단한다(#judgment-asset-stamp). 둘 중 하나라도 모르면(구 카드/브로드캐스트 부재)
+  // 종전 동작 유지. 브로드캐스트는 같은 탭의 교체만 보므로, **다른 탭**의 교체는 CTA
+  // 클릭 시점의 신선한 재검증(staleOverride)이 잡는다(#judgment-cta-revalidate).
+  const actions = useChatActions();
+  const currentAssetId = actions?.selectedFloorplanAssetId;
+  const [staleOverride, setStaleOverride] = useState(false);
+  const [checkingConsult, setCheckingConsult] = useState(false);
+  // 레거시(스탬프 없는) 카드가 게이트를 통과한 시점의 현재 선택 도면 — 폼의 서버측
+  // stale 재검증 지문으로 쓴다(#legacy-judgment-freshness).
+  const [legacyExpectedAssetId, setLegacyExpectedAssetId] = useState<
+    string | undefined
+  >(undefined);
+  const staleFloorplan =
+    staleOverride ||
+    (typeof payload.asset_id === 'string' &&
+      typeof currentAssetId === 'string' &&
+      currentAssetId !== payload.asset_id);
+
+  // CTA 클릭 시점 재검증 — 서버의 현재 세션을 새로 읽어 이 결과가 아직 유효한지
+  // 확인한다. 확인 실패(네트워크)나 응답 필드 부재는 상담을 막지 않는다(전환 크리티컬
+  // CTA, best-effort 가드 — 확실한 stale 증거가 있을 때만 차단).
+  async function handleConsultClick() {
+    const sid =
+      actions?.sessionId ??
+      (typeof payload.session_id === 'string' ? payload.session_id : undefined);
+    if (sid) {
+      setCheckingConsult(true);
+      try {
+        const row = await getSession(sid);
+        if (typeof payload.asset_id === 'string') {
+          // 스탬프 카드 — 현재 선택 도면과 대조(#judgment-cta-revalidate).
+          const live = row.selected_floorplan_asset_id;
+          if (live != null && live !== payload.asset_id) {
+            setStaleOverride(true);
+            return;
+          }
+        } else {
+          // 레거시(스탬프 없는) 결과 카드 — 세션에 도면 교체 이력이 있으면 이 카드는
+          // 그 이전 결론일 수 있어 보수적으로 차단한다(#legacy-judgment-freshness).
+          // 교체 이력은 새 도면의 분석·판정이 **완료돼도 되돌아가지 않는 단조 신호**라,
+          // has_report/분석 키처럼 재검토 뒤 옛 카드가 다시 통과하는 구멍이 없다.
+          // 도면 없이 발행되는 LLM-only 예비 결과(분석 키 부재가 정상)도 교체 이력이
+          // 없으면 종전대로 상담을 연다. 필드 부재(구 API·테스트)는 통과(best-effort).
+          if (row.floorplan_replaced === true) {
+            setStaleOverride(true);
+            return;
+          }
+          // 통과한 레거시 카드도 클릭 시점의 현재 도면을 지문으로 폼에 실어, 폼 작성
+          // 중 교체를 서버가 409(LEAD_FLOORPLAN_STALE)로 잡게 한다 — 스탬프 카드와
+          // 같은 마감. 도면 없는 세션(LLM-only)은 실을 지문이 없어 종전 동작.
+          const live = row.selected_floorplan_asset_id;
+          if (typeof live === 'string') {
+            setLegacyExpectedAssetId(live);
+          }
+        }
+      } catch {
+        /* 확인 실패 — 진행(브로드캐스트/서버측 세션 상태가 최종 방어선) */
+      } finally {
+        setCheckingConsult(false);
+      }
+    }
+    setShowConsult(true);
+  }
 
   return (
     <CardShell accent={style.accent} labelledBy={titleId}>
@@ -182,11 +253,14 @@ export function JudgmentSummaryCard({
       </div>
 
       {/* 판정 근거 투명성 — 법령 기준 검토를 거친 결과인지, 그 전 예비 관찰인지 한 줄로
-          밝힌다. B2C 카피라 '룰엔진' 등 내부 용어는 노출하지 않는다. */}
+          밝힌다. B2C 카피라 '룰엔진' 등 내부 용어는 노출하지 않는다. 도면이 교체됐으면
+          어느 쪽이든 '이전 도면 기준'임을 우선해 밝힌다. */}
       <Text size="11px" c="dimmed" mt={6} style={{ lineHeight: 1.4 }}>
-        {payload.rule_backed
-          ? '※ 법령 기준으로 검토한 결과예요.'
-          : '※ 자동 분석 기반 예비 관찰이에요. 검토에 필요한 정보가 모이면 더 정확히 봐 드려요.'}
+        {staleFloorplan
+          ? '※ 이 결과는 이전에 올렸던 도면 기준이에요. 새 도면으로 다시 검토하면 결과가 달라질 수 있어요.'
+          : payload.rule_backed
+            ? '※ 법령 기준으로 검토한 결과예요.'
+            : '※ 자동 분석 기반 예비 관찰이에요. 검토에 필요한 정보가 모이면 더 정확히 봐 드려요.'}
       </Text>
 
       <Text
@@ -221,8 +295,15 @@ export function JudgmentSummaryCard({
       <CardRule />
 
       {/* 상담 인입 — 결과를 본 직후 전문가 상담으로 자연스럽게 잇는다. 클릭하면 같은
-          대화 화면에서 빠른 상담폼이 펼쳐지고, 주소 등은 이미 세션이 알고 있어 바로 제출. */}
-      {consultSubmitted ? (
+          대화 화면에서 빠른 상담폼이 펼쳐지고, 주소 등은 이미 세션이 알고 있어 바로 제출.
+          도면이 교체된 옛 결과 카드에서는 CTA 를 막는다 — 상담 lead 에는 세션의 **현재**
+          도면이 자동 첨부되므로, 옛 결론 + 새 도면이 섞여 나가는 인입을 차단한다
+          (#judgment-asset-stamp). 새 검토를 마친 최신 결과 카드가 CTA 를 잇는다. */}
+      {staleFloorplan ? (
+        <Text size="sm" c="dimmed" mb="sm" style={{ lineHeight: 1.55 }}>
+          새 도면 기준 검토를 마치면, 새 결과 카드에서 상담을 신청할 수 있어요.
+        </Text>
+      ) : consultSubmitted ? (
         <Text size="sm" c="var(--jippin-brand-copy)" mb="sm" style={{ lineHeight: 1.55 }}>
           상담 신청이 접수되었어요. 담당자가 영업일 기준 1일 이내에 연락드릴게요.
         </Text>
@@ -236,6 +317,11 @@ export function JudgmentSummaryCard({
             fromSession={
               typeof payload.session_id === 'string' ? payload.session_id : undefined
             }
+            expectedFloorplanAssetId={
+              typeof payload.asset_id === 'string'
+                ? payload.asset_id
+                : legacyExpectedAssetId
+            }
             ctaId="precheck_report"
             onSubmitted={() => setConsultSubmitted(true)}
           />
@@ -246,7 +332,8 @@ export function JudgmentSummaryCard({
           fullWidth
           mb="sm"
           leftSection={<IconHeadset size={18} aria-hidden />}
-          onClick={() => setShowConsult(true)}
+          onClick={() => void handleConsultClick()}
+          disabled={checkingConsult}
         >
           전문가 상담 신청하기
         </CtaButton>

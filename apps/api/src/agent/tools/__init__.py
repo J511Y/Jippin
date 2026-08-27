@@ -195,12 +195,16 @@ def build_tools(
 
     @tool
     async def emit_floorplan_request(reason: str | None = None) -> dict[str, Any]:
-        """평면도가 필요한데 아직 첨부되지 않았을 때, 사용자에게 **도면 업로드 카드**를 띄운다.
-        본문에 업로드 방법을 텍스트로 설명하지 말고 이 도구를 호출하라. reason 에 왜 도면이
-        필요한지 한 문장."""
+        """평면도가 필요한데 아직 첨부되지 않았을 때, **또는 다른 평면도로 재업로드가
+        필요할 때**(분석 결과 벽·창호 후보 0, 도면 판독 불가, 사용자가 교체를 원할 때)
+        사용자에게 **도면 업로드 카드**를 띄운다. 이미 도면이 첨부돼 있어도 새 도면을
+        받아야 하면 이 도구를 다시 호출하라(새로 올라온 도면이 기존 도면을 대체한다).
+        본문에 업로드 방법을 텍스트로 설명하지 말고 이 도구를 호출하라. reason 에 왜
+        (새) 도면이 필요한지 한 문장."""
         return await emit_floorplan_request_impl(
             run_context=run_context,
             run_id=run_id,
+            session_id=session_id,
             reason=reason,
         )
 

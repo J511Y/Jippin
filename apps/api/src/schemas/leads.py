@@ -98,6 +98,12 @@ class LeadCreateRequest(BaseModel):
     # 사전검토(precheck_session) 인입이면 원천 세션 id — 본인 세션이면 백엔드가
     # consultation_leads.session_id 로 연결하고, 주소 미입력 시 세션 주소로 폴백한다(0019).
     session_id: uuid.UUID | None = None
+    # 사전검토 **결과 카드**에서 온 상담이면, 그 결과가 유래한 도면 asset — lead 생성
+    # 시점의 세션 현재 도면과 대조해 다르면 409(LEAD_FLOORPLAN_STALE)로 거절한다
+    # (#judgment-cta-revalidate 의 서버측 마무리). 폼 작성 중 다른 탭이 도면을 교체해도
+    # 옛 결론에 새 도면이 자동 첨부(#session-floorplan-carryover)되어 나가지 않는다.
+    # None 이면 검사 생략(일반 인입/구 클라이언트).
+    expected_floorplan_asset_id: uuid.UUID | None = None
     attachments: list[LeadAttachmentInput] = Field(
         default_factory=list, max_length=_MAX_ATTACHMENTS
     )

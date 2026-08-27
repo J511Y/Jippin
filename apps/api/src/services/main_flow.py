@@ -160,6 +160,7 @@ async def _db_advance_session_status(
     run_id: uuid.UUID | None,
     only_if_live_selection: bool = False,
     only_if_rule_eval: bool = False,
+    only_if_selected_asset: Any = _UNSET,
 ) -> dict[str, Any] | None:
     """마일스톤 도달을 기록하고 status 를 forward-only 로 전이한다(단일 트랜잭션).
 
@@ -181,6 +182,11 @@ async def _db_advance_session_status(
     비어 있으면 생략한다 — verdict 쓰기와 이 지연된 report_ready 전진 사이에 재분석
     병합이 판정을 소거한 경우, 리포트 없는 세션이 report_ready 배지를 달지 않는다
     (#advance-recheck-verdict; GET /report 의 준비 기준 = rule_eval_result 존재).
+
+    ``only_if_selected_asset`` 이 오면 같은 트랜잭션에서 ``selected_floorplan_asset_id``
+    를 다시 읽어 다르면 이벤트·전진 모두 생략한다 — 분석이 도는 동안 도면이 교체된
+    경우, 그 stale 분석의 전이가 교체 재개(floorplan_selected) 뒤에 도착해 새 도면의
+    배지를 다시 밀어 올리지 않는다(#advance-recheck-asset, merge 지문과 대칭 가드).
     """
 
     target_rank = _STATUS_RANK[target]
@@ -194,6 +200,7 @@ async def _db_advance_session_status(
                     _SESSIONS.c.status,
                     _SESSIONS.c.judgment_schema,
                     _SESSIONS.c.rule_eval_result,
+                    _SESSIONS.c.selected_floorplan_asset_id,
                 )
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
@@ -207,6 +214,11 @@ async def _db_advance_session_status(
         if only_if_live_selection and not _has_live_selection(row0.judgment_schema):
             return None
         if only_if_rule_eval and row0.rule_eval_result is None:
+            return None
+        if (
+            only_if_selected_asset is not _UNSET
+            and row0.selected_floorplan_asset_id != only_if_selected_asset
+        ):
             return None
 
         # 마일스톤 이벤트 — 단계별 1회(중복 방지). status 전진 여부와 무관하게 기록한다.
@@ -257,6 +269,7 @@ async def advance_session_status(
     run_id: uuid.UUID | None = None,
     only_if_live_selection: bool = False,
     only_if_rule_eval: bool = False,
+    only_if_selected_asset: Any = _UNSET,
 ) -> dict[str, Any] | None:
     """도구/플로우 마일스톤에서 세션 status 를 한 단계 전진시킨다(best-effort, runtime-only).
 
@@ -265,7 +278,9 @@ async def advance_session_status(
     예외를 삼키고 None 을 반환한다 — status 는 진행 상황의 투영일 뿐 정본 데이터가 아니다.
     실제 전이가 일어났으면 갱신된 세션 row 를 반환한다. ``only_if_live_selection`` 은
     전진 직전 같은 트랜잭션에서 살아 있는 선택을(#advance-recheck-selection),
-    ``only_if_rule_eval`` 은 판정 존재를(#advance-recheck-verdict) 재확인한다.
+    ``only_if_rule_eval`` 은 판정 존재를(#advance-recheck-verdict),
+    ``only_if_selected_asset`` 은 선택 도면이 그대로인지를(#advance-recheck-asset)
+    재확인한다.
     """
 
     if target not in _STATUS_RANK:
@@ -278,6 +293,7 @@ async def advance_session_status(
             run_id=run_id,
             only_if_live_selection=only_if_live_selection,
             only_if_rule_eval=only_if_rule_eval,
+            only_if_selected_asset=only_if_selected_asset,
         )
     except Exception:  # noqa: BLE001 - 상태 전이 실패는 도구/플로우를 막지 않는다
         _log.warning(
@@ -304,6 +320,7 @@ async def _db_regress_session_status(
     reason: str | None,
     only_if_no_selection: bool = False,
     clear_rule_eval: bool = False,
+    only_if_selected_asset: Any = _UNSET,
 ) -> dict[str, Any] | None:
     """status 를 명시적으로 **뒤로** 되돌린다(재개 전용, 단일 트랜잭션).
 
@@ -322,13 +339,22 @@ async def _db_regress_session_status(
     병합(verdict 소거)과 이 재개 사이에 set_session_verdict 가 끼어들어 무효화된 선택
     기준의 판정을 다시 써 놓았을 수 있다(#reopen-clears-verdict). 오버레이를 다시
     골라야 하는 세션에서 GET /report 가 그 stale 판정을 제공하지 않게 한다.
+
+    ``only_if_selected_asset`` 이 오면 같은 트랜잭션에서 ``selected_floorplan_asset_id``
+    를 재확인해 다르면 되돌리지 않는다 — 교체 링크와 이 지연된 재개 사이에 **또 다른**
+    교체·분석이 끼어든 경우, 그 최신 도면의 유효한 진행 배지를 옛 교체의 재개가
+    후퇴시키지 않는다(#advance-recheck-asset 의 재개 쪽 대칭).
     """
 
     target_rank = _STATUS_RANK[target]
     async with get_engine().begin() as conn:
         row0 = (
             await conn.execute(
-                sa.select(_SESSIONS.c.status, _SESSIONS.c.judgment_schema)
+                sa.select(
+                    _SESSIONS.c.status,
+                    _SESSIONS.c.judgment_schema,
+                    _SESSIONS.c.selected_floorplan_asset_id,
+                )
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
             )
@@ -341,6 +367,11 @@ async def _db_regress_session_status(
         if _STATUS_RANK.get(current, -1) <= target_rank:
             return None
         if only_if_no_selection and _has_live_selection(row0.judgment_schema):
+            return None
+        if (
+            only_if_selected_asset is not _UNSET
+            and row0.selected_floorplan_asset_id != only_if_selected_asset
+        ):
             return None
         await conn.execute(
             sa.insert(_SESSION_STATUS_EVENTS).values(
@@ -377,6 +408,7 @@ async def reopen_session_status(
     reason: str | None = None,
     only_if_no_selection: bool = False,
     clear_rule_eval: bool = False,
+    only_if_selected_asset: Any = _UNSET,
 ) -> dict[str, Any] | None:
     """세션 status 를 이전 단계로 재개한다(best-effort, runtime-only).
 
@@ -384,8 +416,9 @@ async def reopen_session_status(
     수행해야 할 때만 쓴다(#selection-invalidation-reopen). 실패는 삼킨다(status 는
     진행 상황의 투영일 뿐 정본 데이터가 아니다). ``only_if_no_selection`` 은 되돌리기
     직전 같은 트랜잭션에서 선택이 여전히 비어 있는지 재확인하고(동시 PATCH 방어),
-    ``clear_rule_eval`` 은 같은 트랜잭션에서 stale 판정도 함께 비운다
-    (#reopen-clears-verdict).
+    ``clear_rule_eval`` 은 같은 트랜잭션에서 stale 판정도 함께 비우며
+    (#reopen-clears-verdict), ``only_if_selected_asset`` 은 선택 도면이 그대로일
+    때만 되돌린다(#advance-recheck-asset 의 재개 쪽 대칭).
     """
 
     if target not in _STATUS_RANK:
@@ -397,6 +430,7 @@ async def reopen_session_status(
             reason=reason,
             only_if_no_selection=only_if_no_selection,
             clear_rule_eval=clear_rule_eval,
+            only_if_selected_asset=only_if_selected_asset,
         )
     except Exception:  # noqa: BLE001 - 상태 재개 실패는 플로우를 막지 않는다
         _log.warning(
@@ -706,6 +740,113 @@ async def _db_update_session_fields(
     return dict(row._mapping) if row is not None else None
 
 
+# 도면 교체 시 함께 무효화하는 judgment_schema 의 분석 산출 키. 전부 '이전 asset 의
+# 도면'을 설명하는 값이라 새 asset 이 붙는 순간 의미가 깨진다(#floorplan-replace-reset).
+# 사용자 답(judgment_values)·주소/대장 유래(building_info, register_supplement)는
+# 도면과 무관하므로 보존한다.
+_FLOORPLAN_ANALYSIS_KEYS: tuple[str, ...] = (
+    "wall_objects",
+    "space_objects",
+    "window_objects",
+    "vlm_supplement",
+    "selected_walls",
+    "selected_windows",
+)
+
+
+async def _db_insert_and_link_floorplan_asset(
+    session_id: uuid.UUID, asset_values: dict[str, Any]
+) -> tuple[dict[str, Any], bool]:
+    """asset INSERT 와 세션 링크(+교체 리셋·배지 재개)를 **한 행잠금 트랜잭션**으로
+    수행한다(#atomic-asset-link, #atomic-replace-reopen).
+
+    insert 와 링크를 별개 트랜잭션으로 나누면, insert 커밋 뒤 링크 전에 요청이 죽는
+    경우(취소/오류) 링크된 적 없는 고아 asset row 가 남는다 — 그러면 '세션의 asset
+    row 2개째 = 교체'라는 floorplan_replaced 파생(#legacy-judgment-freshness)이 고아
+    + 첫 실링크를 교체로 오판해 스탬프 없는 결과 카드의 상담 CTA 를 영구히 잠근다.
+    원자화로 '모든 asset row 는 생성 시점에 링크됐다' 불변식을 세운다(링크 실패는
+    insert 도 함께 롤백). 세션 행잠금을 **먼저** 잡고 insert 한다 — insert 의 FK
+    KEY SHARE 를 먼저 잡으면 동시 업로드 둘이 서로의 FOR UPDATE 승격을 기다리는
+    교착이 된다(#lock-then-insert).
+
+    교체(replaced) 시 이전 분석 산출 제거(#floorplan-replace-reset)와 배지 재개
+    (floorplan_selected)도 같은 트랜잭션이다 — 재개를 별도 호출로 미루면 링크 커밋과
+    재개 사이 창에서 새 asset 의 분석 완료가 전진시킨 유효 배지를 지연된 재개가
+    후퇴시킬 수 있다. 재개 규칙은 _db_regress_session_status 와 동일(종료/handoff
+    불변, 현재가 target 이하면 no-op, 재개 이벤트는 매번 기록). verdict/
+    completion_decision 무효화는 0016 트리거가 처리하므로 중복하지 않는다.
+
+    반환은 (asset_row, replaced). 세션이 없으면(호출 직전 소유 검증과 이 트랜잭션
+    사이에 삭제) 404 — asset insert 없이 전체 롤백.
+    """
+
+    async with get_engine().begin() as conn:
+        row0 = (
+            await conn.execute(
+                sa.select(
+                    _SESSIONS.c.selected_floorplan_asset_id,
+                    _SESSIONS.c.judgment_schema,
+                    _SESSIONS.c.status,
+                )
+                .where(_SESSIONS.c.id == session_id)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if row0 is None:
+            raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
+        asset_row = (
+            await conn.execute(
+                sa.insert(_FLOORPLAN_ASSETS)
+                .values(**asset_values)
+                .returning(*_FLOORPLAN_ASSETS.c)
+            )
+        ).one()
+        asset = dict(asset_row._mapping)
+        # 직접 업로드 asset 이 곧 세션의 도면 소스다 — 다른 소스 포인터(카탈로그
+        # selected_floorplan_id / 업로드 메타 selected_floorplan_upload_id)는 함께
+        # 비워 단일 소스 불변식을 지킨다(#single-floorplan-source). 현재는 이 포인터들을
+        # 쓰는 흐름이 없어 no-op 이지만, 카탈로그 선택 흐름이 생겨도 직접 업로드가
+        # 이전 소스의 분석·선택을 물려받는 구멍이 열리지 않는다.
+        values: dict[str, Any] = {
+            "selected_floorplan_asset_id": asset["id"],
+            "selected_floorplan_id": None,
+            "selected_floorplan_upload_id": None,
+        }
+        prior = row0.selected_floorplan_asset_id
+        replaced = prior is not None and prior != asset["id"]
+        if replaced:
+            js = row0.judgment_schema if isinstance(row0.judgment_schema, dict) else {}
+            reset = {k: v for k, v in js.items() if k not in _FLOORPLAN_ANALYSIS_KEYS}
+            if reset != js:
+                values["judgment_schema"] = reset
+            current = row0.status
+            if (
+                current not in _TERMINAL_STATUSES
+                and current != "handoff"
+                and _STATUS_RANK.get(current, -1) > _STATUS_RANK["floorplan_selected"]
+            ):
+                values["status"] = "floorplan_selected"
+                await conn.execute(
+                    sa.insert(_SESSION_STATUS_EVENTS).values(
+                        session_id=session_id,
+                        from_status=current,
+                        to_status="floorplan_selected",
+                        reason="floorplan_replaced",
+                        run_id=None,
+                    )
+                )
+        await conn.execute(
+            sa.update(_SESSIONS)
+            .where(_SESSIONS.c.id == session_id)
+            .values(
+                last_activity_at=sa.func.now(),
+                updated_at=sa.func.now(),
+                **values,
+            )
+        )
+    return asset, replaced
+
+
 async def _db_insert_agent_run(values: dict[str, Any]) -> dict[str, Any] | None:
     """`agent_runs` INSERT(멱등). 같은 ``id`` 가 이미 있으면 ON CONFLICT DO NOTHING 으로
     None 을 반환한다 — 라우터가 헤더 노출 전에 만든 placeholder 나 이른 ``/interrupt``
@@ -967,6 +1108,44 @@ async def get_owned_session(
     )
 
 
+async def _db_count_session_floorplan_assets(session_id: uuid.UUID) -> int:
+    async with get_engine().begin() as conn:
+        count = (
+            await conn.execute(
+                sa.select(sa.func.count())
+                .select_from(_FLOORPLAN_ASSETS)
+                .where(_FLOORPLAN_ASSETS.c.session_id == session_id)
+            )
+        ).scalar()
+    return int(count or 0)
+
+
+async def get_owned_session_view(
+    session_id: uuid.UUID,
+    *,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """``GET /sessions/{id}`` 응답용 — 소유 세션 row 에 표시 파생 필드를 붙인다.
+
+    ``floorplan_replaced``(#legacy-judgment-freshness): asset row 는 업로드마다 쌓이고
+    교체는 삭제 없는 대체라(#floorplan-replace-reset), 두 번째 row 부터가 곧 교체 이력
+    이다 — 모든 asset row 는 생성 시점에 세션에 링크되므로(#atomic-asset-link, 링크
+    실패 시 insert 도 롤백) 링크된 적 없는 고아 row 가 count 를 부풀리지 않는다.
+    has_report/분석 키와 달리 새 도면의 재검토가 완료돼도 **되돌아가지 않는 단조
+    신호**라, 스탬프 없는 레거시 결과 카드의 상담 CTA 가 이 값으로 신선도를 가른다.
+    runner 등 내부 경로는 count 비용 없는 ``get_owned_session`` 을 그대로 쓴다.
+    """
+
+    row = await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    count = await _db_count_session_floorplan_assets(session_id)
+    return {**row, "floorplan_replaced": count >= 2}
+
+
 async def get_session_address(session_id: uuid.UUID) -> dict[str, Any] | None:
     """세션 주소 row 를 반환(없으면 None). 에이전트 세션 컨텍스트 스냅샷용 — 호출자가
     이미 owner-gated 세션을 들고 있으므로 추가 소유권 검사는 하지 않는다."""
@@ -1070,10 +1249,16 @@ def _prune_selections_inplace(merged: dict[str, Any]) -> bool:
 
 #: _db_merge_judgment_schema 의 검증 실패 sentinel — 쓰기 없이 중단됐음을 알린다.
 _MERGE_SELECTION_STALE = "selection_stale"
+#: 분석 입력(선택 asset)이 분석 시작 시점과 달라져 병합을 중단한 sentinel.
+_MERGE_INPUT_STALE = "analysis_input_stale"
 
 
 async def _db_merge_judgment_schema(
-    session_id: uuid.UUID, *, patch: dict[str, Any], validate_selection: bool = False
+    session_id: uuid.UUID,
+    *,
+    patch: dict[str, Any],
+    validate_selection: bool = False,
+    expected_asset_id: Any = _UNSET,
 ) -> tuple[dict[str, Any], bool] | str | None:
     """판단스키마 병합 + 선택 검증/프루닝 + rule_eval 무효화를 **단일 행잠금 트랜잭션**으로.
 
@@ -1085,6 +1270,11 @@ async def _db_merge_judgment_schema(
     ``validate_selection`` 이면 patch 에 실린 선택 id 를 **잠근 행의 현행 객체**와
     대조해, 하나라도 어긋나면 아무것도 쓰지 않고 ``_MERGE_SELECTION_STALE`` 을
     돌려준다 — 스냅숏 검증과 영속 사이의 재분석 커밋 창 제거(#stale-overlay-submission).
+
+    ``expected_asset_id`` 가 오면 **잠근 행의 현재 선택 asset** 과 대조해, 다르면
+    아무것도 쓰지 않고 ``_MERGE_INPUT_STALE`` 을 돌려준다 — 분석이 도는 동안 도면이
+    교체되면(#floorplan-replace-reset 직후) 옛 도면의 분석 산출이 새 도면에 붙는 창을
+    행잠금 안에서 막는다(#analysis-merge-fingerprint).
 
     반환은 (merged, selection_pruned) / 검증 실패 sentinel / 행 부재 None(호출자
     owner-gate 이후의 삭제 race).
@@ -1103,13 +1293,22 @@ async def _db_merge_judgment_schema(
     async with get_engine().begin() as conn:
         row0 = (
             await conn.execute(
-                sa.select(_SESSIONS.c.id, _SESSIONS.c.judgment_schema)
+                sa.select(
+                    _SESSIONS.c.id,
+                    _SESSIONS.c.judgment_schema,
+                    _SESSIONS.c.selected_floorplan_asset_id,
+                )
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
             )
         ).one_or_none()
         if row0 is None:
             return None
+        if (
+            expected_asset_id is not _UNSET
+            and row0.selected_floorplan_asset_id != expected_asset_id
+        ):
+            return _MERGE_INPUT_STALE  # 쓰기 전 중단 — 세션 무변경.
         current = row0.judgment_schema
         merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
         merged.update(patch)
@@ -1150,6 +1349,7 @@ async def merge_judgment_schema(
     owner_is_anonymous: bool,
     patch: dict[str, Any],
     validate_selection: bool = False,
+    expected_asset_id: Any = _UNSET,
 ) -> dict[str, Any]:
     """공통 판단 스키마(JSONB)에 top-level 키를 병합한다(owner-gated).
 
@@ -1166,6 +1366,10 @@ async def merge_judgment_schema(
     현행 객체와 대조해, 어긋나면 아무것도 쓰지 않고 409(SELECTION_STALE)를 던진다 —
     스냅숏 검증으로는 재분석 커밋이 사이에 끼는 TOCTOU 를 못 막는다
     (#stale-overlay-submission).
+
+    ``expected_asset_id``(분석 영속 경로)가 오면 병합 시점의 선택 asset 이 그 값과
+    다를 때 아무것도 쓰지 않고 409(ANALYSIS_INPUT_STALE)를 던진다 — 분석 도중 도면이
+    교체되면 옛 도면의 산출이 새 도면에 붙지 않게 한다(#analysis-merge-fingerprint).
     """
 
     await _resolve_owner_session(
@@ -1174,11 +1378,19 @@ async def merge_judgment_schema(
         owner_is_anonymous=owner_is_anonymous,
     )
     result = await _db_merge_judgment_schema(
-        session_id, patch=patch, validate_selection=validate_selection
+        session_id,
+        patch=patch,
+        validate_selection=validate_selection,
+        expected_asset_id=expected_asset_id,
     )
     if result is None:
         # owner-gate 통과 직후의 삭제 race — 부재 세션과 동일하게 취급.
         raise _not_found("Session not found.")
+    if result == _MERGE_INPUT_STALE:
+        raise _conflict(
+            "Selected floorplan changed since this analysis started.",
+            "ANALYSIS_INPUT_STALE",
+        )
     if isinstance(result, str):
         raise _conflict(
             "Selection does not match the latest analysis objects.",
@@ -1210,9 +1422,30 @@ async def merge_judgment_schema(
             reason="walls_selected",
             only_if_live_selection=True,
         )
-    elif "wall_objects" in patch:
+    elif "wall_objects" in patch and (
+        patch.get("wall_objects") or patch.get("window_objects")
+    ):
+        # 분석 영속 경로가 지문을 줬으면 지연된 전진에도 같은 가드를 건다 — 병합 커밋과
+        # 이 전진 사이에 도면이 교체되면 새 도면의 배지를 밀어 올리지 않는다
+        # (#advance-recheck-asset).
         await advance_session_status(
-            session_id=session_id, target="awaiting_overlay", reason="analysis_complete"
+            session_id=session_id,
+            target="awaiting_overlay",
+            reason="analysis_complete",
+            only_if_selected_asset=expected_asset_id,
+        )
+    elif "wall_objects" in patch:
+        # 빈 분석(벽·창호 후보 0)은 고를 게 없다 — 오버레이 카드도 안 뜨는데 배지가
+        # '오버레이 대기'면 관리 목록이 선택 가능한 세션처럼 표시한다. 첫 분석이면
+        # 전진 생략으로 충분하지만, **재분석이 후보를 전부 잃은** 경우엔 이미
+        # awaiting_overlay 이므로 도면 선택 단계로 재개한다(이미 그 이하면 no-op,
+        # 아래 프루닝 재개(awaiting_overlay)는 낮아진 배지에서 no-op 이 된다)
+        # (#no-overlay-for-empty-analysis).
+        await reopen_session_status(
+            session_id=session_id,
+            target="floorplan_selected",
+            reason="analysis_empty",
+            only_if_selected_asset=expected_asset_id,
         )
     if (patched_selection or selection_pruned) and not any(
         _nonempty_selection(merged.get(k)) for k in selection_keys
@@ -1440,18 +1673,6 @@ async def create_floorplan_upload(
     )
 
 
-async def _db_insert_floorplan_asset(values: dict[str, Any]) -> dict[str, Any]:
-    async with get_engine().begin() as conn:
-        row = (
-            await conn.execute(
-                sa.insert(_FLOORPLAN_ASSETS)
-                .values(**values)
-                .returning(*_FLOORPLAN_ASSETS.c)
-            )
-        ).one()
-    return dict(row._mapping)
-
-
 async def _db_select_selected_floorplan_asset(
     session_id: uuid.UUID,
 ) -> dict[str, Any] | None:
@@ -1492,7 +1713,15 @@ async def create_floorplan_asset(
         owner_user_id=owner_user_id,
         owner_is_anonymous=owner_is_anonymous,
     )
-    asset = await _db_insert_floorplan_asset(
+    # asset 기록과 세션 링크는 한 트랜잭션이다(#atomic-asset-link) — 링크된 적 없는
+    # 고아 asset row 를 남기지 않아 floorplan_replaced 파생(row 수)이 건전해진다.
+    # main_flow 는 비-authenticated 풀러로 쓰므로 0008 client-guard 트리거는
+    # early-return 하고, 같은 세션 소속 asset 이라 reference-scope 도 통과한다.
+    # 재업로드(기존 asset 에서 갈아타기)면 이전 도면의 분석 산출 제거와 배지 재개
+    # (floorplan_selected)도 같은 행잠금 트랜잭션에서 일어난다(#floorplan-replace-
+    # reset, #atomic-replace-reopen) — 이전 도면 자체(asset row/파일)는 남는다.
+    asset, _replaced = await _db_insert_and_link_floorplan_asset(
+        session_id,
         {
             "session_id": session_id,
             "owner_user_id": owner_user_id,
@@ -1506,13 +1735,7 @@ async def create_floorplan_asset(
             # 사용자 업로드 원본은 검사 전이므로 pending — 세그멘테이션은 clean(또는
             # 설정상 허용)일 때만 분석한다(#scan-gate, schema plan §1534/§1588).
             "scan_status": "pending",
-        }
-    )
-    # 세션을 이 asset 으로 연결한다. main_flow 는 비-authenticated 풀러로 쓰므로 0008
-    # client-guard 트리거는 early-return 하고, 같은 세션 소속 asset 이라 reference-scope
-    # 도 통과한다(상태 전이는 강제하지 않음 — 에이전트 플로우가 status 를 진행).
-    await _db_update_session_fields(
-        session_id, {"selected_floorplan_asset_id": asset["id"]}
+        },
     )
     # 도면 asset 이 세션에 연결됐으니 status 를 floorplan_selected 로 전진.
     await advance_session_status(

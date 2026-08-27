@@ -52,6 +52,9 @@ export interface SessionResponse {
   completion_decision: string | null;
   /** 리포트 준비 여부 — 백엔드가 verdict(rule_eval_result) 존재로 판정. */
   has_report: boolean;
+  /** 도면 교체 이력(#legacy-judgment-freshness) — 단건 GET 에서만 파생(true/false),
+   *  목록/생성 응답과 구 API 는 null/부재. 소비자는 `=== true` 로만 판정할 것. */
+  floorplan_replaced?: boolean | null;
   last_activity_at: string;
   expires_at: string | null;
   created_at: string;
@@ -205,18 +208,23 @@ export async function getFloorplanAssetSignedUrl(
 /**
  * OVERLAY-002: 사용자가 선택한 철거 희망 비내력벽·창호 region_id 목록을 판단스키마에 기록.
  * `windowRegionIds` 를 생략하면 창호 선택은 건드리지 않는다(하위호환).
+ * `assetId`(카드가 유래한 도면)를 주면 서버가 현재 선택 도면과 대조해, 도면이 교체된
+ * 뒤의 옛 카드 제출을 409 로 거절한다 — region id 는 다른 도면에서도 재사용되므로
+ * id 존재 검증만으로는 다른 도면의 벽이 선택될 수 있다(#overlay-asset-fingerprint).
  */
 export async function updateSelectedWalls(
   sessionId: string,
   regionIds: string[],
-  windowRegionIds?: string[]
+  windowRegionIds?: string[],
+  assetId?: string
 ): Promise<{ selected_walls: string[]; selected_windows: string[] }> {
   const res = await apiClient.patch<{
     selected_walls: string[];
     selected_windows?: string[];
   }>(`/sessions/${sessionId}/selected-walls`, {
     region_ids: regionIds,
-    ...(windowRegionIds !== undefined ? { window_region_ids: windowRegionIds } : {})
+    ...(windowRegionIds !== undefined ? { window_region_ids: windowRegionIds } : {}),
+    ...(assetId !== undefined ? { asset_id: assetId } : {})
   });
   return {
     selected_walls: res.data.selected_walls,
@@ -225,8 +233,10 @@ export async function updateSelectedWalls(
 }
 
 /**
- * 세션 진입 시 HF 세그멘테이션 엔드포인트를 미리 깨운다(콜드스타트 체감 제거).
- * best-effort — 실패해도 무시하고, 백엔드가 스로틀하므로 자주 불러도 안전하다.
+ * 도면 추론(HF) 엔드포인트 웨이크업 핑 — 세션 진입 1회 + 세션 활성 동안 10분 간격
+ * keep-alive(SessionChat). 백엔드가 GET /health 를 보낸다: 잠들어 있으면 스케일업
+ * 시작(~26초 뒤 서빙), 웜이면 idle 타이머(15분) 리셋. best-effort — 실패해도
+ * 무시하고, 백엔드가 스로틀하므로 자주 불러도 안전하다.
  */
 export async function warmupSegmentation(): Promise<void> {
   try {

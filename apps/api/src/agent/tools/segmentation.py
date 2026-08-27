@@ -26,10 +26,13 @@ mask_threshold, max_tiles}}``. tile_size/tile_overlap 은 학습값이라 넘기
 touches_tile_border…) — 여기서 라벨별 count + score 평균으로 집계해
 segmentation-result 계약(instances)으로 환원한다(좌표는 계약상 미포함).
 
-엔드포인트는 CPU + scale-to-zero(15분)라 유휴 후 첫 요청은 **503 으로 스케일업**되며
-수 분 걸릴 수 있다 — 폴링 재시도로 흡수한다. 어떤 실패도 **절대 uncaught raise 하지
-않고** 구조화 dict 를 반환한다(미배포/콜드스타트/타임아웃 모두 ok=false). 에이전트는
-ok=false 면 ASK_MORE 로 degrade, 반복 실패 시 HOLD_OR_HANDOFF 한다.
+엔드포인트는 GPU(nvidia-l4, 2026-08-26 전환) + scale-to-zero(15분)라 유휴 후 첫 요청은
+**즉시 503** 으로 반환되며 스케일업이 시작되고, 서빙 가능까지 약 26초 걸린다(실측).
+세션 시작 시 웨이크업 핑(agent/warmup.py)이 미리 깨워 두지만, 핑 후 26초가 지나기 전에
+도면이 제출되는 창은 3초 간격 폴링(첫 503 부터 wall-clock 60초 예산)으로 흡수한다.
+어떤 실패도 **절대 uncaught raise 하지 않고** 구조화 dict 를 반환한다(미배포/콜드스타트/
+타임아웃 모두 ok=false). 에이전트는 ok=false 면 ASK_MORE 로 degrade, 반복 실패 시
+HOLD_OR_HANDOFF 한다.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ import asyncio
 import contextlib
 import hashlib
 import ipaddress
+import time
 import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -45,6 +49,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ...errors import ZippinException
 from ...logging import get_logger
 
 if TYPE_CHECKING:
@@ -52,7 +57,7 @@ if TYPE_CHECKING:
 
 log = get_logger("zippin.agent.tools.segmentation")
 
-SCHEMA_VERSION = "1.4.0"
+SCHEMA_VERSION = "1.5.0"
 
 # segmentation-result 계약의 라벨 enum(검증·요약용).
 _KNOWN_LABELS: frozenset[str] = frozenset(
@@ -83,7 +88,8 @@ _KNOWN_LABELS: frozenset[str] = frozenset(
 # 높은 벽들. wall_other 는 v4 의 '판단 보류' 벽, wall_unknown 은 v3 이하 과거 데이터.
 _UNCERTAIN_WALL_LABELS: frozenset[str] = frozenset({"wall_other", "wall_unknown"})
 
-# 콜드스타트(503) 재시도 대기 상한(초). Retry-After 가 더 커도 이 값으로 캡한다.
+# 콜드스타트(503) 재시도 1회 대기 상한(초). Retry-After/estimated_time 힌트가 더 커도
+# 이 값으로 캡한다 — GPU 웨이크가 약 26초라 정상 힌트는 이 안에 들어온다.
 _MAX_RETRY_DELAY_SECONDS = 30.0
 
 # 핸들러가 "입력이 학습 해상도보다 작다"고 알리는 note 키. 이 값이 오면 앱이 도면을
@@ -1212,22 +1218,25 @@ async def segment_session_floorplan(
             error_code="SEGMENTATION_NO_IMAGE",
             summary="분석할 도면이 아직 업로드되지 않았습니다. 도면을 먼저 올려 주세요.",
         )
-    # 분석 입력 지문을 한 번만 기록(첫 분석 도구). 도면을 분석하는 시점의 (asset, address).
-    # resume 로 RunContext 가 비어 새로 생긴 경우 런너가 내구 지문을 복원하므로
-    # analysis_inputs 가 이미 채워져 있어 재기록하지 않는다.
-    if (
-        run_context is not None
-        and getattr(run_context, "analysis_inputs", None) is None
-    ):
-        inputs = await main_flow.get_session_inputs(session_id)
-        if inputs is not None:
-            run_context.analysis_inputs = inputs
-            if run_id is not None:
-                await main_flow.set_run_analysis_inputs(
-                    run_id=run_id,
-                    asset_id=inputs[0],
-                    address_id=inputs[1],
-                )
+    # 분석 입력 지문을 기록 — 도면을 분석하는 시점의 (asset, address). resume 로
+    # RunContext 가 비어 새로 생긴 경우 런너가 내구 지문을 복원하므로, **같은 asset**
+    # 이면 재기록하지 않는다. 단 지문의 asset 이 지금 분석하는 asset 과 다르면(같은
+    # 런에서 STALE_INPUT 후 교체된 도면을 재분석하는 경우) **최신 시도로 갱신**한다 —
+    # 안 그러면 이후 카드 스탬프·verdict 지문이 이번 런의 첫 asset 에 묶여, 재요청
+    # 카드가 '이미 이행됨'으로 잠기고 새 분석의 판정 영속이 거부된다
+    # (#analysis-inputs-latest-attempt).
+    if run_context is not None:
+        existing = getattr(run_context, "analysis_inputs", None)
+        if existing is None or existing[0] != asset["id"]:
+            inputs = await main_flow.get_session_inputs(session_id)
+            if inputs is not None:
+                run_context.analysis_inputs = inputs
+                if run_id is not None:
+                    await main_flow.set_run_analysis_inputs(
+                        run_id=run_id,
+                        asset_id=inputs[0],
+                        address_id=inputs[1],
+                    )
     # 보안 스캔 가드: 사용자 업로드 원본은 clean(또는 not_required)일 때만 분석한다.
     # pending 은 설정(agent_allow_unscanned_floorplans)이 허용할 때만. infected 등은 항상
     # 차단 — 미검사 콘텐츠를 HF 로 전달하지 않는다(#scan-gate).
@@ -1261,7 +1270,49 @@ async def segment_session_floorplan(
     result = await segment_floorplan_impl(
         image_url=signed, settings=settings, client=client
     )
-    if not result.get("ok") or not result.get("regions"):
+    if not result.get("ok"):
+        return result
+    if not result.get("regions"):
+        # 검출 0 인 **완료된** 분석도 빈 산출로 영속한다(#empty-analysis-persist) —
+        # wall_objects 키가 없으면 다음 턴 세션 상태가 '분석 진행/대기(재요청 금지)'로
+        # 오인해, 같은 턴 재요청이 유실됐을 때 사용자가 갇힌다. asset 지문으로 조건부
+        # 병합해(#analysis-merge-fingerprint) 그 사이 교체된 새 도면을 덮지 않는다.
+        try:
+            await main_flow.merge_judgment_schema(
+                session_id=session_id,
+                owner_user_id=owner_user_id,
+                owner_is_anonymous=owner_is_anonymous,
+                patch={
+                    "wall_objects": [],
+                    "space_objects": [],
+                    "window_objects": [],
+                    # 같은 asset 의 이전 분석이 남긴 VLM 관찰도 이번(빈) 런 기준으로
+                    # 소거한다 — 아무것도 못 찾은 분석에 옛 관찰이 붙지 않게
+                    # (#vlm-freshness).
+                    "vlm_supplement": None,
+                },
+                expected_asset_id=asset["id"],
+            )
+        except ZippinException as exc:
+            if exc.code == "ANALYSIS_INPUT_STALE":
+                # 검출 0 은 이미 교체된 옛 도면의 결과다 — '후보 0' 요약을 돌려주면
+                # 에이전트가 멀쩡한 새 도면을 두고 또 재업로드를 요청한다. 새 도면
+                # 재분석 흐름으로 유도한다(비어 있지 않은 분기와 동일 처리).
+                return _result(
+                    False,
+                    error_code="SEGMENTATION_STALE_INPUT",
+                    summary=(
+                        "분석 중에 도면이 새 도면으로 교체되어 이 결과는 저장하지 "
+                        "않았어요. 새 도면으로 다시 분석해 주세요."
+                    ),
+                )
+            log.warning(
+                "segmentation_judgment_persist_failed", session_id=str(session_id)
+            )
+        except Exception:  # noqa: BLE001 - 영속 실패는 분석 자체를 무르지 않는다
+            log.warning(
+                "segmentation_judgment_persist_failed", session_id=str(session_id)
+            )
         return result
     # 분석 성공 — 오버레이 카드 방출 + 공통 판단 스키마(wall/space objects) 누적 + LLM
     # 반환분에서 좌표 제거(컨텍스트 leanness). 카드 방출/판단 누적 실패는 분석 자체를
@@ -1301,8 +1352,13 @@ async def segment_session_floorplan(
     # 분석 성공(세그멘테이션 + VLM 평면도 검증 통과) 시에만 status 를 analyzing 으로 전진한다 —
     # 서명/엔드포인트/도면판정/not-floorplan 실패로 early-return 하는 경로에서 배지가 analyzing
     # 에 stuck 되지 않게(리뷰 지적). 직후 merge_judgment_schema 가 awaiting_overlay 로 전진한다.
+    # 분석하던 asset 이 여전히 선택돼 있을 때만 — 분석 중 교체가 재개(floorplan_selected)한
+    # 배지를 이 stale 전이가 다시 밀어 올리지 않게(#advance-recheck-asset).
     await main_flow.advance_session_status(
-        session_id=session_id, target="analyzing", reason="segmentation_succeeded"
+        session_id=session_id,
+        target="analyzing",
+        reason="segmentation_succeeded",
+        only_if_selected_asset=asset["id"],
     )
 
     # AI-003 정합성 검증·정규화 — VLM 교정(reclassifications)을 regions 에 머지한다.
@@ -1349,8 +1405,10 @@ async def segment_session_floorplan(
     # 트랜잭션에서** 새 선택 가능 id 와의 교집합으로 줄인다(#atomic-merge-prune).
     # 도구 쪽에서 미리 읽어 patch 에 실으면, 그 스냅숏과 영속 사이에 옛 카드 제출이
     # 끼어드는 창이 생긴다(#stale-overlay-submission 의 잔여 race).
-    if supplement is not None:
-        patch["vlm_supplement"] = supplement
+    # VLM 산출은 **항상** patch 에 싣는다(None 포함, 계약상 nullable) — 같은 asset 의
+    # 재분석에서 이번 런에 VLM 이 없었는데 이전 런의 관찰/보정이 남아 있으면, 세션
+    # 상태·룰 힌트가 서로 다른 런의 산출을 섞어 쓴다(#vlm-freshness).
+    patch["vlm_supplement"] = supplement
     # **판단객체를 먼저 영속하고, 성공했을 때만 오버레이 카드를 방출한다**
     # (#persist-before-emit). 카드를 먼저 내보내면 사용자가 즉시 제출했을 때
     # PATCH /selected-walls 가 아직 옛 wall_objects 로 검증해 새 카드가
@@ -1363,13 +1421,40 @@ async def segment_session_floorplan(
             owner_user_id=owner_user_id,
             owner_is_anonymous=owner_is_anonymous,
             patch=patch,
+            # 분석이 도는 동안(수 분) 다른 탭/재제출 카드가 도면을 교체했을 수 있다 —
+            # 분석을 시작한 asset 이 여전히 선택돼 있을 때만 산출을 영속한다
+            # (#analysis-merge-fingerprint). 교체됐으면 이 결과는 옛 도면의 것이므로
+            # 버리고, 에이전트에게 재분석을 유도한다.
+            expected_asset_id=asset["id"],
         )
+    except ZippinException as exc:
+        if exc.code == "ANALYSIS_INPUT_STALE":
+            return _result(
+                False,
+                error_code="SEGMENTATION_STALE_INPUT",
+                summary=(
+                    "분석 중에 도면이 새 도면으로 교체되어 이 결과는 저장하지 "
+                    "않았어요. 새 도면으로 다시 분석해 주세요."
+                ),
+            )
+        judgment_persisted = False
+        log.warning("segmentation_judgment_persist_failed", session_id=str(session_id))
     except Exception:  # noqa: BLE001 - 영속 실패는 분석 자체를 무르지 않는다(best-effort)
         judgment_persisted = False
         log.warning("segmentation_judgment_persist_failed", session_id=str(session_id))
 
     overlay_emitted = False
-    if judgment_persisted and run_context is not None and run_id is not None:
+    # 벽·창호(선택 가능 객체)가 하나도 없으면 오버레이를 내지 않는다 — 공간만 잡힌
+    # 도면에 비인터랙티브 오버레이를 띄우면, 같은 턴의 재업로드 안내(#no-overlay-for-
+    # empty-analysis)와 화면이 모순되고 에이전트도 overlay_emitted=true 를 '고를 수
+    # 있는 카드가 떴다'로 오독한다. 검출 상세는 요약·세션 상태로 충분하다.
+    selectable_found = bool(walls or windows)
+    if (
+        judgment_persisted
+        and selectable_found
+        and run_context is not None
+        and run_id is not None
+    ):
         from .domain import emit_ui_component_impl
 
         # 오버레이는 머지된(VLM 교정 반영) regions 로 띄운다.
@@ -1451,12 +1536,15 @@ async def segment_floorplan_impl(
     if settings.hf_segmentation_token:
         headers["Authorization"] = f"Bearer {settings.hf_segmentation_token}"
 
-    max_retries = settings.hf_segmentation_cold_start_max_retries
+    max_wait = settings.hf_segmentation_cold_start_max_wait_seconds
     owns_client = client is None
     if client is None:
         client = httpx.AsyncClient(timeout=settings.hf_segmentation_timeout_seconds)
     try:
-        attempt = 0
+        # 콜드스타트 재시도 예산은 **첫 503 부터의 wall-clock**(기본 60초)이다 — 횟수
+        # 예산은 Retry-After 힌트가 개입하면 실제 대기 시간이 불투명해진다. GPU 웨이크가
+        # 약 26초이므로 세션 시작 핑 직후 제출돼도 이 예산 안에서 서빙이 시작된다.
+        cold_start_deadline: float | None = None
         while True:
             try:
                 # 모델 카드 계약: inputs 는 data URL/base64/HTTP(S) URL 중 하나. 우리는
@@ -1514,16 +1602,20 @@ async def segment_floorplan_impl(
                     summary="엔드포인트가 아직 배포되지 않았습니다(404).",
                 )
             if status == 503:
-                if attempt >= max_retries:
+                now = time.monotonic()
+                if cold_start_deadline is None:
+                    cold_start_deadline = now + max_wait
+                if now >= cold_start_deadline:
                     return _result(
                         False,
                         error_code="SEGMENTATION_COLD_START_TIMEOUT",
                         summary="콜드스타트 대기 한도를 초과했습니다.",
                     )
-                attempt += 1
-                await asyncio.sleep(
-                    _retry_delay(resp, settings.hf_segmentation_cold_start_poll_seconds)
+                delay = _retry_delay(
+                    resp, settings.hf_segmentation_cold_start_poll_seconds
                 )
+                # 남은 예산 이내로 캡 — 마지막 재시도가 예산 끝에서 한 번 더 나간다.
+                await asyncio.sleep(min(delay, cold_start_deadline - now))
                 continue
             if status in (400, 422):
                 return _result(

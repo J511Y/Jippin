@@ -7,7 +7,14 @@
  * 이 카드를 방출하고, 사용자가 카드 안에서 이미지를 골라 첨부하면 업로드 →
  * asset 등록 → `sendMessage` 로 분석을 이어 가게 한다.
  *
- * payload: { reason?: string }
+ * payload: { reason?: string, prior_asset_id?: string | null }
+ *
+ * `prior_asset_id` 는 서버가 카드 발행 시점의 selected_floorplan_asset_id 를 스탬프한
+ * 값(#floorplan-request-prior-asset). "세션에 도면이 하나라도 있으면 첨부 완료"가 아니라
+ * "이 카드 발행 **이후** 새 asset 이 붙었는가"로 완료를 판정해야, 분석 불가(벽 후보 0)
+ * 등으로 에이전트가 **재업로드**를 요청한 새 카드가 뜨자마자 '받았어요'로 잠기지 않는다.
+ * 스탬프가 없는 구 카드들은 종전대로 "도면이 있으면 첨부 완료"로 처리하되, '다른 도면으로
+ * 다시 올리기'로 언제든 폼을 되열 수 있다(재제출 — 기존 도면은 삭제하지 않고 대체).
  *
  * 보안/검증: payload 는 LLM/서버 유래라 런타임 형태가 임의일 수 있다. `isPlainObject`
  * 로 객체임을 좁힌 뒤 `reason` 이 string 일 때만 채택한다(아니면 기본 문구). 모든
@@ -37,6 +44,9 @@ const MAX_BYTES = 50 * 1024 * 1024;
 
 export type FloorplanRequestPayload = {
   reason?: string;
+  /** 카드 발행 시점에 세션에 이미 선택돼 있던 asset id (서버 스탬프). null=발행
+   *  시점에 도면 없음, undefined=스탬프 없는 구 카드(#floorplan-request-prior-asset). */
+  prior_asset_id?: string | null;
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -53,7 +63,14 @@ export function isFloorplanRequestPayload(
   if (!isPlainObject(payload)) {
     return false;
   }
-  return payload.reason === undefined || typeof payload.reason === 'string';
+  if (payload.reason !== undefined && typeof payload.reason !== 'string') {
+    return false;
+  }
+  return (
+    payload.prior_asset_id === undefined ||
+    payload.prior_asset_id === null ||
+    typeof payload.prior_asset_id === 'string'
+  );
 }
 
 const DEFAULT_REASON =
@@ -78,7 +95,14 @@ export function FloorplanRequestCard({
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [attached, setAttached] = useState(false);
+  // 이 카드에서 방금 업로드에 성공했는지(세션 재조회가 돌아오기 전의 낙관 상태).
+  const [locallyAttached, setLocallyAttached] = useState(false);
+  // '다른 도면으로 다시 올리기'를 누른 시점의 선택 asset — 그 값이 그대로인 동안은
+  // 폼을 유지하고, **새로운** asset 변화(형제 카드의 업로드 포함)가 오면 다시 잠근다.
+  // undefined = 되연 적 없음.
+  const [reopenedAtAssetId, setReopenedAtAssetId] = useState<
+    string | null | undefined
+  >(undefined);
 
   const reason =
     typeof payload.reason === 'string' && payload.reason.trim().length > 0
@@ -87,21 +111,26 @@ export function FloorplanRequestCard({
 
   const interactive = actions !== null;
   const streaming = actions?.busy ?? false;
-  const disabled = busy || streaming || attached || !interactive;
 
   // 새로고침 시 이 카드(과거 메시지의 동적 컴포넌트)가 로컬 state 만으로는 첨부 여부를
-  // 몰라 업로드 폼을 다시 보여 주던 문제 — 마운트 시 세션의 selected_floorplan_asset_id
-  // 를 조회해 이미 도면이 첨부됐으면 '첨부됨' 상태로 반영한다(영속 상태와 UI 동기화).
+  // 몰라 업로드 폼을 다시 보여 주던 문제 — 세션의 selected_floorplan_asset_id 로 영속
+  // 상태와 UI 를 동기화한다. 컨텍스트 브로드캐스트(#floorplan-cards-broadcast)가 정본:
+  // 형제 카드가 업로드해 값이 바뀌면 이 카드도 함께 재조정된다(한 스레드의 여러 도면
+  // 카드가 서로 모순되게 남지 않게). 브로드캐스트가 없을 때(테스트 등)만 1회 자체 조회.
   const sessionId = actions?.sessionId;
+  const priorAssetId = payload.prior_asset_id;
+  const broadcastAssetId = actions?.selectedFloorplanAssetId;
+  const [fetchedAssetId, setFetchedAssetId] = useState<string | null | undefined>(
+    undefined
+  );
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || broadcastAssetId !== undefined) return;
     let ignore = false;
     void (async () => {
       try {
         const row = await getSession(sessionId);
-        if (!ignore && row.selected_floorplan_asset_id != null) {
-          setAttached(true);
-        }
+        // await 이후의 setState — 동기 cascading render 아님(#set-state-in-effect 규약).
+        if (!ignore) setFetchedAssetId(row.selected_floorplan_asset_id ?? null);
       } catch {
         /* 조회 실패 — 폼을 그대로 보여 준다(첨부는 다시 시도 가능) */
       }
@@ -109,7 +138,26 @@ export function FloorplanRequestCard({
     return () => {
       ignore = true;
     };
-  }, [sessionId]);
+  }, [sessionId, broadcastAssetId]);
+  const currentAssetId =
+    broadcastAssetId !== undefined ? broadcastAssetId : fetchedAssetId;
+
+  // 첨부 완료는 렌더 시 파생한다(효과로 state 미러링 금지 — react-hooks/set-state-in-effect).
+  // "도면이 있다"만으로 잠그면 재업로드 요청 카드가 뜨자마자 죽는다 — 카드에 스탬프된
+  // prior_asset_id(발행 시점의 asset)와 비교해 **이 카드 이후 새 asset 이 붙었을 때만**
+  // 이행된 것으로 본다(#floorplan-request-prior-asset). 스탬프 없는 구 카드는 종전
+  // 동작(도면 존재=첨부됨). '다시 올리기'로 되연 카드는 그 시점의 asset 이 그대로인
+  // 동안 폼을 유지한다.
+  const fulfilledByServer =
+    currentAssetId != null &&
+    (priorAssetId === undefined || currentAssetId !== priorAssetId);
+  const attached =
+    locallyAttached ||
+    (fulfilledByServer && currentAssetId !== reopenedAtAssetId);
+  // 세션에 (어떤 카드로든) 도면이 이미 존재하는지 — 폼 상태에서 "새 도면이 기존 도면을
+  // 대체한다"는 안내를 붙일지 결정한다(재제출 UX).
+  const hasPriorFloorplan = currentAssetId != null || locallyAttached;
+  const disabled = busy || streaming || attached || !interactive;
 
   function handlePick(picked: File | null) {
     setError(null);
@@ -140,7 +188,8 @@ export function FloorplanRequestCard({
       });
       // 등록까지 성공 — 정리 대상 아님.
       uploadedKey = null;
-      setAttached(true);
+      setLocallyAttached(true);
+      setFile(null);
       trackPrecheckFloorplanAttach();
       await actions.refreshSession?.();
       await actions.sendMessage('도면을 첨부했어요. 분석해 주세요.');
@@ -176,9 +225,34 @@ export function FloorplanRequestCard({
       <CardRule />
 
       {attached ? (
-        <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.55 }}>
-          도면을 첨부했어요. 이어서 비내력벽 후보를 분석할게요.
-        </Text>
+        <Stack gap="xs">
+          <Text size="sm" c="var(--jippin-brand-copy)" style={{ lineHeight: 1.55 }}>
+            도면을 첨부했어요. 이어서 비내력벽 후보를 분석할게요.
+          </Text>
+          {/* 재제출 — 첨부 완료로 잠긴 카드에서도 폼을 되열어 다른 도면을 올릴 수 있다.
+              기존 도면은 삭제되지 않고 새 도면이 대체한다(분석도 새 도면 기준으로 재실행).
+              3차 액션이라 subtle, 단 모바일 터치 타깃 ≥44px(AGENTS.md)는 minHeight 로 보장. */}
+          {interactive ? (
+            <Button
+              variant="subtle"
+              color="jippin"
+              size="sm"
+              leftSection={<IconPhotoUp size={14} />}
+              onClick={() => {
+                // 이 시점의 asset 을 기억해 폼을 되연다 — 이후 **새** asset 변화가
+                // 오면(형제 카드 업로드 등) 다시 '첨부 완료'로 잠긴다.
+                setReopenedAtAssetId(currentAssetId ?? null);
+                setLocallyAttached(false);
+                setFile(null);
+                setError(null);
+              }}
+              disabled={busy || streaming}
+              styles={{ root: { alignSelf: 'flex-start', minHeight: 44 } }}
+            >
+              다른 도면으로 다시 올리기
+            </Button>
+          ) : null}
+        </Stack>
       ) : (
         <Stack gap="sm">
           <Text
@@ -201,6 +275,13 @@ export function FloorplanRequestCard({
                 leftSection={<IconPhotoUp size={16} />}
                 aria-label="평면도 이미지 선택"
               />
+              {/* 재제출 안내 — 세션에 도면이 이미 있으면, 새 업로드가 기존 도면을
+                  대체(재분석)함을 알린다. 기존 도면 삭제 아님. */}
+              {hasPriorFloorplan ? (
+                <Text size="xs" c="dimmed">
+                  새 도면을 올리면 이전 도면 대신 새 도면으로 다시 분석해요.
+                </Text>
+              ) : null}
               {error ? (
                 <Group
                   gap={8}
