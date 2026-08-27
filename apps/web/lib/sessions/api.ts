@@ -52,6 +52,9 @@ export interface SessionResponse {
   completion_decision: string | null;
   /** 리포트 준비 여부 — 백엔드가 verdict(rule_eval_result) 존재로 판정. */
   has_report: boolean;
+  /** 도면 교체 이력(#legacy-judgment-freshness) — 단건 GET 에서만 파생(true/false),
+   *  목록/생성 응답과 구 API 는 null/부재. 소비자는 `=== true` 로만 판정할 것. */
+  floorplan_replaced?: boolean | null;
   last_activity_at: string;
   expires_at: string | null;
   created_at: string;

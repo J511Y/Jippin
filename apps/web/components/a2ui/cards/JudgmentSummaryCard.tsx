@@ -176,26 +176,53 @@ export function JudgmentSummaryCard({
   const currentAssetId = actions?.selectedFloorplanAssetId;
   const [staleOverride, setStaleOverride] = useState(false);
   const [checkingConsult, setCheckingConsult] = useState(false);
+  // 레거시(스탬프 없는) 카드가 게이트를 통과한 시점의 현재 선택 도면 — 폼의 서버측
+  // stale 재검증 지문으로 쓴다(#legacy-judgment-freshness).
+  const [legacyExpectedAssetId, setLegacyExpectedAssetId] = useState<
+    string | undefined
+  >(undefined);
   const staleFloorplan =
     staleOverride ||
     (typeof payload.asset_id === 'string' &&
       typeof currentAssetId === 'string' &&
       currentAssetId !== payload.asset_id);
 
-  // CTA 클릭 시점 재검증 — 서버의 현재 선택 도면을 새로 읽어 스탬프와 대조한다.
-  // 확인 실패(네트워크)는 상담을 막지 않는다(전환 크리티컬 CTA, best-effort 가드).
+  // CTA 클릭 시점 재검증 — 서버의 현재 세션을 새로 읽어 이 결과가 아직 유효한지
+  // 확인한다. 확인 실패(네트워크)나 응답 필드 부재는 상담을 막지 않는다(전환 크리티컬
+  // CTA, best-effort 가드 — 확실한 stale 증거가 있을 때만 차단).
   async function handleConsultClick() {
     const sid =
       actions?.sessionId ??
       (typeof payload.session_id === 'string' ? payload.session_id : undefined);
-    if (typeof payload.asset_id === 'string' && sid) {
+    if (sid) {
       setCheckingConsult(true);
       try {
         const row = await getSession(sid);
-        const live = row.selected_floorplan_asset_id;
-        if (live != null && live !== payload.asset_id) {
-          setStaleOverride(true);
-          return;
+        if (typeof payload.asset_id === 'string') {
+          // 스탬프 카드 — 현재 선택 도면과 대조(#judgment-cta-revalidate).
+          const live = row.selected_floorplan_asset_id;
+          if (live != null && live !== payload.asset_id) {
+            setStaleOverride(true);
+            return;
+          }
+        } else {
+          // 레거시(스탬프 없는) 결과 카드 — 세션에 도면 교체 이력이 있으면 이 카드는
+          // 그 이전 결론일 수 있어 보수적으로 차단한다(#legacy-judgment-freshness).
+          // 교체 이력은 새 도면의 분석·판정이 **완료돼도 되돌아가지 않는 단조 신호**라,
+          // has_report/분석 키처럼 재검토 뒤 옛 카드가 다시 통과하는 구멍이 없다.
+          // 도면 없이 발행되는 LLM-only 예비 결과(분석 키 부재가 정상)도 교체 이력이
+          // 없으면 종전대로 상담을 연다. 필드 부재(구 API·테스트)는 통과(best-effort).
+          if (row.floorplan_replaced === true) {
+            setStaleOverride(true);
+            return;
+          }
+          // 통과한 레거시 카드도 클릭 시점의 현재 도면을 지문으로 폼에 실어, 폼 작성
+          // 중 교체를 서버가 409(LEAD_FLOORPLAN_STALE)로 잡게 한다 — 스탬프 카드와
+          // 같은 마감. 도면 없는 세션(LLM-only)은 실을 지문이 없어 종전 동작.
+          const live = row.selected_floorplan_asset_id;
+          if (typeof live === 'string') {
+            setLegacyExpectedAssetId(live);
+          }
         }
       } catch {
         /* 확인 실패 — 진행(브로드캐스트/서버측 세션 상태가 최종 방어선) */
@@ -291,7 +318,9 @@ export function JudgmentSummaryCard({
               typeof payload.session_id === 'string' ? payload.session_id : undefined
             }
             expectedFloorplanAssetId={
-              typeof payload.asset_id === 'string' ? payload.asset_id : undefined
+              typeof payload.asset_id === 'string'
+                ? payload.asset_id
+                : legacyExpectedAssetId
             }
             ctaId="precheck_report"
             onSubmitted={() => setConsultSubmitted(true)}

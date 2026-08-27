@@ -336,10 +336,15 @@ async def test_replacing_floorplan_resets_prior_analysis(fake_db):
     assert js.get("judgment_values") == {"floor_count": 6}
 
 
-async def test_replacing_floorplan_reopens_status(fake_db):
+async def test_replacing_floorplan_reopens_status(fake_db, monkeypatch):
     """교체는 배지도 floorplan_selected 로 재개한다 — 분석·판정이 무효화됐는데
     awaiting_overlay/report_ready 등으로 남아 관리 목록이 무효 세션을 진행/완료로
-    표시하지 않게(#floorplan-replace-reset 의 status 짝)."""
+    표시하지 않게(#floorplan-replace-reset 의 status 짝).
+
+    재개는 링크와 **같은 행잠금 트랜잭션**에서 일어난다(#atomic-replace-reopen) —
+    별도 reopen_session_status 호출로 미루면 링크 커밋과 재개 사이 창에서 새 asset 의
+    분석 완료가 전진시킨 유효 배지를 지연된 재개가 후퇴시킬 수 있다. 여기서는 그 별도
+    호출이 아예 없음을 함께 고정한다."""
 
     session_id, subject = await _create_session_direct()
 
@@ -364,8 +369,89 @@ async def test_replacing_floorplan_reopens_status(fake_db):
     )
     assert fake_db.sessions[session_id]["status"] == "awaiting_overlay"
 
+    async def _fail_reopen(**kwargs):
+        raise AssertionError(
+            "교체 재개는 링크 트랜잭션 안에서 원자적으로 일어나야 한다 — "
+            "create_floorplan_asset 이 reopen_session_status 를 따로 부르면 안 된다."
+        )
+
+    monkeypatch.setattr(main_flow, "reopen_session_status", _fail_reopen)
+
     await attach("a2.png")
     assert fake_db.sessions[session_id]["status"] == "floorplan_selected"
+    # 재개 이벤트도 링크 seam 이 기록한다(감사 이력 보존).
+    assert any(
+        e["session_id"] == session_id
+        and e["to_status"] == "floorplan_selected"
+        and e["reason"] == "floorplan_replaced"
+        for e in fake_db.session_status_events
+    )
+
+
+async def test_session_view_derives_floorplan_replaced(fake_db):
+    """#legacy-judgment-freshness: 단건 GET view 는 asset row 수로 교체 이력을 파생한다
+    — 0~1개면 False(도면 없음/최초 업로드), 2개째부터 True. 교체 이력은 새 도면의
+    재검토가 완료돼도 되돌아가지 않는 단조 신호다(레거시 결과 카드 CTA 의 근거)."""
+
+    session_id, subject = await _create_session_direct()
+
+    async def view():
+        return await main_flow.get_owned_session_view(session_id, owner_user_id=subject)
+
+    assert (await view())["floorplan_replaced"] is False
+
+    async def attach(name: str):
+        return await main_flow.create_floorplan_asset(
+            session_id=session_id,
+            owner_user_id=subject,
+            payload={
+                "bucket": "session-floorplans",
+                "object_key": f"{subject}/{session_id}/{name}",
+                "content_type": "image/png",
+                "byte_size": 10,
+            },
+        )
+
+    await attach("a1.png")
+    assert (await view())["floorplan_replaced"] is False
+
+    await attach("a2.png")
+    assert (await view())["floorplan_replaced"] is True
+
+    # 새 도면의 분석·판정이 완료돼도(True 로 되살아나는 has_report 와 달리) 유지된다.
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=subject,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}]},
+    )
+    assert (await view())["floorplan_replaced"] is True
+
+
+async def test_insert_and_link_atomic_no_orphan_on_missing_session(fake_db):
+    """#atomic-asset-link: 세션이 없으면 asset insert 없이 404(전체 롤백 미러) —
+    링크된 적 없는 고아 asset row 가 floorplan_replaced 파생(row 수)을 오염시켜
+    교체 없는 세션을 영구 '교체됨'으로 만드는 경로를 봉인한다."""
+
+    ghost_session = uuid.uuid4()
+    with pytest.raises(ZippinException) as ei:
+        await main_flow._db_insert_and_link_floorplan_asset(
+            ghost_session,
+            {
+                "session_id": ghost_session,
+                "owner_user_id": uuid.uuid4(),
+                "kind": "original",
+                "storage_provider": "s3",
+                "bucket": "session-floorplans",
+                "object_key": "x/y/z.png",
+                "content_type": "image/png",
+                "byte_size": 10,
+                "sha256_hex": None,
+                "scan_status": "pending",
+            },
+        )
+    assert ei.value.code == "SESSION_NOT_FOUND"
+    assert fake_db.floorplan_assets == {}
 
 
 async def test_merge_rejects_stale_expected_asset(fake_db):
@@ -901,8 +987,13 @@ async def test_empty_reanalysis_reopens_to_floorplan_selected(fake_db):
 
 
 async def test_replacement_reopen_skips_when_asset_changed_again(fake_db):
-    """#advance-recheck-asset(재개 대칭): B 교체의 지연된 재개가 도착하기 전에 또 다른
-    교체·분석(C)이 끝났으면, C 의 유효한 awaiting_overlay 배지를 후퇴시키지 않는다."""
+    """#advance-recheck-asset(재개 대칭): 지연된 재개가 도착하기 전에 또 다른 교체·
+    분석(C)이 끝났으면, C 의 유효한 awaiting_overlay 배지를 후퇴시키지 않는다.
+
+    교체 재개 자체는 이제 링크 트랜잭션 안에서 원자적이라(#atomic-replace-reopen)
+    이 창이 없지만, only_if_selected_asset 가드는 트랜잭션 밖에서 재개를 부르는
+    다른 경로(예: 빈 재분석의 analysis_empty 재개)가 계속 쓴다 — 가드 semantics 를
+    직접 고정해 둔다."""
 
     session_id, subject = await _create_session_direct()
 

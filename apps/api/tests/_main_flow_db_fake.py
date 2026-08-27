@@ -37,8 +37,9 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_select_session_address",
     "_db_upsert_session_address",
     "_db_insert_floorplan_upload",
-    "_db_insert_floorplan_asset",
+    "_db_insert_and_link_floorplan_asset",
     "_db_select_selected_floorplan_asset",
+    "_db_count_session_floorplan_assets",
     "_db_search_floorplan_catalog",
     "_db_select_candidate_revision_keys",
     "_db_insert_floorplan_candidates",
@@ -52,7 +53,6 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_select_chat_tool_call_by_lc_id",
     "_db_list_chat_messages",
     "_db_update_session_fields",
-    "_db_link_session_floorplan_asset",
     "_db_insert_agent_run",
     "_db_select_agent_run",
     "_db_select_active_agent_run",
@@ -436,11 +436,19 @@ class FakeMainFlowDb:
 
     # -- floorplan_assets --------------------------------------------------
 
-    async def _db_insert_floorplan_asset(
-        self, values: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _db_insert_and_link_floorplan_asset(
+        self, session_id: uuid.UUID, asset_values: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        """asset insert + 세션 링크(+교체 리셋·배지 재개) 원자 수행(real seam 미러,
+        #atomic-asset-link) — 세션이 없으면 asset 을 남기지 않고 404(전체 롤백 미러).
+        링크된 적 없는 고아 asset row 가 없어야 floorplan_replaced 파생(row 수)이
+        건전하다."""
+
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise main_flow._not_found("Session not found.", code="SESSION_NOT_FOUND")
         now = _now()
-        row: dict[str, Any] = {
+        asset: dict[str, Any] = {
             "id": uuid.uuid4(),
             "floorplan_id": None,
             "floorplan_upload_id": None,
@@ -453,10 +461,61 @@ class FakeMainFlowDb:
             "scan_status": "pending",
             "created_at": now,
             "updated_at": now,
-            **values,
+            **asset_values,
         }
-        self.floorplan_assets[row["id"]] = row
-        return dict(row)
+        self.floorplan_assets[asset["id"]] = asset
+        replaced = self._link_session_floorplan_asset(session, asset["id"])
+        self._touch_session(session_id)
+        return dict(asset), replaced
+
+    def _link_session_floorplan_asset(
+        self, row: dict[str, Any], asset_id: uuid.UUID
+    ) -> bool:
+        """세션 포인터 링크 + 교체 리셋·배지 재개(real seam 의 링크 구간 미러)."""
+
+        prior = row.get("selected_floorplan_asset_id")
+        replaced = prior is not None and prior != asset_id
+        row["selected_floorplan_asset_id"] = asset_id
+        # 단일 소스 불변식(real seam 미러, #single-floorplan-source).
+        row["selected_floorplan_id"] = None
+        row["selected_floorplan_upload_id"] = None
+        if prior != asset_id:
+            # 재업로드(다른 asset 에서 갈아타기) — 이전 도면의 분석 산출을 제거한다
+            # (real seam 미러, #floorplan-replace-reset). 첫 연결(None→asset)엔 지울
+            # 분석이 없다.
+            js = row.get("judgment_schema")
+            if replaced and isinstance(js, dict):
+                row["judgment_schema"] = {
+                    k: v
+                    for k, v in js.items()
+                    if k not in main_flow._FLOORPLAN_ANALYSIS_KEYS
+                }
+            # migration 0016 trg_sessions_invalidate_verdict 미러(포인터 변경).
+            row["rule_eval_result"] = None
+            row["rule_evaluated_at"] = None
+            row["completion_decision"] = None
+        if replaced:
+            # 배지 재개도 링크와 같은 '트랜잭션'에서(real seam 미러, #atomic-replace-
+            # reopen) — 종료/handoff 불변, 현재가 floorplan_selected 이하면 no-op,
+            # 재개 이벤트는 매번 기록(_db_regress_session_status 와 같은 규칙).
+            rank = {name: i for i, name in enumerate(main_flow.STATUS_ORDER)}
+            current = row["status"]
+            if (
+                current not in ("expired", "deleted", "handoff")
+                and rank.get(current, -1) > rank["floorplan_selected"]
+            ):
+                self.session_status_events.append(
+                    {
+                        "session_id": row["id"],
+                        "from_status": current,
+                        "to_status": "floorplan_selected",
+                        "reason": "floorplan_replaced",
+                        "run_id": None,
+                        "occurred_at": _now(),
+                    }
+                )
+                row["status"] = "floorplan_selected"
+        return replaced
 
     async def _db_select_selected_floorplan_asset(
         self, session_id: uuid.UUID
@@ -469,6 +528,13 @@ class FakeMainFlowDb:
             return None
         row = self.floorplan_assets.get(asset_id)
         return dict(row) if row is not None else None
+
+    async def _db_count_session_floorplan_assets(self, session_id: uuid.UUID) -> int:
+        # 세션의 asset row 수(real seam 미러) — 교체는 삭제 없는 대체라 업로드마다
+        # 누적되고, 2개째부터가 곧 교체 이력이다(#legacy-judgment-freshness).
+        return sum(
+            1 for a in self.floorplan_assets.values() if a["session_id"] == session_id
+        )
 
     async def _db_search_floorplan_catalog(
         self, *, apartment_name: str, building_dong: str | None, limit: int
@@ -657,36 +723,6 @@ class FakeMainFlowDb:
             row["completion_decision"] = None
         self._touch_session(session_id)
         return dict(row)
-
-    async def _db_link_session_floorplan_asset(
-        self, session_id: uuid.UUID, asset_id: uuid.UUID
-    ) -> tuple[dict[str, Any] | None, bool]:
-        row = self.sessions.get(session_id)
-        if row is None:
-            return None, False
-        prior = row.get("selected_floorplan_asset_id")
-        replaced = prior is not None and prior != asset_id
-        row["selected_floorplan_asset_id"] = asset_id
-        # 단일 소스 불변식(real seam 미러, #single-floorplan-source).
-        row["selected_floorplan_id"] = None
-        row["selected_floorplan_upload_id"] = None
-        if prior != asset_id:
-            # 재업로드(다른 asset 에서 갈아타기) — 이전 도면의 분석 산출을 제거한다
-            # (real seam 미러, #floorplan-replace-reset). 첫 연결(None→asset)엔 지울
-            # 분석이 없다.
-            js = row.get("judgment_schema")
-            if replaced and isinstance(js, dict):
-                row["judgment_schema"] = {
-                    k: v
-                    for k, v in js.items()
-                    if k not in main_flow._FLOORPLAN_ANALYSIS_KEYS
-                }
-            # migration 0016 trg_sessions_invalidate_verdict 미러(포인터 변경).
-            row["rule_eval_result"] = None
-            row["rule_evaluated_at"] = None
-            row["completion_decision"] = None
-        self._touch_session(session_id)
-        return dict(row), replaced
 
     async def _db_set_session_verdict_if_inputs(
         self,

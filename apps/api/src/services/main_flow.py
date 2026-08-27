@@ -754,19 +754,30 @@ _FLOORPLAN_ANALYSIS_KEYS: tuple[str, ...] = (
 )
 
 
-async def _db_link_session_floorplan_asset(
-    session_id: uuid.UUID, asset_id: uuid.UUID
-) -> tuple[dict[str, Any] | None, bool]:
-    """세션 포인터를 새 asset 으로 연결하고, **다른 asset 에서 갈아타는 경우** 이전
-    분석 산출을 같은 행잠금 트랜잭션에서 제거한다(#floorplan-replace-reset).
+async def _db_insert_and_link_floorplan_asset(
+    session_id: uuid.UUID, asset_values: dict[str, Any]
+) -> tuple[dict[str, Any], bool]:
+    """asset INSERT 와 세션 링크(+교체 리셋·배지 재개)를 **한 행잠금 트랜잭션**으로
+    수행한다(#atomic-asset-link, #atomic-replace-reopen).
 
-    안 지우면 새 도면에 이전 도면의 wall_objects/selected_walls 가 남아, 에이전트가
-    '분석 완료'로 오인해 재분석을 건너뛰거나 옛 벽 판정을 새 도면 위에 설명하는 오류가
-    난다. verdict/completion_decision 무효화는 0016 트리거가(역할 무관) 처리하므로
-    여기서 중복하지 않는다.
+    insert 와 링크를 별개 트랜잭션으로 나누면, insert 커밋 뒤 링크 전에 요청이 죽는
+    경우(취소/오류) 링크된 적 없는 고아 asset row 가 남는다 — 그러면 '세션의 asset
+    row 2개째 = 교체'라는 floorplan_replaced 파생(#legacy-judgment-freshness)이 고아
+    + 첫 실링크를 교체로 오판해 스탬프 없는 결과 카드의 상담 CTA 를 영구히 잠근다.
+    원자화로 '모든 asset row 는 생성 시점에 링크됐다' 불변식을 세운다(링크 실패는
+    insert 도 함께 롤백). 세션 행잠금을 **먼저** 잡고 insert 한다 — insert 의 FK
+    KEY SHARE 를 먼저 잡으면 동시 업로드 둘이 서로의 FOR UPDATE 승격을 기다리는
+    교착이 된다(#lock-then-insert).
 
-    반환은 (updated_row | None, replaced) — ``replaced`` 는 기존의 **다른** asset 에서
-    갈아탔는지(호출자가 status 재개 여부를 결정하는 근거).
+    교체(replaced) 시 이전 분석 산출 제거(#floorplan-replace-reset)와 배지 재개
+    (floorplan_selected)도 같은 트랜잭션이다 — 재개를 별도 호출로 미루면 링크 커밋과
+    재개 사이 창에서 새 asset 의 분석 완료가 전진시킨 유효 배지를 지연된 재개가
+    후퇴시킬 수 있다. 재개 규칙은 _db_regress_session_status 와 동일(종료/handoff
+    불변, 현재가 target 이하면 no-op, 재개 이벤트는 매번 기록). verdict/
+    completion_decision 무효화는 0016 트리거가 처리하므로 중복하지 않는다.
+
+    반환은 (asset_row, replaced). 세션이 없으면(호출 직전 소유 검증과 이 트랜잭션
+    사이에 삭제) 404 — asset insert 없이 전체 롤백.
     """
 
     async with get_engine().begin() as conn:
@@ -775,43 +786,65 @@ async def _db_link_session_floorplan_asset(
                 sa.select(
                     _SESSIONS.c.selected_floorplan_asset_id,
                     _SESSIONS.c.judgment_schema,
+                    _SESSIONS.c.status,
                 )
                 .where(_SESSIONS.c.id == session_id)
                 .with_for_update()
             )
         ).one_or_none()
         if row0 is None:
-            return None, False
+            raise _not_found("Session not found.", code="SESSION_NOT_FOUND")
+        asset_row = (
+            await conn.execute(
+                sa.insert(_FLOORPLAN_ASSETS)
+                .values(**asset_values)
+                .returning(*_FLOORPLAN_ASSETS.c)
+            )
+        ).one()
+        asset = dict(asset_row._mapping)
         # 직접 업로드 asset 이 곧 세션의 도면 소스다 — 다른 소스 포인터(카탈로그
         # selected_floorplan_id / 업로드 메타 selected_floorplan_upload_id)는 함께
         # 비워 단일 소스 불변식을 지킨다(#single-floorplan-source). 현재는 이 포인터들을
         # 쓰는 흐름이 없어 no-op 이지만, 카탈로그 선택 흐름이 생겨도 직접 업로드가
         # 이전 소스의 분석·선택을 물려받는 구멍이 열리지 않는다.
         values: dict[str, Any] = {
-            "selected_floorplan_asset_id": asset_id,
+            "selected_floorplan_asset_id": asset["id"],
             "selected_floorplan_id": None,
             "selected_floorplan_upload_id": None,
         }
         prior = row0.selected_floorplan_asset_id
-        replaced = prior is not None and prior != asset_id
+        replaced = prior is not None and prior != asset["id"]
         if replaced:
             js = row0.judgment_schema if isinstance(row0.judgment_schema, dict) else {}
             reset = {k: v for k, v in js.items() if k not in _FLOORPLAN_ANALYSIS_KEYS}
             if reset != js:
                 values["judgment_schema"] = reset
-        row = (
-            await conn.execute(
-                sa.update(_SESSIONS)
-                .where(_SESSIONS.c.id == session_id)
-                .values(
-                    last_activity_at=sa.func.now(),
-                    updated_at=sa.func.now(),
-                    **values,
+            current = row0.status
+            if (
+                current not in _TERMINAL_STATUSES
+                and current != "handoff"
+                and _STATUS_RANK.get(current, -1) > _STATUS_RANK["floorplan_selected"]
+            ):
+                values["status"] = "floorplan_selected"
+                await conn.execute(
+                    sa.insert(_SESSION_STATUS_EVENTS).values(
+                        session_id=session_id,
+                        from_status=current,
+                        to_status="floorplan_selected",
+                        reason="floorplan_replaced",
+                        run_id=None,
+                    )
                 )
-                .returning(*_SESSIONS.c)
+        await conn.execute(
+            sa.update(_SESSIONS)
+            .where(_SESSIONS.c.id == session_id)
+            .values(
+                last_activity_at=sa.func.now(),
+                updated_at=sa.func.now(),
+                **values,
             )
-        ).one_or_none()
-    return (dict(row._mapping) if row is not None else None), replaced
+        )
+    return asset, replaced
 
 
 async def _db_insert_agent_run(values: dict[str, Any]) -> dict[str, Any] | None:
@@ -1073,6 +1106,44 @@ async def get_owned_session(
         owner_user_id=owner_user_id,
         owner_is_anonymous=owner_is_anonymous,
     )
+
+
+async def _db_count_session_floorplan_assets(session_id: uuid.UUID) -> int:
+    async with get_engine().begin() as conn:
+        count = (
+            await conn.execute(
+                sa.select(sa.func.count())
+                .select_from(_FLOORPLAN_ASSETS)
+                .where(_FLOORPLAN_ASSETS.c.session_id == session_id)
+            )
+        ).scalar()
+    return int(count or 0)
+
+
+async def get_owned_session_view(
+    session_id: uuid.UUID,
+    *,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool = False,
+) -> dict[str, Any]:
+    """``GET /sessions/{id}`` 응답용 — 소유 세션 row 에 표시 파생 필드를 붙인다.
+
+    ``floorplan_replaced``(#legacy-judgment-freshness): asset row 는 업로드마다 쌓이고
+    교체는 삭제 없는 대체라(#floorplan-replace-reset), 두 번째 row 부터가 곧 교체 이력
+    이다 — 모든 asset row 는 생성 시점에 세션에 링크되므로(#atomic-asset-link, 링크
+    실패 시 insert 도 롤백) 링크된 적 없는 고아 row 가 count 를 부풀리지 않는다.
+    has_report/분석 키와 달리 새 도면의 재검토가 완료돼도 **되돌아가지 않는 단조
+    신호**라, 스탬프 없는 레거시 결과 카드의 상담 CTA 가 이 값으로 신선도를 가른다.
+    runner 등 내부 경로는 count 비용 없는 ``get_owned_session`` 을 그대로 쓴다.
+    """
+
+    row = await _resolve_owner_session(
+        session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    count = await _db_count_session_floorplan_assets(session_id)
+    return {**row, "floorplan_replaced": count >= 2}
 
 
 async def get_session_address(session_id: uuid.UUID) -> dict[str, Any] | None:
@@ -1602,18 +1673,6 @@ async def create_floorplan_upload(
     )
 
 
-async def _db_insert_floorplan_asset(values: dict[str, Any]) -> dict[str, Any]:
-    async with get_engine().begin() as conn:
-        row = (
-            await conn.execute(
-                sa.insert(_FLOORPLAN_ASSETS)
-                .values(**values)
-                .returning(*_FLOORPLAN_ASSETS.c)
-            )
-        ).one()
-    return dict(row._mapping)
-
-
 async def _db_select_selected_floorplan_asset(
     session_id: uuid.UUID,
 ) -> dict[str, Any] | None:
@@ -1654,7 +1713,15 @@ async def create_floorplan_asset(
         owner_user_id=owner_user_id,
         owner_is_anonymous=owner_is_anonymous,
     )
-    asset = await _db_insert_floorplan_asset(
+    # asset 기록과 세션 링크는 한 트랜잭션이다(#atomic-asset-link) — 링크된 적 없는
+    # 고아 asset row 를 남기지 않아 floorplan_replaced 파생(row 수)이 건전해진다.
+    # main_flow 는 비-authenticated 풀러로 쓰므로 0008 client-guard 트리거는
+    # early-return 하고, 같은 세션 소속 asset 이라 reference-scope 도 통과한다.
+    # 재업로드(기존 asset 에서 갈아타기)면 이전 도면의 분석 산출 제거와 배지 재개
+    # (floorplan_selected)도 같은 행잠금 트랜잭션에서 일어난다(#floorplan-replace-
+    # reset, #atomic-replace-reopen) — 이전 도면 자체(asset row/파일)는 남는다.
+    asset, _replaced = await _db_insert_and_link_floorplan_asset(
+        session_id,
         {
             "session_id": session_id,
             "owner_user_id": owner_user_id,
@@ -1668,27 +1735,8 @@ async def create_floorplan_asset(
             # 사용자 업로드 원본은 검사 전이므로 pending — 세그멘테이션은 clean(또는
             # 설정상 허용)일 때만 분석한다(#scan-gate, schema plan §1534/§1588).
             "scan_status": "pending",
-        }
+        },
     )
-    # 세션을 이 asset 으로 연결한다. main_flow 는 비-authenticated 풀러로 쓰므로 0008
-    # client-guard 트리거는 early-return 하고, 같은 세션 소속 asset 이라 reference-scope
-    # 도 통과한다(상태 전이는 강제하지 않음 — 에이전트 플로우가 status 를 진행).
-    # 재업로드(기존 asset 에서 갈아타기)면 이전 도면의 분석 산출도 같은 트랜잭션에서
-    # 제거된다(#floorplan-replace-reset) — 이전 도면 자체(asset row/파일)는 남는다.
-    _, replaced = await _db_link_session_floorplan_asset(session_id, asset["id"])
-    if replaced:
-        # 분석 산출·판정이 방금 무효화됐는데 배지가 awaiting_overlay/report_ready 등에
-        # 남아 있으면 관리 목록·필터가 무효 세션을 진행/완료로 계속 표시한다 — 도면
-        # 선택 직후 단계로 재개한다(forward-only 의 sanctioned 역방향, 이미 그 이하면
-        # no-op, handoff/종료 상태는 건드리지 않음). 이 업로드의 asset 이 여전히 선택돼
-        # 있을 때만 — 링크와 이 재개 사이에 또 다른 교체·분석이 끝났으면 그 최신
-        # 도면의 유효한 배지를 후퇴시키지 않는다(#advance-recheck-asset 대칭).
-        await reopen_session_status(
-            session_id=session_id,
-            target="floorplan_selected",
-            reason="floorplan_replaced",
-            only_if_selected_asset=asset["id"],
-        )
     # 도면 asset 이 세션에 연결됐으니 status 를 floorplan_selected 로 전진.
     await advance_session_status(
         session_id=session_id, target="floorplan_selected", reason="floorplan_selected"
