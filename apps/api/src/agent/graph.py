@@ -57,7 +57,10 @@ def _build_model(settings: Any) -> Any:
 
         # 도구를 쓰는 gpt-5.6-luna 는 Chat Completions 에서 reasoning_effort 와 함께
         # 호출할 수 없으므로 Responses API 를 명시한다. LangGraph 체크포인트가 대화 이력의
-        # 정본이므로 use_previous_response_id 는 켜지 않는다.
+        # 정본이므로 use_previous_response_id 는 켜지 않는다. responses/v1 출력은 reasoning,
+        # assistant text, function call 의 원래 순서와 복수 reasoning item 을 content block 으로
+        # 보존한다. v0 호환 출력은 reasoning 을 additional_kwargs 단일 필드로 축약해 stateless
+        # replay(store=False) 시 encrypted_content 를 손상시킬 수 있다.
         # store: 완성본을 OpenAI Platform Logs 에 저장(평가/디버깅). 프리체크 대화는 주소
         # 등 PII 를 담을 수 있어 **openai_store_logs 가 켜진 경우에만** 저장한다(기본 미저장,
         # 프로덕션 보호). metadata 로 앱/환경을 태깅해 환경별 필터링이 가능하게 한다.
@@ -65,6 +68,8 @@ def _build_model(settings: Any) -> Any:
             model=model_str.split(":", 1)[1],
             api_key=api_key,
             use_responses_api=True,
+            output_version="responses/v1",
+            include=["reasoning.encrypted_content"],
             store=settings.openai_store_logs,
             extra_body={
                 "metadata": {"app": "jippin-agent", "env": str(settings.app_env)}
