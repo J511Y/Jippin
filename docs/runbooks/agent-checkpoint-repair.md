@@ -25,17 +25,20 @@ OpenAI Responses API를 `store=false`로 호출하는 LangGraph 세션이
 ## 운영 복구 절차
 
 복구 전 해당 세션의 활성 agent run이 없고 마지막 run이 terminal 상태인지 확인한다.
-먼저 dry-run으로 제거 대상 개수만 확인한다.
+먼저 dry-run으로 후보의 ID·message index·암호문 길이·짧은 SHA-256만 확인한다. 암호문
+원문과 대화 내용은 출력하지 않는다. 정상 후보가 여러 개인데 한 항목만 길이가 두 배인
+경우처럼 진단 증거와 일치하는 항목을 지정한다.
 
 ```bash
 fly ssh console -a jippin -C "python -m src.agent.checkpoint_repair <session-uuid>"
 ```
 
-진단에서 확인한 개수와 일치할 때만 적용한다. `--expected-items` 불일치 시 아무것도
-쓰지 않고 실패한다.
+진단에서 확인한 reasoning ID와 제거 개수가 모두 일치할 때만 적용한다.
+`--reasoning-id` 없이 적용할 수 없고, `--expected-items`가 불일치해도 아무것도 쓰지
+않고 실패한다.
 
 ```bash
-fly ssh console -a jippin -C "python -m src.agent.checkpoint_repair <session-uuid> --apply --expected-items 1"
+fly ssh console -a jippin -C "python -m src.agent.checkpoint_repair <session-uuid> --apply --reasoning-id <rs_id> --expected-items 1"
 ```
 
 도구는 최신 체크포인트의 암호화된 legacy reasoning 필드만 제거한다. 사용자/assistant
