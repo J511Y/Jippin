@@ -19,7 +19,13 @@ import pytest
 
 from src.agent.events import SseEventStream
 from src.agent.projection import AssistantMessage, ToolEnd, ToolStart
-from src.agent.runner import AgentRunner, TokenSignal, ToolProgress, translate_stream
+from src.agent.runner import (
+    AgentRunner,
+    TokenSignal,
+    ToolProgress,
+    _runtime_error_code,
+    translate_stream,
+)
 from src.services import main_flow
 from tests._main_flow_db_fake import FakeMainFlowDb, install_main_flow_fake
 
@@ -83,6 +89,26 @@ class _FakeAgent:
 
     def astream(self, payload: Any, config: Any = None, stream_mode: Any = None):
         return _aiter(self._chunks)
+
+
+def test_runtime_error_code_classifies_invalid_encrypted_content() -> None:
+    exc = RuntimeError("safe placeholder")
+    exc.code = "invalid_encrypted_content"  # type: ignore[attr-defined]
+
+    assert _runtime_error_code(exc) == "AGENT_CHECKPOINT_INVALID"
+
+
+def test_runtime_error_code_reads_structured_body_without_exposing_message() -> None:
+    exc = RuntimeError("contains user data")
+    exc.body = {  # type: ignore[attr-defined]
+        "error": {
+            "code": "invalid_encrypted_content",
+            "message": "must not be persisted",
+        }
+    }
+
+    assert _runtime_error_code(exc) == "AGENT_CHECKPOINT_INVALID"
+    assert _runtime_error_code(RuntimeError("other")) == "AGENT_RUNTIME_ERROR"
 
 
 def _parse(frames: list[str]) -> list[tuple[str | None, dict[str, Any] | None]]:

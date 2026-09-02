@@ -47,6 +47,19 @@ _STEP_SUBMITTING = "submitting"
 _STEP_STREAMING = "streaming"
 
 
+def _runtime_error_code(exc: Exception) -> str:
+    """PII/raw upstream message 를 노출하지 않고 알려진 장애만 안정적 코드로 분류한다."""
+
+    upstream_code = getattr(exc, "code", None)
+    if upstream_code is None:
+        body = getattr(exc, "body", None)
+        error = body.get("error") if isinstance(body, dict) else None
+        upstream_code = error.get("code") if isinstance(error, dict) else None
+    if upstream_code == "invalid_encrypted_content":
+        return "AGENT_CHECKPOINT_INVALID"
+    return "AGENT_RUNTIME_ERROR"
+
+
 def _stable_lc_id(prefix: str, *parts: str) -> str:
     """LC 메시지/툴콜 id 가 없을 때 쓰는 결정적 fallback.
 
@@ -632,10 +645,12 @@ class AgentRunner:
                 # str(exc)/traceback 은 SQL 파라미터·업스트림 URL·프롬프트/주소 PII 를
                 # 담을 수 있다. 로그 싱크가 redaction 되지 않으므로 안정적 코드/타입/run
                 # id 만 남기고 raw 메시지·트레이스백은 기록하지 않는다(#no-raw-exc-log).
+                error_code = _runtime_error_code(exc)
                 log.error(
                     "agent_run_failed",
                     run_id=str(self.run_id),
                     error_type=type(exc).__name__,
+                    error_code=error_code,
                 )
                 run_status = "failed"
                 # raw 예외 문자열(SQL 파라미터·업스트림 텍스트·사용자 프롬프트/주소 등
@@ -643,11 +658,11 @@ class AgentRunner:
                 # (계약: error_message 에 raw 금지).
                 await main_flow.update_agent_run(
                     run_id=self.run_id,
-                    error_code="AGENT_RUNTIME_ERROR",
+                    error_code=error_code,
                     error_message="에이전트 실행 중 오류가 발생했습니다.",
                 )
                 yield sse.error(
-                    error_code="AGENT_RUNTIME_ERROR",
+                    error_code=error_code,
                     message="에이전트 실행 중 오류가 발생했습니다.",
                     recoverable=False,
                 )
