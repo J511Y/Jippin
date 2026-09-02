@@ -9,6 +9,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.agent.checkpoint_repair import (
+    inspect_encrypted_legacy_reasoning,
     repair_latest_checkpoint,
     strip_encrypted_legacy_reasoning,
 )
@@ -58,6 +59,36 @@ def test_strip_encrypted_legacy_reasoning_preserves_public_and_tool_state() -> N
     }
     assert sanitized[2].content == original[2].content
     assert sanitized[3].content == original[3].content
+
+
+def test_inspect_legacy_reasoning_returns_only_safe_descriptors() -> None:
+    candidates = inspect_encrypted_legacy_reasoning(_messages())
+
+    assert candidates == (
+        {
+            "message_index": 1,
+            "reasoning_id": "rs-corrupt",
+            "encrypted_length": len("corrupt-encrypted-content"),
+            "encrypted_sha256": "2744c7f341322b31",
+        },
+    )
+    assert "corrupt-encrypted-content" not in str(candidates)
+
+
+def test_strip_legacy_reasoning_targets_explicit_id_only() -> None:
+    original = _messages()
+
+    untouched, removed = strip_encrypted_legacy_reasoning(
+        original, reasoning_ids=frozenset({"rs-other"})
+    )
+    sanitized, matched = strip_encrypted_legacy_reasoning(
+        original, reasoning_ids=frozenset({"rs-corrupt"})
+    )
+
+    assert removed == 0
+    assert untouched[1].additional_kwargs["reasoning"]["id"] == "rs-corrupt"
+    assert matched == 1
+    assert "reasoning" not in sanitized[1].additional_kwargs
 
 
 class _FakeCheckpointer:
@@ -128,6 +159,7 @@ async def test_repair_appends_child_checkpoint_with_new_messages_version() -> No
         thread_id=uuid.UUID("865fec06-7e28-4818-baf6-fbb9550610f7"),
         apply=True,
         expected_items=1,
+        reasoning_ids=frozenset({"rs-corrupt"}),
     )
 
     assert result.applied is True
@@ -157,6 +189,22 @@ async def test_repair_refuses_unexpected_item_count() -> None:
             thread_id=uuid.UUID("865fec06-7e28-4818-baf6-fbb9550610f7"),
             apply=True,
             expected_items=2,
+            reasoning_ids=frozenset({"rs-corrupt"}),
+        )
+
+    assert checkpointer.put_args is None
+
+
+@pytest.mark.asyncio
+async def test_repair_apply_requires_explicit_reasoning_id() -> None:
+    checkpointer = _FakeCheckpointer()
+
+    with pytest.raises(RuntimeError, match="targeted reasoning id"):
+        await repair_latest_checkpoint(
+            checkpointer,
+            thread_id=uuid.UUID("865fec06-7e28-4818-baf6-fbb9550610f7"),
+            apply=True,
+            expected_items=1,
         )
 
     assert checkpointer.put_args is None

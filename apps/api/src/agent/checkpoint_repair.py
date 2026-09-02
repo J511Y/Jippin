@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import hashlib
 import json
 import uuid
 from dataclasses import asdict, dataclass
@@ -33,9 +34,41 @@ class RepairResult:
     applied: bool
     source_checkpoint_id: str | None
     repair_checkpoint_id: str | None = None
+    candidates: tuple[dict[str, Any], ...] = ()
 
 
-def strip_encrypted_legacy_reasoning(messages: list[Any]) -> tuple[list[Any], int]:
+def inspect_encrypted_legacy_reasoning(
+    messages: list[Any],
+) -> tuple[dict[str, Any], ...]:
+    """원문 없이 message index, reasoning id, 길이, 짧은 해시만 반환한다."""
+
+    candidates: list[dict[str, Any]] = []
+    for index, message in enumerate(messages):
+        additional_kwargs = getattr(message, "additional_kwargs", None)
+        reasoning = (
+            additional_kwargs.get("reasoning")
+            if isinstance(additional_kwargs, dict)
+            else None
+        )
+        encrypted = (
+            reasoning.get("encrypted_content") if isinstance(reasoning, dict) else None
+        )
+        if not isinstance(encrypted, str) or not encrypted:
+            continue
+        candidates.append(
+            {
+                "message_index": index,
+                "reasoning_id": reasoning.get("id"),
+                "encrypted_length": len(encrypted),
+                "encrypted_sha256": hashlib.sha256(encrypted.encode()).hexdigest()[:16],
+            }
+        )
+    return tuple(candidates)
+
+
+def strip_encrypted_legacy_reasoning(
+    messages: list[Any], *, reasoning_ids: frozenset[str] | None = None
+) -> tuple[list[Any], int]:
     """암호화된 v0 reasoning 필드만 제거한 메시지 복사본과 제거 개수를 반환한다."""
 
     sanitized: list[Any] = []
@@ -52,6 +85,10 @@ def strip_encrypted_legacy_reasoning(messages: list[Any]) -> tuple[list[Any], in
             and isinstance(reasoning.get("encrypted_content"), str)
             and reasoning["encrypted_content"]
         ):
+            sanitized.append(message)
+            continue
+        reasoning_id = reasoning.get("id")
+        if reasoning_ids is not None and reasoning_id not in reasoning_ids:
             sanitized.append(message)
             continue
 
@@ -73,6 +110,7 @@ async def repair_latest_checkpoint(
     thread_id: uuid.UUID,
     apply: bool,
     expected_items: int | None = None,
+    reasoning_ids: frozenset[str] | None = None,
 ) -> RepairResult:
     """최신 체크포인트를 검사하고, 요청된 경우 복구 자식 체크포인트를 추가한다."""
 
@@ -86,8 +124,13 @@ async def repair_latest_checkpoint(
     if not isinstance(messages, list):
         raise RuntimeError("checkpoint messages channel not found")
 
-    sanitized, removed = strip_encrypted_legacy_reasoning(messages)
+    candidates = inspect_encrypted_legacy_reasoning(messages)
+    sanitized, removed = strip_encrypted_legacy_reasoning(
+        messages, reasoning_ids=reasoning_ids
+    )
     source_id = checkpoint.get("id")
+    if apply and not reasoning_ids:
+        raise RuntimeError("apply requires at least one targeted reasoning id")
     if expected_items is not None and removed != expected_items:
         raise RuntimeError(
             f"legacy reasoning count mismatch: expected={expected_items}, actual={removed}"
@@ -98,6 +141,7 @@ async def repair_latest_checkpoint(
             legacy_reasoning_items=removed,
             applied=False,
             source_checkpoint_id=source_id,
+            candidates=candidates,
         )
 
     from langgraph.checkpoint.base import create_checkpoint
@@ -125,6 +169,7 @@ async def repair_latest_checkpoint(
         applied=True,
         source_checkpoint_id=source_id,
         repair_checkpoint_id=next_config["configurable"]["checkpoint_id"],
+        candidates=candidates,
     )
 
 
@@ -144,9 +189,17 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Fail without writing unless the removable item count matches.",
     )
+    parser.add_argument(
+        "--reasoning-id",
+        action="append",
+        default=[],
+        help="Legacy reasoning item ID to remove. Repeat for multiple IDs.",
+    )
     args = parser.parse_args()
     if args.apply and args.expected_items is None:
         parser.error("--apply requires --expected-items")
+    if args.apply and not args.reasoning_id:
+        parser.error("--apply requires at least one --reasoning-id")
     return args
 
 
@@ -160,6 +213,7 @@ async def _run(args: argparse.Namespace) -> None:
             thread_id=args.thread_id,
             apply=args.apply,
             expected_items=args.expected_items,
+            reasoning_ids=frozenset(args.reasoning_id) if args.reasoning_id else None,
         )
         print(json.dumps(asdict(result), ensure_ascii=False))
     finally:
