@@ -66,6 +66,12 @@ export type FloorplanOverlayPayload = {
   regions?: OverlayRegion[];
   /** 벽 어휘 버전(서버 주입). 없으면 v3 — 아래 normalizeLegacyRegions 참고. */
   vocab_version?: number;
+  /**
+   * 재제공 카드 머리말(서버 주입, #overlay-reshow). 에이전트가 show_floorplan_overlay 로
+   * 같은 도면 카드를 다시 띄울 때만 실린다 — 있으면 **재선택 모드**: 저장된 선택을 복원하되
+   * '제출됨'으로 잠그지 않아 사용자가 더 고르거나 바꿔서 바로 다시 제출할 수 있다.
+   */
+  reason?: string;
 };
 
 /**
@@ -166,6 +172,13 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
   const titleId = useId();
   const sessionId = actions?.sessionId;
   const assetId = typeof payload.asset_id === 'string' ? payload.asset_id : undefined;
+  // 재선택 모드 — 서버가 reason 을 실어 보낸 재제공 카드. 안내 문구·머리말이 바뀌고, 복원된
+  // 선택이 '제출됨'으로 잠기지 않는다(#overlay-reshow).
+  const reselectReason =
+    typeof payload.reason === 'string' && payload.reason.trim().length > 0
+      ? payload.reason.trim()
+      : null;
+  const reselect = reselectReason !== null;
 
   // v3 카드(vocab_version 없음)는 옛 어휘 의미로 되살린 뒤 v4 규칙 하나로만 렌더한다.
   const regions = useMemo(
@@ -356,7 +369,9 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
         setSelected((current) =>
           sameStringSet(current, restoredSet) ? current : restoredSet
         );
-        setSubmitted(restoredSet.size > 0); // 이미 제출된 선택 복원.
+        // 이미 제출된 선택 복원. 재선택 모드에선 잠그지 않는다 — 이 카드의 목적이
+        // '더 고르거나 바꿔서 다시 제출'이라 같은 선택 그대로도 재제출을 허용한다.
+        setSubmitted(!reselect && restoredSet.size > 0);
       } catch {
         if (!ignore) setImageFailed(true);
       } finally {
@@ -366,7 +381,7 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     return () => {
       ignore = true;
     };
-  }, [sessionId, assetId, selectableIds]);
+  }, [sessionId, assetId, selectableIds, reselect]);
 
   // 토글은 **로컬 상태만** 바꾼다(자동 저장 안 함) — 아래 '제출' 버튼으로 확정한다.
   const toggle = useCallback((regionId: string) => {
@@ -456,13 +471,29 @@ export function FloorplanOverlayCard({ payload }: { payload: FloorplanOverlayPay
     <CardShell accent="blueprint" labelledBy={titleId}>
       <CardHeader
         icon={<IconVectorTriangle size={17} aria-hidden />}
-        eyebrow="철거 대상 선택"
-        title="철거할 벽·창호를 골라 제출해 주세요"
+        eyebrow={reselect ? '철거 대상 다시 선택' : '철거 대상 선택'}
+        title={
+          reselect
+            ? '철거할 벽·창호를 다시 골라 제출해 주세요'
+            : '철거할 벽·창호를 골라 제출해 주세요'
+        }
         titleId={titleId}
       />
       <CardRule />
 
       <Stack gap="sm">
+        {reselectReason ? (
+          // 재제공 사유(에이전트 생활어 한 문장) — 서버/LLM 유래 문자열은 텍스트 노드로만.
+          <Text size="sm" c="var(--jippin-brand-ink)" fw={600} lh={1.55}>
+            {reselectReason}
+          </Text>
+        ) : null}
+        {reselect ? (
+          <Text size="sm" c="var(--jippin-brand-copy)" lh={1.55}>
+            이전에 고른 곳은 그대로 표시돼 있어요. 더 고르거나 바꾼 뒤 다시 제출하면 새
+            선택 기준으로 다시 검토해요.
+          </Text>
+        ) : null}
         {/* 안내 문구는 **실제로 검출된 것만** 가리킨다 — 화면에 없는 색(초록 벽·파란 창)을
             찾게 하면 사용자가 헤매다 선택 흐름이 멈춘다. 비내력 후보가 하나도 없고 미확정
             벽만 잡히는 도면이 실제로 나온다(v4는 판단 보류를 별도 클래스로 낸다). */}

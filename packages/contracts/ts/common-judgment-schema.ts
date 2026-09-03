@@ -18,9 +18,9 @@ export interface CommonJudgmentSchema {
    */
   analyzed_at: string;
   /**
-   * 스키마 버전 (semver). 1.3.0: vlm_supplement 의 null 허용을 스키마에 명문화(설명은 원래 'null 또는 부재'였으나 타입이 미인코딩 — 이번 런에 VLM 산출이 없음을 null 로 영속하는 #vlm-freshness 경로 지원). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영).
+   * 스키마 버전 (semver). 1.4.0: vlm_supplement 에 confidence/is_floorplan/judgment_hints(코드가 이미 영속하던 필드의 계약 정합화) + region_assessments(벽·창호 영역별 VLM 위치·구조/경계 의견 — 선택 벽 종합 판단, 창호 경계 자동 반영, 오버레이 재제공 안내에 사용) 추가(추가형, 하위호환). 1.3.0: vlm_supplement 의 null 허용을 스키마에 명문화(설명은 원래 'null 또는 부재'였으나 타입이 미인코딩 — 이번 런에 VLM 산출이 없음을 null 로 영속하는 #vlm-freshness 경로 지원). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영).
    */
-  schema_version: "1.3.0";
+  schema_version: "1.4.0";
   building_info: BuildingInfo;
   /**
    * 공간 객체 목록.
@@ -177,6 +177,50 @@ export interface VlmSupplement {
     object_id: string;
     new_label: string;
     reason: string;
+  }[];
+  /**
+   * VLM 전체 분석 신뢰도 0~1 (1.4.0 명문화). 0.6 미만이면 ANALYSIS_LOW_CONFIDENCE 로 재확인 권장.
+   */
+  confidence?: number | null;
+  /**
+   * VLM 이 이미지를 실제 평면도로 봤는지 (1.4.0 명문화). 명시적 false 만 '평면도 아님'으로 취급한다.
+   */
+  is_floorplan?: boolean;
+  /**
+   * VLM 이 도면에서 직접 읽은 룰 입력 힌트 (1.4.0 명문화). 어휘/타입은 JudgmentValues 와 동일하며, 못 읽은 항목은 null. 우선순위: CHAT 전달값 > 이 힌트 > 룰엔진 보수적 가정.
+   */
+  judgment_hints?: {
+    has_sprinkler?: boolean | null;
+    has_evacuation_space?: boolean | null;
+    stairwell_count?: number | null;
+    window_form?: "FIXED" | "OPENABLE" | "FOLDING" | "SLIDING" | "OTHER" | null;
+    fire_zone?: boolean | null;
+    balcony_attached?: boolean | null;
+  };
+  /**
+   * VLM 의 벽·창호 영역별 위치·의견 (1.4.0 추가, #region-assessments). CHAT 이 선택 벽을 세그멘테이션 분류와 종합해 설명하고, 창호 경계(window_demolition_boundary)를 자동 반영하며, 사용자에게 어느 영역이 어디인지 안내하는 근거.
+   */
+  region_assessments?: {
+    /**
+     * 세그멘테이션 region_id (wall_objects/window_objects 의 id 와 동일).
+     */
+    region_id: string;
+    /**
+     * 영역 종류 — 서버가 region 출처로 정한다(VLM 출력 아님).
+     */
+    kind: "wall" | "window";
+    /**
+     * 비전문가용 생활어 위치 (예: '거실과 침실1 사이', '거실과 발코니 사이').
+     */
+    location: string;
+    /**
+     * 벽(kind=wall): NON_LOAD_BEARING/LOAD_BEARING/UNCERTAIN. 창호(kind=window): BALCONY_BOUNDARY(발코니-실내 경계 창)/EXTERIOR(외기 직접 접촉 창)/UNCERTAIN. kind 별 어휘 밖은 서버가 UNCERTAIN 으로 강등한다.
+     */
+    assessment: "NON_LOAD_BEARING" | "LOAD_BEARING" | "UNCERTAIN" | "BALCONY_BOUNDARY" | "EXTERIOR";
+    /**
+     * 근거 한 문장.
+     */
+    reason?: string;
   }[];
 }
 /**

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from typing import Any
 
 import pytest
 
@@ -1034,3 +1035,256 @@ async def test_emit_floorplan_request_survives_stamp_failure(monkeypatch) -> Non
     assert res["ok"] is True
     ui, _snap = ctx.drain_ui()
     assert "prior_asset_id" not in ui[0]["elements"]["fp"]["props"]
+
+
+# --- VLM 창호 경계 자동 반영 + 오버레이 재제공 (#region-assessments, #overlay-reshow) ----
+
+
+def _assessment(rid: str, assessment: str, kind: str = "window") -> dict[str, Any]:
+    return {
+        "region_id": rid,
+        "kind": kind,
+        "location": f"{rid} 위치",
+        "assessment": assessment,
+        "reason": "",
+    }
+
+
+def test_vlm_window_boundary_derivation() -> None:
+    def js(sel: list[str], items: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "selected_windows": sel,
+            "vlm_supplement": {"region_assessments": items},
+        }
+
+    assert domain._vlm_window_boundary({}) is None
+    assert (
+        domain._vlm_window_boundary(
+            js(["w1", "w2"], [_assessment("w1", "BALCONY_BOUNDARY")])
+        )
+        is None
+    )  # 하나라도 평가 없음 → 미확인
+    assert (
+        domain._vlm_window_boundary(
+            js(
+                ["w1", "w2"],
+                [
+                    _assessment("w1", "BALCONY_BOUNDARY"),
+                    _assessment("w2", "BALCONY_BOUNDARY"),
+                ],
+            )
+        )
+        == "BALCONY_BOUNDARY"
+    )
+    assert (
+        domain._vlm_window_boundary(
+            js(
+                ["w1", "w2"],
+                [_assessment("w1", "BALCONY_BOUNDARY"), _assessment("w2", "EXTERIOR")],
+            )
+        )
+        == "EXTERIOR"
+    )  # 외기 창 포함 → 보수적으로 EXTERIOR
+    assert (
+        domain._vlm_window_boundary(js(["w1"], [_assessment("w1", "UNCERTAIN")]))
+        is None
+    )
+
+
+async def test_evaluate_rules_autofills_window_boundary_from_vlm(monkeypatch) -> None:
+    # LLM 이 경계를 안 넘겨도 VLM 판정이 전부 경계 창이면 서버가 BALCONY_BOUNDARY 로 채워
+    # HOLD(재확인) 대신 발코니 확장 경로로 평가한다 — 사용자 재질문 없이 결론.
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_windows": ["pred:7", "pred:8"],
+        "window_objects": [{"id": "pred:7"}, {"id": "pred:8"}],
+        "vlm_supplement": {
+            "region_assessments": [
+                _assessment("pred:7", "BALCONY_BOUNDARY"),
+                _assessment("pred:8", "BALCONY_BOUNDARY"),
+            ]
+        },
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id, judgment_values={"floor_count": 16}
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] != "HOLD"
+    assert not any("창호가 바깥 공기" in r for r in res["result"].get("reasons", []))
+
+
+async def test_evaluate_rules_llm_boundary_overrides_vlm(monkeypatch) -> None:
+    # 사용자가 "둘 다 내부 분합창"이라 정정해 LLM 이 BALCONY_BOUNDARY 를 넘기면 VLM 의
+    # EXTERIOR 판정보다 우선한다(LLM 전달값 > VLM).
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_windows": ["pred:7"],
+        "window_objects": [{"id": "pred:7"}],
+        "vlm_supplement": {"region_assessments": [_assessment("pred:7", "EXTERIOR")]},
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={
+            "window_demolition_boundary": "BALCONY_BOUNDARY",
+            "floor_count": 16,
+        },
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] != "DENY"
+
+    res2 = await domain.evaluate_rules_impl(
+        session_id=session_id, judgment_values={"floor_count": 16}
+    )
+    assert res2["result"]["verdict"] == "DENY"  # LLM 값 없으면 VLM EXTERIOR 반영
+
+
+def _overlay_spec(asset_id: str, region_id: str = "pred:1") -> dict[str, Any]:
+    return {
+        "root": "ov",
+        "elements": {
+            "ov": {
+                "type": "FloorplanOverlay",
+                "props": {
+                    "asset_id": asset_id,
+                    "image": {"width": 100, "height": 100},
+                    "regions": [
+                        {
+                            "region_id": region_id,
+                            "class_name": "wall_nonbearing",
+                            "polygon": [10, 10, 20, 10, 20, 20],
+                        }
+                    ],
+                    "vocab_version": 4,
+                },
+            }
+        },
+    }
+
+
+async def _attach_asset(session_id, owner, name: str = "a1.png"):
+    return await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/{name}",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+
+
+async def test_show_overlay_requires_floorplan_and_analysis(monkeypatch) -> None:
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is False and res["error_code"] == "OVERLAY_NO_FLOORPLAN"
+
+    await _attach_asset(session_id, owner)
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is False and res["error_code"] == "OVERLAY_NO_ANALYSIS"
+    assert ctx.pending_ui_components == []
+
+
+async def test_show_overlay_reemits_latest_card_for_current_asset(monkeypatch) -> None:
+    # 분석 시점에 방출된 카드(chat_messages.ui_components)를 **현재 asset 기준**으로 찾아
+    # reason 만 얹어 재방출한다 — 옛 도면의 카드는 건너뛰고, 재분석은 하지 않는다.
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    old = await _attach_asset(session_id, owner, "old.png")
+    await main_flow.append_internal_chat_message(
+        session_id=session_id,
+        role="assistant",
+        content="옛 카드",
+        ui_components=[_overlay_spec(str(old["id"]), "pred:9")],
+    )
+    new = await _attach_asset(session_id, owner, "new.png")
+    await main_flow.append_internal_chat_message(
+        session_id=session_id,
+        role="assistant",
+        content="새 카드",
+        ui_components=[_overlay_spec(str(new["id"]), "pred:1")],
+    )
+    await main_flow.append_internal_chat_message(
+        session_id=session_id, role="assistant", content="결과 안내", ui_components=[]
+    )
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}],
+        "selected_walls": ["pred:1"],
+    }
+
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        reason="거실 날개벽을 골라 주세요",
+    )
+    assert res["ok"] is True and res["overlay_emitted"] is True
+    ui, _snap = ctx.drain_ui()
+    props = ui[0]["elements"]["ov"]["props"]
+    assert props["asset_id"] == str(new["id"])
+    assert props["regions"][0]["region_id"] == "pred:1"
+    assert props["reason"] == "거실 날개벽을 골라 주세요"
+    assert props["vocab_version"] == 4
+
+
+async def test_show_overlay_rebuilds_from_judgment_objects_when_no_card(
+    monkeypatch,
+) -> None:
+    # 카드 이력이 없으면(영속 실패·정리 등) 판단객체 coords 로 재구성해 띄운다 — 기본
+    # reason 이 붙고 wall_type 은 오버레이 어휘로 역매핑된다.
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    await _attach_asset(session_id, owner)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "pred:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            },
+            {
+                "id": "pred:2",
+                "wall_type": "LOAD_BEARING",
+                "coords": [{"x": 30, "y": 30}, {"x": 40, "y": 30}, {"x": 40, "y": 40}],
+            },
+            {"id": "pred:3", "wall_type": "UNKNOWN", "coords": [{"x": 1, "y": 1}]},
+        ],
+        "window_objects": [
+            {
+                "id": "pred:7",
+                "coords": [{"x": 50, "y": 50}, {"x": 60, "y": 50}, {"x": 60, "y": 60}],
+            }
+        ],
+    }
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is True
+    ui, _snap = ctx.drain_ui()
+    props = ui[0]["elements"]["ov"]["props"]
+    by_id = {r["region_id"]: r["class_name"] for r in props["regions"]}
+    assert by_id == {
+        "pred:1": "wall_nonbearing",
+        "pred:2": "wall_reinforced_concrete",
+        "pred:7": "window",
+    }  # pred:3 은 좌표 부족으로 드롭
+    assert props["reason"]

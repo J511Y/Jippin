@@ -258,3 +258,87 @@ async def test_interpret_no_key_returns_none() -> None:
         settings=settings,
     )
     assert res is None
+
+
+# --- region_assessments (#region-assessments) ------------------------------
+
+
+def test_normalize_assessments_kind_vocab_and_dedupe() -> None:
+    # kind 는 서버가 id 출처로 정하고, kind 별 어휘 밖 assessment 는 UNCERTAIN 으로 강등.
+    # 유효 id 밖·중복·위치 없는 항목은 드롭한다.
+    out = vlm._normalize_assessments(
+        [
+            {
+                "region_id": "pred:3",
+                "location": "거실과 침실1 사이",
+                "assessment": "non_load_bearing",  # 대소문자 무시
+                "reason": "얇은 벽",
+            },
+            {
+                "region_id": "pred:7",
+                "location": "거실과 발코니 사이",
+                "assessment": "BALCONY_BOUNDARY",
+            },
+            {
+                "region_id": "pred:8",
+                "location": "침실2 바깥",
+                "assessment": "NON_LOAD_BEARING",  # 창호에 벽 어휘 → UNCERTAIN
+            },
+            {"region_id": "pred:3", "location": "중복", "assessment": "LOAD_BEARING"},
+            {"region_id": "pred:99", "location": "모름", "assessment": "UNCERTAIN"},
+            {"region_id": "pred:4", "location": "   ", "assessment": "UNCERTAIN"},
+            "garbage",
+        ],
+        wall_ids={"pred:3", "pred:4"},
+        window_ids={"pred:7", "pred:8"},
+    )
+    assert [a["region_id"] for a in out] == ["pred:3", "pred:7", "pred:8"]
+    assert out[0] == {
+        "region_id": "pred:3",
+        "kind": "wall",
+        "location": "거실과 침실1 사이",
+        "assessment": "NON_LOAD_BEARING",
+        "reason": "얇은 벽",
+    }
+    assert out[1]["kind"] == "window"
+    assert out[1]["assessment"] == "BALCONY_BOUNDARY"
+    assert out[1]["reason"] == ""
+    assert out[2]["assessment"] == "UNCERTAIN"
+
+
+def test_normalize_assessments_non_list() -> None:
+    assert vlm._normalize_assessments(None, wall_ids=set(), window_ids=set()) == []
+    assert vlm._normalize_assessments("x", wall_ids=set(), window_ids=set()) == []
+
+
+def test_normalize_supplement_carries_region_assessments() -> None:
+    data = {
+        "is_floorplan": True,
+        "confidence": 0.8,
+        "notes": [],
+        "reclassifications": [],
+        "region_assessments": [
+            {
+                "region_id": "pred:1",
+                "location": "거실과 주방 사이",
+                "assessment": "LOAD_BEARING",
+                "reason": "두꺼운 해칭",
+            },
+            {
+                "region_id": "pred:7",
+                "location": "거실과 발코니 사이",
+                "assessment": "EXTERIOR",
+                "reason": "x",
+            },
+        ],
+    }
+    s = vlm._normalize_supplement(
+        data, model="m", valid_ids={"pred:1"}, window_ids={"pred:7"}
+    )
+    assert [a["assessment"] for a in s["region_assessments"]] == [
+        "LOAD_BEARING",
+        "EXTERIOR",
+    ]
+    # window_ids 를 안 넘긴 구 호출 경로도 깨지지 않는다(창호 항목만 드롭).
+    s2 = vlm._normalize_supplement(data, model="m", valid_ids={"pred:1"})
+    assert [a["region_id"] for a in s2["region_assessments"]] == ["pred:1"]

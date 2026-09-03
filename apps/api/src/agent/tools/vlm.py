@@ -67,12 +67,30 @@ _SYSTEM_PROMPT = (
     "모르면 null.\n"
     "   - balcony_attached: 사용자가 고른(또는 검토 중인) 철거 대상 벽이 발코니와 접하면 "
     "true(발코니 확장에 해당), 발코니와 무관한 실내 공간 사이 벽이면 false, 모르면 null.\n"
+    "6) region_assessments: 아래 제공된 **벽(wall_*)과 창호(window) region 각각**에 대한 "
+    "구조화 평가 배열. 사용자가 나중에 이 중 어느 것을 골라도 대화 에이전트가 위치와 구조 "
+    "의견을 바로 말할 수 있도록 **모든 벽·창호 region 을 빠짐없이** 채웁니다. 각 항목:\n"
+    "   - region_id: 제공된 region_id 그대로.\n"
+    "   - location: 그 벽/창이 도면상 어디에 있는지 비전문가가 알아듣는 생활어 한 구절 "
+    "(예: '거실과 침실1 사이', '주방 옆 다용도실 쪽', '거실과 발코니 사이', "
+    "'침실2 바깥쪽 외벽 창'). 공간 이름은 도면 표기를 우선합니다.\n"
+    "   - assessment: 벽이면 NON_LOAD_BEARING(비내력 추정)/LOAD_BEARING(내력 추정)/"
+    "UNCERTAIN(도면만으로 판단 어려움) 중 하나. 창호면 BALCONY_BOUNDARY(발코니와 실내 "
+    "사이 경계 창, 흔히 분합창)/EXTERIOR(외기와 직접 닿는 최외곽 창)/UNCERTAIN 중 하나. "
+    "창호 판단 기준: 창의 한쪽이 발코니 공간이고 다른 쪽이 거실·침실 등 실내면 "
+    "BALCONY_BOUNDARY, 창의 한쪽이 도면 바깥(외기)이면 EXTERIOR. 확신이 없으면 "
+    "UNCERTAIN 으로 두고 추측하지 않습니다.\n"
+    "   - reason: 그렇게 본 근거 한 문장(두께·해칭·기호·인접 공간 등).\n"
     '출력 예: {"is_floorplan":true,"confidence":0.7,"notes":["..."],'
     '"reclassifications":[{"object_id":"pred:5","new_label":'
     '"wall_reinforced_concrete","reason":"..."}],'
     '"judgment_hints":{"has_sprinkler":null,"has_evacuation_space":true,'
     '"stairwell_count":2,"window_form":"FIXED","fire_zone":false,'
-    '"balcony_attached":false}}'
+    '"balcony_attached":false},'
+    '"region_assessments":[{"region_id":"pred:3","location":"거실과 침실1 사이",'
+    '"assessment":"NON_LOAD_BEARING","reason":"얇은 단선 벽체로 표기"},'
+    '{"region_id":"pred:7","location":"거실과 발코니 사이",'
+    '"assessment":"BALCONY_BOUNDARY","reason":"한쪽이 발코니, 다른 쪽이 거실"}]}'
 )
 
 
@@ -132,10 +150,15 @@ _WALL_LABELS: frozenset[str] = frozenset(
 
 
 def _normalize_supplement(
-    data: dict[str, Any], *, model: str, valid_ids: set[str]
+    data: dict[str, Any],
+    *,
+    model: str,
+    valid_ids: set[str],
+    window_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """VLM 출력 정규화. ``valid_ids`` 는 **벽 region 만** 담아야 한다(호출자 책임) —
-    교정의 원본도 벽, 교정 라벨도 벽(_WALL_LABELS)으로 이중 강제한다."""
+    교정의 원본도 벽, 교정 라벨도 벽(_WALL_LABELS)으로 이중 강제한다. ``window_ids``
+    는 창호 region — 영역별 평가(region_assessments)의 창호 어휘 검증에만 쓴다."""
 
     notes = [
         str(n).strip()
@@ -172,6 +195,11 @@ def _normalize_supplement(
         # false-only, segment_session_floorplan 의 not-floorplan 게이트가 이 값을 본다).
         "is_floorplan": data.get("is_floorplan") is not False,
         "judgment_hints": _normalize_hints(data.get("judgment_hints")),
+        "region_assessments": _normalize_assessments(
+            data.get("region_assessments"),
+            wall_ids=valid_ids,
+            window_ids=window_ids or set(),
+        ),
     }
 
 
@@ -209,6 +237,71 @@ def _normalize_hints(raw: Any) -> dict[str, Any]:
         "fire_zone": _bool("fire_zone"),
         "balcony_attached": _bool("balcony_attached"),
     }
+
+
+#: 영역별 평가 어휘(#region-assessments). 벽/창호로 어휘가 갈리고, 어휘 밖·누락은
+#: UNCERTAIN 으로 강등한다 — 대화 에이전트가 '확신 없음'을 확인 질문으로 잇게 한다.
+_WALL_ASSESSMENTS: frozenset[str] = frozenset(
+    {"NON_LOAD_BEARING", "LOAD_BEARING", "UNCERTAIN"}
+)
+_WINDOW_ASSESSMENTS: frozenset[str] = frozenset(
+    {"BALCONY_BOUNDARY", "EXTERIOR", "UNCERTAIN"}
+)
+_MAX_ASSESSMENTS = 60
+_MAX_LOCATION_CHARS = 80
+_MAX_REASON_CHARS = 200
+
+
+def _normalize_assessments(
+    raw: Any, *, wall_ids: set[str], window_ids: set[str]
+) -> list[dict[str, Any]]:
+    """VLM 영역별 평가(region_assessments)를 엄격 정규화한다.
+
+    - region_id 는 세그멘테이션이 낸 벽·창호 id 만(유효 id 밖은 드롭, 중복은 첫 항목).
+    - kind 는 id 의 출처(벽/창호)로 서버가 정하고, assessment 는 kind 별 어휘 밖이면
+      UNCERTAIN 으로 강등한다(창호 어휘를 벽에 붙이는 등의 계약 밖 출력 차단).
+    - location/reason 은 문자열만, 길이 제한. location 이 비면 항목을 드롭한다 — 위치
+      없는 평가는 에이전트가 사용자에게 짚어 줄 수 없어 쓸모가 없다.
+    """
+
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if len(out) >= _MAX_ASSESSMENTS:
+            break
+        if not isinstance(item, dict):
+            continue
+        rid = item.get("region_id")
+        if not isinstance(rid, str) or rid in seen:
+            continue
+        if rid in wall_ids:
+            kind, vocab = "wall", _WALL_ASSESSMENTS
+        elif rid in window_ids:
+            kind, vocab = "window", _WINDOW_ASSESSMENTS
+        else:
+            continue
+        location = item.get("location")
+        location = location.strip() if isinstance(location, str) else ""
+        if not location:
+            continue
+        assessment = item.get("assessment")
+        if not isinstance(assessment, str) or assessment.upper() not in vocab:
+            assessment = "UNCERTAIN"
+        reason = item.get("reason")
+        reason = reason.strip() if isinstance(reason, str) else ""
+        seen.add(rid)
+        out.append(
+            {
+                "region_id": rid,
+                "kind": kind,
+                "location": location[:_MAX_LOCATION_CHARS],
+                "assessment": assessment.upper(),
+                "reason": reason[:_MAX_REASON_CHARS],
+            }
+        )
+    return out
 
 
 async def interpret_floorplan_impl(
@@ -297,13 +390,22 @@ async def interpret_floorplan_impl(
         for r in regions
         if isinstance(r, dict) and str(r.get("class_name") or "") in _WALL_LABELS
     }
+    window_ids = {
+        str(r.get("region_id"))
+        for r in regions
+        if isinstance(r, dict) and str(r.get("class_name") or "") == "window"
+    }
     supplement = _normalize_supplement(
-        data, model=model_str.split(":", 1)[1], valid_ids=valid_ids
+        data,
+        model=model_str.split(":", 1)[1],
+        valid_ids=valid_ids,
+        window_ids=window_ids,
     )
     log.info(
         "vlm_interpret_completed",
         notes=len(supplement["notes"]),
         reclassifications=len(supplement["reclassifications"]),
+        region_assessments=len(supplement["region_assessments"]),
         confidence=supplement["confidence"],
         is_floorplan=supplement["is_floorplan"],
     )

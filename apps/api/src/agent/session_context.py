@@ -40,6 +40,63 @@ def _wall_type_by_id(judgment: dict[str, Any]) -> dict[str, str]:
     return out
 
 
+_WALL_TYPE_LABEL: dict[str, str] = {
+    "NON_LOAD_BEARING": "비내력벽 후보",
+    "LOAD_BEARING": "내력벽 후보",
+    "UNKNOWN": "미확정 벽",
+}
+
+_ASSESSMENT_LABEL: dict[str, str] = {
+    "NON_LOAD_BEARING": "비내력 추정",
+    "LOAD_BEARING": "내력 추정(주의)",
+    "BALCONY_BOUNDARY": "발코니-실내 사이 경계 창(분합창)",
+    "EXTERIOR": "외기와 직접 닿는 바깥 창",
+    "UNCERTAIN": "도면만으로 판단 어려움",
+}
+
+
+def _assessments_by_id(judgment: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """VLM 영역별 평가(vlm_supplement.region_assessments)를 region_id 로 색인한다."""
+
+    vlm = judgment.get("vlm_supplement")
+    items = vlm.get("region_assessments") if isinstance(vlm, dict) else None
+    out: dict[str, dict[str, Any]] = {}
+    if isinstance(items, list):
+        for a in items:
+            if isinstance(a, dict) and isinstance(a.get("region_id"), str):
+                out[a["region_id"]] = a
+    return out
+
+
+def _selection_detail(
+    region_id: str,
+    *,
+    seg_label: str | None,
+    assessment: dict[str, Any] | None,
+) -> str:
+    """선택 항목 한 줄 — 세그멘테이션 분류 + VLM 위치/의견/근거(있는 것만).
+
+    VLM 산출(location/reason)은 이미지에서 읽은 텍스트라 « » 로 격리한다
+    (#prompt-injection-vlm)."""
+
+    parts: list[str] = []
+    if seg_label:
+        parts.append(f"분석 분류: {seg_label}")
+    if assessment is not None:
+        loc = assessment.get("location")
+        if isinstance(loc, str) and loc.strip():
+            parts.append(f"VLM 위치: {_data(loc)}")
+        label = _ASSESSMENT_LABEL.get(str(assessment.get("assessment") or ""))
+        if label:
+            parts.append(f"VLM 의견: {label}")
+        reason = assessment.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            parts.append(f"근거: {_data(reason)}")
+    else:
+        parts.append("VLM 위치/의견: 없음")
+    return f"  · {region_id} — " + " / ".join(parts)
+
+
 def build_session_state_context(
     session: dict[str, Any] | None,
     address: dict[str, Any] | None,
@@ -117,6 +174,40 @@ def build_session_state_context(
                     "대상에 포함되면 내력 여부를 단정하지 말고 추가 확인(현장/전문가)이 "
                     "필요하다고 안내할 것.)"
                 )
+            # 오리엔테이션(#region-assessments): 사용자가 고르기 **전에도** 어느 벽/창이
+            # 어디인지 생활어로 안내할 수 있게, 선택 가능한 영역의 VLM 위치를 나열한다.
+            # (예: "거실과 발코니 사이는 창호(파란색)로 잡혀 있어요" — 거실 벽을 묻는
+            # 사용자가 초록 벽만 찾다 헤매지 않게.)
+            by_id = _assessments_by_id(judgment)
+            orient: list[str] = []
+            for w in walls:
+                if not isinstance(w, dict) or not isinstance(w.get("id"), str):
+                    continue
+                if w.get("wall_type") == "LOAD_BEARING":
+                    continue  # 선택 불가(표시 전용) — 안내에서 제외
+                a = by_id.get(w["id"])
+                loc = a.get("location") if isinstance(a, dict) else None
+                if isinstance(loc, str) and loc.strip():
+                    kind = _WALL_TYPE_LABEL.get(str(w.get("wall_type")), "벽")
+                    orient.append(f"{w['id']}={_data(loc)}({kind})")
+            if isinstance(windows, list):
+                for win in windows:
+                    if not isinstance(win, dict) or not isinstance(win.get("id"), str):
+                        continue
+                    a = by_id.get(win["id"])
+                    loc = a.get("location") if isinstance(a, dict) else None
+                    if isinstance(loc, str) and loc.strip():
+                        label = _ASSESSMENT_LABEL.get(
+                            str(a.get("assessment") or ""), "창호"
+                        )
+                        orient.append(f"{win['id']}={_data(loc)}(창호, {label})")
+            if orient:
+                lines.append(
+                    "  (선택 가능한 영역의 도면상 위치 — VLM 이 이미지에서 읽음: "
+                    + "; ".join(orient[:16])
+                    + ". 사용자가 '○○ 벽'을 말하면 이 위치로 어느 영역인지 짚어 주고, "
+                    "거실-발코니 사이가 창호로 잡혀 있으면 그 사실을 먼저 알려 줄 것.)"
+                )
         elif analyzed:
             lines.append(
                 "- 평면도: 첨부 + 분석 완료 — 그러나 **벽·창호 후보가 하나도 잡히지 "
@@ -153,19 +244,78 @@ def build_session_state_context(
             f"region_id: {shown}. 이 선택을 '이미 아는 것'으로 다루고, 사용자가 '내가 "
             f"고른/선택한 벽'을 물으면 이 선택을 근거로 답할 것(선택을 모른다고 하지 말 것)."
         )
+        # 선택 벽별 근거(#region-assessments): 세그멘테이션 분류 + VLM 위치/의견. 에이전트가
+        # "비내력벽 N곳을 고르셨네요"로 되풀이하지 않고, 어느 벽인지·두 근거가 일치하는지를
+        # 종합해 말하게 한다.
+        by_id = _assessments_by_id(judgment)
+        for rid in ids[:10]:
+            lines.append(
+                _selection_detail(
+                    rid,
+                    seg_label=_WALL_TYPE_LABEL.get(str(wt.get(rid))),
+                    assessment=by_id.get(rid),
+                )
+            )
+        conflict = any(
+            wt.get(rid) == "NON_LOAD_BEARING"
+            and isinstance(by_id.get(rid), dict)
+            and by_id[rid].get("assessment") in ("LOAD_BEARING", "UNCERTAIN")
+            for rid in ids
+        )
+        lines.append(
+            "  → 답변 규칙: 선택 목록을 그대로 되풀이하지 말고, 각 벽이 **어디에 있는 벽인지**"
+            "(VLM 위치)와 **분석 분류·VLM 의견을 종합한 소견**을 생활어로 말할 것. "
+            + (
+                "분석 분류(비내력 후보)와 VLM 의견이 **어긋나는 벽이 있다** — 이 벽은 "
+                "비내력이라 단정하지 말고 두 근거가 갈린다는 점과 현장 확인 필요를 분명히 "
+                "말할 것."
+                if conflict
+                else "두 근거가 일치하면 그 일치를 근거로 제시할 것."
+            )
+        )
 
     # 창호 선택 — 발코니-실 경계 창호 철거(거실 통합) 검토 대상.
     selected_windows = judgment.get("selected_windows")
     if isinstance(selected_windows, list) and selected_windows:
         win_ids = [s for s in selected_windows if isinstance(s, str)]
         shown_windows = ", ".join(win_ids[:10])
+        by_id = _assessments_by_id(judgment)
+        verdicts = {
+            str(by_id[rid].get("assessment"))
+            if isinstance(by_id.get(rid), dict)
+            else "UNCERTAIN"
+            for rid in win_ids
+        }
+        if verdicts == {"BALCONY_BOUNDARY"}:
+            resolution = (
+                "VLM 판정이 모두 **발코니-실내 경계 창**이다 — 사용자에게 다시 묻지 말고 "
+                "이를 근거로 발코니 확장 검토로 진행할 것(규칙 평가에는 서버가 "
+                "BALCONY_BOUNDARY 를 자동 반영한다). 사용자가 다르게 말하면 사용자 답을 "
+                "우선하되 도면 관찰과 다르다는 점을 한 문장으로 알릴 것."
+            )
+        elif "EXTERIOR" in verdicts:
+            resolution = (
+                "VLM 판정에 **외기와 직접 닿는 바깥 창**이 포함돼 있다 — 그 창은 철거할 수 "
+                "없다고 먼저 알리고(규칙 평가에는 서버가 EXTERIOR 를 자동 반영한다), "
+                "경계 창만 남기고 다시 고르고 싶으면 show_floorplan_overlay 로 도면을 다시 "
+                "띄워 줄 것. 사용자가 '내부 분합창'이라고 정정하면 사용자 답을 우선하고 "
+                "window_demolition_boundary=BALCONY_BOUNDARY 로 넘길 것."
+            )
+        else:
+            resolution = (
+                "VLM 이 경계를 확정하지 못한 창이 있다 — **그 창에 대해서만** 생활어로 한 번 "
+                "확인하고(예: '거실과 발코니 사이 창인가요, 바깥 공기와 바로 닿는 창인가요?'), "
+                "답을 window_demolition_boundary(EXTERIOR|BALCONY_BOUNDARY)로 넘길 것. "
+                "확정된 창을 다시 묻지 말 것."
+            )
         lines.append(
             f"- 사용자가 도면에서 철거 검토 대상으로 직접 선택한 창호: {len(win_ids)}곳. "
-            f"region_id: {shown_windows}. 이 창호가 외기(건물 바깥)와 직접 닿는 최외곽 "
-            f"창인지, 발코니와 실내 사이의 경계 창인지 판단해 규칙 평가에 "
-            f"window_demolition_boundary(EXTERIOR|BALCONY_BOUNDARY)로 넘길 것 — 도면 "
-            f"관찰로 확신이 없으면 사용자에게 생활어로 확인할 것."
+            f"region_id: {shown_windows}. {resolution}"
         )
+        for rid in win_ids[:10]:
+            lines.append(
+                _selection_detail(rid, seg_label="창호", assessment=by_id.get(rid))
+            )
 
     # AI-002 VLM 문맥 검토 결과 — 도면 이미지를 본 관찰/보정을 에이전트가 활용하게 한다.
     vlm = judgment.get("vlm_supplement")

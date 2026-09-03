@@ -11,6 +11,7 @@ uncaught raise 하지 않고 {ok, error_code} 구조화 결과를 돌려 에이�
 from __future__ import annotations
 
 import asyncio
+import copy
 import re
 import uuid
 from datetime import UTC, datetime
@@ -624,6 +625,38 @@ def _apply_vlm_hints(
     return filled
 
 
+def _vlm_window_boundary(judgment_schema: dict[str, Any]) -> str | None:
+    """선택 창호의 VLM 경계 판정(region_assessments)에서 window_demolition_boundary 를
+    유도한다(#region-assessments → 룰 자동 보강).
+
+    - 선택 창호 중 하나라도 EXTERIOR 면 EXTERIOR(보수적 — 그 창은 철거 불가, DENY).
+    - 전부 BALCONY_BOUNDARY 면 BALCONY_BOUNDARY(발코니 확장 경로).
+    - 그 외(UNCERTAIN/평가 없음 포함)면 None — 룰엔진이 HOLD 로 재확인을 요구하고,
+      에이전트는 확정되지 않은 창에 대해서만 사용자에게 묻는다.
+    """
+
+    selected = judgment_schema.get("selected_windows")
+    if not isinstance(selected, list) or not selected:
+        return None
+    supplement = judgment_schema.get("vlm_supplement")
+    items = (
+        supplement.get("region_assessments") if isinstance(supplement, dict) else None
+    )
+    if not isinstance(items, list):
+        return None
+    by_id = {
+        a["region_id"]: str(a.get("assessment") or "")
+        for a in items
+        if isinstance(a, dict) and isinstance(a.get("region_id"), str)
+    }
+    verdicts = [by_id.get(rid) for rid in selected if isinstance(rid, str)]
+    if any(v == "EXTERIOR" for v in verdicts):
+        return "EXTERIOR"
+    if verdicts and all(v == "BALCONY_BOUNDARY" for v in verdicts):
+        return "BALCONY_BOUNDARY"
+    return None
+
+
 async def evaluate_rules_impl(
     *,
     session_id: uuid.UUID,
@@ -694,6 +727,17 @@ async def evaluate_rules_impl(
         else:
             clean_values.pop(target_key, None)
     hinted = _apply_vlm_hints(clean_values, js, accepted)
+    # 창호 경계는 **LLM 전달값 > VLM 영역 판정 > 미확인(HOLD)** — LLM 이 사용자 답으로
+    # 정정한 값이 있으면 그것을 존중하고, 없을 때만 VLM 판정으로 채운다.
+    if (
+        window_selected
+        and clean_values.get("window_demolition_boundary") is None
+        and "window_demolition_boundary" in accepted
+    ):
+        boundary = _vlm_window_boundary(js)
+        if boundary is not None:
+            clean_values["window_demolition_boundary"] = boundary
+            hinted.append("window_demolition_boundary")
     if hinted:
         log.info(
             "rule_eval_vlm_hints_applied", session_id=str(session_id), fields=hinted
@@ -860,6 +904,189 @@ async def emit_floorplan_request_impl(
     }
     return await emit_ui_component_impl(
         run_context=run_context, run_id=run_id, components=[spec]
+    )
+
+
+#: judgment_schema.wall_objects.wall_type → 오버레이 class_name (재구성 폴백용 역매핑).
+_OVERLAY_CLASS_BY_WALL_TYPE: dict[str, str] = {
+    "NON_LOAD_BEARING": "wall_nonbearing",
+    "LOAD_BEARING": "wall_reinforced_concrete",
+    "UNKNOWN": "wall_other",
+}
+
+
+def _overlay_component_asset(
+    component: Any,
+) -> tuple[str | None, dict[str, Any]] | None:
+    """json-render 스펙에서 FloorplanOverlay 카드의 (asset_id, props) 를 읽는다."""
+
+    if not isinstance(component, dict):
+        return None
+    root = component.get("root")
+    elements = component.get("elements")
+    if not isinstance(root, str) or not isinstance(elements, dict):
+        return None
+    element = elements.get(root)
+    if not isinstance(element, dict) or element.get("type") != "FloorplanOverlay":
+        return None
+    props = element.get("props")
+    if not isinstance(props, dict):
+        return None
+    asset_id = props.get("asset_id")
+    return (asset_id if isinstance(asset_id, str) else None), props
+
+
+def _rebuild_overlay_regions(judgment_schema: dict[str, Any]) -> list[dict[str, Any]]:
+    """영속된 판단객체(wall/window_objects)로 오버레이 region 을 재구성한다(폴백).
+
+    분석 시점의 카드가 chat_messages 에 남아 있지 않을 때만 쓴다 — coords(MaskCoord[])
+    를 평탄 polygon 으로 되돌리고 wall_type 을 오버레이 어휘로 역매핑한다. 세그멘테이션
+    원본의 score/bbox 는 없으므로 최소 필드만 싣는다.
+    """
+
+    regions: list[dict[str, Any]] = []
+
+    def _polygon(obj: dict[str, Any]) -> list[float]:
+        flat: list[float] = []
+        for pt in obj.get("coords") or []:
+            if isinstance(pt, dict) and isinstance(pt.get("x"), (int, float)):
+                if isinstance(pt.get("y"), (int, float)):
+                    flat.extend((float(pt["x"]), float(pt["y"])))
+        return flat
+
+    walls = judgment_schema.get("wall_objects")
+    if isinstance(walls, list):
+        for w in walls:
+            if not isinstance(w, dict) or not isinstance(w.get("id"), str):
+                continue
+            cls = _OVERLAY_CLASS_BY_WALL_TYPE.get(str(w.get("wall_type")))
+            poly = _polygon(w)
+            if cls and len(poly) >= 6:
+                regions.append(
+                    {"region_id": w["id"], "class_name": cls, "polygon": poly}
+                )
+    windows = judgment_schema.get("window_objects")
+    if isinstance(windows, list):
+        for win in windows:
+            if not isinstance(win, dict) or not isinstance(win.get("id"), str):
+                continue
+            poly = _polygon(win)
+            if len(poly) >= 6:
+                regions.append(
+                    {"region_id": win["id"], "class_name": "window", "polygon": poly}
+                )
+    return regions
+
+
+async def show_floorplan_overlay_impl(
+    *,
+    run_context: "RunContext",
+    run_id: uuid.UUID,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """현재 도면의 **오버레이 카드를 다시 띄운다**(#overlay-reshow).
+
+    분석 후 대화가 이어진 뒤 사용자가 다른 벽/창호를 추가로 검토하고 싶어 하거나, 에이전트가
+    "도면에서 골라 달라"고 요청해야 할 때 호출한다 — 카드 없이 말로만 고르라고 하면 사용자가
+    무엇을 해야 할지 모른다(세션 32a62ac9 의 '날개벽' 사례). 재분석은 하지 않는다: 분석
+    시점에 방출된 카드(chat_messages.ui_components)를 현재 선택 asset 기준으로 찾아 그대로
+    재방출하고, 없으면 영속된 판단객체로 재구성한다. 프론트 카드는 저장된 선택을 복원하고
+    재선택·재제출을 허용하므로, 제출되면 서버가 selected_walls 를 갱신하고 옛 verdict 를
+    무효화한다(기존 흐름 재사용).
+    """
+
+    asset = await main_flow.get_selected_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    if asset is None:
+        return _err(
+            "OVERLAY_NO_FLOORPLAN",
+            "아직 첨부된 도면이 없습니다. emit_floorplan_request 로 도면을 먼저 받으세요.",
+        )
+    asset_id = str(asset["id"])
+    try:
+        js = await main_flow.get_session_judgment_schema(session_id)
+    except Exception:  # noqa: BLE001 - 조회 실패는 '분석 없음'과 같이 다룬다
+        js = {}
+    walls = js.get("wall_objects")
+    windows = js.get("window_objects")
+    analyzed = isinstance(walls, list) or isinstance(windows, list)
+    selectable = bool(walls) or bool(windows)
+    if not analyzed or not selectable:
+        return _err(
+            "OVERLAY_NO_ANALYSIS",
+            "이 도면의 분석 결과가 없거나 고를 수 있는 벽·창호가 없습니다. "
+            "segment_floorplan 으로 먼저 분석하세요.",
+        )
+
+    spec: dict[str, Any] | None = None
+    try:
+        messages = await main_flow.list_session_chat_messages(
+            session_id=session_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
+    except Exception:  # noqa: BLE001 - 이력 조회 실패는 재구성 폴백으로
+        messages = []
+    for row in reversed(messages):
+        if row.get("role") != "assistant":
+            continue
+        for component in row.get("ui_components") or []:
+            found = _overlay_component_asset(component)
+            if found is None:
+                continue
+            found_asset, _props = found
+            if found_asset == asset_id:
+                spec = copy.deepcopy(component)
+                break
+        if spec is not None:
+            break
+
+    source = "message"
+    if spec is None:
+        from .segmentation import build_overlay_spec
+
+        regions = _rebuild_overlay_regions(js)
+        if not regions:
+            return _err(
+                "OVERLAY_NO_ANALYSIS",
+                "이 도면의 분석 결과로는 오버레이를 다시 그릴 수 없습니다. "
+                "segment_floorplan 으로 다시 분석하세요.",
+            )
+        image: dict[str, Any] = {}
+        if isinstance(asset.get("width_px"), int) and isinstance(
+            asset.get("height_px"), int
+        ):
+            image = {"width": asset["width_px"], "height": asset["height_px"]}
+        spec = build_overlay_spec(asset_id=asset_id, image=image, regions=regions)
+        source = "rebuilt"
+
+    root = spec.get("root")
+    props = spec["elements"][root]["props"]
+    if isinstance(reason, str) and reason.strip():
+        props["reason"] = reason.strip()
+    else:
+        props["reason"] = "추가로 철거를 검토할 벽이나 창호를 골라 다시 제출해 주세요."
+    await emit_ui_component_impl(
+        run_context=run_context, run_id=run_id, components=[spec]
+    )
+    log.info(
+        "overlay_reshown",
+        session_id=str(session_id),
+        asset_id=asset_id,
+        source=source,
+    )
+    return _ok(
+        overlay_emitted=True,
+        summary=(
+            "도면 오버레이 카드를 다시 띄웠어요. 본문에는 무엇을 고르면 되는지 짧은 안내 "
+            "한 문장만 두세요."
+        ),
     )
 
 
