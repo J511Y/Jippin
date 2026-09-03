@@ -19,9 +19,11 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
+  IconArrowRight,
   IconClipboardList,
   IconHomeCheck,
   IconInbox,
+  IconSparkles,
   IconUser
 } from '@tabler/icons-react';
 import Link from 'next/link';
@@ -50,22 +52,32 @@ import {
   VERDICT_TONE_COLOR
 } from '@/lib/home-check/display';
 import { parseApiError } from '@/lib/api/error';
+import {
+  listSessions,
+  syncExistingToken,
+  type SessionResponse,
+  type SessionStatus
+} from '@/lib/sessions/api';
 import { createClient } from '@/lib/supabase/client';
 
 /**
  * 마이페이지 (CMP-DIRECT).
  *
- * '내 정보'(프로필 · 비밀번호 변경 · 회원 탈퇴)와 '상담 현황'(기존 /contacts 에서
- * 이동) 두 탭으로 구성한다. 활성 탭은 URL 쿼리(`?tab=`)와 동기화해 딥링크를
- * 지원한다.
+ * 내 정보·사전검토·상담 현황·우리집 체크를 한곳에 모은다. 활성 탭은 URL
+ * 쿼리(`?tab=`)와 동기화해 딥링크를 지원한다.
  */
 
-type MyPageTab = 'profile' | 'consultations' | 'home-check';
+type MyPageTab = 'profile' | 'prechecks' | 'consultations' | 'home-check';
 
 const DEFAULT_TAB: MyPageTab = 'profile';
 
 function isMyPageTab(value: string | null): value is MyPageTab {
-  return value === 'profile' || value === 'consultations' || value === 'home-check';
+  return (
+    value === 'profile' ||
+    value === 'prechecks' ||
+    value === 'consultations' ||
+    value === 'home-check'
+  );
 }
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
@@ -76,6 +88,20 @@ const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   spam: { label: '종료', color: 'gray' }
 };
 
+const PRECHECK_STATUS: Record<SessionStatus, { label: string; color: string }> = {
+  draft: { label: '시작 전', color: 'gray' },
+  address_ready: { label: '도면 등록 전', color: 'jippin' },
+  floorplan_selected: { label: '분석 준비', color: 'jippin' },
+  analyzing: { label: '분석 중', color: 'info' },
+  awaiting_overlay: { label: '벽체 확인 중', color: 'info' },
+  collecting_info: { label: '정보 확인 중', color: 'info' },
+  ready_for_rule: { label: '판정 중', color: 'info' },
+  report_ready: { label: '결과 확인 가능', color: 'success' },
+  handoff: { label: '상담 연결', color: 'success' },
+  expired: { label: '만료됨', color: 'gray' },
+  deleted: { label: '삭제됨', color: 'gray' }
+};
+
 async function logout() {
   await fetch('/auth/logout', { method: 'POST' }).catch(() => undefined);
   window.location.assign('/');
@@ -84,6 +110,31 @@ async function logout() {
 function leadTitle(lead: MyLead): string {
   const addr = [lead.road_addr_part1, lead.road_addr_part2].filter(Boolean).join(' ');
   return addr || `${lead.applicant_name}님 상담`;
+}
+
+function withUnitSuffix(value: string | null | undefined, suffix: string): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed.endsWith(suffix) ? trimmed : `${trimmed}${suffix}`;
+}
+
+function precheckTitle(session: SessionResponse): string {
+  const address = session.address;
+  return (
+    address?.apartment_name?.trim() ||
+    address?.road_address?.trim() ||
+    address?.jibun_address?.trim() ||
+    '사전검토'
+  );
+}
+
+function precheckUnit(session: SessionResponse): string | null {
+  const address = session.address;
+  if (!address) return null;
+  const dong = withUnitSuffix(address.building_dong, '동');
+  const ho = withUnitSuffix(address.unit_ho, '호');
+  const unit = [dong, ho].filter(Boolean).join(' ');
+  return unit || null;
 }
 
 export function MyPageClient() {
@@ -150,6 +201,9 @@ export function MyPageClient() {
           <Tabs.Tab value="profile" leftSection={<IconUser size={16} />}>
             내 정보
           </Tabs.Tab>
+          <Tabs.Tab value="prechecks" leftSection={<IconSparkles size={16} />}>
+            사전검토
+          </Tabs.Tab>
           <Tabs.Tab value="consultations" leftSection={<IconClipboardList size={16} />}>
             상담 현황
           </Tabs.Tab>
@@ -172,6 +226,10 @@ export function MyPageClient() {
           </Stack>
         </Tabs.Panel>
 
+        <Tabs.Panel value="prechecks" pt="lg">
+          <PrechecksSection />
+        </Tabs.Panel>
+
         <Tabs.Panel value="consultations" pt="lg">
           <ConsultationsSection />
         </Tabs.Panel>
@@ -181,6 +239,114 @@ export function MyPageClient() {
         </Tabs.Panel>
       </Tabs>
     </>
+  );
+}
+
+function PrechecksSection() {
+  const [sessions, setSessions] = useState<SessionResponse[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        await syncExistingToken();
+        const items = await listSessions();
+        if (active) setSessions(items);
+      } catch {
+        if (active) {
+          setError('사전검토 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <Stack gap="sm">
+      <Group justify="space-between" align="center">
+        <Title order={2} size="h3">
+          사전검토
+        </Title>
+        <Button component={Link} href="/sessions" variant="light" color="jippin" size="sm">
+          새 사전검토
+        </Button>
+      </Group>
+
+      {error ? (
+        <Alert color="danger" variant="light">
+          {error}
+        </Alert>
+      ) : sessions === null ? (
+        <Group justify="center" py="lg">
+          <Loader size="sm" />
+        </Group>
+      ) : sessions.length === 0 ? (
+        <Card withBorder padding="xl">
+          <Stack align="center" gap="sm" ta="center" py="md">
+            <ThemeIcon size={48} radius="xl" variant="light" color="gray">
+              <IconSparkles size={24} />
+            </ThemeIcon>
+            <Text fw={600}>아직 진행한 사전검토가 없어요</Text>
+            <Text size="sm" c="dimmed">
+              도면을 올려 AI 사전검토를 시작하면 진행 내역과 결과를 여기에서 확인할 수 있어요.
+            </Text>
+            <Button component={Link} href="/sessions" color="jippin" size="md" mt="xs">
+              사전검토 시작
+            </Button>
+          </Stack>
+        </Card>
+      ) : (
+        <Stack gap="sm">
+          {sessions.map((session) => {
+            const status = session.has_report
+              ? PRECHECK_STATUS.report_ready
+              : PRECHECK_STATUS[session.status];
+            const unit = precheckUnit(session);
+            return (
+              <Card
+                key={session.id}
+                withBorder
+                radius="lg"
+                padding="lg"
+                component={Link}
+                href={`/sessions/${session.id}`}
+                style={{ textDecoration: 'none', color: 'inherit' }}
+              >
+                <Group justify="space-between" wrap="nowrap" align="center">
+                  <Stack gap={6} style={{ minWidth: 0 }}>
+                    <Group gap="xs" wrap="nowrap" align="center">
+                      <ThemeIcon size={28} radius="xl" variant="light" color="jippin">
+                        <IconSparkles size={15} aria-hidden />
+                      </ThemeIcon>
+                      <Text fw={600} truncate style={{ minWidth: 0 }}>
+                        {precheckTitle(session)}
+                      </Text>
+                    </Group>
+                    <Group gap="xs">
+                      <Badge color={status.color} variant="light" radius="sm">
+                        {status.label}
+                      </Badge>
+                      {unit ? (
+                        <Text size="xs" c="dimmed">
+                          {unit}
+                        </Text>
+                      ) : null}
+                      <Text size="xs" c="dimmed">
+                        {session.last_activity_at.slice(0, 10)} 최근 진행
+                      </Text>
+                    </Group>
+                  </Stack>
+                  <IconArrowRight size={18} color="var(--mantine-color-gray-6)" aria-hidden />
+                </Group>
+              </Card>
+            );
+          })}
+        </Stack>
+      )}
+    </Stack>
   );
 }
 

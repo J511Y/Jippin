@@ -105,7 +105,9 @@ export function HomeCheckReportView({
   const HeroIcon = meta.Icon;
 
   const ext = report.extension_check ?? null;
-  const changes = report.change_history ?? [];
+  // 표제부는 수집·판정·대장 상세/PDF 정본에 그대로 유지하고, 사용자가 보는 변동 이력은
+  // 해당 세대의 전유부 이력만 보여 준다.
+  const changes = (report.change_history ?? []).filter((entry) => entry.source === 'exclusive');
   const documents = (report.documents ?? []).filter((d) => d.url);
   const cautionReasons = report.caution_reasons ?? [];
   const unrecordedAreas = ext?.unrecorded_areas ?? [];
