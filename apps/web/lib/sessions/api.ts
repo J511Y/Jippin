@@ -42,11 +42,21 @@ export type SessionStatus =
   | 'expired'
   | 'deleted';
 
+export interface SessionAddress {
+  road_address: string | null;
+  jibun_address: string | null;
+  apartment_name: string | null;
+  building_dong: string | null;
+  unit_ho: string | null;
+}
+
 export interface SessionResponse {
   id: string;
   user_id: string;
   status: SessionStatus;
   address_id: string | null;
+  /** 목록 응답에 포함되는 주소 요약. 주소 입력 전 세션과 구 응답에서는 없음. */
+  address?: SessionAddress | null;
   selected_floorplan_asset_id: string | null;
   judgment_schema: Record<string, unknown>;
   completion_decision: string | null;

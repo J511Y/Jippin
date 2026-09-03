@@ -141,6 +141,9 @@ class SessionResponse(BaseModel):
     user_id: uuid.UUID
     status: SessionStatus
     address_id: uuid.UUID | None
+    # 목록 화면에서 세션을 서로 구분할 수 있도록 소유자 검증이 끝난 주소 요약을 함께
+    # 내려준다. 생성/단건 응답처럼 주소를 조인하지 않는 경로에서는 None 이다.
+    address: SessionAddressResponse | None = None
     selected_floorplan_id: uuid.UUID | None
     selected_floorplan_upload_id: uuid.UUID | None
     selected_floorplan_asset_id: uuid.UUID | None
