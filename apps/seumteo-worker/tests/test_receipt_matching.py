@@ -387,6 +387,52 @@ class ReceiptMatchingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["pbsvcRecpNo"], "20263230000I317508")
 
+    async def test_nonnumeric_unit_token_requires_boundary(self) -> None:
+        """'OF-304-1' 은 'OF-304-10' 에 걸리지 않는다 — 비숫자 토큰도 영숫자·하이픈 경계(Codex P2)."""
+
+        self._use_sambu(es_ho_nm="OF-304-1")
+        longer = _row(
+            "20263230000I317509",
+            "20260903142240",
+            address="서울특별시 강남구 삼성동 99-13 삼부아파트 101 OF-304-10",
+        )
+        mine = _row(
+            "20263230000I317510",
+            "20260903142239",
+            address="서울특별시 강남구 삼성동 99-13 삼부아파트 101 OF-304-1",
+        )
+
+        self._history(longer)
+        with self.assertRaisesRegex(FlowError, "신청한 발급 건"):
+            await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
+        self._history(longer, mine)
+        result = await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
+        self.assertEqual(result["pbsvcRecpNo"], "20263230000I317510")
+
+    async def test_short_building_name_inside_dong_token_does_not_hide_units(
+        self,
+    ) -> None:
+        """건물명 'A' 가 동 'A동' 안에서 잡혀도 지번 식별자 뒤 구간에서 동→호를 찾는다(Codex P2)."""
+
+        self._use_sambu(
+            bld_nm="A",
+            jibun_addr="서울특별시 강남구 삼성동 99-13 다른표기",
+            es_dong_nm="A동",
+        )
+        self._history(
+            _row(
+                "20263230000I317511",
+                "20260903142241",
+                address="서울특별시 강남구 삼성동 99-13 다른표기 A동 1001호",
+            )
+        )
+
+        result = await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
+        self.assertEqual(result["pbsvcRecpNo"], "20263230000I317511")
+
     async def test_snapshot_normalizes_existing_receipt_numbers(self) -> None:
         self.flow._post = AsyncMock(
             return_value={

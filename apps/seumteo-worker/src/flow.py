@@ -241,21 +241,44 @@ def _unit_pattern(value: str | None, suffix: str) -> re.Pattern[str] | None:
     쌓이고 잡은 upstream 오류로 끝난다(#recp-unit-suffix). 접미·'제' 접두·공백을 관용하되,
     숫자 토큰은 앞뒤 숫자·하이픈 경계를 요구해 '101'이 '1101동'/'1010동'/지번 '99-13'에
     걸리지 않게 하고, 접미를 소비하지 않았으면 뒤에 공백·끝·접미만 허용해 '종로1가'의 '1'
-    같은 부분일치를 배제한다. 공백을 먼저 지우면 '101 1001호'가 '1011001호'로 붙어 경계가
-    사라지므로, 호출측은 공백을 보존한 주소를 넘겨야 한다.
+    같은 부분일치를 배제한다. 비숫자 토큰도 영숫자·하이픈 경계를 요구해 'OF-304-1'이
+    'OF-304-10'에, 'A'가 'A1'에 걸리지 않게 한다(접미를 소비한 뒤에는 경계를 두지 않아
+    '가동308호'처럼 붙은 표기는 허용). 공백을 먼저 지우면 '101 1001호'가 '1011001호'로 붙어
+    경계가 사라지므로, 호출측은 공백을 보존한 주소를 넘겨야 한다.
     """
 
     core = _norm_unit(value)
     if not core:
         return None
+    boundary = r"[A-Za-z\d-]"
     if core.isdigit():
-        return re.compile(rf"(?<![\d-])0*{core}(?:\s*{suffix})?(?=\s|$|{suffix})")
+        return re.compile(rf"(?<!{boundary})0*{core}(?:\s*{suffix})?(?=\s|$|{suffix})")
     # 비숫자('가동'·'동명칭없음'·'OF-304-1'): 정규화값+접미 또는 원문 그대로(공백 관용).
     alts = [re.escape(core) + r"\s*" + suffix]
     raw_parts = re.sub(r"[()]", "", value or "").split()
     if raw_parts:
-        alts.append(r"\s*".join(re.escape(p) for p in raw_parts))
-    return re.compile("|".join(dict.fromkeys(alts)))
+        alts.append(r"\s*".join(re.escape(p) for p in raw_parts) + rf"(?!{boundary})")
+    return re.compile(rf"(?<!{boundary})(?:" + "|".join(dict.fromkeys(alts)) + ")")
+
+
+def _units_follow(
+    tail: str,
+    dong_pattern: re.Pattern[str] | None,
+    ho_pattern: re.Pattern[str] | None,
+) -> bool:
+    """tail 안에 동 토큰이 있고 그 **뒤에** 호 토큰이 이어지는지(동→호 순서).
+
+    호는 동 뒤에 온다 — 동번호를 호로 오인해 공용 계정의 다른 호 접수를 잘못 여는 일을 막는다
+    (#recp-ho-after-dong). 동 토큰이 여러 번 나오면(건물명 속 숫자 등) 각 위치 뒤를 모두 본다.
+    패턴이 None 이면 그 축은 검사하지 않는다(표제부는 호가 없다).
+    """
+
+    if dong_pattern is None:
+        return ho_pattern is None or ho_pattern.search(tail) is not None
+    for dm in dong_pattern.finditer(tail):
+        if ho_pattern is None or ho_pattern.search(tail, dm.end()) is not None:
+            return True
+    return False
 
 
 def _collapse_spaces(text: str) -> str:
@@ -1273,7 +1296,12 @@ class SeumteoFlow:
         kind = _REGSTR_KIND[req.register_kind]
         # 동/호 토큰 — ES 원문 포맷(접미 유무·'제' 접두)을 관용한다(#recp-unit-suffix).
         dong_pattern = _unit_pattern(t.get("es_dong_nm") or req.dong, "동")
-        ho_pattern = _unit_pattern(t.get("es_ho_nm") or req.ho, "호")
+        # 호는 전유부만 검사한다(표제부 행에는 호가 없다).
+        ho_pattern = (
+            _unit_pattern(t.get("es_ho_nm") or req.ho, "호")
+            if req.register_kind == "exclusive"
+            else None
+        )
         # 건물 식별자 — 공용 계정에 다른 단지의 같은 동/호(예: 다른 단지 101동 1001호)가 섞여
         # 있어, 동/호만으로 매칭하면 **엉뚱한 건물의 발급 문서**를 열 수 있다. 건물명과
         # **'시군구·법정동+본번' 지번 프리픽스**(짧은 본번의 부분일치 오매칭 방지)를 모두
@@ -1317,28 +1345,22 @@ class SeumteoFlow:
             if sent_echo and _collapse_spaces(addr) == sent_echo:
                 matched_by = "echo"
             else:
-                # 건물 식별자(건물명·지번 프리픽스)가 끝나는 지점 **뒤에서만** 동/호를 찾는다 —
-                # 지번 본번('종로1가 1')이나 건물명 속 숫자가 동/호로 오인되지 않게. 둘 다
-                # 맞으면 더 뒤쪽 끝(더 좁은 구간)을 쓴다.
-                ends = [
-                    m.end()
-                    for p in (name_pattern, parcel_pattern)
-                    if p is not None and (m := p.search(addr)) is not None
-                ]
-                if not ends:
+                # 건물 식별자가 끝나는 지점 **뒤에서만** 동→호를 찾는다 — 지번 본번('종로1가 1')
+                # 이나 건물명 속 숫자가 동/호로 오인되지 않게. 강한 식별자(지번 프리픽스)가
+                # 맞으면 그 끝만 쓴다 — 짧은 건물명('A')이 동 토큰('A동') 안에서 잡혀 구간을
+                # 잘못 자르지 않게(Codex P2 #201). 지번이 안 맞을 때만 건물명 출현 위치를 쓰되,
+                # 여러 번 나오면 각 위치 뒤를 모두 본다.
+                starts = (
+                    [m.end() for m in parcel_pattern.finditer(addr)]
+                    if parcel_pattern is not None
+                    else []
+                )
+                if not starts and name_pattern is not None:
+                    starts = [m.end() for m in name_pattern.finditer(addr)]
+                if not starts:
                     continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
-                tail = addr[max(ends) :]
-                if dong_pattern is not None:
-                    dm = dong_pattern.search(tail)
-                    if dm is None:
-                        continue
-                    # 호는 동 뒤에 온다 — 동번호를 호로 오인해 공용 계정의 다른 호 접수를
-                    # 잘못 여는 일을 막는다(#recp-ho-after-dong).
-                    tail = tail[dm.end() :]
-                if (
-                    req.register_kind == "exclusive"
-                    and ho_pattern is not None
-                    and ho_pattern.search(tail) is None
+                if not any(
+                    _units_follow(addr[s:], dong_pattern, ho_pattern) for s in starts
                 ):
                     continue
                 matched_by = "units"
