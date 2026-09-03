@@ -433,6 +433,69 @@ class ReceiptMatchingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["pbsvcRecpNo"], "20263230000I317511")
 
+    async def test_dong_token_inside_building_name_cannot_borrow_later_ho(
+        self,
+    ) -> None:
+        """'… 101 타워 102동 1001호' 는 101/1001 이 아니다 — 동→호는 주소 말단의 연속 토큰(Codex P2)."""
+
+        self._use_sambu(jibun_addr="서울특별시 강남구 삼성동 99-13 101 타워")
+        other_dong = _row(
+            "20263230000I317512",
+            "20260903142243",
+            address="서울특별시 강남구 삼성동 99-13 101 타워 102동 1001호",
+        )
+        mine = _row(
+            "20263230000I317513",
+            "20260903142242",
+            address="서울특별시 강남구 삼성동 99-13 101 타워 101 1001호",
+        )
+
+        self._history(other_dong)
+        with self.assertRaisesRegex(FlowError, "신청한 발급 건"):
+            await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
+        self._history(other_dong, mine)
+        result = await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
+        self.assertEqual(result["pbsvcRecpNo"], "20263230000I317513")
+
+    async def test_heading_requires_terminal_dong(self) -> None:
+        """표제부(호 없음)는 동이 주소 말단이어야 한다 — '… 101 타워 102동' 은 101동이 아니다."""
+
+        self._use_sambu(
+            jibun_addr="서울특별시 강남구 삼성동 99-13 101 타워", es_ho_nm=""
+        )
+        self.req = BuildingRegisterRequest(
+            road_addr="서울특별시 강남구 봉은사로111길 26",
+            dong="101",
+            register_kind="heading",
+        )
+        other_dong = {
+            **_row(
+                "20263230000I317514",
+                "20260903142245",
+                address="서울특별시 강남구 삼성동 99-13 101 타워 102동",
+            ),
+            "regstrKindCd": "3",
+        }
+        mine = {
+            **_row(
+                "20263230000I317515",
+                "20260903142244",
+                address="서울특별시 강남구 삼성동 99-13 101 타워 101",
+            ),
+            "regstrKindCd": "3",
+        }
+
+        self._history(other_dong)
+        with self.assertRaisesRegex(FlowError, "신청한 발급 건"):
+            await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
+        self._history(other_dong, mine)
+        result = await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
+        self.assertEqual(result["pbsvcRecpNo"], "20263230000I317515")
+
     async def test_snapshot_normalizes_existing_receipt_numbers(self) -> None:
         self.flow._post = AsyncMock(
             return_value={

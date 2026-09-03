@@ -261,22 +261,45 @@ def _unit_pattern(value: str | None, suffix: str) -> re.Pattern[str] | None:
     return re.compile(rf"(?<!{boundary})(?:" + "|".join(dict.fromkeys(alts)) + ")")
 
 
-def _units_follow(
+def _units_terminal(
     tail: str,
     dong_pattern: re.Pattern[str] | None,
     ho_pattern: re.Pattern[str] | None,
 ) -> bool:
-    """tail 안에 동 토큰이 있고 그 **뒤에** 호 토큰이 이어지는지(동→호 순서).
+    """tail 이 '동 [호]' 단위 구간으로 **끝나는지** — 동 바로 뒤에 호, 그 뒤엔 아무것도 없다.
 
-    호는 동 뒤에 온다 — 동번호를 호로 오인해 공용 계정의 다른 호 접수를 잘못 여는 일을 막는다
-    (#recp-ho-after-dong). 동 토큰이 여러 번 나오면(건물명 속 숫자 등) 각 위치 뒤를 모두 본다.
-    패턴이 None 이면 그 축은 검사하지 않는다(표제부는 호가 없다).
+    호는 동 뒤에 온다(#recp-ho-after-dong). 다만 "동 뒤 어딘가"로 느슨하게 찾으면 건물명 속
+    독립 토큰('101 타워'의 101)을 동으로 오인한 뒤 진짜 동('102동')을 건너뛰어 호를 집는다
+    (Codex P2 #201). 세움터 신청내역 locDetlAddr 는 워커가 담기(C01)에 보낸 형식 그대로
+    '지번 [건물명] 동 [호]' 로 끝나므로, 동→호가 주소의 **말단 연속 토큰**일 때만 인정한다
+    (사이엔 공백·접미 '동'·접두 '제' 만 허용). 동 토큰이 여러 번 나오면(건물명 속 숫자 등)
+    각 위치를 모두 시도한다. 동 패턴이 없으면 호가 말단이어야 하고, 호 패턴이 없으면
+    (표제부) 동이 말단이어야 한다.
     """
 
+    def _ends_at(pos: int) -> bool:
+        return not tail[pos:].strip()
+
     if dong_pattern is None:
-        return ho_pattern is None or ho_pattern.search(tail) is not None
+        if ho_pattern is None:
+            return True
+        return any(_ends_at(m.end()) for m in ho_pattern.finditer(tail))
     for dm in dong_pattern.finditer(tail):
-        if ho_pattern is None or ho_pattern.search(tail, dm.end()) is not None:
+        pos = dm.end()
+        if tail.startswith(
+            "동", pos
+        ):  # 숫자 동 패턴이 접미를 안 삼킨 경우('101동1001호')
+            pos += 1
+        while pos < len(tail) and tail[pos].isspace():
+            pos += 1
+        if ho_pattern is None:
+            if pos == len(tail):
+                return True
+            continue
+        if tail.startswith("제", pos):
+            pos += 1
+        hm = ho_pattern.match(tail, pos)
+        if hm is not None and _ends_at(hm.end()):
             return True
     return False
 
@@ -1345,11 +1368,11 @@ class SeumteoFlow:
             if sent_echo and _collapse_spaces(addr) == sent_echo:
                 matched_by = "echo"
             else:
-                # 건물 식별자가 끝나는 지점 **뒤에서만** 동→호를 찾는다 — 지번 본번('종로1가 1')
-                # 이나 건물명 속 숫자가 동/호로 오인되지 않게. 강한 식별자(지번 프리픽스)가
-                # 맞으면 그 끝만 쓴다 — 짧은 건물명('A')이 동 토큰('A동') 안에서 잡혀 구간을
-                # 잘못 자르지 않게(Codex P2 #201). 지번이 안 맞을 때만 건물명 출현 위치를 쓰되,
-                # 여러 번 나오면 각 위치 뒤를 모두 본다.
+                # 건물 식별자가 끝나는 지점 **뒤에서** 동→호가 주소 **말단**을 이루는지 본다 —
+                # 지번 본번('종로1가 1')이나 건물명 속 숫자('101 타워')가 동/호로 오인되지
+                # 않게. 강한 식별자(지번 프리픽스)가 맞으면 그 끝만 쓴다 — 짧은 건물명('A')이
+                # 동 토큰('A동') 안에서 잡혀 구간을 잘못 자르지 않게(Codex P2 #201). 지번이
+                # 안 맞을 때만 건물명 출현 위치를 쓰되, 여러 번 나오면 각 위치를 모두 본다.
                 starts = (
                     [m.end() for m in parcel_pattern.finditer(addr)]
                     if parcel_pattern is not None
@@ -1360,7 +1383,7 @@ class SeumteoFlow:
                 if not starts:
                     continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
                 if not any(
-                    _units_follow(addr[s:], dong_pattern, ho_pattern) for s in starts
+                    _units_terminal(addr[s:], dong_pattern, ho_pattern) for s in starts
                 ):
                     continue
                 matched_by = "units"
