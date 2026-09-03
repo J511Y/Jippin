@@ -5,7 +5,7 @@
 from .agent_run_request import AgentRunRequest, UserMessage
 from .agent_run_status import AgentRunStatus, AgentRunStatusValue
 from .agent_sse_event import AgentSseEvent, DoneEvent, ErrorEvent, MessageEvent, Role, RunStatus, SessionStatus, StateChangeDecision, StateChangeEvent, TokenEvent, ToolKind, ToolStepEvent, ToolStepStatus
-from .common_judgment_schema import BuildingInfo, BuildingType, CommonJudgmentSchema, JudgmentValues, MaskCoord, PermitEntry, Provider, Reclassification, RegisterSupplement, SelectedWall, SelectedWindow, SourceEngine, SourceEngine1, SpaceObject, Type, VlmSupplement, WallObject, WallType, WindowDemolitionBoundary, WindowForm, WindowObject
+from .common_judgment_schema import BuildingInfo, BuildingType, CommonJudgmentSchema, JudgmentHints, JudgmentValues, MaskCoord, PermitEntry, Provider, Reclassification, RegionAssessment, RegionKind, RegionOpinion, RegisterSupplement, SelectedWall, SelectedWindow, SourceEngine, SourceEngine1, SpaceObject, Type, VlmSupplement, WallObject, WallType, WindowDemolitionBoundary, WindowForm, WindowObject
 from .completion_decision import Channel, CompletionDecision, ConfidenceSummary, ConflictFlag, Decision, Kind, MissingField, NextAction
 from .error_response import ErrorBody, ErrorResponse
 from .estimate_result import Assumption, Currency, EstimateItem, EstimateResult, MoneyRange
@@ -50,6 +50,7 @@ __all__ = [
     "HomeCheckReport",
     "Image",
     "Instance",
+    "JudgmentHints",
     "JudgmentValues",
     "Kind",
     "Kind1",
@@ -66,6 +67,9 @@ __all__ = [
     "Provider",
     "Reclassification",
     "Region",
+    "RegionAssessment",
+    "RegionKind",
+    "RegionOpinion",
     "RegisterSupplement",
     "ReportMeta",
     "RequiredFacility",

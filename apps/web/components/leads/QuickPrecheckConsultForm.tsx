@@ -36,6 +36,10 @@ export interface QuickPrecheckConsultFormProps {
    *  현재 도면과 대조해, 폼 작성 중 도면이 교체됐으면 409 로 거절한다
    *  (#judgment-cta-revalidate 의 서버측 마무리). */
   expectedFloorplanAssetId?: string;
+  /** 이 상담이 유래한 결과의 벽·창호 선택 지문(결과 카드 스탬프) — 제출 시 백엔드가
+   *  세션의 현재 선택과 대조해, 폼 작성 중 다시 골랐으면 409 로 거절한다
+   *  (#judgment-selection-stamp 의 서버측 마무리). */
+  expectedSelectionKey?: string;
   /** 인입 식별자 — 제출 추적 cta. */
   ctaId?: LeadCtaId;
   /** 제출 성공 콜백 — 카드가 완료 상태로 전환. */
@@ -52,6 +56,7 @@ export function QuickPrecheckConsultForm({
   prefillAddress,
   fromSession,
   expectedFloorplanAssetId,
+  expectedSelectionKey,
   ctaId,
   onSubmitted
 }: QuickPrecheckConsultFormProps) {
@@ -107,6 +112,7 @@ export function QuickPrecheckConsultForm({
         road_addr_part1: prefillAddress?.trim() || null,
         session_id: fromSession ?? null,
         expected_floorplan_asset_id: expectedFloorplanAssetId ?? null,
+        expected_selection_key: expectedSelectionKey ?? null,
         message: values.message.trim() || null
       });
       trackLeadSubmit('precheck_session', ctaId);
@@ -119,10 +125,13 @@ export function QuickPrecheckConsultForm({
     } catch (error) {
       // 폼 작성 중 도면이 교체된 경우(409 LEAD_FLOORPLAN_STALE) — 원인이 사용자의
       // 입력이 아니므로 생활어로 상황과 다음 행동을 안내한다.
+      const code = parseApiError(error).code;
       const message =
-        parseApiError(error).code === 'LEAD_FLOORPLAN_STALE'
+        code === 'LEAD_FLOORPLAN_STALE'
           ? '도면이 새로 바뀌어 이 결과 기준으로는 신청할 수 없어요. 새 도면 검토를 마친 뒤 새 결과 카드에서 다시 신청해 주세요.'
-          : parseApiError(error).message;
+          : code === 'LEAD_SELECTION_STALE'
+            ? '철거할 벽·창호 선택이 바뀌어 이 결과 기준으로는 신청할 수 없어요. 바뀐 선택으로 검토를 마친 뒤 새 결과 카드에서 다시 신청해 주세요.'
+            : parseApiError(error).message;
       notifications.show({
         color: 'danger',
         title: '상담 신청에 실패했어요',

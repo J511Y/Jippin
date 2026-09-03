@@ -9,6 +9,13 @@
   도면이 교체되면 산출을 영속하지 않고 이 코드로 degrade, PR #185). 본 ADR 의 어휘·
   해상도·병합 결정은 불변이며, 판단 스키마 쪽 짝은 `common-judgment-schema` **1.3.0**
   (`vlm_supplement` null 허용 명문화 — 같은 PR #vlm-freshness).
+  2026-09-03 — `common-judgment-schema` **1.3.0 → 1.4.0**(추가형): `vlm_supplement.
+  region_assessments`(VLM 이 벽·창호 영역마다 생활어 위치 + 구조/경계 의견을 구조화로
+  남김, #region-assessments) 및 코드가 이미 영속하던 `confidence`/`is_floorplan`/
+  `judgment_hints` 계약 정합화. 대화 에이전트가 사용자 선택 벽을 세그멘테이션 분류와
+  종합해 설명(선택 되풀이 금지), 창호 경계(`window_demolition_boundary`)를 VLM 판정으로
+  자동 채워 재질문을 없애고, 같은 도면의 오버레이 카드를 `show_floorplan_overlay` 로
+  재제공(#overlay-reshow)하기 위한 근거 데이터. 세그멘테이션 계약(1.5.0)은 불변.
 - **대체 아님**: 3단계 분석 파이프라인(세그멘테이션 → VLM → 정합성 머지)과 HITL 전제는 유지된다.
 
 ## 배경 / 문제

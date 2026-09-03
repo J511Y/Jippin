@@ -25,6 +25,7 @@ from .domain import (
     lookup_floorplan_candidates_impl,
     search_address_impl,
     set_completion_decision_impl,
+    show_floorplan_overlay_impl,
 )
 from .segmentation import segment_session_floorplan
 
@@ -43,6 +44,7 @@ TOOL_KINDS: dict[str, str] = {
     "evaluate_rules": "rule_engine",
     "emit_ui_component": "render",
     "emit_floorplan_request": "render",
+    "show_floorplan_overlay": "render",
     "emit_address_candidates": "render",
     "emit_judgment_summary": "render",
     "set_completion_decision": "rule_engine",
@@ -209,6 +211,24 @@ def build_tools(
         )
 
     @tool
+    async def show_floorplan_overlay(reason: str | None = None) -> dict[str, Any]:
+        """이미 분석된 현재 도면의 **오버레이 선택 카드를 다시 띄운다**(재분석 없음).
+        사용자에게 "도면에서 (다른/추가) 벽이나 창호를 골라 달라"고 해야 할 때는 말로만
+        요청하지 말고 **반드시 이 도구를 호출**하라 — 예: 검토를 마친 뒤 사용자가 다른
+        벽(날개벽·다른 방 벽 등)을 묻거나, 고른 대상을 바꾸고 싶어 하거나, 외기 창을 빼고
+        다시 고르게 할 때. 카드는 저장된 선택을 복원하고 재선택·재제출을 허용한다.
+        reason 에 무엇을 고르면 되는지 생활어 한 문장(카드 머리말). 도면 미첨부/미분석이면
+        ok=false 와 함께 다음 단계(emit_floorplan_request / segment_floorplan)를 알려 준다."""
+        return await show_floorplan_overlay_impl(
+            run_context=run_context,
+            run_id=run_id,
+            session_id=session_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+            reason=reason,
+        )
+
+    @tool
     async def emit_address_candidates(
         candidates: list[dict[str, Any]],
     ) -> dict[str, Any]:
@@ -265,6 +285,7 @@ def build_tools(
         evaluate_rules,
         emit_ui_component,
         emit_floorplan_request,
+        show_floorplan_overlay,
         emit_address_candidates,
         emit_judgment_summary,
         set_completion_decision,
