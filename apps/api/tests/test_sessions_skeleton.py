@@ -179,6 +179,36 @@ def test_list_sessions_returns_only_owned(monkeypatch, fake_db):
     assert other.json() == []
 
 
+def test_list_sessions_includes_owned_address_summary(monkeypatch):
+    client, pem, kid, _ = _client(monkeypatch)
+    token, _subject = helpers.mint_token(pem, kid, is_anonymous=False)
+    with client:
+        session_id = client.post(
+            "/sessions", headers={"Authorization": f"Bearer {token}"}, json={}
+        ).json()["id"]
+        address = client.put(
+            f"/sessions/{session_id}/address",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "road_address": "서울특별시 영등포구 여의대방로 1",
+                "apartment_name": "집핀아파트",
+                "building_dong": "101",
+                "unit_ho": "1403",
+            },
+        )
+        listed = client.get("/sessions", headers={"Authorization": f"Bearer {token}"})
+
+    assert address.status_code == 200
+    assert listed.status_code == 200
+    assert listed.json()[0]["address"] == {
+        **address.json(),
+        "road_address": "서울특별시 영등포구 여의대방로 1",
+        "apartment_name": "집핀아파트",
+        "building_dong": "101",
+        "unit_ho": "1403",
+    }
+
+
 def test_get_report_not_ready_is_404(monkeypatch, fake_db):
     client, pem, kid, _ = _client(monkeypatch)
     token, _ = helpers.mint_token(pem, kid, is_anonymous=False)

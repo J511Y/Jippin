@@ -1485,7 +1485,7 @@ async def _db_list_sessions(
     owner_user_id: uuid.UUID, limit: int
 ) -> list[dict[str, Any]]:
     async with get_engine().begin() as conn:
-        rows = (
+        session_rows = (
             await conn.execute(
                 sa.select(_SESSIONS)
                 .where(
@@ -1496,7 +1496,28 @@ async def _db_list_sessions(
                 .limit(limit)
             )
         ).all()
-    return [dict(r._mapping) for r in rows]
+        sessions = [dict(row._mapping) for row in session_rows]
+        session_ids = [row["id"] for row in sessions]
+        address_rows = (
+            (
+                await conn.execute(
+                    sa.select(_SESSION_ADDRESSES).where(
+                        _SESSION_ADDRESSES.c.session_id.in_(session_ids)
+                    )
+                )
+            ).all()
+            if session_ids
+            else []
+        )
+
+    # 목록에서 N+1 조회 없이 주소를 붙인다. 세션 쿼리가 먼저 owner_user_id 로 제한되므로
+    # 다른 사용자의 주소가 섞일 수 없고, 주소가 아직 없는 draft 세션은 None 이다.
+    addresses_by_session = {
+        row._mapping["session_id"]: dict(row._mapping) for row in address_rows
+    }
+    for session in sessions:
+        session["address"] = addresses_by_session.get(session["id"])
+    return sessions
 
 
 async def list_owned_sessions(

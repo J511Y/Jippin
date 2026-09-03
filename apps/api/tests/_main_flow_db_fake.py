@@ -337,7 +337,19 @@ class FakeMainFlowDb:
             if r["user_id"] == owner_user_id and r.get("status") != "deleted"
         ]
         rows.sort(key=lambda r: r["last_activity_at"], reverse=True)
-        return [dict(r) for r in rows[:limit]]
+        result: list[dict[str, Any]] = []
+        for stored in rows[:limit]:
+            row = dict(stored)
+            row["address"] = next(
+                (
+                    dict(address)
+                    for address in self.session_addresses.values()
+                    if address["session_id"] == stored["id"]
+                ),
+                None,
+            )
+            result.append(row)
+        return result
 
     async def _db_clear_session_expiry(self, session_id: uuid.UUID) -> dict[str, Any]:
         row = self.sessions[session_id]
