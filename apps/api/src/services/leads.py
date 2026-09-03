@@ -327,6 +327,30 @@ async def create_lead(
                 code="LEAD_FLOORPLAN_STALE",
                 http_status=409,
             )
+        # 선택 지문 검증(#judgment-selection-stamp 의 서버측 마무리): 결과 카드가 근거한
+        # 벽/창호 선택과 세션의 **현재** 선택이 다르면 그 결과의 verdict 는 이미 무효
+        # (재선택이 rule_eval_result 를 지움)다 — 폼이 열린 뒤 재선택된 경우처럼 웹 게이트
+        # 가 놓치는 경로를 여기서 막는다. 세션 읽기 실패/필드 부재는 fail-open.
+        expected_key = payload.get("expected_selection_key")
+        if isinstance(expected_key, str):
+            try:
+                session_row = await main_flow._db_select_session(
+                    lead_values["session_id"]
+                )
+            except Exception:  # noqa: BLE001 - 조회 실패는 접수를 막지 않는다
+                session_row = None
+            js = session_row.get("judgment_schema") if session_row else None
+            if isinstance(js, dict) and (
+                main_flow.judgment_selection_key(
+                    js, session_row.get("rule_evaluated_at") if session_row else None
+                )
+                != expected_key
+            ):
+                raise ZippinException(
+                    "Selected walls/windows changed since this result was issued.",
+                    code="LEAD_SELECTION_STALE",
+                    http_status=409,
+                )
         if auto is not None and not any(
             att["bucket"] == auto["bucket"]
             and att["object_path"] == auto["object_path"]

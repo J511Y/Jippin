@@ -205,26 +205,37 @@ class Reclassification(BaseModel):
     reason: str
 
 
-class VlmSupplement(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    provider: Provider | None = None
+class WindowForm(Enum):
     """
-    VLM 프로바이더 (ADR-0001 §7 의 VLMClient 인터페이스 호환).
+    창호 형태 어휘 — JudgmentValues.window_form 과 VlmSupplement.judgment_hints.window_form 이 공유한다(1.4.0 에서 공용 정의로 승격, 생성 바인딩의 WindowForm 심볼 보존).
     """
-    model: str | None = None
+
+    FIXED = "FIXED"
+    OPENABLE = "OPENABLE"
+    FOLDING = "FOLDING"
+    SLIDING = "SLIDING"
+    OTHER = "OTHER"
+
+
+class RegionKind(Enum):
     """
-    예: 'gpt-5.4-mini', 'gpt-5.5'.
+    VLM 영역별 평가의 영역 종류.
     """
-    notes: list[str] | None = None
+
+    wall = "wall"
+    window = "window"
+
+
+class RegionOpinion(Enum):
     """
-    VLM 자유 텍스트 주석.
+    VLM 영역별 평가 어휘(벽: NON_LOAD_BEARING/LOAD_BEARING/UNCERTAIN, 창호: BALCONY_BOUNDARY/EXTERIOR/UNCERTAIN).
     """
-    reclassifications: list[Reclassification] | None = None
-    """
-    Mask2Former 라벨을 VLM 이 교정한 결과.
-    """
+
+    NON_LOAD_BEARING = "NON_LOAD_BEARING"
+    LOAD_BEARING = "LOAD_BEARING"
+    UNCERTAIN = "UNCERTAIN"
+    BALCONY_BOUNDARY = "BALCONY_BOUNDARY"
+    EXTERIOR = "EXTERIOR"
 
 
 class PermitEntry(BaseModel):
@@ -267,19 +278,6 @@ class RegisterSupplement(BaseModel):
     """
     조회(read-back) 시점.
     """
-
-
-class WindowForm(Enum):
-    """
-    창호 형태.
-    """
-
-    FIXED = "FIXED"
-    OPENABLE = "OPENABLE"
-    FOLDING = "FOLDING"
-    SLIDING = "SLIDING"
-    OTHER = "OTHER"
-    NoneType_None = None
 
 
 class WindowDemolitionBoundary(Enum):
@@ -334,6 +332,86 @@ class JudgmentValues(BaseModel):
     """
 
 
+class JudgmentHints(BaseModel):
+    """
+    VLM 이 도면에서 직접 읽은 룰 입력 힌트 (1.4.0 명문화). 어휘/타입은 JudgmentValues 와 동일하며, 못 읽은 항목은 null. 우선순위: CHAT 전달값 > 이 힌트 > 룰엔진 보수적 가정.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    has_sprinkler: bool | None = None
+    has_evacuation_space: bool | None = None
+    stairwell_count: int | None = Field(None, ge=0)
+    window_form: WindowForm | None = None
+    fire_zone: bool | None = None
+    balcony_attached: bool | None = None
+
+
+class RegionAssessment(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    region_id: str = Field(..., min_length=1)
+    """
+    세그멘테이션 region_id (wall_objects/window_objects 의 id 와 동일).
+    """
+    kind: RegionKind
+    """
+    영역 종류 — 서버가 region 출처로 정한다(VLM 출력 아님).
+    """
+    location: str = Field(..., max_length=80, min_length=1)
+    """
+    비전문가용 생활어 위치 (예: '거실과 침실1 사이', '거실과 발코니 사이').
+    """
+    assessment: RegionOpinion
+    """
+    벽(kind=wall): NON_LOAD_BEARING/LOAD_BEARING/UNCERTAIN. 창호(kind=window): BALCONY_BOUNDARY(발코니-실내 경계 창)/EXTERIOR(외기 직접 접촉 창)/UNCERTAIN. kind 별 어휘 밖은 서버가 UNCERTAIN 으로 강등한다.
+    """
+    reason: str | None = Field(None, max_length=200)
+    """
+    근거 한 문장.
+    """
+
+
+class VlmSupplement(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    provider: Provider | None = None
+    """
+    VLM 프로바이더 (ADR-0001 §7 의 VLMClient 인터페이스 호환).
+    """
+    model: str | None = None
+    """
+    예: 'gpt-5.4-mini', 'gpt-5.5'.
+    """
+    notes: list[str] | None = None
+    """
+    VLM 자유 텍스트 주석.
+    """
+    reclassifications: list[Reclassification] | None = None
+    """
+    Mask2Former 라벨을 VLM 이 교정한 결과.
+    """
+    confidence: float | None = Field(None, ge=0.0, le=1.0)
+    """
+    VLM 전체 분석 신뢰도 0~1 (1.4.0 명문화). 0.6 미만이면 ANALYSIS_LOW_CONFIDENCE 로 재확인 권장.
+    """
+    is_floorplan: bool | None = None
+    """
+    VLM 이 이미지를 실제 평면도로 봤는지 (1.4.0 명문화). 명시적 false 만 '평면도 아님'으로 취급한다.
+    """
+    judgment_hints: JudgmentHints | None = None
+    """
+    VLM 이 도면에서 직접 읽은 룰 입력 힌트 (1.4.0 명문화). 어휘/타입은 JudgmentValues 와 동일하며, 못 읽은 항목은 null. 우선순위: CHAT 전달값 > 이 힌트 > 룰엔진 보수적 가정.
+    """
+    region_assessments: list[RegionAssessment] | None = None
+    """
+    VLM 의 벽·창호 영역별 위치·의견 (1.4.0 추가, #region-assessments). CHAT 이 선택 벽을 세그멘테이션 분류와 종합해 설명하고, 창호 경계(window_demolition_boundary)를 자동 반영하며, 사용자에게 어느 영역이 어디인지 안내하는 근거.
+    """
+
+
 class CommonJudgmentSchema(BaseModel):
     """
     공통 판단 스키마 — AI 분석·OVERLAY 선택·CHAT 보완값이 CHAT/session 에서 병합되어 FLOW_GUARD 평가를 거쳐 RULE 의 단일 입력 컨트랙트가 된다. SDD §5.2 정본.
@@ -350,9 +428,9 @@ class CommonJudgmentSchema(BaseModel):
     """
     AI 분석 시점 (ISO-8601).
     """
-    schema_version: Literal["1.3.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
+    schema_version: Literal["1.4.0"] = Field(..., pattern="^\\d+\\.\\d+\\.\\d+$")
     """
-    스키마 버전 (semver). 1.3.0: vlm_supplement 의 null 허용을 스키마에 명문화(설명은 원래 'null 또는 부재'였으나 타입이 미인코딩 — 이번 런에 VLM 산출이 없음을 null 로 영속하는 #vlm-freshness 경로 지원). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영).
+    스키마 버전 (semver). 1.4.0: vlm_supplement 에 confidence/is_floorplan/judgment_hints(코드가 이미 영속하던 필드의 계약 정합화) + region_assessments(벽·창호 영역별 VLM 위치·구조/경계 의견 — 선택 벽 종합 판단, 창호 경계 자동 반영, 오버레이 재제공 안내에 사용) 추가(추가형, 하위호환). 1.3.0: vlm_supplement 의 null 허용을 스키마에 명문화(설명은 원래 'null 또는 부재'였으나 타입이 미인코딩 — 이번 런에 VLM 산출이 없음을 null 로 영속하는 #vlm-freshness 경로 지원). 1.1.0: window_objects/selected_windows/window_demolition_boundary 추가(추가형, 하위호환 — 창호 철거 검토 지원). 1.2.0: register_supplement 추가(추가형, 하위호환 — 건축물대장 확인 사실의 리포트 반영).
     """
     building_info: BuildingInfo
     space_objects: list[SpaceObject]

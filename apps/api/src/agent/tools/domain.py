@@ -11,6 +11,7 @@ uncaught raise 하지 않고 {ok, error_code} 구조화 결과를 돌려 에이�
 from __future__ import annotations
 
 import asyncio
+import copy
 import re
 import uuid
 from datetime import UTC, datetime
@@ -564,18 +565,43 @@ def _derive_wall_type(judgment_schema: dict[str, Any]) -> str | None:
 
     사용자가 고른 벽 중 하나라도 내력벽 후보면 보수적으로 LOAD_BEARING(→DENY),
     전부 비내력벽 후보면 NON_LOAD_BEARING. 선택이 없거나 매핑 불가면 None(HOLD 가 묻는다).
+
+    **VLM 영역별 의견과의 충돌**(#region-assessments, Codex P1): 세그멘테이션은 비내력
+    후보라 해도 VLM 이 같은 벽을 내력 추정/판단 어려움으로 봤다면 두 근거가 갈린 것이다.
+    이때 비내력으로 확정해 ALLOW/WARN 을 영속하면 안 되므로 None(→HOLD, 추가 확인)으로
+    강등한다 — 세션 상태 블록이 에이전트에게 주는 '단정 금지' 안내와 룰 판정을 일치시킨다.
     """
     selected = judgment_schema.get("selected_walls")
     walls = judgment_schema.get("wall_objects")
     if not isinstance(selected, list) or not selected or not isinstance(walls, list):
         return None
     by_id = {w.get("id"): w.get("wall_type") for w in walls if isinstance(w, dict)}
-    types = [by_id.get(s) for s in selected if isinstance(s, str)]
+    ids = [s for s in selected if isinstance(s, str)]
+    types = [by_id.get(s) for s in ids]
     if any(t == "LOAD_BEARING" for t in types):
         return "LOAD_BEARING"
     if types and all(t == "NON_LOAD_BEARING" for t in types):
+        opinions = _region_assessments_by_id(judgment_schema)
+        if any(opinions.get(rid) in ("LOAD_BEARING", "UNCERTAIN") for rid in ids):
+            return None
         return "NON_LOAD_BEARING"
     return None
+
+
+def _region_assessments_by_id(judgment_schema: dict[str, Any]) -> dict[str, str]:
+    """vlm_supplement.region_assessments → {region_id: assessment}."""
+
+    supplement = judgment_schema.get("vlm_supplement")
+    items = (
+        supplement.get("region_assessments") if isinstance(supplement, dict) else None
+    )
+    if not isinstance(items, list):
+        return {}
+    return {
+        a["region_id"]: str(a.get("assessment") or "")
+        for a in items
+        if isinstance(a, dict) and isinstance(a.get("region_id"), str)
+    }
 
 
 def _nonempty_list(judgment_schema: dict[str, Any], key: str) -> bool:
@@ -622,6 +648,38 @@ def _apply_vlm_hints(
             clean_values[key] = value
             filled.append(key)
     return filled
+
+
+def _vlm_window_boundary(judgment_schema: dict[str, Any]) -> str | None:
+    """선택 창호의 VLM 경계 판정(region_assessments)에서 window_demolition_boundary 를
+    유도한다(#region-assessments → 룰 자동 보강).
+
+    - 선택 창호 중 하나라도 EXTERIOR 면 EXTERIOR(보수적 — 그 창은 철거 불가, DENY).
+    - 전부 BALCONY_BOUNDARY 면 BALCONY_BOUNDARY(발코니 확장 경로).
+    - 그 외(UNCERTAIN/평가 없음 포함)면 None — 룰엔진이 HOLD 로 재확인을 요구하고,
+      에이전트는 확정되지 않은 창에 대해서만 사용자에게 묻는다.
+    - VLM 전체 신뢰도가 **유효한 숫자로 문턱 이상**일 때만 승격한다 — 저신뢰는 물론
+      신뢰도가 누락/비정상(None)이어도 None 으로 두어, 측정되지 않은 추측이 HOLD 를
+      우회해 확정 판정/오거부가 되지 않게(#low-conf-gate, Codex P1).
+    """
+
+    from .vlm import has_trusted_confidence
+
+    selected = judgment_schema.get("selected_windows")
+    if not isinstance(selected, list) or not selected:
+        return None
+    supplement = judgment_schema.get("vlm_supplement")
+    if not has_trusted_confidence(supplement if isinstance(supplement, dict) else None):
+        return None
+    by_id = _region_assessments_by_id(judgment_schema)
+    if not by_id:
+        return None
+    verdicts = [by_id.get(rid) for rid in selected if isinstance(rid, str)]
+    if any(v == "EXTERIOR" for v in verdicts):
+        return "EXTERIOR"
+    if verdicts and all(v == "BALCONY_BOUNDARY" for v in verdicts):
+        return "BALCONY_BOUNDARY"
+    return None
 
 
 async def evaluate_rules_impl(
@@ -694,6 +752,17 @@ async def evaluate_rules_impl(
         else:
             clean_values.pop(target_key, None)
     hinted = _apply_vlm_hints(clean_values, js, accepted)
+    # 창호 경계는 **LLM 전달값 > VLM 영역 판정 > 미확인(HOLD)** — LLM 이 사용자 답으로
+    # 정정한 값이 있으면 그것을 존중하고, 없을 때만 VLM 판정으로 채운다.
+    if (
+        window_selected
+        and clean_values.get("window_demolition_boundary") is None
+        and "window_demolition_boundary" in accepted
+    ):
+        boundary = _vlm_window_boundary(js)
+        if boundary is not None:
+            clean_values["window_demolition_boundary"] = boundary
+            hinted.append("window_demolition_boundary")
     if hinted:
         log.info(
             "rule_eval_vlm_hints_applied", session_id=str(session_id), fields=hinted
@@ -863,6 +932,253 @@ async def emit_floorplan_request_impl(
     )
 
 
+#: judgment_schema.wall_objects.wall_type → 오버레이 class_name (재구성 폴백용 역매핑).
+_OVERLAY_CLASS_BY_WALL_TYPE: dict[str, str] = {
+    "NON_LOAD_BEARING": "wall_nonbearing",
+    "LOAD_BEARING": "wall_reinforced_concrete",
+    "UNKNOWN": "wall_other",
+}
+
+
+def _overlay_component_asset(
+    component: Any,
+) -> tuple[str | None, dict[str, Any]] | None:
+    """json-render 스펙에서 FloorplanOverlay 카드의 (asset_id, props) 를 읽는다."""
+
+    if not isinstance(component, dict):
+        return None
+    root = component.get("root")
+    elements = component.get("elements")
+    if not isinstance(root, str) or not isinstance(elements, dict):
+        return None
+    element = elements.get(root)
+    if not isinstance(element, dict) or element.get("type") != "FloorplanOverlay":
+        return None
+    props = element.get("props")
+    if not isinstance(props, dict):
+        return None
+    asset_id = props.get("asset_id")
+    return (asset_id if isinstance(asset_id, str) else None), props
+
+
+def _rebuild_overlay_regions(judgment_schema: dict[str, Any]) -> list[dict[str, Any]]:
+    """영속된 판단객체(wall/window_objects)로 오버레이 region 을 재구성한다(폴백).
+
+    분석 시점의 카드가 chat_messages 에 남아 있지 않을 때만 쓴다 — coords(MaskCoord[])
+    를 평탄 polygon 으로 되돌리고 wall_type 을 오버레이 어휘로 역매핑한다. 세그멘테이션
+    원본의 score/bbox 는 없으므로 최소 필드만 싣는다.
+    """
+
+    regions: list[dict[str, Any]] = []
+
+    def _polygon(obj: dict[str, Any]) -> list[float]:
+        flat: list[float] = []
+        for pt in obj.get("coords") or []:
+            if isinstance(pt, dict) and isinstance(pt.get("x"), (int, float)):
+                if isinstance(pt.get("y"), (int, float)):
+                    flat.extend((float(pt["x"]), float(pt["y"])))
+        return flat
+
+    walls = judgment_schema.get("wall_objects")
+    if isinstance(walls, list):
+        for w in walls:
+            if not isinstance(w, dict) or not isinstance(w.get("id"), str):
+                continue
+            cls = _OVERLAY_CLASS_BY_WALL_TYPE.get(str(w.get("wall_type")))
+            poly = _polygon(w)
+            if cls and len(poly) >= 6:
+                regions.append(
+                    {"region_id": w["id"], "class_name": cls, "polygon": poly}
+                )
+    windows = judgment_schema.get("window_objects")
+    if isinstance(windows, list):
+        for win in windows:
+            if not isinstance(win, dict) or not isinstance(win.get("id"), str):
+                continue
+            poly = _polygon(win)
+            if len(poly) >= 6:
+                regions.append(
+                    {"region_id": win["id"], "class_name": "window", "polygon": poly}
+                )
+    return regions
+
+
+#: 오버레이에서 사용자가 고를 수 있는 클래스(FloorplanOverlayCard.selectableRegions 와 정합).
+_OVERLAY_SELECTABLE_CLASSES: frozenset[str] = frozenset(
+    {"wall_nonbearing", "wall_other", "wall_unknown", "window"}
+)
+
+
+def _selectable_signature(
+    regions: list[Any],
+) -> dict[str, tuple[str, tuple[float, ...]]]:
+    """선택 가능 region 의 **완전한 표현**(id → (정규화 클래스, 폴리곤)) — 재사용 카드가
+    현재 판단객체와 기하·분류까지 같은지 대조한다(Codex P2). 미확정 벽은 카드 payload 에서
+    ``wall_unknown`` 으로 통일되므로(#deploy-skew) ``wall_other`` 와 같은 클래스로 본다."""
+
+    out: dict[str, tuple[str, tuple[float, ...]]] = {}
+    for r in regions:
+        if not isinstance(r, dict) or not isinstance(r.get("region_id"), str):
+            continue
+        cls = r.get("class_name")
+        if cls not in _OVERLAY_SELECTABLE_CLASSES:
+            continue
+        poly = r.get("polygon") or []
+        if not all(isinstance(v, (int, float)) for v in poly):
+            continue
+        norm_cls = "wall_other" if cls == "wall_unknown" else str(cls)
+        out[r["region_id"]] = (norm_cls, tuple(round(float(v), 2) for v in poly))
+    return out
+
+
+def _overlay_card_matches_judgment(
+    spec: dict[str, Any], judgment_schema: dict[str, Any]
+) -> bool:
+    """카드의 선택 가능 region(id·클래스·폴리곤)이 현재 판단객체와 완전히 같은가."""
+
+    found = _overlay_component_asset(spec)
+    if found is None:
+        return False
+    _asset, props = found
+    return _selectable_signature(
+        list(props.get("regions") or [])
+    ) == _selectable_signature(_rebuild_overlay_regions(judgment_schema))
+
+
+#: 결과 카드에 스탬프할 선택 지문 — 정의는 main_flow(리드 제출 재검증과 공유,
+#: #judgment-selection-stamp). 웹 `selectionKeyOf` 와 형식이 같아야 한다.
+selection_key = main_flow.judgment_selection_key
+
+
+async def show_floorplan_overlay_impl(
+    *,
+    run_context: "RunContext",
+    run_id: uuid.UUID,
+    session_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    owner_is_anonymous: bool,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """현재 도면의 **오버레이 카드를 다시 띄운다**(#overlay-reshow).
+
+    분석 후 대화가 이어진 뒤 사용자가 다른 벽/창호를 추가로 검토하고 싶어 하거나, 에이전트가
+    "도면에서 골라 달라"고 요청해야 할 때 호출한다 — 카드 없이 말로만 고르라고 하면 사용자가
+    무엇을 해야 할지 모른다(세션 32a62ac9 의 '날개벽' 사례). 재분석은 하지 않는다: 분석
+    시점에 방출된 카드(chat_messages.ui_components)를 현재 선택 asset 기준으로 찾아 그대로
+    재방출하고, 없으면 영속된 판단객체로 재구성한다. 프론트 카드는 저장된 선택을 복원하고
+    재선택·재제출을 허용하므로, 제출되면 서버가 selected_walls 를 갱신하고 옛 verdict 를
+    무효화한다(기존 흐름 재사용).
+    """
+
+    asset = await main_flow.get_selected_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner_user_id,
+        owner_is_anonymous=owner_is_anonymous,
+    )
+    if asset is None:
+        return _err(
+            "OVERLAY_NO_FLOORPLAN",
+            "아직 첨부된 도면이 없습니다. emit_floorplan_request 로 도면을 먼저 받으세요.",
+        )
+    asset_id = str(asset["id"])
+    try:
+        js = await main_flow.get_session_judgment_schema(session_id)
+    except Exception:  # noqa: BLE001 - 조회 실패는 '분석 없음'과 같이 다룬다
+        js = {}
+    walls = js.get("wall_objects")
+    windows = js.get("window_objects")
+    analyzed = isinstance(walls, list) or isinstance(windows, list)
+    # 선택 가능 = 내력벽이 아닌 벽 + 창호(프론트 selectableRegions 와 정합, Codex P2) —
+    # 내력벽만 잡힌 도면은 카드에 제출 버튼이 없어 '다시 고르기'를 이어갈 수 없다.
+    selectable = any(
+        isinstance(w, dict) and w.get("wall_type") != "LOAD_BEARING"
+        for w in (walls or [])
+    ) or bool(windows)
+    if not analyzed or not selectable:
+        return _err(
+            "OVERLAY_NO_ANALYSIS",
+            "이 도면의 분석 결과가 없거나 고를 수 있는 벽·창호가 없습니다. "
+            "segment_floorplan 으로 먼저 분석하세요.",
+        )
+
+    spec: dict[str, Any] | None = None
+    try:
+        messages = await main_flow.list_session_chat_messages(
+            session_id=session_id,
+            owner_user_id=owner_user_id,
+            owner_is_anonymous=owner_is_anonymous,
+        )
+    except Exception:  # noqa: BLE001 - 이력 조회 실패는 재구성 폴백으로
+        messages = []
+    for row in reversed(messages):
+        if row.get("role") != "assistant":
+            continue
+        for component in row.get("ui_components") or []:
+            found = _overlay_component_asset(component)
+            if found is None:
+                continue
+            found_asset, _props = found
+            if found_asset == asset_id:
+                spec = copy.deepcopy(component)
+                break
+        if spec is not None:
+            break
+
+    # 재사용 카드 검증(Codex P2): 같은 asset 이 재분석됐는데 그 카드가 투영되지 못한
+    # 경우(영속 성공 후 런 실패 등) 옛 카드는 현재 판단객체와 다른 기하/분류/id 를 담을
+    # 수 있다. 선택 가능 region 의 id·클래스·폴리곤이 현재 판단객체와 완전히 같을 때만
+    # 재사용하고, 아니면 버리고 재구성한다.
+    if spec is not None and not _overlay_card_matches_judgment(spec, js):
+        log.info(
+            "overlay_reshow_card_mismatch",
+            session_id=str(session_id),
+            asset_id=asset_id,
+        )
+        spec = None
+
+    source = "message"
+    if spec is None:
+        from .segmentation import build_overlay_spec
+
+        regions = _rebuild_overlay_regions(js)
+        if not regions:
+            return _err(
+                "OVERLAY_NO_ANALYSIS",
+                "이 도면의 분석 결과로는 오버레이를 다시 그릴 수 없습니다. "
+                "segment_floorplan 으로 다시 분석하세요.",
+            )
+        image: dict[str, Any] = {}
+        if isinstance(asset.get("width_px"), int) and isinstance(
+            asset.get("height_px"), int
+        ):
+            image = {"width": asset["width_px"], "height": asset["height_px"]}
+        spec = build_overlay_spec(asset_id=asset_id, image=image, regions=regions)
+        source = "rebuilt"
+
+    root = spec.get("root")
+    props = spec["elements"][root]["props"]
+    if isinstance(reason, str) and reason.strip():
+        props["reason"] = reason.strip()
+    else:
+        props["reason"] = "추가로 철거를 검토할 벽이나 창호를 골라 다시 제출해 주세요."
+    await emit_ui_component_impl(
+        run_context=run_context, run_id=run_id, components=[spec]
+    )
+    log.info(
+        "overlay_reshown",
+        session_id=str(session_id),
+        asset_id=asset_id,
+        source=source,
+    )
+    return _ok(
+        overlay_emitted=True,
+        summary=(
+            "도면 오버레이 카드를 다시 띄웠어요. 본문에는 무엇을 고르면 되는지 짧은 안내 "
+            "한 문장만 두세요."
+        ),
+    )
+
+
 async def emit_address_candidates_impl(
     *,
     run_context: "RunContext",
@@ -963,6 +1279,16 @@ async def emit_judgment_summary_impl(
     ok, stamp = await _card_asset_stamp(run_context=run_context, session_id=session_id)
     if ok and stamp is not None:
         props["asset_id"] = stamp
+    # 선택 지문 스탬프 — 같은 도면에서 벽/창호를 **다시 골라** 옛 verdict 가 무효화돼도
+    # 옛 결과 카드가 현재처럼 보이며 상담 CTA 를 열지 않게 한다(#judgment-selection-stamp).
+    # 지문엔 verdict 리비전도 들어간다 — 같은 선택으로 재분석·재평가돼도 옛 카드가
+    # 통과하지 않게(main_flow.judgment_selection_key 참고).
+    try:
+        stamped = await main_flow.get_session_selection_key(session_id)
+        if stamped is not None:
+            props["selection_key"] = stamped
+    except Exception:  # noqa: BLE001 - 지문 조회 실패는 카드 방출을 막지 않는다(구 카드 동작)
+        pass
     # 판정 카드 하단 상담 CTA(빠른 상담폼)에서 현장 주소를 prefill 할 수 있게 확정 주소를 싣는다.
     # 도로명/지번이 없으면 아파트명+동+호로 폴백한다(0019).
     try:

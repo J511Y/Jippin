@@ -37,4 +37,17 @@ describe('FloorplanOverlay 카탈로그 props', () => {
     }) as { vocab_version?: number };
     expect(parsed.vocab_version).toBeUndefined();
   });
+
+  it('재제공 카드의 reason 을 보존한다(#overlay-reshow)', () => {
+    // show_floorplan_overlay 가 얹는 안내 문장 — 카탈로그에 없으면 Zod 가 strip 해
+    // 카드가 재선택 모드로 전환되지 못한다.
+    const parsed = props.parse({
+      asset_id: 'a1',
+      image: { width: 10, height: 10 },
+      regions: [],
+      vocab_version: 4,
+      reason: '거실 날개벽을 골라 주세요'
+    }) as { reason?: string };
+    expect(parsed.reason).toBe('거실 날개벽을 골라 주세요');
+  });
 });

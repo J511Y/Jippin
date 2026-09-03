@@ -172,3 +172,40 @@ describe('FloorplanOverlayCard 도면 교체 감지 (#overlay-asset-fingerprint 
     );
   });
 });
+
+describe('FloorplanOverlayCard 재제공(재선택) 모드 (#overlay-reshow)', () => {
+  it('reason 이 있으면 머리말과 안내를 보여 주고, 복원된 선택을 제출됨으로 잠그지 않는다', async () => {
+    apiMocks.getSession.mockResolvedValueOnce({
+      selected_floorplan_asset_id: 'asset-1',
+      judgment_schema: { selected_walls: ['wall:1'], selected_windows: [] }
+    });
+    const view = render(
+      <Card payload={{ ...wallPayload, reason: '거실 날개벽을 골라 주세요' }} />
+    );
+
+    expect(view.getByText('거실 날개벽을 골라 주세요')).toBeTruthy();
+    expect(view.getByText('철거할 벽·창호를 다시 골라 제출해 주세요')).toBeTruthy();
+    // 이전 선택(wall:1)은 복원되지만 버튼은 '보냈어요'가 아니라 재제출 가능 상태.
+    await waitFor(() =>
+      expect(view.getByRole('button', { name: '선택한 1곳 철거 검토하기' })).toBeTruthy()
+    );
+    expect(
+      (view.getByRole('button', { name: '선택한 1곳 철거 검토하기' }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+  });
+
+  it('reason 이 없으면 종전대로 복원된 선택을 제출됨으로 표시한다', async () => {
+    apiMocks.getSession.mockResolvedValueOnce({
+      selected_floorplan_asset_id: 'asset-1',
+      judgment_schema: { selected_walls: ['wall:1'], selected_windows: [] }
+    });
+    const view = render(<Card payload={{ ...wallPayload, reason: '   ' }} />);
+    expect(view.queryByText('철거할 벽·창호를 다시 골라 제출해 주세요')).toBeNull();
+    await waitFor(() =>
+      expect(
+        view.getByRole('button', { name: '철거 검토 요청을 보냈어요 · 1곳' })
+      ).toBeTruthy()
+    );
+  });
+});

@@ -182,3 +182,181 @@ def test_known_judgment_values_listed() -> None:
     assert "floor_count" in ctx and "stairwell_count" in ctx
     # None 값은 제외.
     assert "has_sprinkler" not in ctx
+
+
+# --- region_assessments 반영 (#region-assessments) --------------------------
+
+
+def _vlm(assessments: list[dict]) -> dict:
+    return {
+        "provider": "OPENAI",
+        "model": "m",
+        "notes": [],
+        "reclassifications": [],
+        "confidence": 0.9,
+        "region_assessments": assessments,
+    }
+
+
+def test_selected_walls_carry_location_and_vlm_opinion() -> None:
+    # 선택 벽마다 분석 분류 + VLM 위치/의견/근거가 한 줄씩 실리고, 되풀이 금지 규칙이 붙는다.
+    session = {
+        "selected_floorplan_asset_id": "asset-1",
+        "judgment_schema": {
+            "wall_objects": [
+                {"id": "pred:5", "wall_type": "NON_LOAD_BEARING"},
+                {"id": "pred:9", "wall_type": "NON_LOAD_BEARING"},
+            ],
+            "selected_walls": ["pred:5", "pred:9"],
+            "vlm_supplement": _vlm(
+                [
+                    {
+                        "region_id": "pred:5",
+                        "kind": "wall",
+                        "location": "거실과 침실1 사이",
+                        "assessment": "NON_LOAD_BEARING",
+                        "reason": "얇은 단선 벽체",
+                    }
+                ]
+            ),
+        },
+    }
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "pred:5 — 분석 분류: 비내력벽 후보 / VLM 위치: «거실과 침실1 사이»" in ctx
+    assert "VLM 의견: 비내력 추정" in ctx and "근거: «얇은 단선 벽체»" in ctx
+    assert "pred:9 — 분석 분류: 비내력벽 후보 / VLM 위치/의견: 없음" in ctx
+    assert "되풀이하지 말고" in ctx
+    assert "두 근거가 일치하면" in ctx
+
+
+def test_selected_wall_conflict_between_segmentation_and_vlm_is_flagged() -> None:
+    # 분류는 비내력 후보인데 VLM 이 내력/미확정으로 보면 '어긋남' 지침이 붙는다(단정 금지).
+    session = {
+        "selected_floorplan_asset_id": "asset-1",
+        "judgment_schema": {
+            "wall_objects": [{"id": "pred:5", "wall_type": "NON_LOAD_BEARING"}],
+            "selected_walls": ["pred:5"],
+            "vlm_supplement": _vlm(
+                [
+                    {
+                        "region_id": "pred:5",
+                        "kind": "wall",
+                        "location": "PS 옆 짧은 벽",
+                        "assessment": "LOAD_BEARING",
+                        "reason": "두꺼운 해칭",
+                    }
+                ]
+            ),
+        },
+    }
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "VLM 의견: 내력 추정(주의)" in ctx
+    assert "어긋나는 벽이 있다" in ctx
+
+
+def test_analyzed_floorplan_lists_region_locations_for_orientation() -> None:
+    # 선택 전에도 어느 영역이 어디인지 안내할 수 있게 선택 가능 영역의 위치를 나열한다.
+    # 내력벽(선택 불가)은 제외, 창호는 경계 판정 라벨과 함께.
+    session = {
+        "selected_floorplan_asset_id": "asset-1",
+        "judgment_schema": {
+            "wall_objects": [
+                {"id": "pred:1", "wall_type": "NON_LOAD_BEARING"},
+                {"id": "pred:2", "wall_type": "LOAD_BEARING"},
+            ],
+            "window_objects": [{"id": "pred:7"}],
+            "vlm_supplement": _vlm(
+                [
+                    {
+                        "region_id": "pred:1",
+                        "kind": "wall",
+                        "location": "거실과 침실1 사이",
+                        "assessment": "NON_LOAD_BEARING",
+                    },
+                    {
+                        "region_id": "pred:2",
+                        "kind": "wall",
+                        "location": "외곽 벽",
+                        "assessment": "LOAD_BEARING",
+                    },
+                    {
+                        "region_id": "pred:7",
+                        "kind": "window",
+                        "location": "거실과 발코니 사이",
+                        "assessment": "BALCONY_BOUNDARY",
+                    },
+                ]
+            ),
+        },
+    }
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "선택 가능한 영역의 도면상 위치" in ctx
+    assert "pred:1=«거실과 침실1 사이»(비내력벽 후보)" in ctx
+    assert "pred:7=«거실과 발코니 사이»(창호, 발코니-실내 사이 경계 창(분합창))" in ctx
+    assert "pred:2=" not in ctx
+
+
+def _window_session(assessments: dict[str, str]) -> dict:
+    return {
+        "selected_floorplan_asset_id": "asset-1",
+        "judgment_schema": {
+            "wall_objects": [],
+            "window_objects": [{"id": "pred:7"}, {"id": "pred:8"}],
+            "selected_windows": ["pred:7", "pred:8"],
+            "vlm_supplement": _vlm(
+                [
+                    {
+                        "region_id": rid,
+                        "kind": "window",
+                        "location": f"{rid} 위치",
+                        "assessment": a,
+                    }
+                    for rid, a in assessments.items()
+                ]
+            ),
+        },
+    }
+
+
+def test_selected_windows_all_boundary_skips_question() -> None:
+    ctx = build_session_state_context(
+        _window_session({"pred:7": "BALCONY_BOUNDARY", "pred:8": "BALCONY_BOUNDARY"}),
+        None,
+    )
+    assert ctx is not None
+    assert "다시 묻지 말고" in ctx
+    assert "BALCONY_BOUNDARY 를 자동 반영" in ctx
+    assert "pred:7 — 분석 분류: 창호 / VLM 위치: «pred:7 위치»" in ctx
+
+
+def test_selected_windows_exterior_warns_and_offers_reshow() -> None:
+    ctx = build_session_state_context(
+        _window_session({"pred:7": "EXTERIOR", "pred:8": "BALCONY_BOUNDARY"}), None
+    )
+    assert ctx is not None
+    assert "외기와 직접 닿는 바깥 창" in ctx
+    assert "show_floorplan_overlay" in ctx
+
+
+def test_selected_windows_uncertain_asks_only_that_window() -> None:
+    ctx = build_session_state_context(
+        _window_session({"pred:7": "BALCONY_BOUNDARY", "pred:8": "UNCERTAIN"}), None
+    )
+    assert ctx is not None
+    assert "그 창에 대해서만" in ctx
+    assert "window_demolition_boundary(EXTERIOR|BALCONY_BOUNDARY)" in ctx
+
+
+def test_selected_windows_low_confidence_asks_user() -> None:
+    # 저신뢰 분석이면 VLM 경계 판정이 있어도 자동 반영되지 않으므로 사용자에게 확인한다.
+    session = _window_session(
+        {"pred:7": "BALCONY_BOUNDARY", "pred:8": "BALCONY_BOUNDARY"}
+    )
+    session["judgment_schema"]["vlm_supplement"]["confidence"] = 0.3
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "분석 신뢰도가 낮아" in ctx
+    assert "BALCONY_BOUNDARY 를 자동 반영" not in ctx

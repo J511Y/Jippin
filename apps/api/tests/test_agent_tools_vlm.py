@@ -258,3 +258,220 @@ async def test_interpret_no_key_returns_none() -> None:
         settings=settings,
     )
     assert res is None
+
+
+# --- region_assessments (#region-assessments) ------------------------------
+
+
+def test_normalize_assessments_kind_vocab_and_dedupe() -> None:
+    # kind 는 서버가 id 출처로 정하고, kind 별 어휘 밖 assessment 는 UNCERTAIN 으로 강등.
+    # 유효 id 밖·중복·위치 없는 항목은 드롭한다.
+    out = vlm._normalize_assessments(
+        [
+            {
+                "region_id": "pred:3",
+                "location": "거실과 침실1 사이",
+                "assessment": "non_load_bearing",  # 대소문자 무시
+                "reason": "얇은 벽",
+            },
+            {
+                "region_id": "pred:7",
+                "location": "거실과 발코니 사이",
+                "assessment": "BALCONY_BOUNDARY",
+            },
+            {
+                "region_id": "pred:8",
+                "location": "침실2 바깥",
+                "assessment": "NON_LOAD_BEARING",  # 창호에 벽 어휘 → UNCERTAIN
+            },
+            {"region_id": "pred:3", "location": "중복", "assessment": "LOAD_BEARING"},
+            {"region_id": "pred:99", "location": "모름", "assessment": "UNCERTAIN"},
+            {"region_id": "pred:4", "location": "   ", "assessment": "UNCERTAIN"},
+            "garbage",
+        ],
+        wall_ids={"pred:3", "pred:4"},
+        window_ids={"pred:7", "pred:8"},
+    )
+    assert [a["region_id"] for a in out] == ["pred:3", "pred:7", "pred:8"]
+    assert out[0] == {
+        "region_id": "pred:3",
+        "kind": "wall",
+        "location": "거실과 침실1 사이",
+        "assessment": "NON_LOAD_BEARING",
+        "reason": "얇은 벽",
+    }
+    assert out[1]["kind"] == "window"
+    assert out[1]["assessment"] == "BALCONY_BOUNDARY"
+    assert out[1]["reason"] == ""
+    assert out[2]["assessment"] == "UNCERTAIN"
+
+
+def test_normalize_assessments_non_list() -> None:
+    assert vlm._normalize_assessments(None, wall_ids=set(), window_ids=set()) == []
+    assert vlm._normalize_assessments("x", wall_ids=set(), window_ids=set()) == []
+
+
+def test_normalize_supplement_carries_region_assessments() -> None:
+    data = {
+        "is_floorplan": True,
+        "confidence": 0.8,
+        "notes": [],
+        "reclassifications": [],
+        "region_assessments": [
+            {
+                "region_id": "pred:1",
+                "location": "거실과 주방 사이",
+                "assessment": "LOAD_BEARING",
+                "reason": "두꺼운 해칭",
+            },
+            {
+                "region_id": "pred:7",
+                "location": "거실과 발코니 사이",
+                "assessment": "EXTERIOR",
+                "reason": "x",
+            },
+        ],
+    }
+    s = vlm._normalize_supplement(
+        data, model="m", valid_ids={"pred:1"}, window_ids={"pred:7"}
+    )
+    assert [a["assessment"] for a in s["region_assessments"]] == [
+        "LOAD_BEARING",
+        "EXTERIOR",
+    ]
+    # window_ids 를 안 넘긴 구 호출 경로도 깨지지 않는다(창호 항목만 드롭).
+    s2 = vlm._normalize_supplement(data, model="m", valid_ids={"pred:1"})
+    assert [a["region_id"] for a in s2["region_assessments"]] == ["pred:1"]
+
+
+# --- 최종 id 재매핑 + 저신뢰 판정 (#assessment-remap, #low-conf-gate) --------------
+
+
+def test_remap_region_assessments_follows_merge_and_clip_provenance() -> None:
+    assessments = [
+        {
+            "region_id": "pred:1",
+            "kind": "wall",
+            "location": "A",
+            "assessment": "UNCERTAIN",
+        },
+        {
+            "region_id": "merged:2",
+            "kind": "wall",
+            "location": "B",
+            "assessment": "LOAD_BEARING",
+        },
+        {
+            "region_id": "pred:7",
+            "kind": "window",
+            "location": "C",
+            "assessment": "EXTERIOR",
+        },
+        {
+            "region_id": "pred:99",
+            "kind": "wall",
+            "location": "gone",
+            "assessment": "UNCERTAIN",
+        },
+    ]
+    regions = [
+        {"region_id": "pred:1", "class_name": "wall_nonbearing"},  # 변화 없음
+        # 교정 재병합 — 구성원 출처로 대조
+        {
+            "region_id": "vlm-merged:1",
+            "class_name": "wall_reinforced_concrete",
+            "member_ids": ["pred:5", "merged:2"],
+        },
+        # RC 잘라내기 — base id 로 대조
+        {"region_id": "pred:7~abc123", "class_name": "window"},
+        {"region_id": "pred:8", "class_name": "wall_other"},  # 평가 없음 → 드롭
+    ]
+    out = vlm.remap_region_assessments(assessments, regions)
+    assert [(a["region_id"], a["location"]) for a in out] == [
+        ("pred:1", "A"),
+        ("vlm-merged:1", "B"),
+        ("pred:7~abc123", "C"),
+    ]
+    assert vlm.remap_region_assessments([], regions) == []
+
+
+def test_is_low_confidence_threshold() -> None:
+    assert vlm.is_low_confidence({"confidence": 0.59}) is True
+    assert vlm.is_low_confidence({"confidence": 0.6}) is False
+    assert vlm.is_low_confidence({"confidence": None}) is False
+    assert vlm.is_low_confidence({"confidence": True}) is False  # bool 은 신뢰도 아님
+    assert vlm.is_low_confidence(None) is False
+
+
+def test_remap_region_assessments_aggregates_conservatively() -> None:
+    # 병합 벽의 구성원 의견이 갈리면 첫 일치가 아니라 보수적 합산(내력 > 미확정 > 비내력).
+    assessments = [
+        {
+            "region_id": "pred:1",
+            "kind": "wall",
+            "location": "A",
+            "assessment": "NON_LOAD_BEARING",
+            "reason": "r1",
+        },
+        {
+            "region_id": "pred:2",
+            "kind": "wall",
+            "location": "B",
+            "assessment": "LOAD_BEARING",
+            "reason": "r2",
+        },
+        {
+            "region_id": "pred:3",
+            "kind": "wall",
+            "location": "C",
+            "assessment": "UNCERTAIN",
+            "reason": "",
+        },
+        {
+            "region_id": "w1",
+            "kind": "window",
+            "location": "W",
+            "assessment": "BALCONY_BOUNDARY",
+        },
+        {
+            "region_id": "w2",
+            "kind": "window",
+            "location": "W2",
+            "assessment": "EXTERIOR",
+        },
+    ]
+    regions = [
+        {
+            "region_id": "vlm-merged:1",
+            "class_name": "wall_nonbearing",
+            "member_ids": ["pred:1", "pred:2"],
+        },
+        {
+            "region_id": "vlm-merged:2",
+            "class_name": "wall_nonbearing",
+            "member_ids": ["pred:1", "pred:3"],
+        },
+        {
+            "region_id": "vlm-merged:3",
+            "class_name": "window",
+            "member_ids": ["w1", "w2"],
+        },
+    ]
+    out = {
+        a["region_id"]: a for a in vlm.remap_region_assessments(assessments, regions)
+    }
+    assert out["vlm-merged:1"]["assessment"] == "LOAD_BEARING"
+    assert out["vlm-merged:1"]["location"] == "A"
+    assert out["vlm-merged:1"]["reason"] == "r1 / r2"
+    assert out["vlm-merged:2"]["assessment"] == "UNCERTAIN"
+    assert out["vlm-merged:3"]["assessment"] == "EXTERIOR"
+
+
+def test_has_trusted_confidence_requires_valid_number_at_threshold() -> None:
+    # 자동 승격은 유효한 숫자 신뢰도가 문턱 이상일 때만 — 누락/None/bool 은 신뢰 불가.
+    assert vlm.has_trusted_confidence({"confidence": 0.6}) is True
+    assert vlm.has_trusted_confidence({"confidence": 0.59}) is False
+    assert vlm.has_trusted_confidence({"confidence": None}) is False
+    assert vlm.has_trusted_confidence({}) is False
+    assert vlm.has_trusted_confidence({"confidence": True}) is False
+    assert vlm.has_trusted_confidence(None) is False

@@ -65,6 +65,9 @@ export interface SessionResponse {
   /** 도면 교체 이력(#legacy-judgment-freshness) — 단건 GET 에서만 파생(true/false),
    *  목록/생성 응답과 구 API 는 null/부재. 소비자는 `=== true` 로만 판정할 것. */
   floorplan_replaced?: boolean | null;
+  /** 영속 verdict 의 리비전(rule_evaluated_at epoch ms, #judgment-selection-stamp) —
+   *  결과 카드 selection_key 대조용. verdict 없으면 null, 구 API 는 부재. */
+  verdict_revision?: number | null;
   last_activity_at: string;
   expires_at: string | null;
   created_at: string;

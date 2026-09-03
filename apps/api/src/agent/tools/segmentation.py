@@ -628,6 +628,9 @@ def _overlay_safe_regions(regions: list[dict[str, Any]]) -> list[dict[str, Any]]
     for r in regions:
         if isinstance(r, dict) and r.get("class_name") in _UNCERTAIN_WALL_LABELS:
             r = {**r, "class_name": "wall_unknown"}
+        if isinstance(r, dict) and "member_ids" in r:
+            # 병합 출처 id 는 서버 내부 정보(#assessment-remap) — 카드 payload 에서 제외.
+            r = {k: v for k, v in r.items() if k != "member_ids"}
         out.append(r)
     return out
 
@@ -920,6 +923,21 @@ def _merge_overlapping_regions(
                 "touches_tile_border": any(
                     bool(m.get("touches_tile_border")) for m in members
                 ),
+                # 출처 id(구성원 + 그 구성원의 출처) — VLM 영역별 평가를 최종 id 로
+                # 옮기는 근거(#assessment-remap). 오버레이 payload 에는 싣지 않는다.
+                "member_ids": [
+                    mid
+                    for m in members
+                    for mid in (
+                        [str(m.get("region_id"))]
+                        + [
+                            str(x)
+                            for x in (m.get("member_ids") or [])
+                            if isinstance(x, str)
+                        ]
+                    )
+                    if mid
+                ],
             }
             # VLM 이 교정한 조각이 하나라도 섞였으면 병합본도 VLM 출처다 — 이 값을 잃으면
             # 판단객체의 source_engine 이 MASK2FORMER 로 되돌아가 교정 이력이 사라진다.
@@ -1324,6 +1342,15 @@ async def segment_session_floorplan(
     # 내력벽 우선(#rc-priority): RC 와 면적이 겹치는 비내력 판정은 그 영역만큼 무시한다.
     regions = _suppress_rc_overlapped_nonbearing(regions)
     image = result.get("image")
+    # 원본 이미지 크기를 asset 에 기록(best-effort, #asset-dimensions) — 카드 이력 없이
+    # 판단객체만으로 오버레이를 재구성할 때 같은 좌표계를 쓰게 한다.
+    if isinstance(image, dict):
+        w, h = image.get("width"), image.get("height")
+        if isinstance(w, int) and isinstance(h, int) and w > 0 and h > 0:
+            with contextlib.suppress(Exception):
+                await main_flow.set_floorplan_asset_dimensions(
+                    asset_id=asset["id"], width_px=w, height_px=h
+                )
 
     # AI-002 VLM 문맥 해석 — 도면 이미지로 Mask2Former 레이블을 보완(실패 시 None=단독 degrade).
     supplement: dict[str, Any] | None = None
@@ -1392,6 +1419,15 @@ async def segment_session_floorplan(
                 for r in regions
                 if isinstance(r, dict) and r.get("source_engine") == "VLM"
             }
+
+    # VLM 영역별 평가는 1차 병합 id 기준이다 — 교정 재병합/RC 잘라내기로 바뀐 최종 id 에
+    # 옮겨 붙인다. 안 그러면 선택 벽에 위치·의견이 붙지 않는다(#assessment-remap).
+    if supplement and supplement.get("region_assessments"):
+        from .vlm import remap_region_assessments
+
+        supplement["region_assessments"] = remap_region_assessments(
+            supplement["region_assessments"], regions
+        )
 
     walls, spaces, windows = build_judgment_objects(regions, vlm_ids=vlm_ids)
     patch: dict[str, Any] = {
@@ -1480,11 +1516,9 @@ async def segment_session_floorplan(
     # "비내력벽 후보 5곳"이라 말하는데 오버레이엔 선택 가능한 벽이 2곳만 보이는 불일치가
     # 난다. VLM 교정으로 클래스가 바뀐 것도 여기서 함께 반영된다.
     summary = summarize_counts(_counts_by_class(regions))
-    low_conf = bool(
-        supplement
-        and supplement.get("confidence") is not None
-        and supplement["confidence"] < 0.6
-    )
+    from .vlm import is_low_confidence
+
+    low_conf = is_low_confidence(supplement)
     if supplement:
         summary = (summary or "") + " VLM 문맥 검토도 함께 반영했어요."
         if vlm_ids:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from typing import Any
 
 import pytest
 
@@ -1034,3 +1035,598 @@ async def test_emit_floorplan_request_survives_stamp_failure(monkeypatch) -> Non
     assert res["ok"] is True
     ui, _snap = ctx.drain_ui()
     assert "prior_asset_id" not in ui[0]["elements"]["fp"]["props"]
+
+
+# --- VLM 창호 경계 자동 반영 + 오버레이 재제공 (#region-assessments, #overlay-reshow) ----
+
+
+def _assessment(rid: str, assessment: str, kind: str = "window") -> dict[str, Any]:
+    return {
+        "region_id": rid,
+        "kind": kind,
+        "location": f"{rid} 위치",
+        "assessment": assessment,
+        "reason": "",
+    }
+
+
+def test_vlm_window_boundary_derivation() -> None:
+    def js(sel: list[str], items: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "selected_windows": sel,
+            "vlm_supplement": {"confidence": 0.9, "region_assessments": items},
+        }
+
+    assert domain._vlm_window_boundary({}) is None
+    assert (
+        domain._vlm_window_boundary(
+            js(["w1", "w2"], [_assessment("w1", "BALCONY_BOUNDARY")])
+        )
+        is None
+    )  # 하나라도 평가 없음 → 미확인
+    assert (
+        domain._vlm_window_boundary(
+            js(
+                ["w1", "w2"],
+                [
+                    _assessment("w1", "BALCONY_BOUNDARY"),
+                    _assessment("w2", "BALCONY_BOUNDARY"),
+                ],
+            )
+        )
+        == "BALCONY_BOUNDARY"
+    )
+    assert (
+        domain._vlm_window_boundary(
+            js(
+                ["w1", "w2"],
+                [_assessment("w1", "BALCONY_BOUNDARY"), _assessment("w2", "EXTERIOR")],
+            )
+        )
+        == "EXTERIOR"
+    )  # 외기 창 포함 → 보수적으로 EXTERIOR
+    assert (
+        domain._vlm_window_boundary(js(["w1"], [_assessment("w1", "UNCERTAIN")]))
+        is None
+    )
+
+
+async def test_evaluate_rules_autofills_window_boundary_from_vlm(monkeypatch) -> None:
+    # LLM 이 경계를 안 넘겨도 VLM 판정이 전부 경계 창이면 서버가 BALCONY_BOUNDARY 로 채워
+    # HOLD(재확인) 대신 발코니 확장 경로로 평가한다 — 사용자 재질문 없이 결론.
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_windows": ["pred:7", "pred:8"],
+        "window_objects": [{"id": "pred:7"}, {"id": "pred:8"}],
+        "vlm_supplement": {
+            "confidence": 0.9,
+            "region_assessments": [
+                _assessment("pred:7", "BALCONY_BOUNDARY"),
+                _assessment("pred:8", "BALCONY_BOUNDARY"),
+            ],
+        },
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id, judgment_values={"floor_count": 16}
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] != "HOLD"
+    assert not any("창호가 바깥 공기" in r for r in res["result"].get("reasons", []))
+
+
+async def test_evaluate_rules_llm_boundary_overrides_vlm(monkeypatch) -> None:
+    # 사용자가 "둘 다 내부 분합창"이라 정정해 LLM 이 BALCONY_BOUNDARY 를 넘기면 VLM 의
+    # EXTERIOR 판정보다 우선한다(LLM 전달값 > VLM).
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_windows": ["pred:7"],
+        "window_objects": [{"id": "pred:7"}],
+        "vlm_supplement": {
+            "confidence": 0.9,
+            "region_assessments": [_assessment("pred:7", "EXTERIOR")],
+        },
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={
+            "window_demolition_boundary": "BALCONY_BOUNDARY",
+            "floor_count": 16,
+        },
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] != "DENY"
+
+    res2 = await domain.evaluate_rules_impl(
+        session_id=session_id, judgment_values={"floor_count": 16}
+    )
+    assert res2["result"]["verdict"] == "DENY"  # LLM 값 없으면 VLM EXTERIOR 반영
+
+
+def _overlay_spec(asset_id: str, region_id: str = "pred:1") -> dict[str, Any]:
+    return {
+        "root": "ov",
+        "elements": {
+            "ov": {
+                "type": "FloorplanOverlay",
+                "props": {
+                    "asset_id": asset_id,
+                    "image": {"width": 100, "height": 100},
+                    "regions": [
+                        {
+                            "region_id": region_id,
+                            "class_name": "wall_nonbearing",
+                            "polygon": [10, 10, 20, 10, 20, 20],
+                        }
+                    ],
+                    "vocab_version": 4,
+                },
+            }
+        },
+    }
+
+
+async def _attach_asset(session_id, owner, name: str = "a1.png"):
+    return await main_flow.create_floorplan_asset(
+        session_id=session_id,
+        owner_user_id=owner,
+        payload={
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/{name}",
+            "content_type": "image/png",
+            "byte_size": 10,
+        },
+    )
+
+
+async def test_show_overlay_requires_floorplan_and_analysis(monkeypatch) -> None:
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is False and res["error_code"] == "OVERLAY_NO_FLOORPLAN"
+
+    await _attach_asset(session_id, owner)
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is False and res["error_code"] == "OVERLAY_NO_ANALYSIS"
+    assert ctx.pending_ui_components == []
+
+
+async def test_show_overlay_reemits_latest_card_for_current_asset(monkeypatch) -> None:
+    # 분석 시점에 방출된 카드(chat_messages.ui_components)를 **현재 asset 기준**으로 찾아
+    # reason 만 얹어 재방출한다 — 옛 도면의 카드는 건너뛰고, 재분석은 하지 않는다.
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    old = await _attach_asset(session_id, owner, "old.png")
+    await main_flow.append_internal_chat_message(
+        session_id=session_id,
+        role="assistant",
+        content="옛 카드",
+        ui_components=[_overlay_spec(str(old["id"]), "pred:9")],
+    )
+    new = await _attach_asset(session_id, owner, "new.png")
+    await main_flow.append_internal_chat_message(
+        session_id=session_id,
+        role="assistant",
+        content="새 카드",
+        ui_components=[_overlay_spec(str(new["id"]), "pred:1")],
+    )
+    await main_flow.append_internal_chat_message(
+        session_id=session_id, role="assistant", content="결과 안내", ui_components=[]
+    )
+    fake.sessions[session_id]["judgment_schema"] = {
+        # 카드(pred:1, 폴리곤 10,10…)와 기하·분류가 같은 현재 판단객체 → 카드 재사용.
+        "wall_objects": [
+            {
+                "id": "pred:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            }
+        ],
+        "selected_walls": ["pred:1"],
+    }
+
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        reason="거실 날개벽을 골라 주세요",
+    )
+    assert res["ok"] is True and res["overlay_emitted"] is True
+    ui, _snap = ctx.drain_ui()
+    props = ui[0]["elements"]["ov"]["props"]
+    assert props["asset_id"] == str(new["id"])
+    assert props["regions"][0]["region_id"] == "pred:1"
+    assert props["reason"] == "거실 날개벽을 골라 주세요"
+    assert props["vocab_version"] == 4
+
+
+async def test_show_overlay_rebuilds_from_judgment_objects_when_no_card(
+    monkeypatch,
+) -> None:
+    # 카드 이력이 없으면(영속 실패·정리 등) 판단객체 coords 로 재구성해 띄운다 — 기본
+    # reason 이 붙고 wall_type 은 오버레이 어휘로 역매핑된다.
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    await _attach_asset(session_id, owner)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "pred:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            },
+            {
+                "id": "pred:2",
+                "wall_type": "LOAD_BEARING",
+                "coords": [{"x": 30, "y": 30}, {"x": 40, "y": 30}, {"x": 40, "y": 40}],
+            },
+            {"id": "pred:3", "wall_type": "UNKNOWN", "coords": [{"x": 1, "y": 1}]},
+        ],
+        "window_objects": [
+            {
+                "id": "pred:7",
+                "coords": [{"x": 50, "y": 50}, {"x": 60, "y": 50}, {"x": 60, "y": 60}],
+            }
+        ],
+    }
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is True
+    ui, _snap = ctx.drain_ui()
+    props = ui[0]["elements"]["ov"]["props"]
+    by_id = {r["region_id"]: r["class_name"] for r in props["regions"]}
+    assert by_id == {
+        "pred:1": "wall_nonbearing",
+        "pred:2": "wall_reinforced_concrete",
+        "pred:7": "window",
+    }  # pred:3 은 좌표 부족으로 드롭
+    assert props["reason"]
+
+
+# --- Codex round-1 회귀 (#region-assessments 충돌·저신뢰 게이트·카드 검증·선택 지문) ----
+
+
+def test_derive_wall_type_holds_on_vlm_conflict() -> None:
+    # 세그멘테이션은 비내력 후보인데 VLM 이 내력 추정/판단 어려움이면 None(→HOLD) —
+    # 두 근거가 갈린 벽을 비내력으로 확정해 ALLOW/WARN 을 영속하지 않는다.
+    base = {
+        "wall_objects": [
+            {"id": "w1", "wall_type": "NON_LOAD_BEARING"},
+            {"id": "w2", "wall_type": "NON_LOAD_BEARING"},
+        ],
+        "selected_walls": ["w1", "w2"],
+    }
+    assert domain._derive_wall_type(base) == "NON_LOAD_BEARING"
+    for opinion in ("LOAD_BEARING", "UNCERTAIN"):
+        js = {
+            **base,
+            "vlm_supplement": {
+                "confidence": 0.9,
+                "region_assessments": [_assessment("w2", opinion, kind="wall")],
+            },
+        }
+        assert domain._derive_wall_type(js) is None
+    agree = {
+        **base,
+        "vlm_supplement": {
+            "confidence": 0.9,
+            "region_assessments": [
+                _assessment("w1", "NON_LOAD_BEARING", kind="wall"),
+                _assessment("w2", "NON_LOAD_BEARING", kind="wall"),
+            ],
+        },
+    }
+    assert domain._derive_wall_type(agree) == "NON_LOAD_BEARING"
+
+
+async def test_evaluate_rules_holds_when_vlm_disputes_nonbearing(monkeypatch) -> None:
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}],
+        "selected_walls": ["w1"],
+        "vlm_supplement": {
+            "confidence": 0.9,
+            "region_assessments": [_assessment("w1", "LOAD_BEARING", kind="wall")],
+        },
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={"wall_type": "NON_LOAD_BEARING", "balcony_attached": False},
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] == "HOLD"
+
+
+def test_vlm_window_boundary_ignored_when_low_confidence() -> None:
+    js = {
+        "selected_windows": ["w1"],
+        "vlm_supplement": {
+            "confidence": 0.4,
+            "region_assessments": [_assessment("w1", "BALCONY_BOUNDARY")],
+        },
+    }
+    assert domain._vlm_window_boundary(js) is None
+    js["vlm_supplement"]["confidence"] = 0.6
+    assert domain._vlm_window_boundary(js) == "BALCONY_BOUNDARY"
+    js["vlm_supplement"]["confidence"] = None  # 미측정 → 승격 금지(Codex P1)
+    assert domain._vlm_window_boundary(js) is None
+
+
+def test_selection_key_sorted_and_stable() -> None:
+    assert domain.selection_key({}) == "|#"
+    assert (
+        domain.selection_key(
+            {"selected_walls": ["b", "a", 3], "selected_windows": ["w"]}
+        )
+        == "a,b|w#"
+    )
+
+
+async def test_judgment_summary_stamps_selection_key(monkeypatch) -> None:
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_walls": ["pred:2", "pred:1"],
+        "selected_windows": [],
+    }
+    await domain.emit_judgment_summary_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        decision="conditional",
+        title="t",
+        summary="s",
+    )
+    ui, _snap = ctx.drain_ui()
+    assert ui[0]["elements"]["j"]["props"]["selection_key"] == "pred:1,pred:2|#"
+
+
+async def test_show_overlay_rebuilds_when_card_regions_mismatch(monkeypatch) -> None:
+    # 같은 asset 의 재분석 결과가 카드로 투영되지 못한 경우 — 옛 카드의 선택 가능 id 가
+    # 현재 판단객체와 다르면 재사용하지 않고 판단객체로 재구성한다(Codex P2).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    asset = await _attach_asset(session_id, owner)
+    await main_flow.append_internal_chat_message(
+        session_id=session_id,
+        role="assistant",
+        content="옛 분석 카드",
+        ui_components=[_overlay_spec(str(asset["id"]), "pred:9")],
+    )
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "merged:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            }
+        ],
+    }
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is True
+    ui, _snap = ctx.drain_ui()
+    ids = [r["region_id"] for r in ui[0]["elements"]["ov"]["props"]["regions"]]
+    assert ids == ["merged:1"]
+
+
+# --- Codex round-2 회귀 (카드 기하 검증 · 자산 치수 복구) ---------------------------
+
+
+async def test_show_overlay_rebuilds_when_card_geometry_or_class_differs(
+    monkeypatch,
+) -> None:
+    # 같은 id 라도 폴리곤이나 분류(wall_other↔wall_nonbearing)가 현재 판단객체와 다르면
+    # 옛 카드를 재사용하지 않는다(Codex P2 — id 집합만 비교하던 구멍).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    asset = await _attach_asset(session_id, owner)
+    await main_flow.append_internal_chat_message(
+        session_id=session_id,
+        role="assistant",
+        content="옛 분석 카드",
+        ui_components=[_overlay_spec(str(asset["id"]), "pred:1")],  # 폴리곤 10,10…
+    )
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "pred:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 25, "y": 10}, {"x": 25, "y": 20}],
+            }
+        ],
+    }
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is True
+    ui, _snap = ctx.drain_ui()
+    region = ui[0]["elements"]["ov"]["props"]["regions"][0]
+    assert region["polygon"] == [10.0, 10.0, 25.0, 10.0, 25.0, 20.0]  # 재구성본
+
+    # 분류만 다른 경우(카드는 비내력, 판단객체는 미확정)도 재구성한다.
+    fake.sessions[session_id]["judgment_schema"]["wall_objects"][0].update(
+        {
+            "wall_type": "UNKNOWN",
+            "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+        }
+    )
+    await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    ui, _snap = ctx.drain_ui()
+    assert (
+        ui[0]["elements"]["ov"]["props"]["regions"][0]["class_name"] == "wall_unknown"
+    )
+
+
+async def test_show_overlay_reuses_card_when_identical(monkeypatch) -> None:
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    asset = await _attach_asset(session_id, owner)
+    spec = _overlay_spec(str(asset["id"]), "pred:1")
+    spec["elements"]["ov"]["props"]["regions"][0]["score"] = 0.9
+    await main_flow.append_internal_chat_message(
+        session_id=session_id, role="assistant", content="카드", ui_components=[spec]
+    )
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "pred:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            }
+        ],
+    }
+    await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    ui, _snap = ctx.drain_ui()
+    assert ui[0]["elements"]["ov"]["props"]["regions"][0]["score"] == 0.9  # 원본 카드
+
+
+async def test_show_overlay_rebuild_uses_persisted_asset_dimensions(
+    monkeypatch,
+) -> None:
+    # 카드 이력이 없을 때 재구성은 asset 에 영속된 원본 이미지 크기를 좌표계로 쓴다
+    # (#asset-dimensions) — 폴리곤 bbox 추정으로 이미지와 어긋나지 않게.
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    asset = await _attach_asset(session_id, owner)
+    await main_flow.set_floorplan_asset_dimensions(
+        asset_id=asset["id"], width_px=1200, height_px=900
+    )
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "pred:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            }
+        ],
+    }
+    await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    ui, _snap = ctx.drain_ui()
+    assert ui[0]["elements"]["ov"]["props"]["image"] == {"width": 1200, "height": 900}
+
+
+# --- Codex round-3 회귀 (verdict 리비전 스탬프 · 신뢰도 미측정 · 내력벽-only 카드) ---------
+
+
+def test_selection_key_includes_verdict_revision() -> None:
+    from datetime import UTC, datetime
+
+    ts = datetime(2026, 9, 3, 2, 0, 0, tzinfo=UTC)
+    key = main_flow.judgment_selection_key({"selected_walls": ["w1"]}, ts)
+    assert key == f"w1|#{int(ts.timestamp() * 1000)}"
+    assert main_flow.judgment_selection_key({"selected_walls": ["w1"]}, None) == "w1|#"
+    assert main_flow.verdict_revision("2026-09-03") is None  # 문자열은 리비전 아님
+
+
+async def test_judgment_summary_key_changes_when_verdict_cleared(monkeypatch) -> None:
+    # 같은 선택 id 로 재분석돼 verdict 가 지워지면(merge 가 rule_evaluated_at 을 비움)
+    # 지문이 달라져 옛 결과 카드가 통과하지 않는다(Codex P1).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    await _attach_asset(session_id, owner)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}],
+        "selected_walls": ["w1"],
+    }
+    await main_flow.set_session_verdict(
+        session_id=session_id,
+        rule_eval_result={"verdict": "WARN"},
+        expected_asset_id=fake.sessions[session_id]["selected_floorplan_asset_id"],
+        expected_address_id=None,
+        expected_selected_walls=["w1"],
+        expected_selected_windows=[],
+    )
+    stamped = await main_flow.get_session_selection_key(session_id)
+    assert stamped is not None and not stamped.endswith("#")
+    await domain.emit_judgment_summary_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        decision="conditional",
+        title="t",
+        summary="s",
+    )
+    ui, _snap = ctx.drain_ui()
+    assert ui[0]["elements"]["j"]["props"]["selection_key"] == stamped
+
+    # 같은 선택 id 로 재분석 → verdict 소거 → 라이브 지문이 달라진다.
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "w1", "wall_type": "UNKNOWN"}]},
+    )
+    live = await main_flow.get_session_selection_key(session_id)
+    assert live != stamped and live is not None and live.endswith("#")
+
+
+async def test_show_overlay_rejects_load_bearing_only_analysis(monkeypatch) -> None:
+    # 내력벽만 잡힌 분석은 카드에 고를 수 있는 영역·제출 버튼이 없다 — 성공으로 돌리면
+    # 에이전트가 '골라 달라'고 하는데 사용자는 이어갈 수 없다(Codex P2).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    await _attach_asset(session_id, owner)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "w1",
+                "wall_type": "LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            }
+        ],
+        "window_objects": [],
+    }
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is False and res["error_code"] == "OVERLAY_NO_ANALYSIS"
+    assert ctx.pending_ui_components == []
