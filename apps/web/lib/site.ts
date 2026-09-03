@@ -23,6 +23,16 @@ export const GTM_CONTAINER_ID =
   process.env.NEXT_PUBLIC_GTM_ID ?? 'GTM-TQN3DM5W';
 
 /**
+ * 네이버 서치어드바이저(웹마스터 도구) 사이트 소유확인 토큰 — HTML 태그 방식.
+ * `<meta name="naver-site-verification">` 로 `<head>` 에 그대로 노출되는 공개 값이라
+ * 코드에 둔다(GTM ID 와 같은 원칙). 웹마스터 도구에 등록한 `https://jippin.ai` 와
+ * 1:1 로 묶인 값이므로 재발급 시 여기만 갱신한다. 프리뷰 origin 에도 렌더되지만
+ * 소유확인은 등록 URL 을 직접 크롤해 대조하므로 무해하다.
+ */
+export const NAVER_SITE_VERIFICATION =
+  'e9aa6d7acb921967c5a3ec2b123815c295ca806c';
+
+/**
  * 검색·LLM 인입 키워드. 사용자 지정 핵심 키워드 + 동의어/롱테일.
  * (베란다 확장 / 인테리어 / 아파트 확장 / 화단철거 / 가벽철거 / 사전검토)
  */
