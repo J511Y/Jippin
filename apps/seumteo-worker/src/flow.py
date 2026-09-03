@@ -232,20 +232,94 @@ def _suffix(value: str | None, suf: str) -> str:
     return text if text.endswith(suf) else text + suf
 
 
-def _addr_has_ho(addr: str, ho: str) -> bool:
-    """신청내역 locDetlAddr("…102동 901"/"…901호")에서 호(ho)를 **동 뒤 구간**에서만 찾는다.
+def _unit_pattern(value: str | None, suffix: str) -> re.Pattern[str] | None:
+    """신청내역 locDetlAddr 에서 동/호 토큰을 찾는 정규식(공백이 보존된 원문 대상).
 
-    호는 동 뒤에 온다. 동번호(예 '101동'의 101)를 호로 오인하면, 아직 내 접수건이 안 뜬 사이
-    공용 계정의 다른 호('101동 1001호') 접수를 잘못 매칭해 엉뚱한 문서를 연다. '동' 이후 구간
-    에서만 호 토큰을 확인해 이를 배제한다(#recp-ho-after-dong).
+    세움터 ES 원문(dongNm/hoNm)은 건물마다 접미 유무가 다르다 — '101동'/'101'/'제101동'/
+    '가동'/'동명칭없음', '1001호'/'1001'. 옛 검사(``(dong + "동") in addr``)는 접미를 강제해
+    삼부아파트(dongNm '101')처럼 접미 없는 건물의 접수행을 영영 못 찾았다 — 신청은 세움터에
+    쌓이고 잡은 upstream 오류로 끝난다(#recp-unit-suffix). 접미·'제' 접두·공백을 관용하되,
+    숫자 토큰은 앞뒤 숫자·하이픈 경계를 요구해 '101'이 '1101동'/'1010동'/지번 '99-13'에
+    걸리지 않게 하고, 접미를 소비하지 않았으면 뒤에 공백·끝·접미만 허용해 '종로1가'의 '1'
+    같은 부분일치를 배제한다. 비숫자 토큰도 영숫자·하이픈 경계를 요구해 'OF-304-1'이
+    'OF-304-10'에, 'A'가 'A1'에 걸리지 않게 한다(접미를 소비한 뒤에는 경계를 두지 않아
+    '가동308호'처럼 붙은 표기는 허용). 공백을 먼저 지우면 '101 1001호'가 '1011001호'로 붙어
+    경계가 사라지므로, 호출측은 공백을 보존한 주소를 넘겨야 한다.
     """
 
-    norm = (addr or "").replace(" ", "")
-    if not ho:
-        return False
-    di = norm.rfind("동")
-    seg = norm[di + 1 :] if di >= 0 else norm
-    return bool(re.search(r"(?<!\d)" + re.escape(ho) + r"호?(?!\d)", seg))
+    core = _norm_unit(value)
+    if not core:
+        return None
+    boundary = r"[A-Za-z\d-]"
+    if core.isdigit():
+        return re.compile(rf"(?<!{boundary})0*{core}(?:\s*{suffix})?(?=\s|$|{suffix})")
+    # 비숫자('가동'·'동명칭없음'·'OF-304-1'): 정규화값+접미 또는 원문 그대로(공백 관용).
+    alts = [re.escape(core) + r"\s*" + suffix]
+    raw_parts = re.sub(r"[()]", "", value or "").split()
+    if raw_parts:
+        alts.append(r"\s*".join(re.escape(p) for p in raw_parts) + rf"(?!{boundary})")
+    return re.compile(rf"(?<!{boundary})(?:" + "|".join(dict.fromkeys(alts)) + ")")
+
+
+def _units_terminal(
+    tail: str,
+    dong_pattern: re.Pattern[str] | None,
+    ho_pattern: re.Pattern[str] | None,
+) -> bool:
+    """tail 이 '동 [호]' 단위 구간으로 **끝나는지** — 동 바로 뒤에 호, 그 뒤엔 아무것도 없다.
+
+    호는 동 뒤에 온다(#recp-ho-after-dong). 다만 "동 뒤 어딘가"로 느슨하게 찾으면 건물명 속
+    독립 토큰('101 타워'의 101)을 동으로 오인한 뒤 진짜 동('102동')을 건너뛰어 호를 집는다
+    (Codex P2 #201). 세움터 신청내역 locDetlAddr 는 워커가 담기(C01)에 보낸 형식 그대로
+    '지번 [건물명] 동 [호]' 로 끝나므로, 동→호가 주소의 **말단 연속 토큰**일 때만 인정한다
+    (사이엔 공백·접미 '동'·접두 '제' 만 허용). 동 토큰이 여러 번 나오면(건물명 속 숫자 등)
+    각 위치를 모두 시도한다. 동 패턴이 없으면 호가 말단이어야 하고, 호 패턴이 없으면
+    (표제부) 동이 말단이어야 한다.
+    """
+
+    def _ends_at(pos: int) -> bool:
+        return not tail[pos:].strip()
+
+    if dong_pattern is None:
+        if ho_pattern is None:
+            return True
+        return any(_ends_at(m.end()) for m in ho_pattern.finditer(tail))
+    for dm in dong_pattern.finditer(tail):
+        pos = dm.end()
+        if tail.startswith(
+            "동", pos
+        ):  # 숫자 동 패턴이 접미를 안 삼킨 경우('101동1001호')
+            pos += 1
+        while pos < len(tail) and tail[pos].isspace():
+            pos += 1
+        if ho_pattern is None:
+            if pos == len(tail):
+                return True
+            continue
+        if tail.startswith("제", pos):
+            pos += 1
+        hm = ho_pattern.match(tail, pos)
+        if hm is not None and _ends_at(hm.end()):
+            return True
+    return False
+
+
+def _collapse_spaces(text: str) -> str:
+    """괄호를 공백으로 바꾸고 공백 연속을 한 칸으로 접는다(토큰 경계 보존 비교용)."""
+
+    return re.sub(r"\s+", " ", re.sub(r"[()]", " ", text)).strip()
+
+
+def _spaced_pattern(key: str, *, guard: str = "") -> re.Pattern[str] | None:
+    """공백·괄호를 뺀 식별자(key)를 **공백 보존 원문**에서 찾는 정규식(문자 사이 공백 관용).
+
+    매치 끝 위치를 돌려받아 그 뒤 구간에서만 동/호를 찾기 위해 쓴다 — 공백을 지운 사본에서
+    찾으면 위치가 원문과 어긋나고 숫자 경계도 사라진다.
+    """
+
+    if not key:
+        return None
+    return re.compile(r"\s*".join(re.escape(ch) for ch in key) + guard)
 
 
 def _parcel_address_key(jibun_addr: str, mnnm: str, slno: str) -> str:
@@ -1243,8 +1317,14 @@ class SeumteoFlow:
         wants: set[str],
     ) -> dict | None:
         kind = _REGSTR_KIND[req.register_kind]
-        dong = _norm_unit(t.get("es_dong_nm") or req.dong)
-        ho = _norm_unit(t.get("es_ho_nm") or req.ho)
+        # 동/호 토큰 — ES 원문 포맷(접미 유무·'제' 접두)을 관용한다(#recp-unit-suffix).
+        dong_pattern = _unit_pattern(t.get("es_dong_nm") or req.dong, "동")
+        # 호는 전유부만 검사한다(표제부 행에는 호가 없다).
+        ho_pattern = (
+            _unit_pattern(t.get("es_ho_nm") or req.ho, "호")
+            if req.register_kind == "exclusive"
+            else None
+        )
         # 건물 식별자 — 공용 계정에 다른 단지의 같은 동/호(예: 다른 단지 101동 1001호)가 섞여
         # 있어, 동/호만으로 매칭하면 **엉뚱한 건물의 발급 문서**를 열 수 있다. 건물명과
         # **'시군구·법정동+본번' 지번 프리픽스**(짧은 본번의 부분일치 오매칭 방지)를 모두
@@ -1262,41 +1342,61 @@ class SeumteoFlow:
         )
         # 본번 488은 4880과 달라야 한다. 위에서 필지 토큰을 포함한 key를 만들었으므로,
         # 이력 주소에서는 숫자·하이픈 경계를 보존해 부분 문자열 오매칭을 막는다.
+        name_pattern = _spaced_pattern(bld_nm)
         parcel_pattern = (
-            re.compile(re.escape(jibun_key) + r"(?![\d-])")
+            _spaced_pattern(jibun_key, guard=r"(?![\d-])")
             if len(jibun_key) >= 8
             else None
         )
+        # 담기(C01)에 보낸 locDetlAddr 원문 — 세움터가 그대로 돌려주면 건물·동·호를 한 번에
+        # 확정하는 가장 강한 식별자다. 공백은 **지우지 않고 한 칸으로 접는다** — 전부 지우면
+        # '101 1001호' 와 '1011001호' 가 같아져 동/호 경계 검사를 우회한다(Codex P2 #201).
+        # 원문이 변형돼 오면(공백 유무 등) 아래 식별자+동/호 토큰 검사로 폴백한다.
+        sent_echo = _collapse_spaces(str(t.get("_locDetlAddr") or ""))
         # S01/D02 응답에서 얻은 번호는 새 행이 여러 개일 때의 tie-breaker 로만 사용한다. 실측상
         # 신청은 완료됐지만 응답에서 재귀 추출한 번호가 06R01 의 실제 pbsvcRecpNo 와 달라,
         # 정확 일치만 강제하면 완료 행을 모두 버리고 중복 발급을 유발했다.
 
         # 최신순 정렬 후, 신청 전 스냅샷에 없던 동일 대상 행만 모은다.
         rows = sorted(rows, key=lambda r: str(r.get("firstCrtnDt") or ""), reverse=True)
-        candidates: list[dict] = []
+        candidates: list[tuple[dict, str]] = []  # (행, 매칭 근거 echo|units)
         for r in rows:
             if str(r.get("regstrKindCd")) != kind:
                 continue
-            addr = str(r.get("locDetlAddr") or "")
-            addr_norm = re.sub(r"[\s()]", "", addr)
-            name_matches = bool(bld_nm and bld_nm in addr_norm)
-            jibun_matches = bool(parcel_pattern and parcel_pattern.search(addr_norm))
-            if not (name_matches or jibun_matches):
-                continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
-            if dong and (dong + "동") not in addr_norm:
-                continue
-            if req.register_kind == "exclusive" and ho and not _addr_has_ho(addr, ho):
-                continue
+            # 괄호는 공백으로 바꾸고 **공백은 보존**한다 — 동/호 토큰의 숫자 경계가 공백이다.
+            addr = re.sub(r"[()]", " ", str(r.get("locDetlAddr") or ""))
+            if sent_echo and _collapse_spaces(addr) == sent_echo:
+                matched_by = "echo"
+            else:
+                # 건물 식별자가 끝나는 지점 **뒤에서** 동→호가 주소 **말단**을 이루는지 본다 —
+                # 지번 본번('종로1가 1')이나 건물명 속 숫자('101 타워')가 동/호로 오인되지
+                # 않게. 강한 식별자(지번 프리픽스)가 맞으면 그 끝만 쓴다 — 짧은 건물명('A')이
+                # 동 토큰('A동') 안에서 잡혀 구간을 잘못 자르지 않게(Codex P2 #201). 지번이
+                # 안 맞을 때만 건물명 출현 위치를 쓰되, 여러 번 나오면 각 위치를 모두 본다.
+                starts = (
+                    [m.end() for m in parcel_pattern.finditer(addr)]
+                    if parcel_pattern is not None
+                    else []
+                )
+                if not starts and name_pattern is not None:
+                    starts = [m.end() for m in name_pattern.finditer(addr)]
+                if not starts:
+                    continue  # 건물 식별자 부재/불충분 → 안전하게 스킵(오건 방지).
+                if not any(
+                    _units_terminal(addr[s:], dong_pattern, ho_pattern) for s in starts
+                ):
+                    continue
+                matched_by = "units"
             recp = _norm_recp_no(r.get("pbsvcRecpNo"))
             if not recp or recp in known_receipts:
                 continue
-            candidates.append(r)
+            candidates.append((r, matched_by))
 
         if wants:
             exact = [
-                row
-                for row in candidates
-                if _norm_recp_no(row.get("pbsvcRecpNo")) in wants
+                cand
+                for cand in candidates
+                if _norm_recp_no(cand[0].get("pbsvcRecpNo")) in wants
             ]
             if len(exact) == 1:
                 candidates = exact
@@ -1309,7 +1409,7 @@ class SeumteoFlow:
                 )
             return None
 
-        r = candidates[0]
+        r, matched_by = candidates[0]
         recp = str(r.get("pbsvcRecpNo") or "")
         by_submit = _norm_recp_no(recp) in wants
         _log.info(
@@ -1318,6 +1418,7 @@ class SeumteoFlow:
             prog=r.get("progStateCd"),
             by_submit=by_submit,
             by_snapshot=not by_submit,
+            matched_by=matched_by,
         )
         # 발급 준비(06R03)는 이 접수의 처리일 기준이다. 검색창이 [어제,오늘]이라 어제 건이
         # 매칭될 수 있으니, 오늘로 재계산하지 말고 이 행의 처리일을 그대로 넘긴다(#recp-date).
