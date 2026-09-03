@@ -9,6 +9,7 @@ import { WebVitals } from '@/components/WebVitals';
 import { Providers } from '@/lib/providers';
 import {
   GTM_CONTAINER_ID,
+  NAVER_SITE_VERIFICATION,
   SITE_DESCRIPTION,
   SITE_KEYWORDS,
   SITE_NAME,
@@ -65,7 +66,12 @@ export const metadata: Metadata = {
     ],
     apple: '/favicon/apple-touch-icon.png'
   },
-  manifest: '/favicon/site.webmanifest'
+  manifest: '/favicon/site.webmanifest',
+  // 검색엔진 사이트 소유확인. 네이버는 Next 가 1급 키(google/yandex 등)로 지원하지
+  // 않으므로 `other` 로 넣는다 → <meta name="naver-site-verification" content="…" />.
+  verification: {
+    other: { 'naver-site-verification': NAVER_SITE_VERIFICATION }
+  }
 };
 
 export const viewport: Viewport = {
