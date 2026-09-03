@@ -347,3 +347,15 @@ def test_selected_windows_uncertain_asks_only_that_window() -> None:
     assert ctx is not None
     assert "그 창에 대해서만" in ctx
     assert "window_demolition_boundary(EXTERIOR|BALCONY_BOUNDARY)" in ctx
+
+
+def test_selected_windows_low_confidence_asks_user() -> None:
+    # 저신뢰 분석이면 VLM 경계 판정이 있어도 자동 반영되지 않으므로 사용자에게 확인한다.
+    session = _window_session(
+        {"pred:7": "BALCONY_BOUNDARY", "pred:8": "BALCONY_BOUNDARY"}
+    )
+    session["judgment_schema"]["vlm_supplement"]["confidence"] = 0.3
+    ctx = build_session_state_context(session, None)
+    assert ctx is not None
+    assert "분석 신뢰도가 낮아" in ctx
+    assert "BALCONY_BOUNDARY 를 자동 반영" not in ctx

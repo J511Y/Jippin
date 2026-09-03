@@ -676,11 +676,19 @@ def test_generated_contract_enum_instances_accepted_same_as_strings():
 
 
 def test_generated_contract_null_window_member_treated_as_missing():
-    # 계약 WindowForm 의 null 멤버 — .value 가 None 이므로 미수집과 동일. v2 에선 창호
-    # 미확인은 보수적 기본값(비고정형)으로 가정해 HOLD 가 아니라 WARN(미확인 caveat)이다.
-    parsed = RuleInput.from_judgment_values(
-        {**_FULL_BASE, "window_form": ContractWindowForm.NoneType_None}
-    )
+    # 계약 1.4.0 부터 WindowForm 은 공용 $defs 어휘(null 멤버 없음 — null 은 필드의
+    # anyOf 로 표현). 그래서 생성 enum 엔 NoneType_None 이 없고, 미수집은 None 그대로다.
+    # v2 에선 창호 미확인은 보수적 기본값(비고정형)으로 가정해 HOLD 가 아니라 WARN(미확인
+    # caveat)이다.
+    assert not hasattr(ContractWindowForm, "NoneType_None")
+    assert {m.value for m in ContractWindowForm} == {
+        "FIXED",
+        "OPENABLE",
+        "FOLDING",
+        "SLIDING",
+        "OTHER",
+    }
+    parsed = RuleInput.from_judgment_values({**_FULL_BASE, "window_form": None})
     assert parsed.window_form is None
     assert parsed.invalid_fields == ()
     assert evaluate(parsed).verdict is Verdict.WARN

@@ -55,6 +55,14 @@ _ASSESSMENT_LABEL: dict[str, str] = {
 }
 
 
+def _is_low_confidence(supplement: Any) -> bool:
+    """VLM 전체 신뢰도 저신뢰 여부 — tools.vlm 의 문턱과 같은 판정(#low-conf-gate)."""
+
+    from .tools.vlm import is_low_confidence
+
+    return is_low_confidence(supplement if isinstance(supplement, dict) else None)
+
+
 def _assessments_by_id(judgment: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """VLM 영역별 평가(vlm_supplement.region_assessments)를 region_id 로 색인한다."""
 
@@ -280,9 +288,12 @@ def build_session_state_context(
         win_ids = [s for s in selected_windows if isinstance(s, str)]
         shown_windows = ", ".join(win_ids[:10])
         by_id = _assessments_by_id(judgment)
+        # 저신뢰 분석(#low-conf-gate)이면 판정이 있어도 서버가 자동 반영하지 않으므로,
+        # 에이전트도 '미확정'으로 보고 사용자에게 확인한다(evaluate_rules 와 정합).
+        low_conf = _is_low_confidence(judgment.get("vlm_supplement"))
         verdicts = {
             str(by_id[rid].get("assessment"))
-            if isinstance(by_id.get(rid), dict)
+            if isinstance(by_id.get(rid), dict) and not low_conf
             else "UNCERTAIN"
             for rid in win_ids
         }
@@ -300,6 +311,13 @@ def build_session_state_context(
                 "경계 창만 남기고 다시 고르고 싶으면 show_floorplan_overlay 로 도면을 다시 "
                 "띄워 줄 것. 사용자가 '내부 분합창'이라고 정정하면 사용자 답을 우선하고 "
                 "window_demolition_boundary=BALCONY_BOUNDARY 로 넘길 것."
+            )
+        elif low_conf:
+            resolution = (
+                "도면 분석 신뢰도가 낮아 VLM 창호 판정을 그대로 쓰지 않는다 — 고른 창마다 "
+                "생활어로 한 번 확인하고(예: '거실과 발코니 사이 창인가요, 바깥 공기와 바로 "
+                "닿는 창인가요?'), 답을 window_demolition_boundary(EXTERIOR|BALCONY_BOUNDARY)"
+                "로 넘길 것."
             )
         else:
             resolution = (

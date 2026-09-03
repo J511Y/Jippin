@@ -5,7 +5,7 @@
 from .agent_run_request import AgentRunRequest, UserMessage
 from .agent_run_status import AgentRunStatus, AgentRunStatusValue
 from .agent_sse_event import AgentSseEvent, DoneEvent, ErrorEvent, MessageEvent, Role, RunStatus, SessionStatus, StateChangeDecision, StateChangeEvent, TokenEvent, ToolKind, ToolStepEvent, ToolStepStatus
-from .common_judgment_schema import Assessment, BuildingInfo, BuildingType, CommonJudgmentSchema, JudgmentHints, JudgmentValues, Kind, MaskCoord, PermitEntry, Provider, Reclassification, RegionAssessment, RegisterSupplement, SelectedWall, SelectedWindow, SourceEngine, SourceEngine1, SpaceObject, Type, VlmSupplement, WallObject, WallType, WindowDemolitionBoundary, WindowForm, WindowForm1, WindowObject
+from .common_judgment_schema import BuildingInfo, BuildingType, CommonJudgmentSchema, JudgmentHints, JudgmentValues, MaskCoord, PermitEntry, Provider, Reclassification, RegionAssessment, RegionKind, RegionOpinion, RegisterSupplement, SelectedWall, SelectedWindow, SourceEngine, SourceEngine1, SpaceObject, Type, VlmSupplement, WallObject, WallType, WindowDemolitionBoundary, WindowForm, WindowObject
 from .completion_decision import Channel, CompletionDecision, ConfidenceSummary, ConflictFlag, Decision, Kind, MissingField, NextAction
 from .error_response import ErrorBody, ErrorResponse
 from .estimate_result import Assumption, Currency, EstimateItem, EstimateResult, MoneyRange
@@ -20,7 +20,6 @@ __all__ = [
     "AgentRunStatus",
     "AgentRunStatusValue",
     "AgentSseEvent",
-    "Assessment",
     "Assumption",
     "BuildingHeading",
     "BuildingInfo",
@@ -69,6 +68,8 @@ __all__ = [
     "Reclassification",
     "Region",
     "RegionAssessment",
+    "RegionKind",
+    "RegionOpinion",
     "RegisterSupplement",
     "ReportMeta",
     "RequiredFacility",
@@ -101,6 +102,5 @@ __all__ = [
     "WallType",
     "WindowDemolitionBoundary",
     "WindowForm",
-    "WindowForm1",
     "WindowObject",
 ]

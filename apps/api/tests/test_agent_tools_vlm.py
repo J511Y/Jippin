@@ -342,3 +342,62 @@ def test_normalize_supplement_carries_region_assessments() -> None:
     # window_ids 를 안 넘긴 구 호출 경로도 깨지지 않는다(창호 항목만 드롭).
     s2 = vlm._normalize_supplement(data, model="m", valid_ids={"pred:1"})
     assert [a["region_id"] for a in s2["region_assessments"]] == ["pred:1"]
+
+
+# --- 최종 id 재매핑 + 저신뢰 판정 (#assessment-remap, #low-conf-gate) --------------
+
+
+def test_remap_region_assessments_follows_merge_and_clip_provenance() -> None:
+    assessments = [
+        {
+            "region_id": "pred:1",
+            "kind": "wall",
+            "location": "A",
+            "assessment": "UNCERTAIN",
+        },
+        {
+            "region_id": "merged:2",
+            "kind": "wall",
+            "location": "B",
+            "assessment": "LOAD_BEARING",
+        },
+        {
+            "region_id": "pred:7",
+            "kind": "window",
+            "location": "C",
+            "assessment": "EXTERIOR",
+        },
+        {
+            "region_id": "pred:99",
+            "kind": "wall",
+            "location": "gone",
+            "assessment": "UNCERTAIN",
+        },
+    ]
+    regions = [
+        {"region_id": "pred:1", "class_name": "wall_nonbearing"},  # 변화 없음
+        # 교정 재병합 — 구성원 출처로 대조
+        {
+            "region_id": "vlm-merged:1",
+            "class_name": "wall_reinforced_concrete",
+            "member_ids": ["pred:5", "merged:2"],
+        },
+        # RC 잘라내기 — base id 로 대조
+        {"region_id": "pred:7~abc123", "class_name": "window"},
+        {"region_id": "pred:8", "class_name": "wall_other"},  # 평가 없음 → 드롭
+    ]
+    out = vlm.remap_region_assessments(assessments, regions)
+    assert [(a["region_id"], a["location"]) for a in out] == [
+        ("pred:1", "A"),
+        ("vlm-merged:1", "B"),
+        ("pred:7~abc123", "C"),
+    ]
+    assert vlm.remap_region_assessments([], regions) == []
+
+
+def test_is_low_confidence_threshold() -> None:
+    assert vlm.is_low_confidence({"confidence": 0.59}) is True
+    assert vlm.is_low_confidence({"confidence": 0.6}) is False
+    assert vlm.is_low_confidence({"confidence": None}) is False
+    assert vlm.is_low_confidence({"confidence": True}) is False  # bool 은 신뢰도 아님
+    assert vlm.is_low_confidence(None) is False

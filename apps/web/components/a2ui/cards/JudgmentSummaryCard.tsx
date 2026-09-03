@@ -25,7 +25,13 @@ import {
   IconScale,
   IconUserSearch
 } from '@tabler/icons-react';
-import { useId, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useState,
+  type CSSProperties,
+  type ReactNode
+} from 'react';
 
 import { LEGAL_NOTICE_TEXT } from '@/components/LegalNotice';
 import { useChatActions } from '@/components/agent/chat-actions';
@@ -54,7 +60,27 @@ export type JudgmentSummaryPayload = {
   /** 이 결과가 유래한 도면 asset(서버 스탬프) — 도면이 교체되면 '이전 도면 기준
    *  결과'로 표시하고 상담 CTA 를 막는다(#judgment-asset-stamp). 구 카드는 미지정. */
   asset_id?: string;
+  /** 이 결과가 근거한 선택 지문(서버 스탬프, `selectionKeyOf` 와 같은 형식) — 같은
+   *  도면에서 벽/창호를 다시 골라 verdict 가 무효화되면 '이전 선택 기준'으로 표시하고
+   *  상담 CTA 를 막는다(#judgment-selection-stamp). 구 카드는 미지정. */
+  selection_key?: string;
 };
+
+/**
+ * 세션 judgment_schema 의 선택 지문 — 서버 `domain.selection_key` 와 동일 형식
+ * (정렬된 selected_walls, `|`, 정렬된 selected_windows). 형식이 어긋나면 모든 카드가
+ * stale 로 보이므로 양쪽을 함께 바꿔야 한다.
+ */
+export function selectionKeyOf(judgmentSchema: unknown): string {
+  const ids = (key: string): string[] => {
+    if (typeof judgmentSchema !== 'object' || judgmentSchema === null) return [];
+    const raw = (judgmentSchema as Record<string, unknown>)[key];
+    return Array.isArray(raw)
+      ? raw.filter((x): x is string => typeof x === 'string').sort()
+      : [];
+  };
+  return `${ids('selected_walls').join(',')}|${ids('selected_windows').join(',')}`;
+}
 
 const KNOWN_DECISIONS: readonly JudgmentDecision[] = [
   'possible',
@@ -187,6 +213,37 @@ export function JudgmentSummaryCard({
       typeof currentAssetId === 'string' &&
       currentAssetId !== payload.asset_id);
 
+  // 재선택 감지(#judgment-selection-stamp) — 같은 도면에서 벽/창호를 다시 골라 제출하면
+  // 서버가 옛 verdict 를 지우지만, 이 카드는 도면 스탬프만으로는 현재처럼 보인다. 선택
+  // 지문이 스탬프된 카드는 마운트 시 한 번 세션의 현재 선택과 대조해 다르면 '이전 선택
+  // 기준'으로 표시하고 CTA 를 막는다(클릭 시점에도 다시 대조). 스탬프 없는 구 카드는
+  // 종전 동작. 조회 실패는 통과(best-effort).
+  const sessionIdForKey =
+    actions?.sessionId ??
+    (typeof payload.session_id === 'string' ? payload.session_id : undefined);
+  const stampedSelectionKey =
+    typeof payload.selection_key === 'string' ? payload.selection_key : undefined;
+  const [staleSelection, setStaleSelection] = useState(false);
+  useEffect(() => {
+    if (!sessionIdForKey || stampedSelectionKey === undefined) return;
+    let ignore = false;
+    void (async () => {
+      try {
+        const row = await getSession(sessionIdForKey);
+        // await 이후의 setState — 동기 cascading render 아님(#set-state-in-effect 규약).
+        if (!ignore && selectionKeyOf(row.judgment_schema) !== stampedSelectionKey) {
+          setStaleSelection(true);
+        }
+      } catch {
+        /* 조회 실패 — 종전 동작(클릭 시점 재검증이 2차 방어) */
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [sessionIdForKey, stampedSelectionKey]);
+  const stale = staleFloorplan || staleSelection;
+
   // CTA 클릭 시점 재검증 — 서버의 현재 세션을 새로 읽어 이 결과가 아직 유효한지
   // 확인한다. 확인 실패(네트워크)나 응답 필드 부재는 상담을 막지 않는다(전환 크리티컬
   // CTA, best-effort 가드 — 확실한 stale 증거가 있을 때만 차단).
@@ -198,6 +255,14 @@ export function JudgmentSummaryCard({
       setCheckingConsult(true);
       try {
         const row = await getSession(sid);
+        // 선택 지문 대조 — 재선택으로 무효화된 결과면 폼을 열지 않는다.
+        if (
+          stampedSelectionKey !== undefined &&
+          selectionKeyOf(row.judgment_schema) !== stampedSelectionKey
+        ) {
+          setStaleSelection(true);
+          return;
+        }
         if (typeof payload.asset_id === 'string') {
           // 스탬프 카드 — 현재 선택 도면과 대조(#judgment-cta-revalidate).
           const live = row.selected_floorplan_asset_id;
@@ -258,7 +323,9 @@ export function JudgmentSummaryCard({
       <Text size="11px" c="dimmed" mt={6} style={{ lineHeight: 1.4 }}>
         {staleFloorplan
           ? '※ 이 결과는 이전에 올렸던 도면 기준이에요. 새 도면으로 다시 검토하면 결과가 달라질 수 있어요.'
-          : payload.rule_backed
+          : staleSelection
+            ? '※ 이 결과는 이전에 고른 벽·창호 기준이에요. 바뀐 선택으로 다시 검토하면 결과가 달라질 수 있어요.'
+            : payload.rule_backed
             ? '※ 법령 기준으로 검토한 결과예요.'
             : '※ 자동 분석 기반 예비 관찰이에요. 검토에 필요한 정보가 모이면 더 정확히 봐 드려요.'}
       </Text>
@@ -299,9 +366,11 @@ export function JudgmentSummaryCard({
           도면이 교체된 옛 결과 카드에서는 CTA 를 막는다 — 상담 lead 에는 세션의 **현재**
           도면이 자동 첨부되므로, 옛 결론 + 새 도면이 섞여 나가는 인입을 차단한다
           (#judgment-asset-stamp). 새 검토를 마친 최신 결과 카드가 CTA 를 잇는다. */}
-      {staleFloorplan ? (
+      {stale ? (
         <Text size="sm" c="dimmed" mb="sm" style={{ lineHeight: 1.55 }}>
-          새 도면 기준 검토를 마치면, 새 결과 카드에서 상담을 신청할 수 있어요.
+          {staleFloorplan
+            ? '새 도면 기준 검토를 마치면, 새 결과 카드에서 상담을 신청할 수 있어요.'
+            : '바뀐 선택 기준 검토를 마치면, 새 결과 카드에서 상담을 신청할 수 있어요.'}
         </Text>
       ) : consultSubmitted ? (
         <Text size="sm" c="var(--jippin-brand-copy)" mb="sm" style={{ lineHeight: 1.55 }}>

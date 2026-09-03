@@ -6,6 +6,11 @@
  */
 
 /**
+ * 창호 형태 어휘 — JudgmentValues.window_form 과 VlmSupplement.judgment_hints.window_form 이 공유한다(1.4.0 에서 공용 정의로 승격, 생성 바인딩의 WindowForm 심볼 보존).
+ */
+export type WindowForm = "FIXED" | "OPENABLE" | "FOLDING" | "SLIDING" | "OTHER";
+
+/**
  * 공통 판단 스키마 — AI 분석·OVERLAY 선택·CHAT 보완값이 CHAT/session 에서 병합되어 FLOW_GUARD 평가를 거쳐 RULE 의 단일 입력 컨트랙트가 된다. SDD §5.2 정본.
  */
 export interface CommonJudgmentSchema {
@@ -193,7 +198,7 @@ export interface VlmSupplement {
     has_sprinkler?: boolean | null;
     has_evacuation_space?: boolean | null;
     stairwell_count?: number | null;
-    window_form?: "FIXED" | "OPENABLE" | "FOLDING" | "SLIDING" | "OTHER" | null;
+    window_form?: WindowForm | null;
     fire_zone?: boolean | null;
     balcony_attached?: boolean | null;
   };
@@ -278,7 +283,7 @@ export interface JudgmentValues {
   /**
    * 창호 형태.
    */
-  window_form?: "FIXED" | "OPENABLE" | "FOLDING" | "SLIDING" | "OTHER" | null;
+  window_form?: WindowForm | null;
   /**
    * 발코니 접합 여부.
    */

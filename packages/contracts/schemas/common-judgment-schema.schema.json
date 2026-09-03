@@ -281,8 +281,7 @@
             "has_evacuation_space": { "type": ["boolean", "null"] },
             "stairwell_count": { "type": ["integer", "null"], "minimum": 0 },
             "window_form": {
-              "type": ["string", "null"],
-              "enum": ["FIXED", "OPENABLE", "FOLDING", "SLIDING", "OTHER", null]
+              "anyOf": [{ "$ref": "#/$defs/WindowForm" }, { "type": "null" }]
             },
             "fire_zone": { "type": ["boolean", "null"] },
             "balcony_attached": { "type": ["boolean", "null"] }
@@ -301,8 +300,7 @@
                 "description": "세그멘테이션 region_id (wall_objects/window_objects 의 id 와 동일)."
               },
               "kind": {
-                "type": "string",
-                "enum": ["wall", "window"],
+                "$ref": "#/$defs/RegionKind",
                 "description": "영역 종류 — 서버가 region 출처로 정한다(VLM 출력 아님)."
               },
               "location": {
@@ -312,14 +310,7 @@
                 "description": "비전문가용 생활어 위치 (예: '거실과 침실1 사이', '거실과 발코니 사이')."
               },
               "assessment": {
-                "type": "string",
-                "enum": [
-                  "NON_LOAD_BEARING",
-                  "LOAD_BEARING",
-                  "UNCERTAIN",
-                  "BALCONY_BOUNDARY",
-                  "EXTERIOR"
-                ],
+                "$ref": "#/$defs/RegionOpinion",
                 "description": "벽(kind=wall): NON_LOAD_BEARING/LOAD_BEARING/UNCERTAIN. 창호(kind=window): BALCONY_BOUNDARY(발코니-실내 경계 창)/EXTERIOR(외기 직접 접촉 창)/UNCERTAIN. kind 별 어휘 밖은 서버가 UNCERTAIN 으로 강등한다."
               },
               "reason": {
@@ -332,6 +323,27 @@
           "description": "VLM 의 벽·창호 영역별 위치·의견 (1.4.0 추가, #region-assessments). CHAT 이 선택 벽을 세그멘테이션 분류와 종합해 설명하고, 창호 경계(window_demolition_boundary)를 자동 반영하며, 사용자에게 어느 영역이 어디인지 안내하는 근거."
         }
       }
+    },
+    "WindowForm": {
+      "type": "string",
+      "enum": ["FIXED", "OPENABLE", "FOLDING", "SLIDING", "OTHER"],
+      "description": "창호 형태 어휘 — JudgmentValues.window_form 과 VlmSupplement.judgment_hints.window_form 이 공유한다(1.4.0 에서 공용 정의로 승격, 생성 바인딩의 WindowForm 심볼 보존)."
+    },
+    "RegionKind": {
+      "type": "string",
+      "enum": ["wall", "window"],
+      "description": "VLM 영역별 평가의 영역 종류."
+    },
+    "RegionOpinion": {
+      "type": "string",
+      "enum": [
+        "NON_LOAD_BEARING",
+        "LOAD_BEARING",
+        "UNCERTAIN",
+        "BALCONY_BOUNDARY",
+        "EXTERIOR"
+      ],
+      "description": "VLM 영역별 평가 어휘(벽: NON_LOAD_BEARING/LOAD_BEARING/UNCERTAIN, 창호: BALCONY_BOUNDARY/EXTERIOR/UNCERTAIN)."
     },
     "RegisterSupplement": {
       "type": "object",
@@ -397,8 +409,7 @@
           "description": "계단실 수."
         },
         "window_form": {
-          "type": ["string", "null"],
-          "enum": ["FIXED", "OPENABLE", "FOLDING", "SLIDING", "OTHER", null],
+          "anyOf": [{ "$ref": "#/$defs/WindowForm" }, { "type": "null" }],
           "description": "창호 형태."
         },
         "balcony_attached": {

@@ -33,6 +33,69 @@ log = get_logger("zippin.agent.tools.vlm")
 #: 노출된다(#vlm-token-leak). 런너의 translate_stream 이 이 태그로 걸러낸다.
 INTERNAL_LLM_TAG = "jippin-internal-llm"
 
+#: VLM 전체 신뢰도(confidence)가 이 값 미만이면 ANALYSIS_LOW_CONFIDENCE — 재확인 권장.
+#: 영역별 평가(region_assessments)를 룰 입력(창호 경계)으로 **자동 승격하는 경로도 이
+#: 문턱을 지킨다**: 저신뢰 추측이 HOLD 를 우회해 확정 판정이 되지 않게(#low-conf-gate).
+LOW_CONFIDENCE_THRESHOLD = 0.6
+
+
+def is_low_confidence(supplement: dict[str, Any] | None) -> bool:
+    """vlm_supplement 의 confidence 가 문턱 미만이면 True(없거나 None 이면 False)."""
+
+    if not isinstance(supplement, dict):
+        return False
+    conf = supplement.get("confidence")
+    return (
+        isinstance(conf, (int, float))
+        and not isinstance(conf, bool)
+        and conf < LOW_CONFIDENCE_THRESHOLD
+    )
+
+
+def remap_region_assessments(
+    assessments: list[dict[str, Any]], regions: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """VLM 평가의 region_id 를 **최종 region id 로 옮긴다**(#assessment-remap).
+
+    VLM 은 1차 병합본 id(pred:N / merged:N)를 보고 평가하지만, 그 뒤 교정 재병합
+    (vlm-merged:N)과 내력벽 우선 잘라내기(``{id}~digest``)가 id 를 바꾼다. 그대로 두면
+    선택 벽에 평가가 붙지 않아 종합 판단이 정확히 교정된 도면에서만 사라진다. 최종
+    region 의 출처 id(자기 id → 병합 구성원 ``member_ids`` → 잘라내기 전 base id)를
+    차례로 대조해 첫 일치 평가를 최종 id 로 복사한다. 출처가 없는 평가는 버린다.
+    """
+
+    by_id = {
+        a["region_id"]: a
+        for a in assessments
+        if isinstance(a, dict) and isinstance(a.get("region_id"), str)
+    }
+    if not by_id:
+        return []
+    out: list[dict[str, Any]] = []
+    for r in regions:
+        if not isinstance(r, dict) or not isinstance(r.get("region_id"), str):
+            continue
+        rid = r["region_id"]
+        candidates: list[str] = [rid]
+        base = rid.split("~", 1)[0]
+        if base != rid:
+            candidates.append(base)
+        members = r.get("member_ids")
+        if isinstance(members, list):
+            for m in members:
+                if isinstance(m, str):
+                    candidates.append(m)
+                    mbase = m.split("~", 1)[0]
+                    if mbase != m:
+                        candidates.append(mbase)
+        for cand in candidates:
+            found = by_id.get(cand)
+            if found is not None:
+                out.append({**found, "region_id": rid})
+                break
+    return out
+
+
 _SYSTEM_PROMPT = (
     "당신은 한국 아파트 평면도를 검토하는 분석가입니다. 자동 세그멘테이션 모델"
     "(Mask2Former)이 벽과 공간을 분류했는데, 특히 벽 종류(내력벽/비내력벽) 분류 정확도가"

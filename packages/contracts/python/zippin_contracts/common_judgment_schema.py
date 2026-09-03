@@ -206,42 +206,29 @@ class Reclassification(BaseModel):
 
 
 class WindowForm(Enum):
+    """
+    창호 형태 어휘 — JudgmentValues.window_form 과 VlmSupplement.judgment_hints.window_form 이 공유한다(1.4.0 에서 공용 정의로 승격, 생성 바인딩의 WindowForm 심볼 보존).
+    """
+
     FIXED = "FIXED"
     OPENABLE = "OPENABLE"
     FOLDING = "FOLDING"
     SLIDING = "SLIDING"
     OTHER = "OTHER"
-    NoneType_None = None
 
 
-class JudgmentHints(BaseModel):
+class RegionKind(Enum):
     """
-    VLM 이 도면에서 직접 읽은 룰 입력 힌트 (1.4.0 명문화). 어휘/타입은 JudgmentValues 와 동일하며, 못 읽은 항목은 null. 우선순위: CHAT 전달값 > 이 힌트 > 룰엔진 보수적 가정.
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    has_sprinkler: bool | None = None
-    has_evacuation_space: bool | None = None
-    stairwell_count: int | None = Field(None, ge=0)
-    window_form: WindowForm | None = None
-    fire_zone: bool | None = None
-    balcony_attached: bool | None = None
-
-
-class Kind(Enum):
-    """
-    영역 종류 — 서버가 region 출처로 정한다(VLM 출력 아님).
+    VLM 영역별 평가의 영역 종류.
     """
 
     wall = "wall"
     window = "window"
 
 
-class Assessment(Enum):
+class RegionOpinion(Enum):
     """
-    벽(kind=wall): NON_LOAD_BEARING/LOAD_BEARING/UNCERTAIN. 창호(kind=window): BALCONY_BOUNDARY(발코니-실내 경계 창)/EXTERIOR(외기 직접 접촉 창)/UNCERTAIN. kind 별 어휘 밖은 서버가 UNCERTAIN 으로 강등한다.
+    VLM 영역별 평가 어휘(벽: NON_LOAD_BEARING/LOAD_BEARING/UNCERTAIN, 창호: BALCONY_BOUNDARY/EXTERIOR/UNCERTAIN).
     """
 
     NON_LOAD_BEARING = "NON_LOAD_BEARING"
@@ -249,70 +236,6 @@ class Assessment(Enum):
     UNCERTAIN = "UNCERTAIN"
     BALCONY_BOUNDARY = "BALCONY_BOUNDARY"
     EXTERIOR = "EXTERIOR"
-
-
-class RegionAssessment(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    region_id: str = Field(..., min_length=1)
-    """
-    세그멘테이션 region_id (wall_objects/window_objects 의 id 와 동일).
-    """
-    kind: Kind
-    """
-    영역 종류 — 서버가 region 출처로 정한다(VLM 출력 아님).
-    """
-    location: str = Field(..., max_length=80, min_length=1)
-    """
-    비전문가용 생활어 위치 (예: '거실과 침실1 사이', '거실과 발코니 사이').
-    """
-    assessment: Assessment
-    """
-    벽(kind=wall): NON_LOAD_BEARING/LOAD_BEARING/UNCERTAIN. 창호(kind=window): BALCONY_BOUNDARY(발코니-실내 경계 창)/EXTERIOR(외기 직접 접촉 창)/UNCERTAIN. kind 별 어휘 밖은 서버가 UNCERTAIN 으로 강등한다.
-    """
-    reason: str | None = Field(None, max_length=200)
-    """
-    근거 한 문장.
-    """
-
-
-class VlmSupplement(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    provider: Provider | None = None
-    """
-    VLM 프로바이더 (ADR-0001 §7 의 VLMClient 인터페이스 호환).
-    """
-    model: str | None = None
-    """
-    예: 'gpt-5.4-mini', 'gpt-5.5'.
-    """
-    notes: list[str] | None = None
-    """
-    VLM 자유 텍스트 주석.
-    """
-    reclassifications: list[Reclassification] | None = None
-    """
-    Mask2Former 라벨을 VLM 이 교정한 결과.
-    """
-    confidence: float | None = Field(None, ge=0.0, le=1.0)
-    """
-    VLM 전체 분석 신뢰도 0~1 (1.4.0 명문화). 0.6 미만이면 ANALYSIS_LOW_CONFIDENCE 로 재확인 권장.
-    """
-    is_floorplan: bool | None = None
-    """
-    VLM 이 이미지를 실제 평면도로 봤는지 (1.4.0 명문화). 명시적 false 만 '평면도 아님'으로 취급한다.
-    """
-    judgment_hints: JudgmentHints | None = None
-    """
-    VLM 이 도면에서 직접 읽은 룰 입력 힌트 (1.4.0 명문화). 어휘/타입은 JudgmentValues 와 동일하며, 못 읽은 항목은 null. 우선순위: CHAT 전달값 > 이 힌트 > 룰엔진 보수적 가정.
-    """
-    region_assessments: list[RegionAssessment] | None = None
-    """
-    VLM 의 벽·창호 영역별 위치·의견 (1.4.0 추가, #region-assessments). CHAT 이 선택 벽을 세그멘테이션 분류와 종합해 설명하고, 창호 경계(window_demolition_boundary)를 자동 반영하며, 사용자에게 어느 영역이 어디인지 안내하는 근거.
-    """
 
 
 class PermitEntry(BaseModel):
@@ -357,19 +280,6 @@ class RegisterSupplement(BaseModel):
     """
 
 
-class WindowForm1(Enum):
-    """
-    창호 형태.
-    """
-
-    FIXED = "FIXED"
-    OPENABLE = "OPENABLE"
-    FOLDING = "FOLDING"
-    SLIDING = "SLIDING"
-    OTHER = "OTHER"
-    NoneType_None = None
-
-
 class WindowDemolitionBoundary(Enum):
     """
     철거 검토 대상 창호가 접한 경계 (1.1.0 추가). EXTERIOR=외기와 직접 접한 최외곽 창호(철거 불가), BALCONY_BOUNDARY=발코니와 실내(거실 등) 사이 경계 창호(철거 시 발코니 확장으로 검토). 도면 촬영 품질이 흔들려 기하 판정이 어려우므로 CHAT(LLM)이 VLM 관찰·대화로 판단해 채우고, 모르면 null(룰엔진이 HOLD 로 재확인).
@@ -404,7 +314,7 @@ class JudgmentValues(BaseModel):
     """
     계단실 수.
     """
-    window_form: WindowForm1 | None = None
+    window_form: WindowForm | None = None
     """
     창호 형태.
     """
@@ -419,6 +329,86 @@ class JudgmentValues(BaseModel):
     window_demolition_boundary: WindowDemolitionBoundary | None = None
     """
     철거 검토 대상 창호가 접한 경계 (1.1.0 추가). EXTERIOR=외기와 직접 접한 최외곽 창호(철거 불가), BALCONY_BOUNDARY=발코니와 실내(거실 등) 사이 경계 창호(철거 시 발코니 확장으로 검토). 도면 촬영 품질이 흔들려 기하 판정이 어려우므로 CHAT(LLM)이 VLM 관찰·대화로 판단해 채우고, 모르면 null(룰엔진이 HOLD 로 재확인).
+    """
+
+
+class JudgmentHints(BaseModel):
+    """
+    VLM 이 도면에서 직접 읽은 룰 입력 힌트 (1.4.0 명문화). 어휘/타입은 JudgmentValues 와 동일하며, 못 읽은 항목은 null. 우선순위: CHAT 전달값 > 이 힌트 > 룰엔진 보수적 가정.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    has_sprinkler: bool | None = None
+    has_evacuation_space: bool | None = None
+    stairwell_count: int | None = Field(None, ge=0)
+    window_form: WindowForm | None = None
+    fire_zone: bool | None = None
+    balcony_attached: bool | None = None
+
+
+class RegionAssessment(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    region_id: str = Field(..., min_length=1)
+    """
+    세그멘테이션 region_id (wall_objects/window_objects 의 id 와 동일).
+    """
+    kind: RegionKind
+    """
+    영역 종류 — 서버가 region 출처로 정한다(VLM 출력 아님).
+    """
+    location: str = Field(..., max_length=80, min_length=1)
+    """
+    비전문가용 생활어 위치 (예: '거실과 침실1 사이', '거실과 발코니 사이').
+    """
+    assessment: RegionOpinion
+    """
+    벽(kind=wall): NON_LOAD_BEARING/LOAD_BEARING/UNCERTAIN. 창호(kind=window): BALCONY_BOUNDARY(발코니-실내 경계 창)/EXTERIOR(외기 직접 접촉 창)/UNCERTAIN. kind 별 어휘 밖은 서버가 UNCERTAIN 으로 강등한다.
+    """
+    reason: str | None = Field(None, max_length=200)
+    """
+    근거 한 문장.
+    """
+
+
+class VlmSupplement(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    provider: Provider | None = None
+    """
+    VLM 프로바이더 (ADR-0001 §7 의 VLMClient 인터페이스 호환).
+    """
+    model: str | None = None
+    """
+    예: 'gpt-5.4-mini', 'gpt-5.5'.
+    """
+    notes: list[str] | None = None
+    """
+    VLM 자유 텍스트 주석.
+    """
+    reclassifications: list[Reclassification] | None = None
+    """
+    Mask2Former 라벨을 VLM 이 교정한 결과.
+    """
+    confidence: float | None = Field(None, ge=0.0, le=1.0)
+    """
+    VLM 전체 분석 신뢰도 0~1 (1.4.0 명문화). 0.6 미만이면 ANALYSIS_LOW_CONFIDENCE 로 재확인 권장.
+    """
+    is_floorplan: bool | None = None
+    """
+    VLM 이 이미지를 실제 평면도로 봤는지 (1.4.0 명문화). 명시적 false 만 '평면도 아님'으로 취급한다.
+    """
+    judgment_hints: JudgmentHints | None = None
+    """
+    VLM 이 도면에서 직접 읽은 룰 입력 힌트 (1.4.0 명문화). 어휘/타입은 JudgmentValues 와 동일하며, 못 읽은 항목은 null. 우선순위: CHAT 전달값 > 이 힌트 > 룰엔진 보수적 가정.
+    """
+    region_assessments: list[RegionAssessment] | None = None
+    """
+    VLM 의 벽·창호 영역별 위치·의견 (1.4.0 추가, #region-assessments). CHAT 이 선택 벽을 세그멘테이션 분류와 종합해 설명하고, 창호 경계(window_demolition_boundary)를 자동 반영하며, 사용자에게 어느 영역이 어디인지 안내하는 근거.
     """
 
 

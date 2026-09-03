@@ -1288,3 +1288,131 @@ async def test_show_overlay_rebuilds_from_judgment_objects_when_no_card(
         "pred:7": "window",
     }  # pred:3 은 좌표 부족으로 드롭
     assert props["reason"]
+
+
+# --- Codex round-1 회귀 (#region-assessments 충돌·저신뢰 게이트·카드 검증·선택 지문) ----
+
+
+def test_derive_wall_type_holds_on_vlm_conflict() -> None:
+    # 세그멘테이션은 비내력 후보인데 VLM 이 내력 추정/판단 어려움이면 None(→HOLD) —
+    # 두 근거가 갈린 벽을 비내력으로 확정해 ALLOW/WARN 을 영속하지 않는다.
+    base = {
+        "wall_objects": [
+            {"id": "w1", "wall_type": "NON_LOAD_BEARING"},
+            {"id": "w2", "wall_type": "NON_LOAD_BEARING"},
+        ],
+        "selected_walls": ["w1", "w2"],
+    }
+    assert domain._derive_wall_type(base) == "NON_LOAD_BEARING"
+    for opinion in ("LOAD_BEARING", "UNCERTAIN"):
+        js = {
+            **base,
+            "vlm_supplement": {
+                "region_assessments": [_assessment("w2", opinion, kind="wall")]
+            },
+        }
+        assert domain._derive_wall_type(js) is None
+    agree = {
+        **base,
+        "vlm_supplement": {
+            "region_assessments": [
+                _assessment("w1", "NON_LOAD_BEARING", kind="wall"),
+                _assessment("w2", "NON_LOAD_BEARING", kind="wall"),
+            ]
+        },
+    }
+    assert domain._derive_wall_type(agree) == "NON_LOAD_BEARING"
+
+
+async def test_evaluate_rules_holds_when_vlm_disputes_nonbearing(monkeypatch) -> None:
+    session_id, fake = await _session_for_rules(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}],
+        "selected_walls": ["w1"],
+        "vlm_supplement": {
+            "region_assessments": [_assessment("w1", "LOAD_BEARING", kind="wall")]
+        },
+    }
+    res = await domain.evaluate_rules_impl(
+        session_id=session_id,
+        judgment_values={"wall_type": "NON_LOAD_BEARING", "balcony_attached": False},
+    )
+    assert res["ok"] is True
+    assert res["result"]["verdict"] == "HOLD"
+
+
+def test_vlm_window_boundary_ignored_when_low_confidence() -> None:
+    js = {
+        "selected_windows": ["w1"],
+        "vlm_supplement": {
+            "confidence": 0.4,
+            "region_assessments": [_assessment("w1", "BALCONY_BOUNDARY")],
+        },
+    }
+    assert domain._vlm_window_boundary(js) is None
+    js["vlm_supplement"]["confidence"] = 0.6
+    assert domain._vlm_window_boundary(js) == "BALCONY_BOUNDARY"
+    js["vlm_supplement"]["confidence"] = None
+    assert domain._vlm_window_boundary(js) == "BALCONY_BOUNDARY"
+
+
+def test_selection_key_sorted_and_stable() -> None:
+    assert domain.selection_key({}) == "|"
+    assert (
+        domain.selection_key(
+            {"selected_walls": ["b", "a", 3], "selected_windows": ["w"]}
+        )
+        == "a,b|w"
+    )
+
+
+async def test_judgment_summary_stamps_selection_key(monkeypatch) -> None:
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "selected_walls": ["pred:2", "pred:1"],
+        "selected_windows": [],
+    }
+    await domain.emit_judgment_summary_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        decision="conditional",
+        title="t",
+        summary="s",
+    )
+    ui, _snap = ctx.drain_ui()
+    assert ui[0]["elements"]["j"]["props"]["selection_key"] == "pred:1,pred:2|"
+
+
+async def test_show_overlay_rebuilds_when_card_regions_mismatch(monkeypatch) -> None:
+    # 같은 asset 의 재분석 결과가 카드로 투영되지 못한 경우 — 옛 카드의 선택 가능 id 가
+    # 현재 판단객체와 다르면 재사용하지 않고 판단객체로 재구성한다(Codex P2).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    asset = await _attach_asset(session_id, owner)
+    await main_flow.append_internal_chat_message(
+        session_id=session_id,
+        role="assistant",
+        content="옛 분석 카드",
+        ui_components=[_overlay_spec(str(asset["id"]), "pred:9")],
+    )
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "merged:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            }
+        ],
+    }
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is True
+    ui, _snap = ctx.drain_ui()
+    ids = [r["region_id"] for r in ui[0]["elements"]["ov"]["props"]["regions"]]
+    assert ids == ["merged:1"]

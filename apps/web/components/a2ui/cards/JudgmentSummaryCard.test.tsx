@@ -36,7 +36,7 @@ vi.mock('@/components/leads/QuickPrecheckConsultForm', () => ({
   )
 }));
 
-import { JudgmentSummaryCard } from './JudgmentSummaryCard';
+import { JudgmentSummaryCard, selectionKeyOf } from './JudgmentSummaryCard';
 
 afterEach(() => {
   cleanup();
@@ -227,5 +227,76 @@ describe('JudgmentSummaryCard 레거시(스탬프 없는) 카드 신선도 (#leg
 
     expect(await screen.findByText(/이전에 올렸던 도면 기준/)).toBeTruthy();
     expect(screen.queryByTestId('quick-consult-form')).toBeNull();
+  });
+});
+
+describe('JudgmentSummaryCard 재선택 감지 (#judgment-selection-stamp)', () => {
+  it('selectionKeyOf 는 서버 지문 형식과 같다', () => {
+    expect(selectionKeyOf(undefined)).toBe('|');
+    expect(
+      selectionKeyOf({ selected_walls: ['b', 'a', 3], selected_windows: ['w'] })
+    ).toBe('a,b|w');
+  });
+
+  it('세션의 현재 선택이 스탬프와 다르면 이전 선택 기준으로 표시하고 CTA 를 막는다', async () => {
+    apiMocks.getSession.mockResolvedValue({
+      selected_floorplan_asset_id: 'asset-1',
+      judgment_schema: { selected_walls: ['wall:2'], selected_windows: [] }
+    });
+    render(
+      <ChatActionsProvider
+        value={{
+          sessionId: 'session-1',
+          busy: false,
+          sendMessage: vi.fn(),
+          selectedFloorplanAssetId: 'asset-1'
+        }}
+      >
+        <JudgmentSummaryCard
+          payload={{
+            decision: 'possible',
+            title: '철거 검토 가능',
+            summary: 's',
+            rule_backed: true,
+            asset_id: 'asset-1',
+            selection_key: 'wall:1|'
+          }}
+        />
+      </ChatActionsProvider>
+    );
+    expect(await screen.findByText(/이전에 고른 벽·창호 기준/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '전문가 상담 신청하기' })).toBeNull();
+    expect(screen.getByText(/바뀐 선택 기준 검토를 마치면/)).toBeTruthy();
+  });
+
+  it('현재 선택이 스탬프와 같으면 종전대로 CTA 를 열고 폼을 띄운다', async () => {
+    const user = userEvent.setup();
+    apiMocks.getSession.mockResolvedValue({
+      selected_floorplan_asset_id: 'asset-1',
+      judgment_schema: { selected_walls: ['wall:1'], selected_windows: [] }
+    });
+    render(
+      <ChatActionsProvider
+        value={{
+          sessionId: 'session-1',
+          busy: false,
+          sendMessage: vi.fn(),
+          selectedFloorplanAssetId: 'asset-1'
+        }}
+      >
+        <JudgmentSummaryCard
+          payload={{
+            decision: 'possible',
+            title: '철거 검토 가능',
+            summary: 's',
+            rule_backed: true,
+            asset_id: 'asset-1',
+            selection_key: 'wall:1|'
+          }}
+        />
+      </ChatActionsProvider>
+    );
+    await user.click(await screen.findByRole('button', { name: '전문가 상담 신청하기' }));
+    expect(await screen.findByTestId('quick-consult-form')).toBeTruthy();
   });
 });
