@@ -104,6 +104,11 @@ class LeadCreateRequest(BaseModel):
     # 옛 결론에 새 도면이 자동 첨부(#session-floorplan-carryover)되어 나가지 않는다.
     # None 이면 검사 생략(일반 인입/구 클라이언트).
     expected_floorplan_asset_id: uuid.UUID | None = None
+    # 결과 카드가 근거한 벽/창호 선택 지문(정렬된 selected_walls|selected_windows, 카드
+    # 스탬프 selection_key). lead 생성 시점의 세션 현재 선택과 다르면 409
+    # (LEAD_SELECTION_STALE) — 폼이 열린 뒤 재선택돼 verdict 가 무효화된 결과로 상담이
+    # 접수되지 않게(#judgment-selection-stamp). None 이면 검사 생략.
+    expected_selection_key: str | None = Field(default=None, max_length=8000)
     attachments: list[LeadAttachmentInput] = Field(
         default_factory=list, max_length=_MAX_ATTACHMENTS
     )

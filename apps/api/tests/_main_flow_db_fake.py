@@ -39,6 +39,7 @@ _SEAM_NAMES: tuple[str, ...] = (
     "_db_insert_floorplan_upload",
     "_db_insert_and_link_floorplan_asset",
     "_db_select_selected_floorplan_asset",
+    "_db_update_floorplan_asset_dimensions",
     "_db_count_session_floorplan_assets",
     "_db_search_floorplan_catalog",
     "_db_select_candidate_revision_keys",
@@ -540,6 +541,14 @@ class FakeMainFlowDb:
             return None
         row = self.floorplan_assets.get(asset_id)
         return dict(row) if row is not None else None
+
+    async def _db_update_floorplan_asset_dimensions(
+        self, asset_id: uuid.UUID, *, width_px: int, height_px: int
+    ) -> None:
+        row = self.floorplan_assets.get(asset_id)
+        if row is not None:
+            row["width_px"] = width_px
+            row["height_px"] = height_px
 
     async def _db_count_session_floorplan_assets(self, session_id: uuid.UUID) -> int:
         # 세션의 asset row 수(real seam 미러) — 교체는 삭제 없는 대체라 업로드마다

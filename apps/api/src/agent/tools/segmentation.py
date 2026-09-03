@@ -1342,6 +1342,15 @@ async def segment_session_floorplan(
     # 내력벽 우선(#rc-priority): RC 와 면적이 겹치는 비내력 판정은 그 영역만큼 무시한다.
     regions = _suppress_rc_overlapped_nonbearing(regions)
     image = result.get("image")
+    # 원본 이미지 크기를 asset 에 기록(best-effort, #asset-dimensions) — 카드 이력 없이
+    # 판단객체만으로 오버레이를 재구성할 때 같은 좌표계를 쓰게 한다.
+    if isinstance(image, dict):
+        w, h = image.get("width"), image.get("height")
+        if isinstance(w, int) and isinstance(h, int) and w > 0 and h > 0:
+            with contextlib.suppress(Exception):
+                await main_flow.set_floorplan_asset_dimensions(
+                    asset_id=asset["id"], width_px=w, height_px=h
+                )
 
     # AI-002 VLM 문맥 해석 — 도면 이미지로 Mask2Former 레이블을 보완(실패 시 None=단독 degrade).
     supplement: dict[str, Any] | None = None

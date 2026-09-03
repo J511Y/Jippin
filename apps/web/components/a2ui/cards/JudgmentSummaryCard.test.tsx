@@ -19,17 +19,20 @@ vi.mock('@/components/leads/QuickPrecheckConsultForm', () => ({
   QuickPrecheckConsultForm: ({
     prefillAddress,
     fromSession,
-    expectedFloorplanAssetId
+    expectedFloorplanAssetId,
+    expectedSelectionKey
   }: {
     prefillAddress?: string;
     fromSession?: string;
     expectedFloorplanAssetId?: string;
+    expectedSelectionKey?: string;
   }) => (
     <div
       data-testid="quick-consult-form"
       data-address={prefillAddress}
       data-session={fromSession}
       data-expected-asset={expectedFloorplanAssetId}
+      data-expected-selection={expectedSelectionKey}
     >
       상담 정보 입력
     </div>
@@ -297,6 +300,8 @@ describe('JudgmentSummaryCard 재선택 감지 (#judgment-selection-stamp)', () 
       </ChatActionsProvider>
     );
     await user.click(await screen.findByRole('button', { name: '전문가 상담 신청하기' }));
-    expect(await screen.findByTestId('quick-consult-form')).toBeTruthy();
+    const form = await screen.findByTestId('quick-consult-form');
+    // 폼이 열린 뒤 재선택돼도 서버가 잡을 수 있게 선택 지문을 폼에 싣는다.
+    expect(form.getAttribute('data-expected-selection')).toBe('wall:1|');
   });
 });

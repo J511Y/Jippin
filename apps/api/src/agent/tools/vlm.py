@@ -88,12 +88,47 @@ def remap_region_assessments(
                     mbase = m.split("~", 1)[0]
                     if mbase != m:
                         candidates.append(mbase)
+        # 병합 구성원 **전부**의 평가를 모아 보수적으로 합친다(Codex P1) — 첫 일치만
+        # 취하면 구성원 순서에 따라 내력/미확정 의견이 가려져 병합 벽이 비내력으로 굳는다.
+        matched: list[dict[str, Any]] = []
+        seen: set[str] = set()
         for cand in candidates:
             found = by_id.get(cand)
-            if found is not None:
-                out.append({**found, "region_id": rid})
-                break
+            if found is not None and cand not in seen:
+                seen.add(cand)
+                matched.append(found)
+        if matched:
+            out.append({**_aggregate_assessments(matched), "region_id": rid})
     return out
+
+
+#: 보수적 합산 우선순위 — 앞쪽이 이긴다(벽: 내력 > 미확정 > 비내력, 창호: 외기 > 미확정
+#: > 경계). 어휘 밖/누락은 UNCERTAIN 으로 본다.
+_CONSERVATIVE_ORDER: dict[str, tuple[str, ...]] = {
+    "wall": ("LOAD_BEARING", "UNCERTAIN", "NON_LOAD_BEARING"),
+    "window": ("EXTERIOR", "UNCERTAIN", "BALCONY_BOUNDARY"),
+}
+
+
+def _aggregate_assessments(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """같은 최종 region 에 모인 여러 평가를 하나로 — 의견은 보수적 우선순위로, 위치는 첫
+    항목, 근거는 서로 다른 것만 이어 붙인다(길이 제한)."""
+
+    first = items[0]
+    kind = str(first.get("kind") or "wall")
+    order = _CONSERVATIVE_ORDER.get(kind, _CONSERVATIVE_ORDER["wall"])
+    opinions = {str(a.get("assessment") or "UNCERTAIN") for a in items}
+    assessment = next((o for o in order if o in opinions), "UNCERTAIN")
+    reasons: list[str] = []
+    for a in items:
+        reason = a.get("reason")
+        if isinstance(reason, str) and reason.strip() and reason not in reasons:
+            reasons.append(reason.strip())
+    return {
+        **first,
+        "assessment": assessment,
+        "reason": " / ".join(reasons)[:_MAX_REASON_CHARS],
+    }
 
 
 _SYSTEM_PROMPT = (

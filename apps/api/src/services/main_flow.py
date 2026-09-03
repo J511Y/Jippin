@@ -1781,6 +1781,53 @@ async def get_selected_floorplan_asset(
     return await _db_select_selected_floorplan_asset(session_id)
 
 
+async def _db_update_floorplan_asset_dimensions(
+    asset_id: uuid.UUID, *, width_px: int, height_px: int
+) -> None:
+    async with get_engine().begin() as conn:
+        await conn.execute(
+            sa.update(_FLOORPLAN_ASSETS)
+            .where(_FLOORPLAN_ASSETS.c.id == asset_id)
+            .values(width_px=width_px, height_px=height_px)
+        )
+
+
+async def set_floorplan_asset_dimensions(
+    *, asset_id: uuid.UUID, width_px: int, height_px: int
+) -> None:
+    """세그멘테이션이 확인한 원본 이미지 크기를 asset row 에 기록한다(#asset-dimensions).
+
+    오버레이 카드는 이미지 좌표계(width/height)로 폴리곤을 그린다. 카드 이력이 없어
+    판단객체만으로 오버레이를 재구성할 때 이 값이 없으면 폴리곤 bbox 로 크기를 추정해
+    이미지와 어긋난다 — 분석 시점에 한 번 영속해 재구성이 같은 좌표계를 쓰게 한다.
+    """
+
+    if width_px <= 0 or height_px <= 0:
+        return
+    await _db_update_floorplan_asset_dimensions(
+        asset_id, width_px=int(width_px), height_px=int(height_px)
+    )
+
+
+def judgment_selection_key(judgment_schema: Any) -> str:
+    """결과 카드/리드 제출의 선택 지문 — 정렬된 selected_walls ``|`` 정렬된 selected_windows.
+
+    CHAT(emit_judgment_summary)이 카드에 스탬프하고, 웹 JudgmentSummaryCard 가 세션과
+    대조하며, 리드 생성(services.leads)이 제출 시점에 재검증한다(#judgment-selection-
+    stamp). 웹 `selectionKeyOf` 와 형식이 같아야 한다.
+    """
+
+    def _ids(key: str) -> list[str]:
+        raw = judgment_schema.get(key) if isinstance(judgment_schema, dict) else None
+        return (
+            sorted(s for s in raw if isinstance(s, str))
+            if isinstance(raw, list)
+            else []
+        )
+
+    return ",".join(_ids("selected_walls")) + "|" + ",".join(_ids("selected_windows"))
+
+
 async def get_session_inputs(
     session_id: uuid.UUID,
 ) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:

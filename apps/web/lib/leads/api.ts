@@ -41,6 +41,10 @@ export interface LeadPayload {
   /** 사전검토 결과 카드 유래 상담이면 그 결과의 도면 asset — 백엔드가 세션의 현재
    *  도면과 대조해 다르면 409(LEAD_FLOORPLAN_STALE)로 거절한다(#judgment-cta-revalidate). */
   expected_floorplan_asset_id?: string | null;
+  /** 사전검토 결과 카드가 근거한 벽·창호 선택 지문(카드 스탬프 selection_key) — 백엔드가
+   *  세션의 현재 선택과 대조해 다르면 409(LEAD_SELECTION_STALE)로 거절한다
+   *  (#judgment-selection-stamp). */
+  expected_selection_key?: string | null;
   attachments?: UploadedAttachment[];
 }
 

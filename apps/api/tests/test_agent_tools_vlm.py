@@ -401,3 +401,67 @@ def test_is_low_confidence_threshold() -> None:
     assert vlm.is_low_confidence({"confidence": None}) is False
     assert vlm.is_low_confidence({"confidence": True}) is False  # bool 은 신뢰도 아님
     assert vlm.is_low_confidence(None) is False
+
+
+def test_remap_region_assessments_aggregates_conservatively() -> None:
+    # 병합 벽의 구성원 의견이 갈리면 첫 일치가 아니라 보수적 합산(내력 > 미확정 > 비내력).
+    assessments = [
+        {
+            "region_id": "pred:1",
+            "kind": "wall",
+            "location": "A",
+            "assessment": "NON_LOAD_BEARING",
+            "reason": "r1",
+        },
+        {
+            "region_id": "pred:2",
+            "kind": "wall",
+            "location": "B",
+            "assessment": "LOAD_BEARING",
+            "reason": "r2",
+        },
+        {
+            "region_id": "pred:3",
+            "kind": "wall",
+            "location": "C",
+            "assessment": "UNCERTAIN",
+            "reason": "",
+        },
+        {
+            "region_id": "w1",
+            "kind": "window",
+            "location": "W",
+            "assessment": "BALCONY_BOUNDARY",
+        },
+        {
+            "region_id": "w2",
+            "kind": "window",
+            "location": "W2",
+            "assessment": "EXTERIOR",
+        },
+    ]
+    regions = [
+        {
+            "region_id": "vlm-merged:1",
+            "class_name": "wall_nonbearing",
+            "member_ids": ["pred:1", "pred:2"],
+        },
+        {
+            "region_id": "vlm-merged:2",
+            "class_name": "wall_nonbearing",
+            "member_ids": ["pred:1", "pred:3"],
+        },
+        {
+            "region_id": "vlm-merged:3",
+            "class_name": "window",
+            "member_ids": ["w1", "w2"],
+        },
+    ]
+    out = {
+        a["region_id"]: a for a in vlm.remap_region_assessments(assessments, regions)
+    }
+    assert out["vlm-merged:1"]["assessment"] == "LOAD_BEARING"
+    assert out["vlm-merged:1"]["location"] == "A"
+    assert out["vlm-merged:1"]["reason"] == "r1 / r2"
+    assert out["vlm-merged:2"]["assessment"] == "UNCERTAIN"
+    assert out["vlm-merged:3"]["assessment"] == "EXTERIOR"

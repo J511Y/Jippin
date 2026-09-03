@@ -391,6 +391,7 @@ export function JudgmentSummaryCard({
                 ? payload.asset_id
                 : legacyExpectedAssetId
             }
+            expectedSelectionKey={stampedSelectionKey}
             ctaId="precheck_report"
             onSubmitted={() => setConsultSubmitted(true)}
           />

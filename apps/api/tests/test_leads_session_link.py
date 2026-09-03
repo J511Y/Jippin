@@ -528,3 +528,100 @@ async def test_create_lead_ignores_session_id_for_non_precheck_form(
         },
     )
     assert captured.get("session_id") is None
+
+
+# --- 선택 지문 재검증 (#judgment-selection-stamp 서버측 마무리) ------------------------
+
+
+def _patch_selection_session(
+    monkeypatch, *, session_id, owner, current_asset, selected_walls
+) -> None:
+    async def fake_select_session(sid):  # type: ignore[no-untyped-def]
+        return {
+            "id": session_id,
+            "user_id": owner,
+            "judgment_schema": {
+                "selected_walls": selected_walls,
+                "selected_windows": [],
+            },
+        }
+
+    async def fake_get_address(sid):  # type: ignore[no-untyped-def]
+        return {"apartment_name": "세션아파트"}
+
+    async def fake_selected_asset(sid):  # type: ignore[no-untyped-def]
+        return {
+            "id": current_asset,
+            "scan_status": "clean",
+            "bucket": "session-floorplans",
+            "object_key": f"{owner}/{session_id}/plan.png",
+            "content_type": "image/png",
+            "byte_size": 10,
+        }
+
+    monkeypatch.setattr(main_flow, "_db_select_session", fake_select_session)
+    monkeypatch.setattr(main_flow, "get_session_address", fake_get_address)
+    monkeypatch.setattr(
+        main_flow, "_db_select_selected_floorplan_asset", fake_selected_asset
+    )
+
+
+async def test_create_lead_rejects_stale_selection_key(monkeypatch) -> None:
+    # 결과 카드가 근거한 선택(wall:1)과 세션의 현재 선택(wall:2)이 다르면 409 —
+    # 폼이 열린 뒤 재선택된 결과로 상담이 접수되지 않는다.
+    owner = uuid.uuid4()
+    session_id = uuid.uuid4()
+    asset = uuid.uuid4()
+    captured = _patch_insert(monkeypatch)
+    _patch_selection_session(
+        monkeypatch,
+        session_id=session_id,
+        owner=owner,
+        current_asset=asset,
+        selected_walls=["wall:2"],
+    )
+    with pytest.raises(ZippinException) as exc:
+        await leads.create_lead(
+            user_id=owner,
+            is_anonymous=False,
+            payload={
+                "source_form": "precheck_session",
+                "applicant_name": "홍길동",
+                "applicant_phone": "010-1234-5678",
+                "road_addr_part1": None,
+                "session_id": session_id,
+                "expected_floorplan_asset_id": asset,
+                "expected_selection_key": "wall:1|",
+            },
+        )
+    assert exc.value.code == "LEAD_SELECTION_STALE"
+    assert exc.value.http_status == 409
+    assert captured == {}
+
+
+async def test_create_lead_accepts_matching_selection_key(monkeypatch) -> None:
+    owner = uuid.uuid4()
+    session_id = uuid.uuid4()
+    asset = uuid.uuid4()
+    captured = _patch_insert(monkeypatch)
+    _patch_selection_session(
+        monkeypatch,
+        session_id=session_id,
+        owner=owner,
+        current_asset=asset,
+        selected_walls=["wall:2", "wall:1"],
+    )
+    await leads.create_lead(
+        user_id=owner,
+        is_anonymous=False,
+        payload={
+            "source_form": "precheck_session",
+            "applicant_name": "홍길동",
+            "applicant_phone": "010-1234-5678",
+            "road_addr_part1": None,
+            "session_id": session_id,
+            "expected_floorplan_asset_id": asset,
+            "expected_selection_key": "wall:1,wall:2|",
+        },
+    )
+    assert captured["session_id"] == session_id

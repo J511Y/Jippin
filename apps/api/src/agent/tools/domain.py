@@ -1008,56 +1008,45 @@ _OVERLAY_SELECTABLE_CLASSES: frozenset[str] = frozenset(
 )
 
 
-def _overlay_selectable_ids(spec: dict[str, Any]) -> set[str]:
-    """카드 스펙의 선택 가능 region id 집합."""
+def _selectable_signature(
+    regions: list[Any],
+) -> dict[str, tuple[str, tuple[float, ...]]]:
+    """선택 가능 region 의 **완전한 표현**(id → (정규화 클래스, 폴리곤)) — 재사용 카드가
+    현재 판단객체와 기하·분류까지 같은지 대조한다(Codex P2). 미확정 벽은 카드 payload 에서
+    ``wall_unknown`` 으로 통일되므로(#deploy-skew) ``wall_other`` 와 같은 클래스로 본다."""
 
-    found = _overlay_component_asset(spec)
-    if found is None:
-        return set()
-    _asset, props = found
-    return {
-        str(r["region_id"])
-        for r in props.get("regions") or []
-        if isinstance(r, dict)
-        and isinstance(r.get("region_id"), str)
-        and r.get("class_name") in _OVERLAY_SELECTABLE_CLASSES
-    }
-
-
-def _judgment_selectable_ids(judgment_schema: dict[str, Any]) -> set[str]:
-    """현재 판단객체 기준 선택 가능 id 집합(내력벽 제외 벽 + 창호)."""
-
-    out: set[str] = set()
-    for w in judgment_schema.get("wall_objects") or []:
-        if (
-            isinstance(w, dict)
-            and isinstance(w.get("id"), str)
-            and w.get("wall_type") != "LOAD_BEARING"
-        ):
-            out.add(w["id"])
-    for win in judgment_schema.get("window_objects") or []:
-        if isinstance(win, dict) and isinstance(win.get("id"), str):
-            out.add(win["id"])
+    out: dict[str, tuple[str, tuple[float, ...]]] = {}
+    for r in regions:
+        if not isinstance(r, dict) or not isinstance(r.get("region_id"), str):
+            continue
+        cls = r.get("class_name")
+        if cls not in _OVERLAY_SELECTABLE_CLASSES:
+            continue
+        poly = r.get("polygon") or []
+        if not all(isinstance(v, (int, float)) for v in poly):
+            continue
+        norm_cls = "wall_other" if cls == "wall_unknown" else str(cls)
+        out[r["region_id"]] = (norm_cls, tuple(round(float(v), 2) for v in poly))
     return out
 
 
-def selection_key(judgment_schema: dict[str, Any]) -> str:
-    """결과 카드에 스탬프할 선택 지문 — 정렬된 selected_walls|selected_windows.
+def _overlay_card_matches_judgment(
+    spec: dict[str, Any], judgment_schema: dict[str, Any]
+) -> bool:
+    """카드의 선택 가능 region(id·클래스·폴리곤)이 현재 판단객체와 완전히 같은가."""
 
-    프론트(JudgmentSummaryCard)가 세션의 현재 선택과 대조해, 재선택으로 무효화된 옛
-    결과 카드를 '이전 선택 기준'으로 표시하고 상담 CTA 를 막는다(#judgment-selection-
-    stamp, Codex P1). 웹 `selectionKeyOf` 와 형식이 같아야 한다.
-    """
+    found = _overlay_component_asset(spec)
+    if found is None:
+        return False
+    _asset, props = found
+    return _selectable_signature(
+        list(props.get("regions") or [])
+    ) == _selectable_signature(_rebuild_overlay_regions(judgment_schema))
 
-    def _ids(key: str) -> list[str]:
-        raw = judgment_schema.get(key)
-        return (
-            sorted(s for s in raw if isinstance(s, str))
-            if isinstance(raw, list)
-            else []
-        )
 
-    return ",".join(_ids("selected_walls")) + "|" + ",".join(_ids("selected_windows"))
+#: 결과 카드에 스탬프할 선택 지문 — 정의는 main_flow(리드 제출 재검증과 공유,
+#: #judgment-selection-stamp). 웹 `selectionKeyOf` 와 형식이 같아야 한다.
+selection_key = main_flow.judgment_selection_key
 
 
 async def show_floorplan_overlay_impl(
@@ -1130,11 +1119,10 @@ async def show_floorplan_overlay_impl(
             break
 
     # 재사용 카드 검증(Codex P2): 같은 asset 이 재분석됐는데 그 카드가 투영되지 못한
-    # 경우(영속 성공 후 런 실패 등) 옛 카드는 현재 판단객체와 다른 기하/id 를 담는다.
-    # 카드의 선택 가능 id 집합이 현재 판단객체와 다르면 버리고 재구성한다.
-    if spec is not None and _overlay_selectable_ids(spec) != _judgment_selectable_ids(
-        js
-    ):
+    # 경우(영속 성공 후 런 실패 등) 옛 카드는 현재 판단객체와 다른 기하/분류/id 를 담을
+    # 수 있다. 선택 가능 region 의 id·클래스·폴리곤이 현재 판단객체와 완전히 같을 때만
+    # 재사용하고, 아니면 버리고 재구성한다.
+    if spec is not None and not _overlay_card_matches_judgment(spec, js):
         log.info(
             "overlay_reshow_card_mismatch",
             session_id=str(session_id),

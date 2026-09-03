@@ -1221,7 +1221,14 @@ async def test_show_overlay_reemits_latest_card_for_current_asset(monkeypatch) -
         session_id=session_id, role="assistant", content="결과 안내", ui_components=[]
     )
     fake.sessions[session_id]["judgment_schema"] = {
-        "wall_objects": [{"id": "pred:1", "wall_type": "NON_LOAD_BEARING"}],
+        # 카드(pred:1, 폴리곤 10,10…)와 기하·분류가 같은 현재 판단객체 → 카드 재사용.
+        "wall_objects": [
+            {
+                "id": "pred:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            }
+        ],
         "selected_walls": ["pred:1"],
     }
 
@@ -1416,3 +1423,121 @@ async def test_show_overlay_rebuilds_when_card_regions_mismatch(monkeypatch) -> 
     ui, _snap = ctx.drain_ui()
     ids = [r["region_id"] for r in ui[0]["elements"]["ov"]["props"]["regions"]]
     assert ids == ["merged:1"]
+
+
+# --- Codex round-2 회귀 (카드 기하 검증 · 자산 치수 복구) ---------------------------
+
+
+async def test_show_overlay_rebuilds_when_card_geometry_or_class_differs(
+    monkeypatch,
+) -> None:
+    # 같은 id 라도 폴리곤이나 분류(wall_other↔wall_nonbearing)가 현재 판단객체와 다르면
+    # 옛 카드를 재사용하지 않는다(Codex P2 — id 집합만 비교하던 구멍).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    asset = await _attach_asset(session_id, owner)
+    await main_flow.append_internal_chat_message(
+        session_id=session_id,
+        role="assistant",
+        content="옛 분석 카드",
+        ui_components=[_overlay_spec(str(asset["id"]), "pred:1")],  # 폴리곤 10,10…
+    )
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "pred:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 25, "y": 10}, {"x": 25, "y": 20}],
+            }
+        ],
+    }
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is True
+    ui, _snap = ctx.drain_ui()
+    region = ui[0]["elements"]["ov"]["props"]["regions"][0]
+    assert region["polygon"] == [10.0, 10.0, 25.0, 10.0, 25.0, 20.0]  # 재구성본
+
+    # 분류만 다른 경우(카드는 비내력, 판단객체는 미확정)도 재구성한다.
+    fake.sessions[session_id]["judgment_schema"]["wall_objects"][0].update(
+        {
+            "wall_type": "UNKNOWN",
+            "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+        }
+    )
+    await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    ui, _snap = ctx.drain_ui()
+    assert (
+        ui[0]["elements"]["ov"]["props"]["regions"][0]["class_name"] == "wall_unknown"
+    )
+
+
+async def test_show_overlay_reuses_card_when_identical(monkeypatch) -> None:
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    asset = await _attach_asset(session_id, owner)
+    spec = _overlay_spec(str(asset["id"]), "pred:1")
+    spec["elements"]["ov"]["props"]["regions"][0]["score"] = 0.9
+    await main_flow.append_internal_chat_message(
+        session_id=session_id, role="assistant", content="카드", ui_components=[spec]
+    )
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "pred:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            }
+        ],
+    }
+    await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    ui, _snap = ctx.drain_ui()
+    assert ui[0]["elements"]["ov"]["props"]["regions"][0]["score"] == 0.9  # 원본 카드
+
+
+async def test_show_overlay_rebuild_uses_persisted_asset_dimensions(
+    monkeypatch,
+) -> None:
+    # 카드 이력이 없을 때 재구성은 asset 에 영속된 원본 이미지 크기를 좌표계로 쓴다
+    # (#asset-dimensions) — 폴리곤 bbox 추정으로 이미지와 어긋나지 않게.
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    asset = await _attach_asset(session_id, owner)
+    await main_flow.set_floorplan_asset_dimensions(
+        asset_id=asset["id"], width_px=1200, height_px=900
+    )
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "pred:1",
+                "wall_type": "NON_LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            }
+        ],
+    }
+    await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    ui, _snap = ctx.drain_ui()
+    assert ui[0]["elements"]["ov"]["props"]["image"] == {"width": 1200, "height": 900}
