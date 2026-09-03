@@ -52,6 +52,21 @@ def is_low_confidence(supplement: dict[str, Any] | None) -> bool:
     )
 
 
+def has_trusted_confidence(supplement: dict[str, Any] | None) -> bool:
+    """영역별 평가를 룰 입력으로 **자동 승격해도 되는가** — confidence 가 유효한 숫자이고
+    문턱 이상일 때만 True. 누락/None/비정상은 '측정 안 됨'이라 False(Codex P1) —
+    ``is_low_confidence`` 가 False 라고 신뢰할 수 있다는 뜻은 아니다."""
+
+    if not isinstance(supplement, dict):
+        return False
+    conf = supplement.get("confidence")
+    return (
+        isinstance(conf, (int, float))
+        and not isinstance(conf, bool)
+        and conf >= LOW_CONFIDENCE_THRESHOLD
+    )
+
+
 def remap_region_assessments(
     assessments: list[dict[str, Any]], regions: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:

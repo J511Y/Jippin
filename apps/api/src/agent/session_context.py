@@ -56,11 +56,14 @@ _ASSESSMENT_LABEL: dict[str, str] = {
 
 
 def _is_low_confidence(supplement: Any) -> bool:
-    """VLM 전체 신뢰도 저신뢰 여부 — tools.vlm 의 문턱과 같은 판정(#low-conf-gate)."""
+    """VLM 판정을 자동 반영할 수 **없는** 상태(저신뢰 또는 신뢰도 미측정) — tools.vlm 의
+    승격 조건(has_trusted_confidence)의 부정과 정확히 같다(#low-conf-gate)."""
 
-    from .tools.vlm import is_low_confidence
+    from .tools.vlm import has_trusted_confidence
 
-    return is_low_confidence(supplement if isinstance(supplement, dict) else None)
+    return not has_trusted_confidence(
+        supplement if isinstance(supplement, dict) else None
+    )
 
 
 def _assessments_by_id(judgment: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -314,7 +317,8 @@ def build_session_state_context(
             )
         elif low_conf:
             resolution = (
-                "도면 분석 신뢰도가 낮아 VLM 창호 판정을 그대로 쓰지 않는다 — 고른 창마다 "
+                "도면 분석 신뢰도가 낮아(또는 측정되지 않아) VLM 창호 판정을 그대로 쓰지 "
+                "않는다 — 고른 창마다 "
                 "생활어로 한 번 확인하고(예: '거실과 발코니 사이 창인가요, 바깥 공기와 바로 "
                 "닿는 창인가요?'), 답을 window_demolition_boundary(EXTERIOR|BALCONY_BOUNDARY)"
                 "로 넘길 것."

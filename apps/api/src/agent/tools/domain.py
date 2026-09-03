@@ -658,17 +658,18 @@ def _vlm_window_boundary(judgment_schema: dict[str, Any]) -> str | None:
     - 전부 BALCONY_BOUNDARY 면 BALCONY_BOUNDARY(발코니 확장 경로).
     - 그 외(UNCERTAIN/평가 없음 포함)면 None — 룰엔진이 HOLD 로 재확인을 요구하고,
       에이전트는 확정되지 않은 창에 대해서만 사용자에게 묻는다.
-    - VLM 전체 신뢰도가 저신뢰(ANALYSIS_LOW_CONFIDENCE)면 판정이 있어도 None —
-      저신뢰 추측이 HOLD 를 우회해 확정 판정/오거부가 되지 않게(#low-conf-gate, Codex P1).
+    - VLM 전체 신뢰도가 **유효한 숫자로 문턱 이상**일 때만 승격한다 — 저신뢰는 물론
+      신뢰도가 누락/비정상(None)이어도 None 으로 두어, 측정되지 않은 추측이 HOLD 를
+      우회해 확정 판정/오거부가 되지 않게(#low-conf-gate, Codex P1).
     """
 
-    from .vlm import is_low_confidence
+    from .vlm import has_trusted_confidence
 
     selected = judgment_schema.get("selected_windows")
     if not isinstance(selected, list) or not selected:
         return None
     supplement = judgment_schema.get("vlm_supplement")
-    if is_low_confidence(supplement if isinstance(supplement, dict) else None):
+    if not has_trusted_confidence(supplement if isinstance(supplement, dict) else None):
         return None
     by_id = _region_assessments_by_id(judgment_schema)
     if not by_id:
@@ -1087,7 +1088,12 @@ async def show_floorplan_overlay_impl(
     walls = js.get("wall_objects")
     windows = js.get("window_objects")
     analyzed = isinstance(walls, list) or isinstance(windows, list)
-    selectable = bool(walls) or bool(windows)
+    # 선택 가능 = 내력벽이 아닌 벽 + 창호(프론트 selectableRegions 와 정합, Codex P2) —
+    # 내력벽만 잡힌 도면은 카드에 제출 버튼이 없어 '다시 고르기'를 이어갈 수 없다.
+    selectable = any(
+        isinstance(w, dict) and w.get("wall_type") != "LOAD_BEARING"
+        for w in (walls or [])
+    ) or bool(windows)
     if not analyzed or not selectable:
         return _err(
             "OVERLAY_NO_ANALYSIS",
@@ -1275,10 +1281,12 @@ async def emit_judgment_summary_impl(
         props["asset_id"] = stamp
     # 선택 지문 스탬프 — 같은 도면에서 벽/창호를 **다시 골라** 옛 verdict 가 무효화돼도
     # 옛 결과 카드가 현재처럼 보이며 상담 CTA 를 열지 않게 한다(#judgment-selection-stamp).
+    # 지문엔 verdict 리비전도 들어간다 — 같은 선택으로 재분석·재평가돼도 옛 카드가
+    # 통과하지 않게(main_flow.judgment_selection_key 참고).
     try:
-        props["selection_key"] = selection_key(
-            await main_flow.get_session_judgment_schema(session_id)
-        )
+        stamped = await main_flow.get_session_selection_key(session_id)
+        if stamped is not None:
+            props["selection_key"] = stamped
     except Exception:  # noqa: BLE001 - 지문 조회 실패는 카드 방출을 막지 않는다(구 카드 동작)
         pass
     # 판정 카드 하단 상담 CTA(빠른 상담폼)에서 현장 주소를 prefill 할 수 있게 확정 주소를 싣는다.

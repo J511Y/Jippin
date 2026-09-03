@@ -1054,7 +1054,7 @@ def test_vlm_window_boundary_derivation() -> None:
     def js(sel: list[str], items: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "selected_windows": sel,
-            "vlm_supplement": {"region_assessments": items},
+            "vlm_supplement": {"confidence": 0.9, "region_assessments": items},
         }
 
     assert domain._vlm_window_boundary({}) is None
@@ -1099,10 +1099,11 @@ async def test_evaluate_rules_autofills_window_boundary_from_vlm(monkeypatch) ->
         "selected_windows": ["pred:7", "pred:8"],
         "window_objects": [{"id": "pred:7"}, {"id": "pred:8"}],
         "vlm_supplement": {
+            "confidence": 0.9,
             "region_assessments": [
                 _assessment("pred:7", "BALCONY_BOUNDARY"),
                 _assessment("pred:8", "BALCONY_BOUNDARY"),
-            ]
+            ],
         },
     }
     res = await domain.evaluate_rules_impl(
@@ -1120,7 +1121,10 @@ async def test_evaluate_rules_llm_boundary_overrides_vlm(monkeypatch) -> None:
     fake.sessions[session_id]["judgment_schema"] = {
         "selected_windows": ["pred:7"],
         "window_objects": [{"id": "pred:7"}],
-        "vlm_supplement": {"region_assessments": [_assessment("pred:7", "EXTERIOR")]},
+        "vlm_supplement": {
+            "confidence": 0.9,
+            "region_assessments": [_assessment("pred:7", "EXTERIOR")],
+        },
     }
     res = await domain.evaluate_rules_impl(
         session_id=session_id,
@@ -1315,17 +1319,19 @@ def test_derive_wall_type_holds_on_vlm_conflict() -> None:
         js = {
             **base,
             "vlm_supplement": {
-                "region_assessments": [_assessment("w2", opinion, kind="wall")]
+                "confidence": 0.9,
+                "region_assessments": [_assessment("w2", opinion, kind="wall")],
             },
         }
         assert domain._derive_wall_type(js) is None
     agree = {
         **base,
         "vlm_supplement": {
+            "confidence": 0.9,
             "region_assessments": [
                 _assessment("w1", "NON_LOAD_BEARING", kind="wall"),
                 _assessment("w2", "NON_LOAD_BEARING", kind="wall"),
-            ]
+            ],
         },
     }
     assert domain._derive_wall_type(agree) == "NON_LOAD_BEARING"
@@ -1337,7 +1343,8 @@ async def test_evaluate_rules_holds_when_vlm_disputes_nonbearing(monkeypatch) ->
         "wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}],
         "selected_walls": ["w1"],
         "vlm_supplement": {
-            "region_assessments": [_assessment("w1", "LOAD_BEARING", kind="wall")]
+            "confidence": 0.9,
+            "region_assessments": [_assessment("w1", "LOAD_BEARING", kind="wall")],
         },
     }
     res = await domain.evaluate_rules_impl(
@@ -1359,17 +1366,17 @@ def test_vlm_window_boundary_ignored_when_low_confidence() -> None:
     assert domain._vlm_window_boundary(js) is None
     js["vlm_supplement"]["confidence"] = 0.6
     assert domain._vlm_window_boundary(js) == "BALCONY_BOUNDARY"
-    js["vlm_supplement"]["confidence"] = None
-    assert domain._vlm_window_boundary(js) == "BALCONY_BOUNDARY"
+    js["vlm_supplement"]["confidence"] = None  # 미측정 → 승격 금지(Codex P1)
+    assert domain._vlm_window_boundary(js) is None
 
 
 def test_selection_key_sorted_and_stable() -> None:
-    assert domain.selection_key({}) == "|"
+    assert domain.selection_key({}) == "|#"
     assert (
         domain.selection_key(
             {"selected_walls": ["b", "a", 3], "selected_windows": ["w"]}
         )
-        == "a,b|w"
+        == "a,b|w#"
     )
 
 
@@ -1388,7 +1395,7 @@ async def test_judgment_summary_stamps_selection_key(monkeypatch) -> None:
         summary="s",
     )
     ui, _snap = ctx.drain_ui()
-    assert ui[0]["elements"]["j"]["props"]["selection_key"] == "pred:1,pred:2|"
+    assert ui[0]["elements"]["j"]["props"]["selection_key"] == "pred:1,pred:2|#"
 
 
 async def test_show_overlay_rebuilds_when_card_regions_mismatch(monkeypatch) -> None:
@@ -1541,3 +1548,85 @@ async def test_show_overlay_rebuild_uses_persisted_asset_dimensions(
     )
     ui, _snap = ctx.drain_ui()
     assert ui[0]["elements"]["ov"]["props"]["image"] == {"width": 1200, "height": 900}
+
+
+# --- Codex round-3 회귀 (verdict 리비전 스탬프 · 신뢰도 미측정 · 내력벽-only 카드) ---------
+
+
+def test_selection_key_includes_verdict_revision() -> None:
+    from datetime import UTC, datetime
+
+    ts = datetime(2026, 9, 3, 2, 0, 0, tzinfo=UTC)
+    key = main_flow.judgment_selection_key({"selected_walls": ["w1"]}, ts)
+    assert key == f"w1|#{int(ts.timestamp() * 1000)}"
+    assert main_flow.judgment_selection_key({"selected_walls": ["w1"]}, None) == "w1|#"
+    assert main_flow.verdict_revision("2026-09-03") is None  # 문자열은 리비전 아님
+
+
+async def test_judgment_summary_key_changes_when_verdict_cleared(monkeypatch) -> None:
+    # 같은 선택 id 로 재분석돼 verdict 가 지워지면(merge 가 rule_evaluated_at 을 비움)
+    # 지문이 달라져 옛 결과 카드가 통과하지 않는다(Codex P1).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    await _attach_asset(session_id, owner)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [{"id": "w1", "wall_type": "NON_LOAD_BEARING"}],
+        "selected_walls": ["w1"],
+    }
+    await main_flow.set_session_verdict(
+        session_id=session_id,
+        rule_eval_result={"verdict": "WARN"},
+        expected_asset_id=fake.sessions[session_id]["selected_floorplan_asset_id"],
+        expected_address_id=None,
+        expected_selected_walls=["w1"],
+        expected_selected_windows=[],
+    )
+    stamped = await main_flow.get_session_selection_key(session_id)
+    assert stamped is not None and not stamped.endswith("#")
+    await domain.emit_judgment_summary_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        decision="conditional",
+        title="t",
+        summary="s",
+    )
+    ui, _snap = ctx.drain_ui()
+    assert ui[0]["elements"]["j"]["props"]["selection_key"] == stamped
+
+    # 같은 선택 id 로 재분석 → verdict 소거 → 라이브 지문이 달라진다.
+    await main_flow.merge_judgment_schema(
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+        patch={"wall_objects": [{"id": "w1", "wall_type": "UNKNOWN"}]},
+    )
+    live = await main_flow.get_session_selection_key(session_id)
+    assert live != stamped and live is not None and live.endswith("#")
+
+
+async def test_show_overlay_rejects_load_bearing_only_analysis(monkeypatch) -> None:
+    # 내력벽만 잡힌 분석은 카드에 고를 수 있는 영역·제출 버튼이 없다 — 성공으로 돌리면
+    # 에이전트가 '골라 달라'고 하는데 사용자는 이어갈 수 없다(Codex P2).
+    session_id, run_id, fake, ctx = await _session_run_ctx(monkeypatch)
+    owner = fake.sessions[session_id]["user_id"]
+    await _attach_asset(session_id, owner)
+    fake.sessions[session_id]["judgment_schema"] = {
+        "wall_objects": [
+            {
+                "id": "w1",
+                "wall_type": "LOAD_BEARING",
+                "coords": [{"x": 10, "y": 10}, {"x": 20, "y": 10}, {"x": 20, "y": 20}],
+            }
+        ],
+        "window_objects": [],
+    }
+    res = await domain.show_floorplan_overlay_impl(
+        run_context=ctx,
+        run_id=run_id,
+        session_id=session_id,
+        owner_user_id=owner,
+        owner_is_anonymous=False,
+    )
+    assert res["ok"] is False and res["error_code"] == "OVERLAY_NO_ANALYSIS"
+    assert ctx.pending_ui_components == []

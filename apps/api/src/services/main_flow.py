@@ -1809,12 +1809,29 @@ async def set_floorplan_asset_dimensions(
     )
 
 
-def judgment_selection_key(judgment_schema: Any) -> str:
-    """결과 카드/리드 제출의 선택 지문 — 정렬된 selected_walls ``|`` 정렬된 selected_windows.
+def verdict_revision(rule_evaluated_at: Any) -> int | None:
+    """영속 verdict 의 리비전 — ``rule_evaluated_at`` 의 epoch ms(없으면 None).
+
+    문자열 ISO 표기는 직렬화 경로(pydantic/isoformat/JS)마다 달라 대조에 쓸 수 없어
+    정수로 고정한다. 세션 응답(``verdict_revision``)과 선택 지문이 같은 함수를 쓴다.
+    """
+
+    if isinstance(rule_evaluated_at, datetime):
+        return int(rule_evaluated_at.timestamp() * 1000)
+    return None
+
+
+def judgment_selection_key(judgment_schema: Any, rule_evaluated_at: Any = None) -> str:
+    """결과 카드/리드 제출의 선택 지문 — ``<정렬 selected_walls>|<정렬 selected_windows>#
+    <verdict 리비전>``.
 
     CHAT(emit_judgment_summary)이 카드에 스탬프하고, 웹 JudgmentSummaryCard 가 세션과
     대조하며, 리드 생성(services.leads)이 제출 시점에 재검증한다(#judgment-selection-
-    stamp). 웹 `selectionKeyOf` 와 형식이 같아야 한다.
+    stamp). 리비전(rule_evaluated_at)을 함께 넣는 이유: 같은 asset 을 **같은 선택 id 로
+    재분석**하면(VLM 의견만 바뀌는 등) merge 가 verdict 를 지우지만 선택 지문은 그대로라,
+    선택만으로는 옛 결과 카드가 현재처럼 통과한다(Codex P1). verdict 가 지워지면 리비전이
+    비고, 다시 평가되면 새 시각이 되어 어느 쪽이든 옛 스탬프와 달라진다. 웹
+    `selectionKeyOf` 와 형식이 같아야 한다.
     """
 
     def _ids(key: str) -> list[str]:
@@ -1825,7 +1842,25 @@ def judgment_selection_key(judgment_schema: Any) -> str:
             else []
         )
 
-    return ",".join(_ids("selected_walls")) + "|" + ",".join(_ids("selected_windows"))
+    rev = verdict_revision(rule_evaluated_at)
+    return (
+        ",".join(_ids("selected_walls"))
+        + "|"
+        + ",".join(_ids("selected_windows"))
+        + "#"
+        + ("" if rev is None else str(rev))
+    )
+
+
+async def get_session_selection_key(session_id: uuid.UUID) -> str | None:
+    """세션 row **한 번 읽기**로 현재 선택 지문(선택 + verdict 리비전)을 만든다. 내부용."""
+
+    row = await _db_select_session(session_id)
+    if row is None:
+        return None
+    return judgment_selection_key(
+        row.get("judgment_schema"), row.get("rule_evaluated_at")
+    )
 
 
 async def get_session_inputs(

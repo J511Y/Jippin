@@ -193,6 +193,7 @@ def _vlm(assessments: list[dict]) -> dict:
         "model": "m",
         "notes": [],
         "reclassifications": [],
+        "confidence": 0.9,
         "region_assessments": assessments,
     }
 

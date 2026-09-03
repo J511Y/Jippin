@@ -465,3 +465,13 @@ def test_remap_region_assessments_aggregates_conservatively() -> None:
     assert out["vlm-merged:1"]["reason"] == "r1 / r2"
     assert out["vlm-merged:2"]["assessment"] == "UNCERTAIN"
     assert out["vlm-merged:3"]["assessment"] == "EXTERIOR"
+
+
+def test_has_trusted_confidence_requires_valid_number_at_threshold() -> None:
+    # 자동 승격은 유효한 숫자 신뢰도가 문턱 이상일 때만 — 누락/None/bool 은 신뢰 불가.
+    assert vlm.has_trusted_confidence({"confidence": 0.6}) is True
+    assert vlm.has_trusted_confidence({"confidence": 0.59}) is False
+    assert vlm.has_trusted_confidence({"confidence": None}) is False
+    assert vlm.has_trusted_confidence({}) is False
+    assert vlm.has_trusted_confidence({"confidence": True}) is False
+    assert vlm.has_trusted_confidence(None) is False

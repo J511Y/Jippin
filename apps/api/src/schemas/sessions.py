@@ -160,6 +160,10 @@ class SessionResponse(BaseModel):
     # 키와 달리 새 도면의 재검토가 완료돼도 되돌아가지 않는 단조 신호라, 스탬프 없는
     # 레거시 결과 카드의 상담 CTA 신선도 판정에 쓴다.
     floorplan_replaced: bool | None = None
+    # 영속 verdict 의 리비전(rule_evaluated_at epoch ms, #judgment-selection-stamp) —
+    # 결과 카드의 selection_key 스탬프와 대조해 재분석/재평가로 무효화된 결과를 가른다.
+    # verdict 가 없으면 None.
+    verdict_revision: int | None = None
     last_activity_at: datetime
     expires_at: datetime | None
     created_at: datetime
@@ -168,8 +172,16 @@ class SessionResponse(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _derive_has_report(cls, data: Any) -> Any:
-        # 세션 row dict 의 rule_eval_result 존재로 has_report 를 파생한다(main_flow 는
-        # 항상 dict 를 넘긴다). dict 가 아니면 기본 False 로 둔다.
-        if isinstance(data, dict) and "has_report" not in data:
-            return {**data, "has_report": data.get("rule_eval_result") is not None}
+        # 세션 row dict 의 rule_eval_result 존재로 has_report 를, rule_evaluated_at 으로
+        # verdict_revision 을 파생한다(main_flow 는 항상 dict 를 넘긴다). dict 가 아니면
+        # 기본값으로 둔다.
+        if isinstance(data, dict):
+            from ..services.main_flow import verdict_revision
+
+            out = dict(data)
+            if "has_report" not in out:
+                out["has_report"] = out.get("rule_eval_result") is not None
+            if "verdict_revision" not in out:
+                out["verdict_revision"] = verdict_revision(out.get("rule_evaluated_at"))
+            return out
         return data

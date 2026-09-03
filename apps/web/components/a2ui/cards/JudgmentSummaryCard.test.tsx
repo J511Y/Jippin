@@ -235,10 +235,10 @@ describe('JudgmentSummaryCard 레거시(스탬프 없는) 카드 신선도 (#leg
 
 describe('JudgmentSummaryCard 재선택 감지 (#judgment-selection-stamp)', () => {
   it('selectionKeyOf 는 서버 지문 형식과 같다', () => {
-    expect(selectionKeyOf(undefined)).toBe('|');
+    expect(selectionKeyOf(undefined)).toBe('|#');
     expect(
       selectionKeyOf({ selected_walls: ['b', 'a', 3], selected_windows: ['w'] })
-    ).toBe('a,b|w');
+    ).toBe('a,b|w#');
   });
 
   it('세션의 현재 선택이 스탬프와 다르면 이전 선택 기준으로 표시하고 CTA 를 막는다', async () => {
@@ -262,7 +262,7 @@ describe('JudgmentSummaryCard 재선택 감지 (#judgment-selection-stamp)', () 
             summary: 's',
             rule_backed: true,
             asset_id: 'asset-1',
-            selection_key: 'wall:1|'
+            selection_key: 'wall:1|#'
           }}
         />
       </ChatActionsProvider>
@@ -294,7 +294,7 @@ describe('JudgmentSummaryCard 재선택 감지 (#judgment-selection-stamp)', () 
             summary: 's',
             rule_backed: true,
             asset_id: 'asset-1',
-            selection_key: 'wall:1|'
+            selection_key: 'wall:1|#'
           }}
         />
       </ChatActionsProvider>
@@ -302,6 +302,6 @@ describe('JudgmentSummaryCard 재선택 감지 (#judgment-selection-stamp)', () 
     await user.click(await screen.findByRole('button', { name: '전문가 상담 신청하기' }));
     const form = await screen.findByTestId('quick-consult-form');
     // 폼이 열린 뒤 재선택돼도 서버가 잡을 수 있게 선택 지문을 폼에 싣는다.
-    expect(form.getAttribute('data-expected-selection')).toBe('wall:1|');
+    expect(form.getAttribute('data-expected-selection')).toBe('wall:1|#');
   });
 });

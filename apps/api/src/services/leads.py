@@ -341,7 +341,10 @@ async def create_lead(
                 session_row = None
             js = session_row.get("judgment_schema") if session_row else None
             if isinstance(js, dict) and (
-                main_flow.judgment_selection_key(js) != expected_key
+                main_flow.judgment_selection_key(
+                    js, session_row.get("rule_evaluated_at") if session_row else None
+                )
+                != expected_key
             ):
                 raise ZippinException(
                     "Selected walls/windows changed since this result was issued.",

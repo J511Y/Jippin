@@ -67,11 +67,16 @@ export type JudgmentSummaryPayload = {
 };
 
 /**
- * 세션 judgment_schema 의 선택 지문 — 서버 `domain.selection_key` 와 동일 형식
- * (정렬된 selected_walls, `|`, 정렬된 selected_windows). 형식이 어긋나면 모든 카드가
- * stale 로 보이므로 양쪽을 함께 바꿔야 한다.
+ * 세션의 선택 지문 — 서버 `main_flow.judgment_selection_key` 와 동일 형식
+ * (`정렬 selected_walls|정렬 selected_windows#verdict_revision`). 리비전은 세션 응답의
+ * `verdict_revision`(영속 verdict 의 epoch ms, 없으면 빈 문자열) — 같은 선택으로 재분석·
+ * 재평가돼도 옛 결과 카드가 통과하지 않게 한다. 형식이 어긋나면 모든 카드가 stale 로
+ * 보이므로 양쪽을 함께 바꿔야 한다.
  */
-export function selectionKeyOf(judgmentSchema: unknown): string {
+export function selectionKeyOf(
+  judgmentSchema: unknown,
+  verdictRevision?: number | null
+): string {
   const ids = (key: string): string[] => {
     if (typeof judgmentSchema !== 'object' || judgmentSchema === null) return [];
     const raw = (judgmentSchema as Record<string, unknown>)[key];
@@ -79,7 +84,11 @@ export function selectionKeyOf(judgmentSchema: unknown): string {
       ? raw.filter((x): x is string => typeof x === 'string').sort()
       : [];
   };
-  return `${ids('selected_walls').join(',')}|${ids('selected_windows').join(',')}`;
+  const rev =
+    typeof verdictRevision === 'number' && Number.isFinite(verdictRevision)
+      ? String(verdictRevision)
+      : '';
+  return `${ids('selected_walls').join(',')}|${ids('selected_windows').join(',')}#${rev}`;
 }
 
 const KNOWN_DECISIONS: readonly JudgmentDecision[] = [
@@ -231,7 +240,7 @@ export function JudgmentSummaryCard({
       try {
         const row = await getSession(sessionIdForKey);
         // await 이후의 setState — 동기 cascading render 아님(#set-state-in-effect 규약).
-        if (!ignore && selectionKeyOf(row.judgment_schema) !== stampedSelectionKey) {
+        if (!ignore && selectionKeyOf(row.judgment_schema, row.verdict_revision) !== stampedSelectionKey) {
           setStaleSelection(true);
         }
       } catch {
@@ -258,7 +267,7 @@ export function JudgmentSummaryCard({
         // 선택 지문 대조 — 재선택으로 무효화된 결과면 폼을 열지 않는다.
         if (
           stampedSelectionKey !== undefined &&
-          selectionKeyOf(row.judgment_schema) !== stampedSelectionKey
+          selectionKeyOf(row.judgment_schema, row.verdict_revision) !== stampedSelectionKey
         ) {
           setStaleSelection(true);
           return;

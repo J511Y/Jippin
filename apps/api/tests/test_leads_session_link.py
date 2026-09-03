@@ -591,7 +591,7 @@ async def test_create_lead_rejects_stale_selection_key(monkeypatch) -> None:
                 "road_addr_part1": None,
                 "session_id": session_id,
                 "expected_floorplan_asset_id": asset,
-                "expected_selection_key": "wall:1|",
+                "expected_selection_key": "wall:1|#",
             },
         )
     assert exc.value.code == "LEAD_SELECTION_STALE"
@@ -621,7 +621,7 @@ async def test_create_lead_accepts_matching_selection_key(monkeypatch) -> None:
             "road_addr_part1": None,
             "session_id": session_id,
             "expected_floorplan_asset_id": asset,
-            "expected_selection_key": "wall:1,wall:2|",
+            "expected_selection_key": "wall:1,wall:2|#",
         },
     )
     assert captured["session_id"] == session_id
