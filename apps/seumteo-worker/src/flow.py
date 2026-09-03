@@ -258,6 +258,12 @@ def _unit_pattern(value: str | None, suffix: str) -> re.Pattern[str] | None:
     return re.compile("|".join(dict.fromkeys(alts)))
 
 
+def _collapse_spaces(text: str) -> str:
+    """괄호를 공백으로 바꾸고 공백 연속을 한 칸으로 접는다(토큰 경계 보존 비교용)."""
+
+    return re.sub(r"\s+", " ", re.sub(r"[()]", " ", text)).strip()
+
+
 def _spaced_pattern(key: str, *, guard: str = "") -> re.Pattern[str] | None:
     """공백·괄호를 뺀 식별자(key)를 **공백 보존 원문**에서 찾는 정규식(문자 사이 공백 관용).
 
@@ -1292,9 +1298,10 @@ class SeumteoFlow:
             else None
         )
         # 담기(C01)에 보낸 locDetlAddr 원문 — 세움터가 그대로 돌려주면 건물·동·호를 한 번에
-        # 확정하는 가장 강한 식별자다(공백 차이만 무시). 원문이 변형돼 오면 아래 식별자+동/호
-        # 토큰 검사로 폴백한다.
-        sent_norm = re.sub(r"[\s()]", "", str(t.get("_locDetlAddr") or ""))
+        # 확정하는 가장 강한 식별자다. 공백은 **지우지 않고 한 칸으로 접는다** — 전부 지우면
+        # '101 1001호' 와 '1011001호' 가 같아져 동/호 경계 검사를 우회한다(Codex P2 #201).
+        # 원문이 변형돼 오면(공백 유무 등) 아래 식별자+동/호 토큰 검사로 폴백한다.
+        sent_echo = _collapse_spaces(str(t.get("_locDetlAddr") or ""))
         # S01/D02 응답에서 얻은 번호는 새 행이 여러 개일 때의 tie-breaker 로만 사용한다. 실측상
         # 신청은 완료됐지만 응답에서 재귀 추출한 번호가 06R01 의 실제 pbsvcRecpNo 와 달라,
         # 정확 일치만 강제하면 완료 행을 모두 버리고 중복 발급을 유발했다.
@@ -1305,9 +1312,9 @@ class SeumteoFlow:
         for r in rows:
             if str(r.get("regstrKindCd")) != kind:
                 continue
-            # 괄호만 제거하고 **공백은 보존**한다 — 동/호 토큰의 숫자 경계가 공백이다.
-            addr = re.sub(r"[()]", "", str(r.get("locDetlAddr") or ""))
-            if sent_norm and re.sub(r"\s", "", addr) == sent_norm:
+            # 괄호는 공백으로 바꾸고 **공백은 보존**한다 — 동/호 토큰의 숫자 경계가 공백이다.
+            addr = re.sub(r"[()]", " ", str(r.get("locDetlAddr") or ""))
+            if sent_echo and _collapse_spaces(addr) == sent_echo:
                 matched_by = "echo"
             else:
                 # 건물 식별자(건물명·지번 프리픽스)가 끝나는 지점 **뒤에서만** 동/호를 찾는다 —

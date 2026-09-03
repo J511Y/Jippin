@@ -361,6 +361,32 @@ class ReceiptMatchingTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(FlowError, "신청한 발급 건"):
             await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
 
+    async def test_echo_match_keeps_unit_boundaries(self) -> None:
+        """echo 비교는 공백을 지우지 않는다 — '101 1001호' 와 '1011001호' 는 다른 세대다(Codex P2)."""
+
+        self._use_sambu(
+            _locDetlAddr="서울특별시 강남구 삼성동 99-13 삼부아파트 101 1001호",
+        )
+        collided = _row(
+            "20263230000I317507",
+            "20260903142238",
+            address="서울특별시 강남구 삼성동 99-13 삼부아파트 1011001호",
+        )
+        mine = _row(
+            "20263230000I317508",
+            "20260903142237",
+            address="서울특별시 강남구 삼성동 99-13 삼부아파트 101 1001호",
+        )
+
+        self._history(collided)
+        with self.assertRaisesRegex(FlowError, "신청한 발급 건"):
+            await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
+        self._history(collided, mine)
+        result = await self.flow._find_recp_no(_Page(), self.req, self.targets, set())
+
+        self.assertEqual(result["pbsvcRecpNo"], "20263230000I317508")
+
     async def test_snapshot_normalizes_existing_receipt_numbers(self) -> None:
         self.flow._post = AsyncMock(
             return_value={
