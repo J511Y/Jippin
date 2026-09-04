@@ -227,7 +227,7 @@ SDD §3·§4의 8개 논리 모듈 + FLOW_GUARD를 다음 라인에 배정한다
 새 화면을 만들거나 기존 화면을 고칠 때 아래를 지킨다. 상세 정본: [`DESIGN.md §4.5~§4.9`](docs/design/DESIGN.md).
 
 - **레이아웃**: 바깥 `Container` 는 `SiteShell` 이 전 페이지 `lg` 로 일괄 적용한다(라우트 등록 불필요·불가). 좁은 콘텐츠는 `PageColumn`(`prose` 720 / `form` 560 / `funnel` 460)으로 좁힌다. 페이지 타이틀+부제는 `PageHeader`. (구 `WIDE_ROUTE_PREFIXES`/`NARROW_FORM_PREFIXES` 분기는 폐지됨)
-- **타이포**: 크기는 theme headings(`Title order=N`)와 토큰(`--jippin-fz-hero|display|legal`)만 — `fz` 오버라이드로 새 크기를 발명하지 않는다. weight 800 금지. 정본: `TYPOGRAPHY.md §2`.
+- **타이포**: 크기는 theme headings(`Title order=N`)와 토큰(`--jippin-fz-hero|display|legal|mark`)만 — `fz` 오버라이드로 새 크기를 발명하지 않는다. `mark`(10px)는 15px 이상 라벨 옆 첨자(내비 `BETA`) 전용으로 유일한 12px 미만 단계다. weight 800 금지. 정본: `TYPOGRAPHY.md §2`.
 - **버튼 위계**: 전환(상담·견적·다운로드) = `CtaButton`(coral, **화면당 1회**) · 기능 진입/제출 = `jippin filled md` · 2차 = `light|outline` · 3차 = `subtle`. coral 을 상태·배지·마커에 쓰지 않는다(상태는 `status.*` 팔레트: `success|warning|danger|info`).
 - **간격·radius**: Mantine spacing 토큰 우선, 랜딩 섹션은 `--jippin-section-py`. radius 는 기본값(컨트롤 md/표면 lg/칩 999)만.
 - **모바일**: 터치 타깃 ≥44px. 하단 고정 요소(채팅·퍼널 도크)는 `env(safe-area-inset-bottom)`. 3열 이상 그리드는 base 1열. 내비게이션은 우상단 햄버거+`Drawer` 단일 패턴(하단 탭바 없음).
