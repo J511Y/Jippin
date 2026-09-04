@@ -55,6 +55,7 @@ font-family: ui-monospace, SFMono-Regular, 'Cascadia Code',
 | `bodyEmph` | 본문 강조 (이름·근거 강조) | 15 / 24 | 600 | `fw={600}` |
 | `caption` | 메타·도움말·캡션 | 13 / 20 | 400 | `fontSizes.xs` |
 | `legal` | 법적 고지 문구 | 12 / 20 | 400 | `var(--jippin-fz-legal)` |
+| `mark` | 라벨 옆 첨자 표시(내비 `BETA` 등) — 단독 텍스트 금지 | 10 / 1.0 | 600 | `var(--jippin-fz-mark)` |
 | `mono.body` | 견적 금액·도면 좌표·조항 번호 | 14 / 22 | 500 (등폭) | `fontFamilyMonospace` + `tabular-nums` |
 
 ### 2.1 스케일 사용 규칙
@@ -64,6 +65,7 @@ font-family: ui-monospace, SFMono-Regular, 'Cascadia Code',
 - **결과 화면의 최상단은 `display` 한 줄** — 가능/불가/보류 결론을 한 줄 안에 보여준다. 줄바꿈은 허용하되, 두 줄을 넘기지 않는다.
 - **버튼·칩·라벨** 은 한국어 줄바꿈을 고려해 좌우 padding 을 충분히, 폭은 자동에 맡긴다. 1줄 강제 후 ellipsis 금지 (의미 손실 위험).
 - **숫자 단독 표기** (금액·면적·조항 번호) 는 `mono.body` 로 정렬한다. 본문 안에서는 일반 본문 weight 를 유지하되 천 단위 구분자(`,`) 를 반드시 표시한다.
+- **`mark` 는 스케일에서 유일한 12px 미만 단계다.** 15px 이상 라벨 바로 옆에 붙는 첨자(내비 `BETA`, [`DESIGN.md §4.7`](DESIGN.md) 베타 표시)에만 쓰고, 문장·캡션·단독 라벨에는 쓰지 않는다. 대문자 로마자 전용 — 한글은 10px 에서 획이 뭉개지므로 `caption` 이상을 쓴다.
 
 ### 2.2 임베디드 마크다운 (채팅·FAQ 답변)
 

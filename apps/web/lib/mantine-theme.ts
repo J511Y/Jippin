@@ -243,6 +243,9 @@ export const jippinCssVariablesResolver: CSSVariablesResolver = () => ({
     '--jippin-fz-hero': 'clamp(2rem, 4vw, 2.75rem)',
     '--jippin-fz-display': 'clamp(1.5rem, 2.6vw, 1.75rem)',
     '--jippin-fz-legal': '0.75rem',
+    // mark 는 스케일에서 유일한 12px 미만 단계 — 15px 이상 라벨 옆 첨자(내비 BETA)
+    // 전용, 문장·캡션·단독 라벨 금지 (TYPOGRAPHY.md §2.1, DESIGN.md §4.7 베타 표시).
+    '--jippin-fz-mark': '0.625rem',
     // 랜딩 섹션 세로 패딩 공용 상수 — 3개 랜딩(홈·가격·사전검토)이 공유.
     '--jippin-section-py': 'clamp(3rem, 6vw, 5rem)'
   },
