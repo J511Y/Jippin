@@ -5,7 +5,6 @@ import {
   Button,
   Card,
   Divider,
-  FileInput,
   Group,
   Select,
   Stack,
@@ -15,8 +14,9 @@ import {
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
-import { IconPaperclip, IconSearch } from '@tabler/icons-react';
+import { IconSearch } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
+import { FloorplanDropInput } from '@/components/inputs/FloorplanDropInput';
 import { PhoneInput } from '@/components/inputs/PhoneInput';
 import { CtaButton } from '@/components/ui';
 import { trackLeadSubmit, type LeadCtaId } from '@/lib/analytics/lead-cta';
@@ -94,6 +94,8 @@ export function ConsultationLeadForm({
 }: ConsultationLeadFormProps = {}) {
   const [submitting, setSubmitting] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  // 드롭 입력의 거절 사유(비이미지·용량 초과) — 입력 아래 폼 에러로 노출한다.
+  const [fileError, setFileError] = useState<string | null>(null);
   // 로그인 회원은 이름/연락처가 이미 계정에 있으므로 prefill 후 잠근다(개별 잠금).
   const [nameLocked, setNameLocked] = useState(false);
   const [phoneLocked, setPhoneLocked] = useState(false);
@@ -228,6 +230,7 @@ export function ConsultationLeadForm({
       // setInitialValues 로 이름/연락처를 심어둬 잠긴 필드가 그대로 유지된다.
       form.reset();
       setFile(null);
+      setFileError(null);
       onSubmitted?.();
     } catch (error) {
       // 업로드는 성공했는데 리드 생성이 실패하면 orphan 평면도(연결 row 없는 PII)가
@@ -362,15 +365,22 @@ export function ConsultationLeadForm({
           {...form.getInputProps('message')}
         />
 
-        <FileInput
+        {/* 드래그앤드롭·클릭·모바일 카메라를 한 표면으로 — PC 에서 탐색기의 도면 사진을
+            바로 끌어다 놓을 수 있다. 이미지 MIME·50MB 검증은 입력이 맡는다. */}
+        <FloorplanDropInput
           label="단위세대 평면도 첨부"
           description="관리사무소 방문 후 해당 도면을 촬영해 첨부해 주세요. (선택)"
-          placeholder="이미지 파일 선택"
-          accept="image/*"
-          clearable
-          leftSection={<IconPaperclip size={16} aria-hidden />}
           value={file}
-          onChange={setFile}
+          onChange={(next) => {
+            setFile(next);
+            setFileError(null);
+          }}
+          onReject={(message) => {
+            setFile(null);
+            setFileError(message);
+          }}
+          error={fileError}
+          disabled={submitting}
         />
 
         <Alert color="jippin" variant="light" radius="md">

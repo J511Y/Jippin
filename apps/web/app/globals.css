@@ -1372,3 +1372,69 @@ a[data-faq-row]:focus-visible {
     animation: hc-step-in 260ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
   }
 }
+
+/* ------------------------------------------------------------------
+   도면 이미지 드롭 입력 (components/inputs/FloorplanDropInput)
+   점선 테두리 = "여기에 놓을 수 있음" 어포던스. 드래그 중/선택됨은 실선 + 전문 보조색.
+   COLOR_SYSTEM §6.2(색 단독 금지): 상태는 선 모양·문구와 함께 전달한다.
+   ------------------------------------------------------------------ */
+.jippin-dropzone {
+  position: relative;
+  width: 100%;
+  padding: 1rem 0.875rem;
+  border: 1.5px dashed var(--jippin-brand-border);
+  border-radius: 12px;
+  background: var(--jippin-brand-surface);
+  cursor: pointer;
+  transition:
+    border-color 130ms ease,
+    background-color 130ms ease,
+    box-shadow 130ms ease;
+}
+
+.jippin-dropzone[data-size='sm'] {
+  padding: 0.75rem;
+}
+
+.jippin-dropzone:hover:not([data-disabled]) {
+  border-color: var(--jippin-brand-professional);
+  background: var(--mantine-color-blueprint-0);
+}
+
+.jippin-dropzone[data-dragging] {
+  border-style: solid;
+  border-color: var(--jippin-brand-professional);
+  background: var(--mantine-color-blueprint-0);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--jippin-brand-professional) 22%, transparent);
+}
+
+.jippin-dropzone[data-filled] {
+  border-style: solid;
+}
+
+.jippin-dropzone[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.jippin-dropzone__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--mantine-color-blueprint-0);
+  color: var(--jippin-brand-professional);
+  flex-shrink: 0;
+}
+
+.jippin-dropzone__thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--jippin-brand-border);
+  background: var(--jippin-brand-surface-alt);
+}

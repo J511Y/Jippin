@@ -11,10 +11,11 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/sessions/api', () => apiMocks);
-vi.mock('@/lib/sessions/upload', () => ({
+const uploadMocks = vi.hoisted(() => ({
   uploadSessionFloorplan: vi.fn(),
   deleteSessionFloorplan: vi.fn()
 }));
+vi.mock('@/lib/sessions/upload', () => uploadMocks);
 vi.mock('@/lib/leads/ensure-anonymous-session', () => ({
   ensureAnonymousSession: vi.fn(() => Promise.resolve())
 }));
@@ -175,5 +176,63 @@ describe('isFloorplanRequestPayload', () => {
     expect(isFloorplanRequestPayload({ prior_asset_id: 'asset-1' })).toBe(true);
     expect(isFloorplanRequestPayload({ prior_asset_id: 7 })).toBe(false);
     expect(isFloorplanRequestPayload({ reason: 7 })).toBe(false);
+  });
+});
+
+describe('FloorplanRequestCard 드래그앤드롭 업로드', () => {
+  function DropCard({ sendMessage }: { sendMessage: ReturnType<typeof vi.fn> }) {
+    return (
+      <ChatActionsProvider
+        value={{
+          sessionId: 'session-1',
+          busy: false,
+          sendMessage,
+          selectedFloorplanAssetId: null
+        }}
+      >
+        <FloorplanRequestCard payload={{ prior_asset_id: null }} />
+      </ChatActionsProvider>
+    );
+  }
+  const drop = (file: File) =>
+    fireEvent.drop(screen.getByTestId('floorplan-dropzone'), {
+      dataTransfer: { types: ['Files'], files: [file] }
+    });
+
+  it('드롭존에 이미지를 놓고 제출하면 업로드 → asset 등록 → 분석 요청으로 이어진다', async () => {
+    const sendMessage = vi.fn();
+    uploadMocks.uploadSessionFloorplan.mockResolvedValueOnce({
+      bucket: 'session-floorplans',
+      object_key: 'u/session-1/k.png',
+      content_type: 'image/png',
+      byte_size: 1
+    });
+    render(<DropCard sendMessage={sendMessage} />);
+    const file = new File(['x'], 'plan.png', { type: 'image/png' });
+    drop(file);
+    expect(screen.getByText('plan.png')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '도면 첨부하고 분석' }));
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith('도면을 첨부했어요. 분석해 주세요.')
+    );
+    expect(uploadMocks.uploadSessionFloorplan).toHaveBeenCalledWith('session-1', file);
+    expect(apiMocks.createFloorplanAsset).toHaveBeenCalledWith('session-1', {
+      bucket: 'session-floorplans',
+      object_key: 'u/session-1/k.png',
+      content_type: 'image/png',
+      byte_size: 1
+    });
+    await waitFor(() => expect(screen.getByText('평면도를 받았어요')).toBeTruthy());
+  });
+
+  it('이미지가 아닌 파일을 놓으면 생활어 사유를 보여 주고 제출 버튼은 잠긴다', () => {
+    render(<DropCard sendMessage={vi.fn()} />);
+    drop(new File(['x'], 'plan.pdf', { type: 'application/pdf' }));
+    expect(screen.getByRole('alert').textContent).toContain('이미지 파일만 첨부할 수 있어요');
+    expect(
+      (screen.getByRole('button', { name: '도면 첨부하고 분석' }) as HTMLButtonElement).disabled
+    ).toBe(true);
+    expect(uploadMocks.uploadSessionFloorplan).not.toHaveBeenCalled();
   });
 });
