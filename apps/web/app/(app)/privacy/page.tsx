@@ -22,6 +22,19 @@ export const metadata: Metadata = {
 const EFFECTIVE_DATE = '2026년 6월 8일';
 const PRIVACY_EMAIL = 'yws@shinnertech.com';
 
+/**
+ * 개정 이력 — 최신 항목이 앞. 헤더의 최종 개정일과 12조 라.항이 함께 참조한다.
+ * 방침 본문이 바뀌면(연락처 표기 정정 포함) 반드시 항목을 추가한다 — 12조가
+ * "개정 시 시행일과 변경 내용을 공지"한다고 약속하므로 이력 없는 수정은 약속 위반.
+ */
+const REVISION_HISTORY = [
+  {
+    date: '2026년 9월 4일',
+    summary: '제10조 개인정보 보호책임자 연락처(이메일) 변경'
+  }
+] as const;
+const LAST_REVISED_DATE = REVISION_HISTORY[0].date;
+
 /** 절(節) 단위 구성 — 목차와 본문이 같은 배열을 공유한다. */
 type Section = { id: string; title: string; body: ReactNode };
 
@@ -488,6 +501,15 @@ const SECTIONS: Section[] = [
           이용자 권리에 중대한 영향을 미치는 변경의 경우에는 시행 30일 전부터
           안내합니다.
         </Clause>
+        <Clause marker="라.">
+          개정 이력은 아래와 같습니다. 개인정보의 처리 내용이나 이용자의 권리에
+          영향이 없는 연락처 등 표기 정정은 정정 즉시 반영하고 본 항에 기록합니다.
+        </Clause>
+        {REVISION_HISTORY.map((revision) => (
+          <Clause key={revision.date} marker="·">
+            {revision.date}: {revision.summary}
+          </Clause>
+        ))}
       </Stack>
     )
   }
@@ -501,7 +523,7 @@ export default function PrivacyPage() {
         title="개인정보처리방침"
         subtitle={
           <>
-            시행일 {EFFECTIVE_DATE}
+            시행일 {EFFECTIVE_DATE} · 최종 개정일 {LAST_REVISED_DATE}
             <br />
             집핀(Jippin) 서비스를 운영하는 신한이너텍 주식회사(이하
             &lsquo;회사&rsquo;)는 이용자의 개인정보를 중요하게 생각하며,
