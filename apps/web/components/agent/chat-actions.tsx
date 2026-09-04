@@ -27,6 +27,12 @@ export interface ChatActions {
    * 자체 조회로 폴백한다.
    */
   selectedFloorplanAssetId?: string | null;
+  /**
+   * 미리보기 전용 — true 면 도면 카드가 업로드/등록/전송을 실제로 하지 않고 첨부 완료
+   * 상태만 재현한다. `/a2ui-preview` 는 공개 경로라 익명 세션 발급·잘못된 session_id 로의
+   * 업로드 호출(422)이 일어나면 안 된다. 실서비스 호스트(SessionChat)는 설정하지 않는다.
+   */
+  simulateUploads?: boolean;
 }
 
 const ChatActionsContext = createContext<ChatActions | null>(null);
