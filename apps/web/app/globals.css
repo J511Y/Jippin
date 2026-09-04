@@ -1423,7 +1423,7 @@ a[data-faq-row]:focus-visible {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: 8px; /* 컨트롤 md — 새 radius 티어(10px)를 만들지 않는다(AGENTS.md §4.8.1) */
   background: var(--mantine-color-blueprint-0);
   color: var(--jippin-brand-professional);
   flex-shrink: 0;

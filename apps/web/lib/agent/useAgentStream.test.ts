@@ -381,3 +381,97 @@ describe('useAgentStream 리뷰 회귀 (Codex PR #204)', () => {
     expect(result.current.messages.map((m) => m.content)).toEqual(['첫 질문', '첫 답']);
   });
 });
+
+describe('useAgentStream 리뷰 회귀 2라운드 (Codex PR #204)', () => {
+  it('resume 점유 레이스에서 진 쪽(스트림 내 AGENT_RUN_NOT_RESUMABLE)도 활성 런을 조회해 대기 후 이어 보낸다', async () => {
+    const calls = installFetch((method, url, n) => {
+      if (url === `${BASE}/messages`) {
+        return json({
+          messages:
+            n === 1 ? [] : [{ id: 'm-win', role: 'assistant', content: '다른 탭 답', ui_components: [] }]
+        });
+      }
+      // 마운트 땐 awaiting_input 이던 런이, 충돌 뒤 조회에선 다른 탭이 이어받아 running.
+      if (url === `${BASE}/runs/active`) {
+        return json({ id: 'run-w', status: n === 1 ? 'awaiting_input' : 'running' });
+      }
+      if (url === `${BASE}/runs/run-w/resume` && method === 'POST') {
+        return sse(
+          [
+            {
+              type: 'error',
+              seq: 1,
+              error_code: 'AGENT_RUN_NOT_RESUMABLE',
+              message: '재개할 수 없는 런입니다.',
+              recoverable: false
+            },
+            { type: 'done', seq: 2, run_status: 'failed' }
+          ],
+          'run-w'
+        );
+      }
+      if (url === `${BASE}/runs/run-w`) return json({ id: 'run-w', status: n < 3 ? 'running' : 'succeeded' });
+      if (url === `${BASE}/runs` && method === 'POST') return reply('m-new', '이어서 답할게요', 'run-n');
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    await waitFor(() => expect(calls.some((c) => c.url === `${BASE}/runs/active`)).toBe(true));
+    await act(async () => {
+      await result.current.send('답변');
+    });
+
+    expect(result.current.status).toBe('done');
+    expect(result.current.error).toBeNull();
+    expect(calls.filter((c) => c.method === 'POST' && c.url === `${BASE}/runs`)).toHaveLength(1);
+    expect(result.current.messages.map((m) => m.content)).toEqual(['다른 탭 답', '답변', '이어서 답할게요']);
+  });
+
+  it('같은 내용의 새 user 메시지(다른 탭)는 옛 영속 버블로 오인되지 않고 병합된다', async () => {
+    installFetch((method, url, n) => {
+      if (url === `${BASE}/messages`) {
+        const old = [
+          { id: 'db-u0', role: 'user', content: '네', ui_components: [] },
+          { id: 'a0', role: 'assistant', content: '처음 답', ui_components: [] }
+        ];
+        return json({
+          messages:
+            n === 1
+              ? old
+              : [
+                  ...old,
+                  { id: 'db-u9', role: 'user', content: '네', ui_components: [] },
+                  { id: 'a9', role: 'assistant', content: '다른 탭 답', ui_components: [] }
+                ]
+        });
+      }
+      if (url === `${BASE}/runs/active`) return notActive();
+      if (url === `${BASE}/runs` && method === 'POST') {
+        if (n === 1) {
+          return json(
+            { error: { code: 'AGENT_RUN_ALREADY_ACTIVE' }, detail: { active_run_id: 'run-a', status: 'running' } },
+            409
+          );
+        }
+        return reply('a2', '둘째 답', 'run-2');
+      }
+      if (url === `${BASE}/runs/run-a`) return json({ id: 'run-a', status: n < 2 ? 'running' : 'succeeded' });
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    await act(async () => {
+      await result.current.send('둘째');
+    });
+
+    expect(result.current.messages.map((m) => [m.role, m.content])).toEqual([
+      ['user', '네'],
+      ['assistant', '처음 답'],
+      ['user', '네'],
+      ['assistant', '다른 탭 답'],
+      ['user', '둘째'],
+      ['assistant', '둘째 답']
+    ]);
+  });
+});

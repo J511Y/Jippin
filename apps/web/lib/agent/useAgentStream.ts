@@ -127,6 +127,7 @@ async function fetchRunStatus(
 const TERMINAL_RUN_STATUSES = ['succeeded', 'failed', 'cancelled'];
 // 재개(/resume)도 재스트림도 안 되는 상태 — 끝나길 기다리는 수밖에 없다(#wait-active-run).
 const ACTIVE_RUN_STATUSES = ['pending', 'running'];
+type ActiveRunRef = { id: string; status: string };
 // 기다리는 동안 활동 타임라인에 올리는 클라이언트 전용 의사 단계(문구는 tool-labels).
 const WAIT_ACTIVE_RUN_STEP = 'wait_active_run';
 const DEFAULT_ACTIVE_RUN_POLL_MS = 2000;
@@ -242,16 +243,20 @@ async function fetchHistory(
 // "이미 있음" 판정: assistant 는 서버 id(SSE message_id = chat_messages.id)로 맞지만, 이 탭이
 // 낙관적으로 붙인 user 버블은 클라이언트 uid 라 영속본(DB id)과 id 가 다르다 — id 만 보면
 // 지난 user 턴이 전부 "새 메시지" 로 보여 중복 버블이 생긴다. 그래서 user 역할은 같은
-// 내용의 기존 버블을 하나씩(1:1) 소비해 영속본과 대응시킨다(#reconcile-optimistic-user).
+// 내용의 기존 낙관적 버블을 하나씩(1:1) 소비해 영속본과 대응시킨다(#reconcile-optimistic-user).
 function mergeHistory(
   prev: ChatMessage[],
   history: ChatMessage[],
   beforeId?: string,
 ): ChatMessage[] {
   const knownIds = new Set(prev.map((m) => m.id));
+  const historyIds = new Set(history.map((m) => m.id));
+  // 낙관적 버블만 센다 — 히스토리에 같은 id 가 있는 로컬 user 메시지는 이미 영속 id 를 가진
+  // 것이라 제외한다. 안 그러면 옛 영속 메시지가 id 로 건너뛰어지면서 그 내용 카운트가 남아,
+  // 다른 탭이 보낸 **같은 내용의 새 메시지**가 옛 버블로 오인돼 빠진다(#optimistic-only).
   const unmatchedUserTexts = new Map<string, number>();
   for (const m of prev) {
-    if (m.role !== 'user') continue;
+    if (m.role !== 'user' || historyIds.has(m.id)) continue;
     const key = m.content.trim();
     unmatchedUserTexts.set(key, (unmatchedUserTexts.get(key) ?? 0) + 1);
   }
@@ -544,11 +549,13 @@ export function useAgentStream(
         runStatus: string | null;
         // 스트림 안으로 온 활성 런 충돌(error AGENT_RUN_ALREADY_ACTIVE)의 활성 런 — 호출부가
         // 409 와 같은 복구(대기·재전달)를 한다(#stream-conflict-recovery).
-        recovered: { id: string; status: string } | null;
+        // 'unknown' = 충돌은 확실한데 활성 런 정보가 없다(resume 점유 레이스 등) — 호출부가
+        // 세션의 활성 런을 조회해 복구한다.
+        recovered: ActiveRunRef | 'unknown' | null;
       }> => {
         let assembled = '';
         let runStatus: string | null = null;
-        let recovered: { id: string; status: string } | null = null;
+        let recovered: ActiveRunRef | 'unknown' | null = null;
         const reader = res.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -652,13 +659,22 @@ export function useAgentStream(
               setStreamingText('');
             } else if (ev.type === 'error') {
               setError(ev.message);
-              if (ev.error_code === 'AGENT_RUN_ALREADY_ACTIVE' && ev.active_run_id) {
+              if (ev.error_code === 'AGENT_RUN_ALREADY_ACTIVE') {
                 // 사전판정 뒤 generator insert 직전의 동시 시작 레이스 — 서버는 HTTP 200
                 // 스트림 안에 이 오류를 실어 보낸다(#active-run-on-race). 메시지는 아직
                 // 전달되지 않았으므로 호출부가 활성 런 기준으로 복구한다.
-                recovered = { id: ev.active_run_id, status: ev.active_run_status ?? '' };
-                setResumeId(ev.active_run_id);
-                resumeModeRef.current = modeForStatus(recovered.status);
+                if (ev.active_run_id) {
+                  recovered = { id: ev.active_run_id, status: ev.active_run_status ?? '' };
+                  setResumeId(ev.active_run_id);
+                  resumeModeRef.current = modeForStatus(recovered.status);
+                } else {
+                  recovered = 'unknown';
+                }
+              } else if (ev.error_code === 'AGENT_RUN_NOT_RESUMABLE') {
+                // 동시 resume 점유 레이스에서 진 쪽 — 사전판정은 둘 다 통과하고 generator 의
+                // 조건부 claim 에서 실패한다. 활성 런 정보가 없으니 호출부가 조회해 같은
+                // 복구(대기·재전달)를 한다(#resume-claim-conflict).
+                recovered = 'unknown';
               }
             } else if (ev.type === 'done') {
               runStatus = ev.run_status;
@@ -797,7 +813,19 @@ export function useAgentStream(
         // 되지 않았으므로 같은 복구를 1회 더 시도한다(#stream-conflict-recovery).
         if (outcome.recovered) {
           setError(null);
-          const retried = await recover(outcome.recovered);
+          const active =
+            outcome.recovered === 'unknown'
+              ? await fetchActiveRun(base, sessionId, token)
+              : outcome.recovered;
+          let retried: Response;
+          if (active) {
+            retried = await recover(active);
+          } else {
+            // 이긴 쪽 런이 그새 끝나 활성 런이 없다 — 새 런으로 같은 메시지를 보낸다.
+            setResumeId(null);
+            resumeModeRef.current = null;
+            retried = await deliver();
+          }
           if (!retried.ok || !retried.body) {
             throw new Error(`에이전트 요청에 실패했습니다 (HTTP ${retried.status}).`);
           }
