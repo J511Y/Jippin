@@ -10,12 +10,14 @@ import { ChatActionsProvider, type ChatActions } from '@/components/agent/chat-a
 
 // 미리보기용 스텁 액션 — 채팅 컨텍스트 밖에서는 카드가 "대화 화면에서…" 안내만 보여 주므로,
 // `interactive` 로 표시한 항목만 이 스텁으로 감싸 실제 인터랙티브 상태(도면 드롭존 등)를
-// 확인한다. 전송/조회는 no-op(세션 없음).
+// 확인한다. 전송/조회는 no-op(세션 없음)이고, 업로드는 simulateUploads 로 성공 상태만 재현한다
+// — 공개 경로에서 익명 세션 발급이나 실제 업로드 호출이 일어나지 않게.
 const PREVIEW_ACTIONS: ChatActions = {
   sessionId: 'preview',
   busy: false,
   sendMessage: () => {},
-  selectedFloorplanAssetId: null
+  selectedFloorplanAssetId: null,
+  simulateUploads: true
 };
 
 type PreviewItem = { label: string; component: Record<string, unknown>; interactive?: boolean };

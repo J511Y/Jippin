@@ -545,8 +545,12 @@ export function useAgentStream(
       };
 
       // 한 SSE 응답 본문을 소비하며 채팅 상태를 갱신하고 종료 run_status 를 돌려준다.
+      // insertBeforeId: 이 스트림의 메시지를 그 메시지(방금 붙인 낙관적 user 버블) 앞에 끼운다 —
+      // reconnect drain 이 되돌리는 직전 런의 답이 새 입력 뒤에 붙어 순서가 뒤집히지 않게
+      // (#drain-before-bubble).
       const pump = async (
         res: Response,
+        insertBeforeId?: string,
       ): Promise<{
         runStatus: string | null;
         // 스트림 안으로 온 활성 런 충돌(error AGENT_RUN_ALREADY_ACTIVE)의 활성 런 — 호출부가
@@ -640,21 +644,19 @@ export function useAgentStream(
               }));
               // resume 재연결 시 서버가 이미 영속된 메시지를 다시 보낼 수 있다 —
               // message_id 로 dedupe 한다(#replay-on-resume).
-              setMessages((prev) =>
-                prev.some((m) => m.id === msgId)
-                  ? prev
-                  : [
-                      ...prev,
-                      {
-                        id: msgId,
-                        role: 'assistant',
-                        content: ev.content,
-                        createdAt: new Date().toISOString(),
-                        dynamics,
-                        activity: turnActivity.length > 0 ? turnActivity : undefined,
-                      },
-                    ],
-              );
+              setMessages((prev) => {
+                if (prev.some((m) => m.id === msgId)) return prev;
+                const next: ChatMessage = {
+                  id: msgId,
+                  role: 'assistant',
+                  content: ev.content,
+                  createdAt: new Date().toISOString(),
+                  dynamics,
+                  activity: turnActivity.length > 0 ? turnActivity : undefined,
+                };
+                const at = insertBeforeId ? prev.findIndex((m) => m.id === insertBeforeId) : -1;
+                return at < 0 ? [...prev, next] : [...prev.slice(0, at), next, ...prev.slice(at)];
+              });
               setActivitySynced([]);
               setToolActivity(null);
               assembled = '';
@@ -690,6 +692,10 @@ export function useAgentStream(
       // failed 로 둘지 가른다. 성공/대기/정상중단은 false 유지(#orphan-tool-step).
       let errored = false;
       try {
+        // 낙관적 user 버블의 id — deliver 의 reconnect drain 이 되돌리는 메시지와 다른 탭 런의
+        // 턴은 이 앞에 끼운다.
+        const userMessageId = uid();
+
         // 사용자 입력 1건을 서버에 전달한다 — 직전 런 상태(refs)에 따라 (0) drop 된 런은
         // no-message reconnect 로 먼저 drain 하고, (1) awaiting_input 이면 /resume 로 답을,
         // 아니면 새 런을 시작한다. 409 복구 뒤 refs 를 맞춰 다시 부를 수 있게 함수로 둔다.
@@ -701,7 +707,7 @@ export function useAgentStream(
           if (dropRunId && resumeModeRef.current === 'reconnect') {
             const rc = await fetchAuthed(resumeUrl(dropRunId), bodyFor(null));
             if (rc.ok && rc.body) {
-              const { runStatus } = await pump(rc);
+              const { runStatus } = await pump(rc, userMessageId);
               if (runStatus === 'awaiting_input' || runStatus === 'interrupted') {
                 resumeModeRef.current = modeForStatus(runStatus);
               } else {
@@ -735,7 +741,6 @@ export function useAgentStream(
         };
 
         // 낙관적 user 버블을 먼저 추가한다(전송 실패해도 입력이 사라지지 않게).
-        const userMessageId = uid();
         setMessages((prev) => [
           ...prev,
           {
@@ -745,6 +750,16 @@ export function useAgentStream(
             createdAt: new Date().toISOString(),
           },
         ]);
+
+        // 다른 탭의 런이 남긴 턴(user/assistant)을 내 말풍선 앞에 합친다 — 다음 답이 그 맥락에
+        // 기대므로 화면도 맞춰야 한다(#wait-active-run 병합).
+        const syncHistory = async (): Promise<void> => {
+          token = await resolveToken();
+          const history = await fetchHistory(base, sessionId, token);
+          if (history.length > 0) {
+            setMessages((prev) => mergeHistory(prev, history, userMessageId));
+          }
+        };
 
         // 활성 런 복구(#active-run-recovery) — HTTP 409 든 스트림 안 error 든 같은 경로.
         // pending/running 이면 재개도 재스트림도 안 되니 끝나길 기다렸다가 그 런의 답을 내
@@ -774,11 +789,7 @@ export function useAgentStream(
             if (settled === null) {
               throw new Error('이전 요청을 아직 처리하고 있어요. 잠시 후 다시 보내 주세요.');
             }
-            token = await resolveToken();
-            const history = await fetchHistory(base, sessionId, token);
-            if (history.length > 0) {
-              setMessages((prev) => mergeHistory(prev, history, userMessageId));
-            }
+            await syncHistory();
             if (settled === 'missing' || TERMINAL_RUN_STATUSES.includes(settled)) {
               setResumeId(null);
               resumeModeRef.current = null;
@@ -823,7 +834,9 @@ export function useAgentStream(
           if (active) {
             retried = await recover(active);
           } else {
-            // 이긴 쪽 런이 그새 끝나 활성 런이 없다 — 새 런으로 같은 메시지를 보낸다.
+            // 이긴 쪽 런이 그새 끝나 활성 런이 없다 — 그 런이 남긴 턴을 먼저 합친 뒤 새 런으로
+            // 같은 메시지를 보낸다(recover 의 running 경로와 같은 병합).
+            await syncHistory();
             setResumeId(null);
             resumeModeRef.current = null;
             retried = await deliver();

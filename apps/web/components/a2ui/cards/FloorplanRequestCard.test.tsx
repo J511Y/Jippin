@@ -236,3 +236,31 @@ describe('FloorplanRequestCard 드래그앤드롭 업로드', () => {
     expect(uploadMocks.uploadSessionFloorplan).not.toHaveBeenCalled();
   });
 });
+
+describe('FloorplanRequestCard 미리보기 스텁 (simulateUploads)', () => {
+  it('simulateUploads 면 실제 업로드·등록·전송 없이 첨부 완료 상태만 재현한다', async () => {
+    const sendMessage = vi.fn();
+    render(
+      <ChatActionsProvider
+        value={{
+          sessionId: 'preview',
+          busy: false,
+          sendMessage,
+          selectedFloorplanAssetId: null,
+          simulateUploads: true
+        }}
+      >
+        <FloorplanRequestCard payload={{ prior_asset_id: null }} />
+      </ChatActionsProvider>
+    );
+    fireEvent.drop(screen.getByTestId('floorplan-dropzone'), {
+      dataTransfer: { types: ['Files'], files: [new File(['x'], 'plan.png', { type: 'image/png' })] }
+    });
+    fireEvent.click(screen.getByRole('button', { name: '도면 첨부하고 분석' }));
+
+    await waitFor(() => expect(screen.getByText('평면도를 받았어요')).toBeTruthy());
+    expect(uploadMocks.uploadSessionFloorplan).not.toHaveBeenCalled();
+    expect(apiMocks.createFloorplanAsset).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+});

@@ -174,6 +174,12 @@ export function FloorplanRequestCard({
     if (!actions || !file) {
       return;
     }
+    if (actions.simulateUploads) {
+      // 미리보기(/a2ui-preview) 전용 — 실제 세션·업로드·등록·전송 없이 성공 상태만 재현한다.
+      setLocallyAttached(true);
+      setFile(null);
+      return;
+    }
     setBusy(true);
     setError(null);
     let uploadedKey: string | null = null;

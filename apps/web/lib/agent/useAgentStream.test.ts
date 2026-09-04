@@ -519,3 +519,72 @@ describe('useAgentStream 리뷰 회귀 3라운드 (Codex PR #204)', () => {
     ]);
   });
 });
+
+describe('useAgentStream 리뷰 회귀 4라운드 (Codex PR #204)', () => {
+  it('interrupted 런의 reconnect drain 이 되돌리는 답은 새 user 버블 앞에 끼운다', async () => {
+    const calls = installFetch((method, url) => {
+      if (url === `${BASE}/messages`) return json({ messages: [] });
+      if (url === `${BASE}/runs/active`) return json({ id: 'run-i', status: 'interrupted' });
+      if (url === `${BASE}/runs/run-i/resume` && method === 'POST') {
+        return reply('m-old', '이전 답(재전송)', 'run-i');
+      }
+      if (url === `${BASE}/runs` && method === 'POST') return reply('m-new', '새 답', 'run-n');
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    await waitFor(() => expect(calls.some((c) => c.url === `${BASE}/runs/active`)).toBe(true));
+    await act(async () => {
+      await result.current.send('새 질문');
+    });
+
+    const drain = calls.find((c) => c.url === `${BASE}/runs/run-i/resume`);
+    expect(drain?.body ?? '').not.toContain('새 질문'); // no-message drain
+    expect(result.current.messages.map((m) => m.content)).toEqual(['이전 답(재전송)', '새 질문', '새 답']);
+  });
+
+  it('충돌 뒤 활성 런이 이미 끝났으면 그 런의 턴을 합친 뒤 새 런으로 보낸다', async () => {
+    // 스트림 내 NOT_RESUMABLE → 활성 런 조회 404(이긴 탭이 끝남) → 히스토리 병합 → 새 런.
+    const calls = installFetch((method, url, n) => {
+      if (url === `${BASE}/messages`) {
+        return json({
+          messages:
+            n === 1
+              ? []
+              : [
+                  { id: 'u-win', role: 'user', content: '다른 탭 질문', ui_components: [] },
+                  { id: 'a-win', role: 'assistant', content: '다른 탭 답', ui_components: [] }
+                ]
+        });
+      }
+      if (url === `${BASE}/runs/active`) {
+        return n === 1 ? json({ id: 'run-w', status: 'awaiting_input' }) : notActive();
+      }
+      if (url === `${BASE}/runs/run-w/resume` && method === 'POST') {
+        return sse(
+          [
+            { type: 'error', seq: 1, error_code: 'AGENT_RUN_NOT_RESUMABLE', message: 'x', recoverable: false },
+            { type: 'done', seq: 2, run_status: 'failed' }
+          ],
+          'run-w'
+        );
+      }
+      if (url === `${BASE}/runs` && method === 'POST') return reply('m-new', '새 답', 'run-n');
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    await waitFor(() => expect(calls.some((c) => c.url === `${BASE}/runs/active`)).toBe(true));
+    await act(async () => {
+      await result.current.send('답변');
+    });
+
+    expect(result.current.status).toBe('done');
+    expect(result.current.messages.map((m) => [m.role, m.content])).toEqual([
+      ['user', '다른 탭 질문'],
+      ['assistant', '다른 탭 답'],
+      ['user', '답변'],
+      ['assistant', '새 답']
+    ]);
+  });
+});
