@@ -1159,6 +1159,26 @@ async def test_list_session_chat_messages_after_cursor(fake: FakeMainFlowDb) -> 
     )
     assert [m["content"] for m in unknown] == ["첫 질문", "첫 답", "둘째 질문"]
 
+    # 같은 타임스탬프(동시 삽입·백필)라도 (created_at, id) 전순서 커서로 페이지를 이어
+    # 붙이면 누락·중복 없이 전부 받는다.
+    same_ts = min(r["created_at"] for r in fake.chat_messages.values())
+    for row in fake.chat_messages.values():
+        row["created_at"] = same_ts
+    page1 = await main_flow.list_session_chat_messages(
+        session_id=session["id"], owner_user_id=owner, limit=2
+    )
+    page2 = await main_flow.list_session_chat_messages(
+        session_id=session["id"],
+        owner_user_id=owner,
+        limit=2,
+        after_message_id=page1[-1]["id"],
+    )
+    ids = [m["id"] for m in page1 + page2]
+    assert len(page1) == 2 and len(page2) == 1
+    assert len(set(ids)) == 3 and set(ids) == {
+        r["id"] for r in fake.chat_messages.values()
+    }
+
 
 async def test_runner_no_message_reconnect_drains_without_append(
     fake: FakeMainFlowDb,

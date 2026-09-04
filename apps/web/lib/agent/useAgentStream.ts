@@ -276,16 +276,25 @@ async function fetchHistorySince(
 function mergeHistory(
   prev: ChatMessage[],
   history: ChatMessage[],
-  options: { beforeId?: string; acceptedOptimisticIds: ReadonlySet<string> },
+  options: {
+    /** 새 메시지를 이 메시지 앞에 끼운다(없으면 뒤에 붙인다). */
+    insertBeforeId?: string;
+    /** 서버가 받아들여 영속본이 있을 수 있는 낙관적 user 버블 id. */
+    acceptedOptimisticIds: ReadonlySet<string>;
+    /** 아직 전달되지 않은 현재 버블 — 영속본이 있을 수 없으므로 대응에 쓰지 않는다. */
+    undeliveredId?: string;
+  },
 ): ChatMessage[] {
-  const { beforeId, acceptedOptimisticIds } = options;
+  const { insertBeforeId, acceptedOptimisticIds, undeliveredId } = options;
   const knownIds = new Set(prev.map((m) => m.id));
   // 서버가 받아들인 낙관적 user 버블만 센다(#accepted-optimistic) — 전송이 실패한 옛 버블이나
-  // 아직 전달되지 않은 현재 버블(beforeId)은 영속본이 없으므로, 세면 다른 탭이 보낸 같은
-  // 내용의 새 메시지를 삼킨다. 영속 id 를 가진 메시지는 id 로 대조돼 여기 들어오지 않는다.
+  // 아직 전달되지 않은 현재 버블은 영속본이 없으므로, 세면 다른 탭이 보낸 같은 내용의 새
+  // 메시지를 삼킨다. 영속 id 를 가진 메시지는 id 로 대조돼 여기 들어오지 않는다.
   const unmatchedUserTexts = new Map<string, number>();
   for (const m of prev) {
-    if (m.role !== 'user' || !acceptedOptimisticIds.has(m.id) || m.id === beforeId) continue;
+    if (m.role !== 'user' || !acceptedOptimisticIds.has(m.id) || m.id === undeliveredId) {
+      continue;
+    }
     const key = m.content.trim();
     unmatchedUserTexts.set(key, (unmatchedUserTexts.get(key) ?? 0) + 1);
   }
@@ -303,7 +312,7 @@ function mergeHistory(
     missing.push(m);
   }
   if (missing.length === 0) return prev;
-  const at = beforeId ? prev.findIndex((m) => m.id === beforeId) : -1;
+  const at = insertBeforeId ? prev.findIndex((m) => m.id === insertBeforeId) : -1;
   if (at < 0) return [...prev, ...missing];
   return [...prev.slice(0, at), ...missing, ...prev.slice(at)];
 }
@@ -411,6 +420,9 @@ export function useAgentStream(
   // 서버가 받아들인(스트림이 열린) 낙관적 user 버블 id — 히스토리 병합에서 영속본과 내용으로
   // 대응시킬 수 있는 버블(#accepted-optimistic). 실패한 전송의 버블은 들어가지 않는다.
   const acceptedUserIdsRef = useRef<Set<string>>(new Set());
+  // 진행 중 전송의 낙관적 버블 id — 마운트 히스토리가 그 전송 뒤에 도착하면 그 행이 이미
+  // 영속됐을 수 있어 대응 후보에 넣는다(#merge-mount-history).
+  const inFlightUserIdRef = useRef<string | null>(null);
   // 커서를 전진시킨다 — 이 탭이 받은 서버 메시지(SSE message_id·히스토리 마지막 항목) 뒤로.
   // 그 시점까지 받아들여진 낙관적 버블의 영속본은 모두 커서 앞이라 다시 조회되지 않으므로
   // 대응 집합에서 물러나게 한다(#retire-accepted) — 남겨 두면 다른 탭의 같은 내용 새
@@ -422,11 +434,15 @@ export function useAgentStream(
   // 받아 온 히스토리를 화면에 합치고 커서를 전진시킨다. 대응 집합은 스냅숏으로 넘긴다 —
   // setMessages 의 updater 는 나중에 실행되는데 그새 advanceCursor 가 집합을 비운다.
   const mergeIncoming = useCallback(
-    (items: ChatMessage[], beforeId?: string) => {
+    (items: ChatMessage[], undeliveredId?: string) => {
       if (items.length === 0) return;
       const accepted = new Set(acceptedUserIdsRef.current);
       setMessages((prev) =>
-        mergeHistory(prev, items, { beforeId, acceptedOptimisticIds: accepted }),
+        mergeHistory(prev, items, {
+          insertBeforeId: undeliveredId,
+          acceptedOptimisticIds: accepted,
+          undeliveredId,
+        }),
       );
       advanceCursor(items[items.length - 1]!.id);
     },
@@ -492,8 +508,23 @@ export function useAgentStream(
         const history = await fetchHistorySince(base, sessionId, resolveToken, undefined);
         if (ignore) return;
         if (history.length > 0) {
-          setMessages((prev) => (prev.length > 0 ? prev : history));
-          advanceCursor(history[history.length - 1]!.id);
+          // 이 조회가 끝나기 전에 사용자가 보냈으면(기존 세션 즉시 입력) 라이브 메시지가 이미
+          // 있다 — 버리지 말고 앞에 합친다(#merge-mount-history). 진행 중 전송의 버블은 그
+          // 행이 이미 영속됐을 수 있어 대응 후보에 넣는다.
+          const accepted = new Set(acceptedUserIdsRef.current);
+          if (inFlightUserIdRef.current) accepted.add(inFlightUserIdRef.current);
+          setMessages((prev) =>
+            prev.length > 0
+              ? mergeHistory(prev, history, {
+                  insertBeforeId: prev[0]!.id,
+                  acceptedOptimisticIds: accepted,
+                })
+              : history,
+          );
+          // 커서는 앞으로만 — 그새 SSE 가 더 새 메시지로 전진시켰으면 되돌리지 않는다.
+          if (lastServerMessageIdRef.current === null) {
+            advanceCursor(history[history.length - 1]!.id);
+          }
         }
         if (!active) return;
         // 이 탭의 send 가 이미 런을 돌리고 있으면(새 세션의 첫 메시지가 이 조회보다 먼저
@@ -776,6 +807,7 @@ export function useAgentStream(
         // 낙관적 user 버블의 id — deliver 의 reconnect drain 이 되돌리는 메시지와 다른 탭 런의
         // 턴은 이 앞에 끼운다.
         const userMessageId = uid();
+        inFlightUserIdRef.current = userMessageId;
 
         // 다른 탭의 런이 남긴 턴(user/assistant)을 내 말풍선 앞에 합친다 — 다음 답이 그 맥락에
         // 기대므로 화면도 맞춰야 한다(#wait-active-run 병합). 마지막으로 아는 서버 메시지 뒤
@@ -980,6 +1012,7 @@ export function useAgentStream(
       } finally {
         streamingRef.current = false;
         abortRef.current = null;
+        inFlightUserIdRef.current = null;
         // 스트림이 끝나면 남은 'started' 단계의 스피너를 멈춘다. 단 **성공으로 끝났을 때만
         // succeeded** 로 마무리하고, 에러/중단(errored)이면 failed 로 둔다 — 실패한 런 옆에
         // "분석 완료" 체크가 뜨던 문제를 막는다(#orphan-tool-step).

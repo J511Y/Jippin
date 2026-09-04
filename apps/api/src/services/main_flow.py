@@ -2306,13 +2306,23 @@ async def _db_list_chat_messages(
             )
             .scalar_subquery()
         )
+        # (created_at, id) 전순서로 비교한다 — created_at 만 쓰면 같은 타임스탬프(동시 삽입·
+        # 백필)의 뒤 행이 빠지고, 정렬도 동률에서 비결정적이라 페이지 경계에서 행이 샌다.
         stmt = stmt.where(
-            sa.or_(anchor.is_(None), _CHAT_MESSAGES.c.created_at > anchor)
+            sa.or_(
+                anchor.is_(None),
+                sa.tuple_(_CHAT_MESSAGES.c.created_at, _CHAT_MESSAGES.c.id)
+                > sa.tuple_(
+                    anchor, sa.literal(after_id, type_=_CHAT_MESSAGES.c.id.type)
+                ),
+            )
         )
     async with get_engine().begin() as conn:
         rows = (
             await conn.execute(
-                stmt.order_by(_CHAT_MESSAGES.c.created_at.asc()).limit(limit)
+                stmt.order_by(
+                    _CHAT_MESSAGES.c.created_at.asc(), _CHAT_MESSAGES.c.id.asc()
+                ).limit(limit)
             )
         ).all()
     return [dict(r._mapping) for r in rows]

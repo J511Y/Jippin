@@ -908,3 +908,65 @@ describe('useAgentStream 리뷰 회귀 6라운드 (Codex PR #204)', () => {
     ]);
   });
 });
+
+/** 본문을 delayMs 뒤에 흘리는 JSON — 마운트 조회가 사용자 전송보다 늦게 끝나는 상황 재현. */
+function jsonDelayed(body: unknown, delayMs: number): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      setTimeout(() => {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(body)));
+        controller.close();
+      }, delayMs);
+    }
+  });
+  return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
+describe('useAgentStream 리뷰 회귀 7라운드 (Codex PR #204)', () => {
+  it('마운트 히스토리가 즉시 전송보다 늦게 오면 버리지 않고 앞에 합치며, 커서는 되돌리지 않는다', async () => {
+    const calls = installFetch((method, url, n) => {
+      if (url.startsWith(`${BASE}/messages`)) {
+        if (!url.includes('after=')) {
+          return jsonDelayed(
+            {
+              messages: [
+                { id: 'u0', role: 'user', content: '옛 질문', ui_components: [] },
+                { id: 'a0', role: 'assistant', content: '옛 답', ui_components: [] }
+              ]
+            },
+            60
+          );
+        }
+        return json({ messages: [] });
+      }
+      if (url === `${BASE}/runs/active`) return notActive();
+      if (url === `${BASE}/runs` && method === 'POST') {
+        if (n === 1) return reply('a-new', '새 답', 'run-new');
+        if (n === 2) {
+          return json(
+            { error: { code: 'AGENT_RUN_ALREADY_ACTIVE' }, detail: { active_run_id: 'run-a', status: 'running' } },
+            409
+          );
+        }
+        return reply('a-2', '둘째 답', 'run-2');
+      }
+      if (url === `${BASE}/runs/run-a`) return json({ id: 'run-a', status: 'succeeded' });
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    // 기존 세션을 열자마자(히스토리 도착 전) 전송.
+    await act(async () => {
+      await result.current.send('새 질문');
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(4), { interval: 5 });
+    expect(result.current.messages.map((m) => m.content)).toEqual(['옛 질문', '옛 답', '새 질문', '새 답']);
+
+    // 커서는 SSE 로 받은 a-new 그대로 — 뒤늦은 히스토리(a0)로 되돌아가지 않는다.
+    await act(async () => {
+      await result.current.send('둘째');
+    });
+    expect(calls.some((c) => c.url === `${BASE}/messages?after=a-new`)).toBe(true);
+    expect(calls.some((c) => c.url === `${BASE}/messages?after=a0`)).toBe(false);
+  });
+});
