@@ -140,14 +140,15 @@ function NavLink({
         // 링크 색을 상속하므로 활성/비활성 상태를 따로 분기하지 않는다. DOM 텍스트는
         // 'Beta'(스크린리더가 한 단어로 읽음)이고 표시만 CSS uppercase. 앞의 공백이
         // 접근성 이름을 '사전검토 Beta' 로 띄운다. position:relative 로 올리므로
-        // 라인 박스가 커지지 않아 헤더 60px 이 그대로다.
+        // 라인 박스가 커지지 않아 헤더 60px 이 그대로다. 크기는 타입 스케일의
+        // `mark` 토큰(TYPOGRAPHY.md §2) — 컴포넌트에서 px 를 발명하지 않는다.
         <>
           {' '}
           <span
             style={{
               position: 'relative',
               top: '-0.4em',
-              fontSize: '0.625rem',
+              fontSize: 'var(--jippin-fz-mark)',
               fontWeight: 600,
               lineHeight: 1,
               letterSpacing: '0.04em',
