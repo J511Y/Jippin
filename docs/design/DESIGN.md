@@ -134,6 +134,7 @@
 - **터치 타깃 최소 44×44px** — 아이콘 버튼·칩·모바일 인터랙션 요소 전부. 아이콘이 작아도 히트 영역은 44px 를 보장한다.
 - 코랄을 상태·배지·금액·마커에 쓰지 않는다(상태는 `status.*`). 본문 링크는 밑줄 기본(`Anchor underline="always"` 테마 기본값).
 - 내부 내비게이션은 `component={Link}`(next/link). `component="a"` 는 외부 링크 전용.
+- **베타 표시**: 정식 출시 전 기능은 내비 라벨 뒤 첨자 텍스트 `BETA`(타입 스케일 `mark` = `var(--jippin-fz-mark)` 10px / 600, uppercase, 링크 색 상속)로 표시한다(`SiteShell` 의 `NavItem.badge`, [`TYPOGRAPHY.md §2`](TYPOGRAPHY.md)). 필 배지·색 면·코랄을 쓰지 않는다 — 베타는 기대치 고지이지 홍보가 아니다(운영자 선택, 2026-09).
 
 ### 4.8 반응형·모바일 — 정본
 
