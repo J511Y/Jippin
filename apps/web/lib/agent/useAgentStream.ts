@@ -238,13 +238,36 @@ async function fetchHistory(
 
 // 이미 있는 메시지는 두고 히스토리의 새 메시지만 끼워 넣는다. beforeId(방금 붙인 낙관적
 // 사용자 말풍선)가 있으면 그 앞에 — 기다린 런의 답은 시간상 내 메시지보다 먼저다.
+//
+// "이미 있음" 판정: assistant 는 서버 id(SSE message_id = chat_messages.id)로 맞지만, 이 탭이
+// 낙관적으로 붙인 user 버블은 클라이언트 uid 라 영속본(DB id)과 id 가 다르다 — id 만 보면
+// 지난 user 턴이 전부 "새 메시지" 로 보여 중복 버블이 생긴다. 그래서 user 역할은 같은
+// 내용의 기존 버블을 하나씩(1:1) 소비해 영속본과 대응시킨다(#reconcile-optimistic-user).
 function mergeHistory(
   prev: ChatMessage[],
   history: ChatMessage[],
   beforeId?: string,
 ): ChatMessage[] {
-  const known = new Set(prev.map((m) => m.id));
-  const missing = history.filter((m) => !known.has(m.id));
+  const knownIds = new Set(prev.map((m) => m.id));
+  const unmatchedUserTexts = new Map<string, number>();
+  for (const m of prev) {
+    if (m.role !== 'user') continue;
+    const key = m.content.trim();
+    unmatchedUserTexts.set(key, (unmatchedUserTexts.get(key) ?? 0) + 1);
+  }
+  const missing: ChatMessage[] = [];
+  for (const m of history) {
+    if (knownIds.has(m.id)) continue;
+    if (m.role === 'user') {
+      const key = m.content.trim();
+      const left = unmatchedUserTexts.get(key) ?? 0;
+      if (left > 0) {
+        unmatchedUserTexts.set(key, left - 1);
+        continue; // 낙관적 버블의 영속본 — 이미 화면에 있다.
+      }
+    }
+    missing.push(m);
+  }
   if (missing.length === 0) return prev;
   const at = beforeId ? prev.findIndex((m) => m.id === beforeId) : -1;
   if (at < 0) return [...prev, ...missing];
@@ -407,6 +430,11 @@ export function useAgentStream(
         // busy(streaming)로 두어 입력·카드 액션을 잠갔다가 그 런이 남긴 메시지를 합친다.
         const active = await fetchActiveRun(base, sessionId, token);
         if (ignore || !active) return;
+        // 이 탭의 send 가 이미 런을 돌리고 있으면(새 세션의 첫 메시지가 이 조회보다 먼저
+        // 시작하는 경우) 조회된 활성 런은 우리 것이다 — 재부착하면 스트림을 소비 중인
+        // send 와 상태(streamingRef/status/refs)를 두 곳에서 만져 꼬인다. 건드리지 않는다
+        // (#reattach-not-own-run).
+        if (streamingRef.current) return;
         if (!ACTIVE_RUN_STATUSES.includes(active.status)) {
           setResumeId(active.id);
           resumeModeRef.current = modeForStatus(active.status);
@@ -512,10 +540,15 @@ export function useAgentStream(
       // 한 SSE 응답 본문을 소비하며 채팅 상태를 갱신하고 종료 run_status 를 돌려준다.
       const pump = async (
         res: Response,
-      ): Promise<{ runStatus: string | null; recoveredId: string | null }> => {
+      ): Promise<{
+        runStatus: string | null;
+        // 스트림 안으로 온 활성 런 충돌(error AGENT_RUN_ALREADY_ACTIVE)의 활성 런 — 호출부가
+        // 409 와 같은 복구(대기·재전달)를 한다(#stream-conflict-recovery).
+        recovered: { id: string; status: string } | null;
+      }> => {
         let assembled = '';
         let runStatus: string | null = null;
-        let recoveredId: string | null = null;
+        let recovered: { id: string; status: string } | null = null;
         const reader = res.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -620,16 +653,19 @@ export function useAgentStream(
             } else if (ev.type === 'error') {
               setError(ev.message);
               if (ev.error_code === 'AGENT_RUN_ALREADY_ACTIVE' && ev.active_run_id) {
-                recoveredId = ev.active_run_id;
+                // 사전판정 뒤 generator insert 직전의 동시 시작 레이스 — 서버는 HTTP 200
+                // 스트림 안에 이 오류를 실어 보낸다(#active-run-on-race). 메시지는 아직
+                // 전달되지 않았으므로 호출부가 활성 런 기준으로 복구한다.
+                recovered = { id: ev.active_run_id, status: ev.active_run_status ?? '' };
                 setResumeId(ev.active_run_id);
-                resumeModeRef.current = modeForStatus(ev.active_run_status ?? '');
+                resumeModeRef.current = modeForStatus(recovered.status);
               }
             } else if (ev.type === 'done') {
               runStatus = ev.run_status;
             }
           }
         }
-        return { runStatus, recoveredId };
+        return { runStatus, recovered };
       };
 
       // 런이 에러/중단으로 끝났는지 — finally 에서 남은 'started' 단계를 succeeded 로 둘지
@@ -692,19 +728,16 @@ export function useAgentStream(
           },
         ]);
 
-        let res = await deliver();
-
-        // 409 = 이 세션에 이미 활성 런이 있다(새 런 시작: AGENT_RUN_ALREADY_ACTIVE — detail 에
-        // active_run_id/status / resume: AGENT_RUN_NOT_RESUMABLE — 다른 탭이 먼저 이어받아
-        // running). 활성 런을 파악해 복구한다(#active-run-recovery).
-        if (res.status === 409) {
-          const active =
-            (await readActiveRun(res)) ?? (await fetchActiveRun(base, sessionId, token));
-          if (active && ACTIVE_RUN_STATUSES.includes(active.status)) {
-            // pending/running: 재개도 재스트림도 안 되는 상태 — 새로고침·다른 탭 전의 분석이
-            // 아직 도는 중에(예: 도면 업로드 카드의 "분석해 주세요") 전송한 경우다. 끝나길
-            // 기다렸다가 그 런의 답을 내 말풍선 앞에 합치고 이어서 보낸다(#wait-active-run).
-            // 예전엔 여기서 "HTTP 409" 로 실패해 사용자가 같은 도면을 다시 올려야 했다.
+        // 활성 런 복구(#active-run-recovery) — HTTP 409 든 스트림 안 error 든 같은 경로.
+        // pending/running 이면 재개도 재스트림도 안 되니 끝나길 기다렸다가 그 런의 답을 내
+        // 말풍선 앞에 합치고 같은 메시지를 다시 전달한다(#wait-active-run). 새로고침·다른 탭
+        // 전의 분석이 아직 도는 중에(예: 도면 업로드 카드의 "분석해 주세요") 전송한 경우다 —
+        // 예전엔 "HTTP 409" 로 실패해 사용자가 같은 도면을 다시 올려야 했다. resumable
+        // (awaiting_input/interrupted)이면 refs 만 맞춰 재전달한다 — interrupted 는 deliver 가
+        // 먼저 no-message 로 drain 한다(서버 재연결 경로가 message 를 무시하므로 바로 /resume
+        // 에 실어 보내면 유실).
+        const recover = async (active: { id: string; status: string }): Promise<Response> => {
+          if (ACTIVE_RUN_STATUSES.includes(active.status)) {
             const waitId = showWaiting();
             let settled: string | 'missing' | null;
             try {
@@ -735,16 +768,22 @@ export function useAgentStream(
               setResumeId(active.id);
               resumeModeRef.current = modeForStatus(settled);
             }
-            res = await deliver();
-          } else if (active) {
-            // resumable(awaiting_input/interrupted) — refs 를 맞추고 같은 메시지를 다시 전달한다
-            // (방금 추가한 사용자 메시지 유실 방지). interrupted 는 deliver 가 먼저 no-message
-            // 로 drain 한다 — 서버 재연결 경로가 message 를 무시하므로 바로 /resume 에 실어
-            // 보내면 유실된다.
+          } else {
             setResumeId(active.id);
             resumeModeRef.current = modeForStatus(active.status);
-            res = await deliver();
           }
+          return deliver();
+        };
+
+        let res = await deliver();
+
+        // 새 런 시작 409(AGENT_RUN_ALREADY_ACTIVE)는 detail 에 active_run_id/status 를 싣는다.
+        // resume 409(AGENT_RUN_NOT_RESUMABLE — 다른 탭이 먼저 이어받아 running)는 detail 이
+        // 없으므로 세션의 활성 런을 직접 조회한다.
+        if (res.status === 409) {
+          const active =
+            (await readActiveRun(res)) ?? (await fetchActiveRun(base, sessionId, token));
+          if (active) res = await recover(active);
         }
 
         if (!res.ok || !res.body) {
@@ -752,7 +791,20 @@ export function useAgentStream(
         }
         setResumeId(res.headers.get('X-Agent-Run-Id') ?? resumableRunIdRef.current);
 
-        const { runStatus, recoveredId } = await pump(res);
+        let outcome = await pump(res);
+        // 사전판정을 지나 generator insert 직전에 다른 탭이 런을 만든 레이스는 HTTP 200
+        // 스트림 안에 error(AGENT_RUN_ALREADY_ACTIVE)+done(failed) 로 온다 — 메시지는 전달
+        // 되지 않았으므로 같은 복구를 1회 더 시도한다(#stream-conflict-recovery).
+        if (outcome.recovered) {
+          setError(null);
+          const retried = await recover(outcome.recovered);
+          if (!retried.ok || !retried.body) {
+            throw new Error(`에이전트 요청에 실패했습니다 (HTTP ${retried.status}).`);
+          }
+          setResumeId(retried.headers.get('X-Agent-Run-Id') ?? resumableRunIdRef.current);
+          outcome = await pump(retried);
+        }
+        const { runStatus, recovered } = outcome;
         setToolActivity(null);
         setStreamingText('');
         if (runStatus === 'awaiting_input') {
@@ -767,7 +819,7 @@ export function useAgentStream(
           setStatus('done');
         } else if (runStatus === 'failed') {
           // conflict 로 활성 런 id 를 복구한 경우엔 비우지 않는다(다음 send 가 resume).
-          if (!recoveredId) {
+          if (!recovered) {
             setResumeId(null);
             resumeModeRef.current = null;
           }

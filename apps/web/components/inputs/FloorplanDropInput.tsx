@@ -24,7 +24,6 @@ import { IconPhotoUp } from '@tabler/icons-react';
 import {
   useEffect,
   useId,
-  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -111,20 +110,24 @@ export function FloorplanDropInput({
 
   const resolvedHint = hint ?? `JPG·PNG 등 이미지 파일, 최대 ${formatBytes(maxBytes)}`;
 
-  // 선택된 이미지 미리보기 — object URL 은 value 가 바뀌거나 언마운트되면 해제한다.
-  const previewUrl = useMemo(() => {
-    if (!value || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
-      return null;
-    }
-    return URL.createObjectURL(value);
-  }, [value]);
+  // 선택된 이미지 미리보기. object URL 은 렌더(useMemo)가 아니라 effect 에서 만든다 —
+  // StrictMode/동시 렌더가 커밋되지 않은 렌더의 URL 을 만들면 cleanup 이 그 URL 을 모르고
+  // 최대 50MB 블롭이 남는다. 같은 effect 의 cleanup 이 정확히 그 URL 을 해제한다.
+  // (effect 안 setState 는 브라우저 리소스 수명 관리의 표준 패턴이라 규약 예외로 둔다.)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   useEffect(() => {
+    if (!value || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+      return undefined;
+    }
+    const url = URL.createObjectURL(value);
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setPreviewUrl(url);
     return () => {
-      if (previewUrl && typeof URL.revokeObjectURL === 'function') {
-        URL.revokeObjectURL(previewUrl);
-      }
+      setPreviewUrl(null);
+      if (typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
     };
-  }, [previewUrl]);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [value]);
 
   function pick(file: File | null | undefined) {
     if (!file) return;
@@ -224,11 +227,27 @@ export function FloorplanDropInput({
               {formatBytes(value.size)} · 다른 이미지를 끌어다 놓거나 눌러서 바꿀 수 있어요
             </Text>
           </Stack>
-          {/* 버튼 자체 핸들러 없음 — 클릭이 컨테이너로 버블돼 파일 대화상자가 열린다. */}
-          <Button type="button" variant="subtle" color="jippin" size="compact-sm" disabled={disabled}>
+          {/* 버튼 자체 핸들러 없음 — 클릭이 컨테이너로 버블돼 파일 대화상자가 열린다.
+              모바일 터치 타깃 ≥44px(AGENTS.md §4.8.1): 두 컨트롤 모두 44px 로 맞춘다.
+              특히 '첨부 취소' 는 빗나가면 컨테이너가 파일 대화상자를 여는 정정 동작이라
+              작으면 안 된다. */}
+          <Button
+            type="button"
+            variant="subtle"
+            color="jippin"
+            size="sm"
+            disabled={disabled}
+            styles={{ root: { minHeight: 44 } }}
+          >
             바꾸기
           </Button>
-          <CloseButton aria-label="첨부 취소" disabled={disabled} onClick={handleClear} />
+          <CloseButton
+            aria-label="첨부 취소"
+            size={44}
+            iconSize={18}
+            disabled={disabled}
+            onClick={handleClear}
+          />
         </Group>
       ) : (
         <Stack gap={6} align="center">

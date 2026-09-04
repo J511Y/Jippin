@@ -167,3 +167,28 @@ describe('validateFloorplanFile / formatBytes', () => {
     expect(formatBytes(900)).toBe('900B');
   });
 });
+
+describe('FloorplanDropInput 미리보기 object URL', () => {
+  it('선택 시 URL 을 만들고 비우면 정확히 그 URL 을 revoke 한다', () => {
+    const create = vi.fn(() => 'blob:preview-1');
+    const revoke = vi.fn();
+    // jsdom 에는 없어 직접 심는다(테스트 뒤 제거).
+    const url = URL as unknown as Record<string, unknown>;
+    url.createObjectURL = create;
+    url.revokeObjectURL = revoke;
+    try {
+      const file = imageFile('plan.png');
+      const view = render(<FloorplanDropInput value={file} onChange={vi.fn()} />);
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(create).toHaveBeenCalledWith(file);
+      expect(view.container.querySelector('img')?.getAttribute('src')).toBe('blob:preview-1');
+
+      view.rerender(<FloorplanDropInput value={null} onChange={vi.fn()} />);
+      expect(revoke).toHaveBeenCalledWith('blob:preview-1');
+      expect(view.container.querySelector('img')).toBeNull();
+    } finally {
+      delete url.createObjectURL;
+      delete url.revokeObjectURL;
+    }
+  });
+});

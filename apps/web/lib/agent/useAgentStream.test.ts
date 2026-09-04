@@ -237,3 +237,147 @@ describe('useAgentStream 마운트 재부착', () => {
     ]);
   });
 });
+
+/** 프레임을 delayMs 뒤에 흘리는 SSE — 전송이 "진행 중" 인 동안 다른 조회가 끝나는 상황 재현. */
+function sseDelayed(frames: Array<Record<string, unknown>>, runId: string, delayMs: number): Response {
+  const body = frames
+    .map((frame) => `event: ${String(frame.type)}\ndata: ${JSON.stringify(frame)}\n\n`)
+    .join('');
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      setTimeout(() => {
+        controller.enqueue(new TextEncoder().encode(body));
+        controller.close();
+      }, delayMs);
+    }
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream', 'X-Agent-Run-Id': runId }
+  });
+}
+
+describe('useAgentStream 리뷰 회귀 (Codex PR #204)', () => {
+  it('스트림 안(HTTP 200)으로 온 AGENT_RUN_ALREADY_ACTIVE 도 대기 후 이어 보낸다', async () => {
+    const calls = installFetch((method, url, n) => {
+      if (url === `${BASE}/messages`) {
+        return json({
+          messages:
+            n === 1 ? [] : [{ id: 'm-prev', role: 'assistant', content: '이전 답', ui_components: [] }]
+        });
+      }
+      if (url === `${BASE}/runs/active`) return notActive();
+      if (url === `${BASE}/runs` && method === 'POST') {
+        if (n === 1) {
+          return sse(
+            [
+              {
+                type: 'error',
+                seq: 1,
+                error_code: 'AGENT_RUN_ALREADY_ACTIVE',
+                message: '이미 진행 중인 런이 있습니다.',
+                recoverable: false,
+                active_run_id: 'run-a',
+                active_run_status: 'running'
+              },
+              { type: 'done', seq: 2, run_status: 'failed' }
+            ],
+            'run-x'
+          );
+        }
+        return reply('m-new', '이어서 답할게요', 'run-b');
+      }
+      if (url === `${BASE}/runs/run-a`) {
+        return json({ id: 'run-a', status: n < 3 ? 'running' : 'succeeded' });
+      }
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    await waitFor(() => expect(calls.some((c) => c.url === `${BASE}/runs/active`)).toBe(true));
+    await act(async () => {
+      await result.current.send('질문');
+    });
+
+    expect(result.current.status).toBe('done');
+    expect(result.current.error).toBeNull();
+    expect(calls.filter((c) => c.method === 'POST' && c.url === `${BASE}/runs`)).toHaveLength(2);
+    expect(result.current.messages.map((m) => m.content)).toEqual(['이전 답', '질문', '이어서 답할게요']);
+  });
+
+  it('409 대기 후 병합할 때 이 탭의 낙관적 user 버블(클라이언트 id)을 중복 삽입하지 않는다', async () => {
+    // 1턴 정상 전송 → 2턴 409 대기. 대기 후 히스토리에는 1턴의 영속본(DB id)이 함께 온다.
+    const calls = installFetch((method, url, n) => {
+      if (url === `${BASE}/messages`) {
+        return json({
+          messages:
+            n === 1
+              ? []
+              : [
+                  { id: 'db-u1', role: 'user', content: '첫 질문', ui_components: [] },
+                  { id: 'a1', role: 'assistant', content: '첫 답', ui_components: [] },
+                  { id: 'db-u2', role: 'user', content: '다른 탭 질문', ui_components: [] },
+                  { id: 'a2', role: 'assistant', content: '다른 탭 답', ui_components: [] }
+                ]
+        });
+      }
+      if (url === `${BASE}/runs/active`) return notActive();
+      if (url === `${BASE}/runs` && method === 'POST') {
+        if (n === 1) return reply('a1', '첫 답', 'run-1');
+        if (n === 2) {
+          return json(
+            { error: { code: 'AGENT_RUN_ALREADY_ACTIVE' }, detail: { active_run_id: 'run-a', status: 'running' } },
+            409
+          );
+        }
+        return reply('a3', '둘째 답', 'run-3');
+      }
+      if (url === `${BASE}/runs/run-a`) return json({ id: 'run-a', status: n < 2 ? 'running' : 'succeeded' });
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    await waitFor(() => expect(calls.some((c) => c.url === `${BASE}/runs/active`)).toBe(true));
+    await act(async () => {
+      await result.current.send('첫 질문');
+    });
+    await act(async () => {
+      await result.current.send('둘째 질문');
+    });
+
+    expect(result.current.messages.map((m) => [m.role, m.content])).toEqual([
+      ['user', '첫 질문'],
+      ['assistant', '첫 답'],
+      ['user', '다른 탭 질문'],
+      ['assistant', '다른 탭 답'],
+      ['user', '둘째 질문'],
+      ['assistant', '둘째 답']
+    ]);
+  });
+
+  it('이 탭의 send 가 이미 돌리는 런은 마운트 재부착이 건드리지 않는다', async () => {
+    const calls = installFetch((method, url) => {
+      if (url === `${BASE}/messages`) return json({ messages: [] });
+      // 마운트 조회 시점엔 이 탭이 방금 시작한 런이 활성 런으로 보인다.
+      if (url === `${BASE}/runs/active`) return json({ id: 'run-self', status: 'running' });
+      if (url === `${BASE}/runs` && method === 'POST') return sseDelayed([
+        { type: 'message', seq: 1, role: 'assistant', content: '첫 답', message_id: 'm1' },
+        { type: 'done', seq: 2, run_status: 'succeeded' }
+      ], 'run-self', 80);
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    // 새 세션의 첫 메시지(pendingFirstMessage)처럼 마운트 조회가 끝나기 전에 보낸다.
+    await act(async () => {
+      await result.current.send('첫 질문');
+    });
+    await waitFor(() => expect(calls.some((c) => c.url === `${BASE}/runs/active`)).toBe(true));
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(calls.some((c) => c.url === `${BASE}/runs/run-self`)).toBe(false);
+    expect(result.current.status).toBe('done');
+    expect(result.current.activity).toEqual([]);
+    expect(result.current.messages.map((m) => m.content)).toEqual(['첫 질문', '첫 답']);
+  });
+});
