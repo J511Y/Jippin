@@ -24,9 +24,9 @@ export const BUSINESS_INFO = {
   company: '신한이너텍 주식회사',
   representative: '윤찬웅',
   businessRegistrationNumber: '106-86-55414',
-  phone: '010-3657-9841',
+  phone: '02-749-7405',
   email: 'titiroll@hanmail.net',
-  address: '서울특별시 강서구 양천로 400-12, 더리브골드타워 416호',
+  address: '서울특별시 강서구 양천로 400-12, 더리브골드타워 612호',
   homepage: 'https://www.sh-innertech.com'
 } as const;
 
