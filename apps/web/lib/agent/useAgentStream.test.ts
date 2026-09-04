@@ -309,14 +309,12 @@ describe('useAgentStream 리뷰 회귀 (Codex PR #204)', () => {
     // 1턴 정상 전송 → 2턴 409 대기. 대기 후 히스토리에는 1턴의 영속본(DB id)이 함께 온다.
     const calls = installFetch((method, url, n) => {
       if (url.startsWith(`${BASE}/messages`)) {
-        // 첫 턴의 답(a1)이 커서가 되어 병합 조회는 ?after=a1 로 온다.
+        // 첫 턴의 답(a1)이 커서가 되어 병합 조회는 ?after=a1 로 오고, 서버는 그 뒤 행만 준다.
         return json({
           messages:
             !url.includes('after=')
               ? []
               : [
-                  { id: 'db-u1', role: 'user', content: '첫 질문', ui_components: [] },
-                  { id: 'a1', role: 'assistant', content: '첫 답', ui_components: [] },
                   { id: 'db-u2', role: 'user', content: '다른 탭 질문', ui_components: [] },
                   { id: 'a2', role: 'assistant', content: '다른 탭 답', ui_components: [] }
                 ]
@@ -754,6 +752,155 @@ describe('useAgentStream 리뷰 회귀 5라운드 (Codex PR #204)', () => {
 
     expect(result.current.messages.map((m) => [m.role, m.content])).toEqual([
       ['user', '네'],
+      ['user', '네'],
+      ['assistant', '다른 탭 답'],
+      ['user', '둘째'],
+      ['assistant', '둘째 답']
+    ]);
+  });
+});
+
+describe('useAgentStream 리뷰 회귀 6라운드 (Codex PR #204)', () => {
+  it('409 의 활성 런이 awaiting_input 이면 다른 탭의 질문·답을 합친 뒤 /resume 로 답한다', async () => {
+    installFetch((method, url, n) => {
+      if (url.startsWith(`${BASE}/messages`)) {
+        return json({
+          messages:
+            n === 1
+              ? []
+              : [
+                  { id: 'u-other', role: 'user', content: '다른 탭 질문', ui_components: [] },
+                  { id: 'a-q', role: 'assistant', content: '몇 동인가요?', ui_components: [] }
+                ]
+        });
+      }
+      if (url === `${BASE}/runs/active`) return notActive();
+      if (url === `${BASE}/runs` && method === 'POST') {
+        return json(
+          { error: { code: 'AGENT_RUN_ALREADY_ACTIVE' }, detail: { active_run_id: 'run-w', status: 'awaiting_input' } },
+          409
+        );
+      }
+      if (url === `${BASE}/runs/run-w/resume` && method === 'POST') return reply('a-r', '네 101동이군요', 'run-w');
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    await act(async () => {
+      await result.current.send('101동');
+    });
+
+    expect(result.current.messages.map((m) => m.content)).toEqual([
+      '다른 탭 질문',
+      '몇 동인가요?',
+      '101동',
+      '네 101동이군요'
+    ]);
+  });
+
+  it('마운트는 활성 런을 먼저 조회한 뒤 히스토리를 받아, 그 사이 끝난 런의 마지막 턴을 놓치지 않는다', async () => {
+    const calls = installFetch((method, url) => {
+      if (url.startsWith(`${BASE}/messages`)) {
+        return json({
+          messages: [
+            { id: 'u0', role: 'user', content: '질문', ui_components: [] },
+            { id: 'a0', role: 'assistant', content: '마무리 답', ui_components: [] }
+          ]
+        });
+      }
+      if (url === `${BASE}/runs/active`) return notActive();
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    const order = calls.map((c) => c.url);
+    expect(order.indexOf(`${BASE}/runs/active`)).toBeLessThan(order.findIndex((u) => u.startsWith(`${BASE}/messages`)));
+  });
+
+  it('병합 조회는 200건 페이지를 커서로 끝까지 따라간다', async () => {
+    const page1 = Array.from({ length: 200 }, (_, i) => ({
+      id: `p${i + 1}`,
+      role: 'assistant',
+      content: `답 ${i + 1}`,
+      ui_components: []
+    }));
+    installFetch((method, url, n) => {
+      if (url.startsWith(`${BASE}/messages`)) {
+        if (!url.includes('after=')) return json({ messages: [] });
+        if (url.endsWith('after=p200')) {
+          return json({ messages: [{ id: 'p201', role: 'assistant', content: '답 201', ui_components: [] }] });
+        }
+        return json({ messages: page1 });
+      }
+      if (url === `${BASE}/runs/active`) return notActive();
+      if (url === `${BASE}/runs` && method === 'POST') {
+        if (n === 1) return reply('a-first', '첫 답', 'run-f');
+        if (n === 2) {
+          return json(
+            { error: { code: 'AGENT_RUN_ALREADY_ACTIVE' }, detail: { active_run_id: 'run-a', status: 'running' } },
+            409
+          );
+        }
+        return reply('a-mine', '내 답', 'run-m');
+      }
+      if (url === `${BASE}/runs/run-a`) return json({ id: 'run-a', status: n < 2 ? 'running' : 'succeeded' });
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    // 첫 답이 커서(a-first)가 되어 이후 병합 조회는 after 로 온다.
+    await act(async () => {
+      await result.current.send('시작');
+    });
+    // 두 번째 전송에서 409 → 대기 → 커서 뒤 201건을 두 페이지로 받는다.
+    await act(async () => {
+      await result.current.send('질문');
+    });
+
+    const contents = result.current.messages.map((m) => m.content);
+    expect(contents.filter((c) => c.startsWith('답 ')).length).toBe(201);
+    expect(contents.slice(-2)).toEqual(['질문', '내 답']);
+  });
+
+  it('서버 메시지를 받은 턴의 낙관적 버블은 대응 집합에서 물러나, 다른 탭의 같은 내용 새 메시지를 삼키지 않는다', async () => {
+    installFetch((method, url, n) => {
+      if (url.startsWith(`${BASE}/messages`)) {
+        return json({
+          messages: !url.includes('after=')
+            ? []
+            : [
+                { id: 'u-other', role: 'user', content: '네', ui_components: [] },
+                { id: 'a-other', role: 'assistant', content: '다른 탭 답', ui_components: [] }
+              ]
+        });
+      }
+      if (url === `${BASE}/runs/active`) return notActive();
+      if (url === `${BASE}/runs` && method === 'POST') {
+        if (n === 1) return reply('a1', '첫 답', 'run-1');
+        if (n === 2) {
+          return json(
+            { error: { code: 'AGENT_RUN_ALREADY_ACTIVE' }, detail: { active_run_id: 'run-a', status: 'running' } },
+            409
+          );
+        }
+        return reply('a2', '둘째 답', 'run-2');
+      }
+      if (url === `${BASE}/runs/run-a`) return json({ id: 'run-a', status: n < 2 ? 'running' : 'succeeded' });
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    await act(async () => {
+      await result.current.send('네'); // 정상 전송 — 답(a1)이 커서가 된다
+    });
+    await act(async () => {
+      await result.current.send('둘째');
+    });
+
+    expect(result.current.messages.map((m) => [m.role, m.content])).toEqual([
+      ['user', '네'],
+      ['assistant', '첫 답'],
       ['user', '네'],
       ['assistant', '다른 탭 답'],
       ['user', '둘째'],

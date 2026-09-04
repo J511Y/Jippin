@@ -241,6 +241,31 @@ async function fetchHistory(
   }
 }
 
+// 서버 페이지 크기(list_session_chat_messages 의 limit) — 커서를 이 크기만큼 따라간다.
+const HISTORY_PAGE_SIZE = 200;
+const HISTORY_MAX_PAGES = 20;
+
+// afterId 뒤의 메시지를 페이지가 짧아질 때까지 따라가며 모두 받는다(#history-after-cursor).
+// 오래 잠든 탭이 200건 넘게 뒤처졌어도 최신 턴까지 받고, afterId 없이 부르면 transcript
+// 전체를 받는다. 실패한(빈) 페이지에서 멈추고 그때까지 받은 것을 돌려준다.
+async function fetchHistorySince(
+  base: string,
+  sessionId: string,
+  getToken: () => Promise<string>,
+  afterId: string | undefined,
+): Promise<ChatMessage[]> {
+  const all: ChatMessage[] = [];
+  let cursor = afterId;
+  for (let page = 0; page < HISTORY_MAX_PAGES; page += 1) {
+    const items = await fetchHistory(base, sessionId, await getToken(), cursor);
+    if (items.length === 0) break;
+    all.push(...items);
+    cursor = items[items.length - 1]!.id;
+    if (items.length < HISTORY_PAGE_SIZE) break;
+  }
+  return all;
+}
+
 // 이미 있는 메시지는 두고 히스토리의 새 메시지만 끼워 넣는다. beforeId(방금 붙인 낙관적
 // 사용자 말풍선)가 있으면 그 앞에 — 기다린 런의 답은 시간상 내 메시지보다 먼저다.
 //
@@ -386,6 +411,27 @@ export function useAgentStream(
   // 서버가 받아들인(스트림이 열린) 낙관적 user 버블 id — 히스토리 병합에서 영속본과 내용으로
   // 대응시킬 수 있는 버블(#accepted-optimistic). 실패한 전송의 버블은 들어가지 않는다.
   const acceptedUserIdsRef = useRef<Set<string>>(new Set());
+  // 커서를 전진시킨다 — 이 탭이 받은 서버 메시지(SSE message_id·히스토리 마지막 항목) 뒤로.
+  // 그 시점까지 받아들여진 낙관적 버블의 영속본은 모두 커서 앞이라 다시 조회되지 않으므로
+  // 대응 집합에서 물러나게 한다(#retire-accepted) — 남겨 두면 다른 탭의 같은 내용 새
+  // 메시지를 옛 버블의 영속본으로 오인해 삼킨다.
+  const advanceCursor = useCallback((id: string) => {
+    lastServerMessageIdRef.current = id;
+    acceptedUserIdsRef.current.clear();
+  }, []);
+  // 받아 온 히스토리를 화면에 합치고 커서를 전진시킨다. 대응 집합은 스냅숏으로 넘긴다 —
+  // setMessages 의 updater 는 나중에 실행되는데 그새 advanceCursor 가 집합을 비운다.
+  const mergeIncoming = useCallback(
+    (items: ChatMessage[], beforeId?: string) => {
+      if (items.length === 0) return;
+      const accepted = new Set(acceptedUserIdsRef.current);
+      setMessages((prev) =>
+        mergeHistory(prev, items, { beforeId, acceptedOptimisticIds: accepted }),
+      );
+      advanceCursor(items[items.length - 1]!.id);
+    },
+    [advanceCursor],
+  );
 
   const setResumeId = useCallback(
     (id: string | null) => {
@@ -431,23 +477,25 @@ export function useAgentStream(
       try {
         const base = agentBaseUrl();
         const token = await resolveToken();
-        // 마운트/새로고침 시 영속된 transcript 를 복원한다 — 완료된 런은 resume 스트림이
-        // 없어 SSE 로 다시 못 받으므로(#load-history-on-mount). 라이브 메시지가 이미 있으면
-        // 덮어쓰지 않는다.
-        const history = await fetchHistory(base, sessionId, token);
-        if (ignore) return;
-        if (history.length > 0) {
-          lastServerMessageIdRef.current = history[history.length - 1]!.id;
-          setMessages((prev) => (prev.length > 0 ? prev : history));
-        }
-
         // 활성 런 재부착(#reattach-active-run). 새로고침/다른 탭으로 연 화면은 서버에 아직
         // 살아 있는 런을 모른다 — 그대로 두면 다음 전송(도면 카드의 "분석해 주세요" 포함)이
         // 새 런을 시작하다 409 AGENT_RUN_ALREADY_ACTIVE 로 실패했다. resumable 이면 다음
         // 전송이 바로 /resume 로 가게 refs 만 맞추고, pending/running 이면 끝날 때까지
         // busy(streaming)로 두어 입력·카드 액션을 잠갔다가 그 런이 남긴 메시지를 합친다.
+        // 활성 런을 **히스토리보다 먼저** 조회한다 — 반대 순서면 두 조회 사이에 런이 끝나
+        // 마지막 턴을 놓친다(새로고침 중 마무리 레이스, #mount-order).
         const active = await fetchActiveRun(base, sessionId, token);
-        if (ignore || !active) return;
+        if (ignore) return;
+        // 마운트/새로고침 시 영속된 transcript 를 복원한다 — 완료된 런은 resume 스트림이
+        // 없어 SSE 로 다시 못 받으므로(#load-history-on-mount). 페이지를 끝까지 따라가
+        // 200건이 넘는 세션도 전부 받는다. 라이브 메시지가 이미 있으면 덮어쓰지 않는다.
+        const history = await fetchHistorySince(base, sessionId, resolveToken, undefined);
+        if (ignore) return;
+        if (history.length > 0) {
+          setMessages((prev) => (prev.length > 0 ? prev : history));
+          advanceCursor(history[history.length - 1]!.id);
+        }
+        if (!active) return;
         // 이 탭의 send 가 이미 런을 돌리고 있으면(새 세션의 첫 메시지가 이 조회보다 먼저
         // 시작하는 경우) 조회된 활성 런은 우리 것이다 — 재부착하면 스트림을 소비 중인
         // send 와 상태(streamingRef/status/refs)를 두 곳에서 만져 꼬인다. 건드리지 않는다
@@ -478,19 +526,14 @@ export function useAgentStream(
         if (ignore) return;
         streamingRef.current = false;
         clearWaiting(waitId);
-        const later = await fetchHistory(
+        const later = await fetchHistorySince(
           base,
           sessionId,
-          await resolveToken(),
+          resolveToken,
           lastServerMessageIdRef.current ?? undefined,
         );
         if (ignore) return;
-        if (later.length > 0) {
-          lastServerMessageIdRef.current = later[later.length - 1]!.id;
-          setMessages((prev) =>
-            mergeHistory(prev, later, { acceptedOptimisticIds: acceptedUserIdsRef.current }),
-          );
-        }
+        mergeIncoming(later);
         if (
           settled === null ||
           settled === 'missing' ||
@@ -516,7 +559,16 @@ export function useAgentStream(
       abortRef.current = null;
       streamingRef.current = false;
     };
-  }, [sessionId, setResumeId, showWaiting, clearWaiting, pollMs, maxWaitMs]);
+  }, [
+    sessionId,
+    setResumeId,
+    showWaiting,
+    clearWaiting,
+    advanceCursor,
+    mergeIncoming,
+    pollMs,
+    maxWaitMs,
+  ]);
 
   const send = useCallback(
     async (content: string) => {
@@ -579,10 +631,14 @@ export function useAgentStream(
         // 'unknown' = 충돌은 확실한데 활성 런 정보가 없다(resume 점유 레이스 등) — 호출부가
         // 세션의 활성 런을 조회해 복구한다.
         recovered: ActiveRunRef | 'unknown' | null;
+        // 이 스트림에서 서버 메시지(message_id)를 하나라도 받았는가 — 받았다면 커서가 이미
+        // 이 턴의 user 영속본 뒤라, 낙관적 버블을 대응 집합에 넣지 않는다(#retire-accepted).
+        sawServerMessage: boolean;
       }> => {
         let assembled = '';
         let runStatus: string | null = null;
         let recovered: ActiveRunRef | 'unknown' | null = null;
+        let sawServerMessage = false;
         const reader = res.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -655,7 +711,10 @@ export function useAgentStream(
               if (ev.role !== 'assistant') continue;
               const dynamics = (ev.ui_components ?? []) as A2uiComponent[];
               const msgId = ev.message_id ?? uid();
-              if (ev.message_id) lastServerMessageIdRef.current = ev.message_id;
+              if (ev.message_id) {
+                advanceCursor(ev.message_id);
+                sawServerMessage = true;
+              }
               // 이 턴의 도구 활동을 메시지에 귀속시킨다 — 한 아바타 아래 [활동 → 본문]
               // 순서로 렌더되도록(도구가 본문보다 먼저 실행되므로). 귀속 후 임시 활동은
               // 비워, 다음 턴 도구가 새로 쌓이고 진행 중 블록이 중복 표시되지 않게 한다.
@@ -707,7 +766,7 @@ export function useAgentStream(
             }
           }
         }
-        return { runStatus, recovered };
+        return { runStatus, recovered, sawServerMessage };
       };
 
       // 런이 에러/중단으로 끝났는지 — finally 에서 남은 'started' 단계를 succeeded 로 둘지
@@ -723,20 +782,13 @@ export function useAgentStream(
         // (after 커서)만 받아 200건이 넘는 긴 세션에서도 최신 턴이 빠지지 않게 한다.
         const syncHistory = async (): Promise<void> => {
           token = await resolveToken();
-          const history = await fetchHistory(
+          const history = await fetchHistorySince(
             base,
             sessionId,
-            token,
+            resolveToken,
             lastServerMessageIdRef.current ?? undefined,
           );
-          if (history.length === 0) return;
-          lastServerMessageIdRef.current = history[history.length - 1]!.id;
-          setMessages((prev) =>
-            mergeHistory(prev, history, {
-              beforeId: userMessageId,
-              acceptedOptimisticIds: acceptedUserIdsRef.current,
-            }),
-          );
+          mergeIncoming(history, userMessageId);
         };
 
         // 활성 런과의 충돌을 정리하고 refs 를 맞춘다(#active-run-recovery) — HTTP 409 든 스트림
@@ -776,8 +828,10 @@ export function useAgentStream(
             return;
           }
           if (active) {
-            // resumable(awaiting_input/interrupted) — interrupted 는 deliver 가 먼저 no-message
+            // resumable(awaiting_input/interrupted) — 다른 탭이 남긴 턴(질문·답)을 먼저 합쳐
+            // 내 답이 빠진 맥락 위에 붙지 않게 한다. interrupted 는 deliver 가 먼저 no-message
             // 로 drain 한다(서버 재연결 경로가 message 를 무시하므로 바로 /resume 에 실으면 유실).
+            await syncHistory();
             setResumeId(active.id);
             resumeModeRef.current = modeForStatus(active.status);
             return;
@@ -880,9 +934,13 @@ export function useAgentStream(
           outcome = await pump(retried);
         }
         const { runStatus, recovered } = outcome;
-        // 이 입력이 서버에 받아들여졌다(스트림이 열렸고 충돌로 끝나지 않음) — 이후 히스토리
-        // 병합에서 영속본과 내용으로 대응시킬 수 있는 버블로 표시한다(#accepted-optimistic).
-        if (!recovered) acceptedUserIdsRef.current.add(userMessageId);
+        // 이 입력이 서버에 받아들여졌고(스트림이 열렸고 충돌로 끝나지 않음) 그 영속본이 아직
+        // 커서 앞에 남아 있을 수 있는(이 스트림에서 서버 메시지를 못 받은) 경우만 대응 집합에
+        // 넣는다(#accepted-optimistic). 서버 메시지를 받았다면 커서가 이미 그 뒤라 영속본은
+        // 다시 조회되지 않는다(#retire-accepted).
+        if (!recovered && !outcome.sawServerMessage) {
+          acceptedUserIdsRef.current.add(userMessageId);
+        }
         setToolActivity(null);
         setStreamingText('');
         if (runStatus === 'awaiting_input') {
@@ -938,7 +996,17 @@ export function useAgentStream(
         }
       }
     },
-    [sessionId, setResumeId, setActivitySynced, showWaiting, clearWaiting, pollMs, maxWaitMs],
+    [
+      sessionId,
+      setResumeId,
+      setActivitySynced,
+      showWaiting,
+      clearWaiting,
+      advanceCursor,
+      mergeIncoming,
+      pollMs,
+      maxWaitMs,
+    ],
   );
 
   const stop = useCallback(() => {
