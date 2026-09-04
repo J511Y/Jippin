@@ -6,6 +6,21 @@
 import { Badge, Container, Stack, Text, Title } from '@mantine/core';
 
 import { A2uiSurface } from '@/components/a2ui';
+import { ChatActionsProvider, type ChatActions } from '@/components/agent/chat-actions';
+
+// 미리보기용 스텁 액션 — 채팅 컨텍스트 밖에서는 카드가 "대화 화면에서…" 안내만 보여 주므로,
+// `interactive` 로 표시한 항목만 이 스텁으로 감싸 실제 인터랙티브 상태(도면 드롭존 등)를
+// 확인한다. 전송/조회는 no-op(세션 없음)이고, 업로드는 simulateUploads 로 성공 상태만 재현한다
+// — 공개 경로에서 익명 세션 발급이나 실제 업로드 호출이 일어나지 않게.
+const PREVIEW_ACTIONS: ChatActions = {
+  sessionId: 'preview',
+  busy: false,
+  sendMessage: () => {},
+  selectedFloorplanAssetId: null,
+  simulateUploads: true
+};
+
+type PreviewItem = { label: string; component: Record<string, unknown>; interactive?: boolean };
 
 // 오버레이 미리보기용 합성 평면도(1000x800). 미리보기엔 세션이 없어 실제 도면 이미지는
 // 안 뜨고 폴리곤/범례/줌/선택 UI 만 확인된다(실서비스에선 서명 URL 로 도면 위에 겹친다).
@@ -27,7 +42,7 @@ const OVERLAY_REGIONS = [
 ];
 
 // (1) json-render 네이티브 스펙 — 백엔드가 새로 방출할 포맷.
-const NATIVE_SPECS: { label: string; component: Record<string, unknown> }[] = [
+const NATIVE_SPECS: PreviewItem[] = [
   {
     label: 'FloorplanOverlay (native spec) — 폴리곤 오버레이 + 비내력벽·미확정 벽 선택',
     component: {
@@ -106,7 +121,8 @@ const NATIVE_SPECS: { label: string; component: Record<string, unknown> }[] = [
     }
   },
   {
-    label: 'FloorplanRequest (native spec)',
+    label: 'FloorplanRequest (native spec) — 드래그앤드롭 업로드 카드(인터랙티브 스텁)',
+    interactive: true,
     component: {
       root: 'fp',
       elements: {
@@ -154,7 +170,7 @@ const NATIVE_SPECS: { label: string; component: Record<string, unknown> }[] = [
 ];
 
 // (2) 레거시 {kind,payload} — 어댑터가 spec 으로 변환해 렌더되어야 함.
-const LEGACY: { label: string; component: Record<string, unknown> }[] = [
+const LEGACY: PreviewItem[] = [
   {
     label: 'floorplan-confirm (legacy {kind,payload})',
     component: { kind: 'floorplan-confirm', payload: { selectedRegionId: '거실-북측벽', confidence: 0.91 } }
@@ -181,7 +197,13 @@ export default function A2uiPreviewPage() {
             <Text size="sm" fw={600} c="dimmed">
               {item.label}
             </Text>
-            <A2uiSurface component={item.component} />
+            {item.interactive ? (
+              <ChatActionsProvider value={PREVIEW_ACTIONS}>
+                <A2uiSurface component={item.component} />
+              </ChatActionsProvider>
+            ) : (
+              <A2uiSurface component={item.component} />
+            )}
           </Stack>
         ))}
       </Stack>

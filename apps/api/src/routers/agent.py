@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
 from ..agent.runner import AgentRunner
@@ -205,14 +205,20 @@ async def get_active_agent_run_status(
 )
 async def get_agent_message_history(
     session_id: uuid.UUID = Path(...),
+    after: uuid.UUID | None = Query(
+        default=None,
+        description="이 메시지 id 뒤의 메시지만 반환(병합 조회 커서). 세션에 없으면 무시.",
+    ),
     requester: RequestUser = Depends(require_supabase_request_user),
 ) -> AgentMessageHistoryResponse:
     # 마운트/새로고침 시 과거 transcript 복원 — 완료된 런은 resume 스트림이 없어 SSE 로
     # 다시 받을 수 없으므로 영속된 user/assistant 메시지를 돌려준다(#load-history-on-mount).
+    # ``after`` 는 활성 런 대기 후 새 턴만 합치는 프론트 병합 조회의 커서(#history-after-cursor).
     rows = await main_flow.list_session_chat_messages(
         session_id=session_id,
         owner_user_id=requester.user_id,
         owner_is_anonymous=requester.is_anonymous,
+        after_message_id=after,
     )
     return AgentMessageHistoryResponse(
         messages=[AgentMessageItem.model_validate(row) for row in rows]

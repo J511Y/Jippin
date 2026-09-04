@@ -66,6 +66,13 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
     active: '필요한 작업을 정리하고 있어요',
     done: '작업 계획을 정리했어요',
     hidden: true
+  },
+  // 클라이언트 전용 의사 단계(서버 도구 아님) — useAgentStream 이 새로고침/다른 탭 전의
+  // 활성 런이 끝나길 기다리는 동안(#wait-active-run) 활동 타임라인에 올리는 한 줄.
+  wait_active_run: {
+    label: '이전 요청 처리',
+    active: '이전 요청을 아직 처리하고 있어요. 끝나는 대로 이어서 진행할게요',
+    done: '이전 요청 처리를 마쳤어요'
   }
 };
 

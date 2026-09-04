@@ -4,8 +4,9 @@
  * A2UI `floorplan-request` 카드 — 도면 업로드 유도 (CMP-DIRECT).
  *
  * 항상 떠 있던 업로드 입력을 대체한다. 에이전트가 "도면이 필요하다"고 판단하면
- * 이 카드를 방출하고, 사용자가 카드 안에서 이미지를 골라 첨부하면 업로드 →
- * asset 등록 → `sendMessage` 로 분석을 이어 가게 한다.
+ * 이 카드를 방출하고, 사용자가 카드 안에서 이미지를 골라(드래그앤드롭·클릭·모바일
+ * 카메라 — `FloorplanDropInput`) 첨부하면 업로드 → asset 등록 → `sendMessage` 로
+ * 분석을 이어 가게 한다.
  *
  * payload: { reason?: string, prior_asset_id?: string | null }
  *
@@ -21,7 +22,7 @@
  * 사용자/LLM 문자열은 React 텍스트 노드로만 렌더해 raw HTML 주입을 막는다.
  */
 
-import { Button, FileInput, Group, Loader, Stack, Text } from '@mantine/core';
+import { Button, Group, Loader, Stack, Text } from '@mantine/core';
 import {
   IconAlertCircle,
   IconCircleCheck,
@@ -31,16 +32,15 @@ import {
 import { useEffect, useId, useState } from 'react';
 import { trackPrecheckFloorplanAttach } from '@/lib/analytics/sessions-funnel';
 import { useChatActions } from '@/components/agent/chat-actions';
+import { FloorplanDropInput } from '@/components/inputs/FloorplanDropInput';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
+import { MAX_UPLOAD_BYTES } from '@/lib/leads/upload-policy';
 import { createFloorplanAsset, getSession } from '@/lib/sessions/api';
 import {
   deleteSessionFloorplan,
   uploadSessionFloorplan
 } from '@/lib/sessions/upload';
 import { CardHeader, CardRule, CardShell } from './CardShell';
-
-/** 50MB — 백엔드 presign 한도와 정합. */
-const MAX_BYTES = 50 * 1024 * 1024;
 
 export type FloorplanRequestPayload = {
   reason?: string;
@@ -159,18 +159,25 @@ export function FloorplanRequestCard({
   const hasPriorFloorplan = currentAssetId != null || locallyAttached;
   const disabled = busy || streaming || attached || !interactive;
 
+  // 이미지 MIME·용량 검증은 드롭 입력이 한 번만 한다 — 통과한 파일만 여기로 온다.
   function handlePick(picked: File | null) {
     setError(null);
-    if (picked && picked.size > MAX_BYTES) {
-      setFile(null);
-      setError('이미지 용량은 50MB 이하여야 합니다.');
-      return;
-    }
     setFile(picked);
+  }
+
+  function handleReject(message: string) {
+    setFile(null);
+    setError(message);
   }
 
   async function handleSubmit() {
     if (!actions || !file) {
+      return;
+    }
+    if (actions.simulateUploads) {
+      // 미리보기(/a2ui-preview) 전용 — 실제 세션·업로드·등록·전송 없이 성공 상태만 재현한다.
+      setLocallyAttached(true);
+      setFile(null);
       return;
     }
     setBusy(true);
@@ -265,15 +272,15 @@ export function FloorplanRequestCard({
 
           {interactive ? (
             <Stack gap="xs">
-              <FileInput
+              {/* 드래그앤드롭 + 클릭/키보드 + 모바일 카메라 한 표면. 검증 거절 사유는
+                  아래 error 블록으로 보여 준다. */}
+              <FloorplanDropInput
                 value={file}
                 onChange={handlePick}
-                accept="image/*"
-                placeholder="이미지 파일 선택 (최대 50MB)"
-                clearable
+                onReject={handleReject}
+                maxBytes={MAX_UPLOAD_BYTES}
                 disabled={busy || streaming}
-                leftSection={<IconPhotoUp size={16} />}
-                aria-label="평면도 이미지 선택"
+                size="sm"
               />
               {/* 재제출 안내 — 세션에 도면이 이미 있으면, 새 업로드가 기존 도면을
                   대체(재분석)함을 알린다. 기존 도면 삭제 아님. */}

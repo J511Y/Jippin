@@ -125,6 +125,15 @@ function Conversation({
     }
   }, [sessionId, applySessionRow]);
 
+  // 런이 끝날 때마다 세션 메타를 다시 읽는다(#refresh-on-settle) — 리포트 링크와 선택
+  // 도면 브로드캐스트가, 이 탭이 재부착으로 기다린 런(useAgentStream #reattach-active-run)
+  // 의 결과까지 반영하도록. 카드가 부르는 refreshSession 과 겹쳐도 시퀀스 가드가 정리한다.
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    if (wasBusy.current && !busy) void refreshSession();
+    wasBusy.current = busy;
+  }, [busy, refreshSession]);
+
   // has_report·선택 도면을 조용히 조회한다(리포트 링크 + 카드 브로드캐스트용). setState
   // 는 await 이후라 cascading render 가 아니다 — effect 안에서 inline 으로 처리해 lint
   // 규약도 만족한다.
