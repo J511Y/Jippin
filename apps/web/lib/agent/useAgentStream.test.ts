@@ -475,3 +475,47 @@ describe('useAgentStream 리뷰 회귀 2라운드 (Codex PR #204)', () => {
     ]);
   });
 });
+
+describe('useAgentStream 리뷰 회귀 3라운드 (Codex PR #204)', () => {
+  it('409 대기 후 병합 시 이긴 탭이 같은 내용을 보냈어도 두 user 턴이 모두 남는다', async () => {
+    // 이 탭의 '분석해 주세요' 는 아직 전달되지 않았으니 영속본이 있을 수 없다 — 이긴 탭의
+    // 같은 내용 user 턴이 내 버블에 오인돼 빠지면 안 된다.
+    installFetch((method, url, n) => {
+      if (url === `${BASE}/messages`) {
+        return json({
+          messages:
+            n === 1
+              ? []
+              : [
+                  { id: 'db-other', role: 'user', content: '분석해 주세요', ui_components: [] },
+                  { id: 'a-other', role: 'assistant', content: '다른 탭 답', ui_components: [] }
+                ]
+        });
+      }
+      if (url === `${BASE}/runs/active`) return notActive();
+      if (url === `${BASE}/runs` && method === 'POST') {
+        if (n === 1) {
+          return json(
+            { error: { code: 'AGENT_RUN_ALREADY_ACTIVE' }, detail: { active_run_id: 'run-a', status: 'running' } },
+            409
+          );
+        }
+        return reply('a-mine', '내 답', 'run-m');
+      }
+      if (url === `${BASE}/runs/run-a`) return json({ id: 'run-a', status: n < 2 ? 'running' : 'succeeded' });
+      return unexpected(method, url);
+    });
+
+    const { result } = renderHook(() => useAgentStream('s1', { activeRunPollMs: 5 }));
+    await act(async () => {
+      await result.current.send('분석해 주세요');
+    });
+
+    expect(result.current.messages.map((m) => [m.role, m.content])).toEqual([
+      ['user', '분석해 주세요'],
+      ['assistant', '다른 탭 답'],
+      ['user', '분석해 주세요'],
+      ['assistant', '내 답']
+    ]);
+  });
+});

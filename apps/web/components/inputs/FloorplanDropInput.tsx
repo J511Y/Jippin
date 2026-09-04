@@ -102,6 +102,19 @@ export function FloorplanDropInput({
   size = 'md'
 }: FloorplanDropInputProps) {
   const inputId = useId();
+  // 접근성: 래퍼의 label/description/error 와 안의 실제 포커스 대상(이미지 선택·바꾸기 버튼)을
+  // aria-labelledby/-describedby 로 잇는다 — 숨은 file input 대신 버튼이 유일한 키보드·
+  // 스크린리더 경로라, 어느 파일 필드인지와 거절 사유를 버튼에서 들을 수 있어야 한다.
+  const labelId = useId();
+  const descriptionId = useId();
+  const errorId = useId();
+  const hintId = useId();
+  const pickerId = useId();
+  const changeId = useId();
+  const describedBy =
+    [description != null ? descriptionId : null, error ? errorId : null, value ? null : hintId]
+      .filter(Boolean)
+      .join(' ') || undefined;
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [dragging, setDragging] = useState(false);
   // dragenter/dragleave 는 자식 요소를 지날 때마다 쌍으로 발생한다 — 깊이를 세어 컨테이너를
@@ -219,7 +232,7 @@ export function FloorplanDropInput({
               <IconPhotoUp size={18} />
             </span>
           )}
-          <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
+          <Stack gap="xs" style={{ minWidth: 0, flex: 1 }}>
             <Text size="sm" fw={600} truncate="end" c="var(--jippin-brand-ink)">
               {value.name}
             </Text>
@@ -233,10 +246,13 @@ export function FloorplanDropInput({
               작으면 안 된다. */}
           <Button
             type="button"
+            id={changeId}
             variant="subtle"
             color="jippin"
             size="sm"
             disabled={disabled}
+            aria-labelledby={label != null ? `${labelId} ${changeId}` : undefined}
+            aria-describedby={describedBy}
             styles={{ root: { minHeight: 44 } }}
           >
             바꾸기
@@ -250,7 +266,7 @@ export function FloorplanDropInput({
           />
         </Group>
       ) : (
-        <Stack gap={6} align="center">
+        <Stack gap="xs" align="center">
           <span className="jippin-dropzone__icon" aria-hidden>
             <IconPhotoUp size={20} />
           </span>
@@ -263,18 +279,23 @@ export function FloorplanDropInput({
           >
             {dragging ? '여기에 놓으면 첨부돼요' : prompt}
           </Text>
-          <Text size="xs" c="dimmed" ta="center" style={{ wordBreak: 'keep-all' }}>
+          <Text id={hintId} size="xs" c="dimmed" ta="center" style={{ wordBreak: 'keep-all' }}>
             {resolvedHint}
           </Text>
           {/* 키보드/스크린리더 경로 — 컨테이너 클릭과 같은 동작(버블링). 모바일 터치 타깃
-              ≥44px 은 minHeight 로 보장. */}
+              ≥44px 은 minHeight 로 보장. 래퍼 label 이 있으면 "<label> 이미지 선택" 으로
+              이름 짓고 description/힌트/거절 사유를 describedby 로 잇는다. */}
           <Button
             type="button"
+            id={pickerId}
             variant="light"
             color="jippin"
             size="sm"
             disabled={disabled}
-            aria-label={ariaLabel}
+            aria-label={label == null ? ariaLabel : undefined}
+            aria-labelledby={label != null ? `${labelId} ${pickerId}` : undefined}
+            aria-describedby={describedBy}
+            aria-invalid={error ? true : undefined}
             styles={{ root: { minHeight: 44 } }}
           >
             이미지 선택
@@ -295,6 +316,9 @@ export function FloorplanDropInput({
       description={description}
       error={error}
       withAsterisk={withAsterisk}
+      labelProps={{ id: labelId }}
+      descriptionProps={{ id: descriptionId }}
+      errorProps={{ id: errorId }}
     >
       {zone}
     </Input.Wrapper>

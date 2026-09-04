@@ -256,7 +256,9 @@ function mergeHistory(
   // 다른 탭이 보낸 **같은 내용의 새 메시지**가 옛 버블로 오인돼 빠진다(#optimistic-only).
   const unmatchedUserTexts = new Map<string, number>();
   for (const m of prev) {
-    if (m.role !== 'user' || historyIds.has(m.id)) continue;
+    // beforeId(방금 붙였고 아직 전달되지 않은 버블)는 영속본이 있을 수 없다 — 세면 이긴 탭이
+    // 보낸 같은 내용의 user 턴을 삼켜 둘 중 하나만 남는다(#exclude-undelivered).
+    if (m.role !== 'user' || historyIds.has(m.id) || m.id === beforeId) continue;
     const key = m.content.trim();
     unmatchedUserTexts.set(key, (unmatchedUserTexts.get(key) ?? 0) + 1);
   }

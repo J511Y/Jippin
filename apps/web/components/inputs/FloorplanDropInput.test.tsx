@@ -192,3 +192,33 @@ describe('FloorplanDropInput 미리보기 object URL', () => {
     }
   });
 });
+
+describe('FloorplanDropInput 접근성 연결', () => {
+  it('label 이 있으면 선택 버튼 이름에 label 이 들어가고 description·힌트·거절 사유가 describedby 로 이어진다', () => {
+    render(
+      <FloorplanDropInput
+        value={null}
+        onChange={vi.fn()}
+        label="단위세대 평면도 첨부"
+        description="촬영해 첨부해 주세요."
+        error="이미지 파일만 첨부할 수 있어요. (JPG, PNG 등)"
+      />
+    );
+    const button = screen.getByRole('button', { name: /단위세대 평면도 첨부/ });
+    expect(button.textContent).toContain('이미지 선택');
+    expect(button.getAttribute('aria-invalid')).toBe('true');
+    const described = (button.getAttribute('aria-describedby') ?? '')
+      .split(' ')
+      .map((id) => document.getElementById(id)?.textContent ?? '')
+      .join(' ');
+    expect(described).toContain('촬영해 첨부해 주세요.');
+    expect(described).toContain('이미지 파일만 첨부할 수 있어요');
+    expect(described).toContain('최대 50MB');
+  });
+
+  it('label 이 없으면(카드) aria-label 이 그대로 이름이 된다', () => {
+    render(<FloorplanDropInput value={null} onChange={vi.fn()} aria-label="평면도 이미지 선택" />);
+    const button = screen.getByRole('button', { name: '평면도 이미지 선택' });
+    expect(button.getAttribute('aria-invalid')).toBeNull();
+  });
+});
