@@ -29,14 +29,22 @@ const HEADER_HEIGHT = 60;
 type NavItem = {
   href: string;
   label: string;
+  /** 정식 출시 전 기능 표시 — 라벨 뒤 첨자 'BETA' (DESIGN.md §4.7 베타 표시). */
+  badge?: 'beta';
   match: (pathname: string) => boolean;
 };
 
 // '상담'(/contacts) 메뉴는 제거됨 — 상담 현황은 마이페이지로 이동했다(CMP-DIRECT).
 // '사전검토'는 사이트 내 사용자를 곧장 채팅 진입(`/sessions`)으로 보낸다. 색인 가능한
 // 안내 페이지(`/sessions/landing`)는 외부 마케팅 인입 전용이라 내비에 노출하지 않는다.
+// 사전검토는 베타 운영 중(2026-09) — `badge: 'beta'` 를 지우면 표시가 사라진다.
 const NAV_ITEMS: NavItem[] = [
-  { href: '/sessions', label: '사전검토', match: (p) => p.startsWith('/sessions') },
+  {
+    href: '/sessions',
+    label: '사전검토',
+    badge: 'beta',
+    match: (p) => p.startsWith('/sessions')
+  },
   { href: '/home-check', label: '우리집 체크', match: (p) => p.startsWith('/home-check') },
   { href: '/prices', label: '가격', match: (p) => p.startsWith('/prices') },
   { href: '/faq', label: '자주묻는질문', match: (p) => p.startsWith('/faq') }
@@ -127,6 +135,30 @@ function NavLink({
       }}
     >
       {item.label}
+      {item.badge === 'beta' ? (
+        // 베타 첨자 — 필 배지가 아니라 라벨 뒤 작은 대문자 텍스트(운영자 선택, 2026-09-04).
+        // 링크 색을 상속하므로 활성/비활성 상태를 따로 분기하지 않는다. DOM 텍스트는
+        // 'Beta'(스크린리더가 한 단어로 읽음)이고 표시만 CSS uppercase. 앞의 공백이
+        // 접근성 이름을 '사전검토 Beta' 로 띄운다. position:relative 로 올리므로
+        // 라인 박스가 커지지 않아 헤더 60px 이 그대로다.
+        <>
+          {' '}
+          <span
+            style={{
+              position: 'relative',
+              top: '-0.4em',
+              fontSize: '0.625rem',
+              fontWeight: 600,
+              lineHeight: 1,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            Beta
+          </span>
+        </>
+      ) : null}
     </UnstyledButton>
   );
 }
