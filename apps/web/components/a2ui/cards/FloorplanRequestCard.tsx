@@ -280,7 +280,6 @@ export function FloorplanRequestCard({
                 onReject={handleReject}
                 maxBytes={MAX_UPLOAD_BYTES}
                 disabled={busy || streaming}
-                aria-label="평면도 이미지 선택"
                 size="sm"
               />
               {/* 재제출 안내 — 세션에 도면이 이미 있으면, 새 업로드가 기존 도면을

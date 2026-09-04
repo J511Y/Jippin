@@ -50,8 +50,9 @@ export interface FloorplanDropInputProps {
   prompt?: string;
   /** 빈 상태 보조 힌트(형식·용량). 기본: 형식 + 용량 상한. */
   hint?: string;
-  /** label 이 없을 때 "이미지 선택" 버튼의 접근성 이름. */
-  'aria-label'?: string;
+  /** 다루는 대상 이름 — 래퍼 label 이 없는 사용처(카드)에서 선택/바꾸기 버튼의 접근성 이름을
+   *  "<subject> 선택"/"<subject> 바꾸기" 로 짓는다. label 이 있으면 label 로 이름 짓는다. */
+  subject?: string;
   /** 시각 밀도 — 카드 안에서는 sm. */
   size?: 'sm' | 'md';
 }
@@ -98,7 +99,7 @@ export function FloorplanDropInput({
   withAsterisk,
   prompt = '평면도 이미지를 여기에 끌어다 놓거나, 눌러서 선택하세요',
   hint,
-  'aria-label': ariaLabel,
+  subject = '평면도 이미지',
   size = 'md'
 }: FloorplanDropInputProps) {
   const inputId = useId();
@@ -132,7 +133,13 @@ export function FloorplanDropInput({
     if (!value || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
       return undefined;
     }
-    const url = URL.createObjectURL(value);
+    let url: string;
+    try {
+      url = URL.createObjectURL(value);
+    } catch {
+      // 미리보기는 부가 기능 — 환경(테스트 jsdom/Node URL 등)이 이 File 을 거부하면 건너뛴다.
+      return undefined;
+    }
     /* eslint-disable react-hooks/set-state-in-effect */
     setPreviewUrl(url);
     return () => {
@@ -251,6 +258,7 @@ export function FloorplanDropInput({
             color="jippin"
             size="sm"
             disabled={disabled}
+            aria-label={label == null ? `${subject} 바꾸기` : undefined}
             aria-labelledby={label != null ? `${labelId} ${changeId}` : undefined}
             aria-describedby={describedBy}
             styles={{ root: { minHeight: 44 } }}
@@ -292,7 +300,7 @@ export function FloorplanDropInput({
             color="jippin"
             size="sm"
             disabled={disabled}
-            aria-label={label == null ? ariaLabel : undefined}
+            aria-label={label == null ? `${subject} 선택` : undefined}
             aria-labelledby={label != null ? `${labelId} ${pickerId}` : undefined}
             aria-describedby={describedBy}
             aria-invalid={error ? true : undefined}

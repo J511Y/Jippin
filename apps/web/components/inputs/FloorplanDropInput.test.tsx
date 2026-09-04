@@ -29,14 +29,7 @@ describe('FloorplanDropInput 드래그앤드롭', () => {
   it('이미지를 드롭하면 onChange 로 파일을 올리고 하이라이트를 끈다', () => {
     const onChange = vi.fn();
     const onReject = vi.fn();
-    render(
-      <FloorplanDropInput
-        value={null}
-        onChange={onChange}
-        onReject={onReject}
-        aria-label="평면도 이미지 선택"
-      />
-    );
+    render(<FloorplanDropInput value={null} onChange={onChange} onReject={onReject} />);
     const zone = screen.getByTestId('floorplan-dropzone');
     const file = imageFile();
 
@@ -117,9 +110,7 @@ describe('FloorplanDropInput 클릭/키보드 선택', () => {
 
   it('"이미지 선택" 버튼(키보드 경로)이 숨은 file input 을 연다', () => {
     const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
-    render(
-      <FloorplanDropInput value={null} onChange={vi.fn()} aria-label="평면도 이미지 선택" />
-    );
+    render(<FloorplanDropInput value={null} onChange={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: '평면도 이미지 선택' }));
     expect(click).toHaveBeenCalledTimes(1);
   });
@@ -216,9 +207,13 @@ describe('FloorplanDropInput 접근성 연결', () => {
     expect(described).toContain('최대 50MB');
   });
 
-  it('label 이 없으면(카드) aria-label 이 그대로 이름이 된다', () => {
-    render(<FloorplanDropInput value={null} onChange={vi.fn()} aria-label="평면도 이미지 선택" />);
-    const button = screen.getByRole('button', { name: '평면도 이미지 선택' });
-    expect(button.getAttribute('aria-invalid')).toBeNull();
+  it('label 이 없으면(카드) subject 로 선택/바꾸기 버튼 이름을 짓는다', () => {
+    const view = render(<FloorplanDropInput value={null} onChange={vi.fn()} />);
+    const picker = screen.getByRole('button', { name: '평면도 이미지 선택' });
+    expect(picker.getAttribute('aria-invalid')).toBeNull();
+
+    view.rerender(<FloorplanDropInput value={imageFile()} onChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: '평면도 이미지 바꾸기' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '첨부 취소' })).toBeTruthy();
   });
 });

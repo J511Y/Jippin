@@ -1381,7 +1381,7 @@ a[data-faq-row]:focus-visible {
 .jippin-dropzone {
   position: relative;
   width: 100%;
-  padding: 1rem 0.875rem;
+  padding: var(--mantine-spacing-md) var(--mantine-spacing-sm); /* 간격은 토큰만(AGENTS.md §4.8.1) */
   border: 1.5px dashed var(--jippin-brand-border);
   border-radius: 12px;
   background: var(--jippin-brand-surface);
@@ -1393,7 +1393,7 @@ a[data-faq-row]:focus-visible {
 }
 
 .jippin-dropzone[data-size='sm'] {
-  padding: 0.75rem;
+  padding: var(--mantine-spacing-sm);
 }
 
 .jippin-dropzone:hover:not([data-disabled]) {

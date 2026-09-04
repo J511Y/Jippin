@@ -1135,6 +1135,31 @@ async def test_list_session_chat_messages_history(fake: FakeMainFlowDb) -> None:
     assert history[0]["content"] == "안녕"
 
 
+async def test_list_session_chat_messages_after_cursor(fake: FakeMainFlowDb) -> None:
+    # #history-after-cursor: after 커서 뒤의 메시지만, 세션에 없는 커서는 무시(첫 페이지).
+    owner = uuid.uuid4()
+    session = await main_flow.create_session(
+        user_id=owner, is_anonymous_owner=False, judgment_schema_version=None
+    )
+    first = await main_flow.append_chat_message(
+        session_id=session["id"], owner_user_id=owner, payload={"content": "첫 질문"}
+    )
+    await main_flow.append_internal_chat_message(
+        session_id=session["id"], role="assistant", content="첫 답"
+    )
+    await main_flow.append_chat_message(
+        session_id=session["id"], owner_user_id=owner, payload={"content": "둘째 질문"}
+    )
+    later = await main_flow.list_session_chat_messages(
+        session_id=session["id"], owner_user_id=owner, after_message_id=first["id"]
+    )
+    assert [m["content"] for m in later] == ["첫 답", "둘째 질문"]
+    unknown = await main_flow.list_session_chat_messages(
+        session_id=session["id"], owner_user_id=owner, after_message_id=uuid.uuid4()
+    )
+    assert [m["content"] for m in unknown] == ["첫 질문", "첫 답", "둘째 질문"]
+
+
 async def test_runner_no_message_reconnect_drains_without_append(
     fake: FakeMainFlowDb,
 ) -> None:

@@ -646,7 +646,7 @@ class FakeMainFlowDb:
         return None
 
     async def _db_list_chat_messages(
-        self, session_id: uuid.UUID, limit: int
+        self, session_id: uuid.UUID, limit: int, after_id: uuid.UUID | None = None
     ) -> list[dict[str, Any]]:
         rows = [
             r
@@ -654,6 +654,12 @@ class FakeMainFlowDb:
             if r["session_id"] == session_id and r.get("role") in ("user", "assistant")
         ]
         rows.sort(key=lambda r: r.get("created_at"))
+        if after_id is not None:
+            anchor = self.chat_messages.get(after_id)
+            if anchor is not None and anchor["session_id"] == session_id:
+                rows = [
+                    r for r in rows if r.get("created_at") > anchor.get("created_at")
+                ]
         return [dict(r) for r in rows[:limit]]
 
     # -- chat_tool_calls -----------------------------------------------------

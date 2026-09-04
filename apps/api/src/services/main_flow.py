@@ -2289,18 +2289,30 @@ async def find_chat_message_by_lc_id(
 
 
 async def _db_list_chat_messages(
-    session_id: uuid.UUID, limit: int
+    session_id: uuid.UUID, limit: int, after_id: uuid.UUID | None = None
 ) -> list[dict[str, Any]]:
+    stmt = sa.select(_CHAT_MESSAGES).where(
+        _CHAT_MESSAGES.c.session_id == session_id,
+        _CHAT_MESSAGES.c.role.in_(("user", "assistant")),
+    )
+    if after_id is not None:
+        # after 커서: 같은 세션의 그 메시지보다 **뒤**만. 커서가 이 세션에 없으면(삭제/타세션)
+        # 조건을 무시해 첫 페이지를 준다 — 클라이언트가 빈 결과로 오판하지 않게.
+        anchor = (
+            sa.select(_CHAT_MESSAGES.c.created_at)
+            .where(
+                _CHAT_MESSAGES.c.id == after_id,
+                _CHAT_MESSAGES.c.session_id == session_id,
+            )
+            .scalar_subquery()
+        )
+        stmt = stmt.where(
+            sa.or_(anchor.is_(None), _CHAT_MESSAGES.c.created_at > anchor)
+        )
     async with get_engine().begin() as conn:
         rows = (
             await conn.execute(
-                sa.select(_CHAT_MESSAGES)
-                .where(
-                    _CHAT_MESSAGES.c.session_id == session_id,
-                    _CHAT_MESSAGES.c.role.in_(("user", "assistant")),
-                )
-                .order_by(_CHAT_MESSAGES.c.created_at.asc())
-                .limit(limit)
+                stmt.order_by(_CHAT_MESSAGES.c.created_at.asc()).limit(limit)
             )
         ).all()
     return [dict(r._mapping) for r in rows]
@@ -2312,11 +2324,15 @@ async def list_session_chat_messages(
     owner_user_id: uuid.UUID,
     owner_is_anonymous: bool = False,
     limit: int = 200,
+    after_message_id: uuid.UUID | None = None,
 ) -> list[dict[str, Any]]:
     """소유 세션의 user/assistant 메시지를 시간순으로 반환(채팅 UI 마운트 복원용).
 
     런이 끝나면 resume 스트림이 없어 영속된 transcript 를 다시 흘릴 수 없으므로,
     프론트가 마운트 시 이 GET 으로 과거 메시지를 채운다(#load-history-on-mount).
+    ``after_message_id`` 를 주면 그 메시지 뒤만 준다 — 다른 탭의 런이 끝나길 기다린 뒤
+    새 턴만 합치는 병합 조회가 오래된 순 ``limit`` 페이지에 갇혀 최신 턴을 놓치지 않게
+    (#history-after-cursor). 커서가 이 세션에 없으면 첫 페이지를 준다.
     """
 
     await _resolve_owner_session(
@@ -2324,7 +2340,7 @@ async def list_session_chat_messages(
         owner_user_id=owner_user_id,
         owner_is_anonymous=owner_is_anonymous,
     )
-    return await _db_list_chat_messages(session_id, limit)
+    return await _db_list_chat_messages(session_id, limit, after_message_id)
 
 
 async def find_chat_tool_call_by_lc_id(
