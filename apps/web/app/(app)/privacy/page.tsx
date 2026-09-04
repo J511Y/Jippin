@@ -20,7 +20,7 @@ export const metadata: Metadata = {
 };
 
 const EFFECTIVE_DATE = '2026년 6월 8일';
-const PRIVACY_EMAIL = 'privacy@jippin.ai';
+const PRIVACY_EMAIL = 'yws@shinnertech.com';
 
 /** 절(節) 단위 구성 — 목차와 본문이 같은 배열을 공유한다. */
 type Section = { id: string; title: string; body: ReactNode };
