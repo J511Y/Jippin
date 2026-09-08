@@ -23,6 +23,19 @@ export const GTM_CONTAINER_ID =
   process.env.NEXT_PUBLIC_GTM_ID ?? 'GTM-TQN3DM5W';
 
 /**
+ * Google Ads 태그 ID(`AW-…`). Google Ads 가 안내한 "Google 태그(gtag.js)" 스니펫을
+ * GTM 컨테이너와 별개로 직접 설치한다 — 전환 링커 쿠키(`_gcl_aw`)·리마케팅·향상된
+ * 전환의 기반 태그. GTM ID 와 같은 공개 식별자 원칙으로 코드에 둔다.
+ *
+ * gtag.js 와 GTM 은 `window.dataLayer` 를 공유하며 같은 페이지에 공존해도 된다
+ * (Google 공식 지원). 다만 GTM 컨테이너 안에도 같은 AW ID 의 전환 태그를 두면
+ * 전환이 중복 집계될 수 있으니 전환 이벤트는 한쪽에서만 발화시킨다.
+ * 프리뷰/테스트 계정을 분리할 때만 `NEXT_PUBLIC_GOOGLE_ADS_ID` 로 덮어쓴다.
+ */
+export const GOOGLE_ADS_TAG_ID =
+  process.env.NEXT_PUBLIC_GOOGLE_ADS_ID ?? 'AW-18195685986';
+
+/**
  * 네이버 서치어드바이저(웹마스터 도구) 사이트 소유확인 토큰 — HTML 태그 방식.
  * `<meta name="naver-site-verification">` 로 `<head>` 에 그대로 노출되는 공개 값이라
  * 코드에 둔다(GTM ID 와 같은 원칙). 웹마스터 도구에 등록한 `https://jippin.ai` 와
