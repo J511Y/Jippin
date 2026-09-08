@@ -28,6 +28,9 @@ const TOOL_DISPLAY: Record<string, ToolDisplay> = {
     active: '주소를 확인하고 있어요',
     done: '주소를 확인했어요'
   },
+  // 내부 보유 도면 조회는 2026-09 부터 에이전트에 등록되지 않는다(카탈로그 미적재 —
+  // "보유 도면 없음" 답변이 상담 인력의 답과 어긋나 신뢰를 깎던 문제). 라벨은 그 이전
+  // 세션의 활동 이력을 렌더하기 위해 남겨 둔다.
   lookup_floorplan_candidates: {
     label: '보유 도면 확인',
     active: '내부 보유 도면을 찾고 있어요',

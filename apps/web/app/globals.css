@@ -1438,3 +1438,79 @@ a[data-faq-row]:focus-visible {
   border: 1px solid var(--jippin-brand-border);
   background: var(--jippin-brand-surface-alt);
 }
+
+/* ------------------------------------------------------------------
+   도면 요청 카드 — 단위세대 평면도 예시 안내 (components/a2ui/cards/FloorplanSampleGuide)
+   썸네일 2장(클릭 → 확대·핀치줌 라이트박스) + 촬영 안내. 색·간격은 토큰만 쓰고,
+   radius 는 드롭존과 같은 12px/8px 티어를 재사용한다(새 티어 발명 금지, AGENTS.md §4.8.1).
+   ------------------------------------------------------------------ */
+.a2ui-samples__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mantine-spacing-xs);
+  /* 넓은 채팅 컬럼(~660px)에서 썸네일이 과하게 커지지 않게 — 한 장 ≤ ~230px. */
+  max-width: 480px;
+}
+
+/* 썸네일 전체가 하나의 버튼 — 터치 타깃은 자연히 ≥44px. 커서(zoom-in)와 우하단
+   확대 칩이 "누르면 커진다" 어포던스를 함께 준다(색·커서 단독 아님). */
+.a2ui-sample {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: zoom-in;
+  border-radius: 12px;
+  color: var(--jippin-brand-copy);
+}
+
+.a2ui-sample__frame {
+  position: relative;
+  display: block;
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
+  border: 1px solid var(--jippin-brand-border);
+  border-radius: 12px;
+  /* 이미지가 도착하기 전 자리 표시 — 드롭존과 같은 옅은 표면색(흰 빈 상자로 보이지 않게). */
+  background: var(--jippin-brand-surface);
+  transition:
+    border-color 130ms ease,
+    box-shadow 130ms ease;
+}
+
+.a2ui-sample:hover .a2ui-sample__frame,
+.a2ui-sample:focus-visible .a2ui-sample__frame {
+  border-color: var(--jippin-brand-professional);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--jippin-brand-professional) 22%, transparent);
+}
+
+/* 포커스 링은 프레임(box-shadow)이 대신 그린다 — 버튼 기본 outline 과 겹치지 않게. */
+.a2ui-sample:focus-visible {
+  outline: none;
+}
+
+.a2ui-sample__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.a2ui-sample__zoom {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  color: var(--jippin-brand-professional);
+  background: color-mix(in srgb, var(--jippin-brand-surface-alt, #ffffff) 88%, transparent);
+  border: 1px solid var(--jippin-brand-border);
+}
