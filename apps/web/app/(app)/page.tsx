@@ -45,7 +45,7 @@ export const metadata: Metadata = {
   keywords: SITE_KEYWORDS,
   alternates: { canonical: '/' },
   openGraph: {
-    title: '집핀 — 벽 하나 헐기 전에, 가능한지부터 확인하세요',
+    title: '집핀 — 벽 하나 철거 전에, 가능한지부터 확인하세요',
     description: SITE_DESCRIPTION,
     url: '/',
     images: [{ url: SITE_OG_IMAGE }]
@@ -147,7 +147,7 @@ export default function HomePage() {
                   wordBreak: 'keep-all'
                 }}
               >
-                벽 하나 헐기 전에,
+                벽 하나 철거 전에,
                 <br />
                 <Text
                   component="span"
@@ -165,7 +165,7 @@ export default function HomePage() {
                 data-reveal
                 style={{ wordBreak: 'keep-all', lineHeight: 1.6 }}
               >
-                인테리어로 집 안의 벽을 트거나 옮기고 싶을 때, 헐어도 되는 벽인지
+                인테리어로 집 안의 벽을 트거나 옮기고 싶을 때, 철거해도 되는 벽인지
                 도면과 주소만으로 미리 확인해 드려요.
               </Text>
               <Group gap="sm" mt="xs" data-reveal>
@@ -268,7 +268,7 @@ export default function HomePage() {
                   <Divider />
                   <Stack gap="sm">
                     {[
-                      { label: '대상 벽체', value: '헐어도 되는 벽', tone: 'success' },
+                      { label: '대상 벽체', value: '철거해도 되는 벽', tone: 'success' },
                       { label: '허가 필요', value: '필요 (구청)', tone: 'warning' },
                       { label: '주의 구간', value: '1곳 감지', tone: 'danger' }
                     ].map((row) => (

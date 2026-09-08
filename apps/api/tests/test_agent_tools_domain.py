@@ -51,6 +51,8 @@ async def _session_with_apartment(monkeypatch):
     return sid, fake
 
 
+# lookup_floorplan_candidates 는 현재 에이전트 도구로 **등록되지 않는다**(카탈로그 미적재,
+# tools/__init__.py #internal-floorplan-lookup-disabled). impl 은 재등록에 대비해 유지·검증한다.
 async def test_lookup_floorplan_candidates_empty_catalog(monkeypatch) -> None:
     # 카탈로그 미큐레이션(빈) → count 0 + 업로드 안내(직접 올려야 함).
     session_id, _fake = await _session_with_apartment(monkeypatch)

@@ -253,6 +253,11 @@ async def lookup_floorplan_candidates_impl(*, session_id: uuid.UUID) -> dict[str
 
     후보가 있으면(count>0) 사용자가 고르게 하고, 없으면(count==0) 직접 업로드를 요청한다.
     카탈로그가 미큐레이션이면 보통 0건이라 업로드로 흐른다.
+
+    **현재 에이전트 도구로 등록돼 있지 않다**(``tools/__init__.py`` 의
+    #internal-floorplan-lookup-disabled 참조): 카탈로그가 비어 있는 동안 "보유 도면 없음"
+    답변이 상담 인력의 답과 어긋나 신뢰를 깎았다. impl 과 단위 테스트는 카탈로그 적재 뒤
+    재등록할 수 있게 그대로 둔다.
     """
 
     try:

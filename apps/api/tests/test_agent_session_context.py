@@ -139,6 +139,10 @@ def test_floorplan_no_candidates_requests_reupload() -> None:
     assert "다른" in ctx and "평면도" in ctx
     assert "분석 진행/대기" not in ctx
     assert "검토를 이어갈 수 없다" in ctx
+    # 재요청 카드의 reason 에 "예시처럼 단위세대 평면도를" 담도록 안내한다 — 부동산 앱의
+    # 간이 평면도를 올려 벽이 안 잡히던 운영 케이스(2a79ab4b·bd6a0163).
+    assert "단위세대 평면도" in ctx
+    assert "reason" in ctx
 
 
 def test_floorplan_windows_only_still_reviewable() -> None:
