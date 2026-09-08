@@ -22,7 +22,6 @@ from .domain import (
     emit_ui_component_impl,
     evaluate_rules_impl,
     get_building_register_impl,
-    lookup_floorplan_candidates_impl,
     search_address_impl,
     set_completion_decision_impl,
     show_floorplan_overlay_impl,
@@ -34,10 +33,16 @@ if TYPE_CHECKING:
 
 # 도구 이름 → chat_tool_calls.tool_kind 매핑. 런너의 투영 writer 가 ledger row 의
 # tool_kind 를 채울 때 참조한다(astream tool 이벤트엔 kind 가 없으므로).
+#
+# ``lookup_floorplan_candidates``(내부 보유 도면 조회)는 **당분간 등록하지 않는다**
+# (2026-09, #internal-floorplan-lookup-disabled): 사내 도면이 카탈로그(``floorplans``)에
+# 0건이라 호출해도 항상 "보유 도면 없음"인데, 상담 단계의 사람은 도면이 있다고 답해
+# 에이전트와 사람의 대답이 어긋나 서비스 신뢰를 깎았다. 카탈로그가 실제로 적재된 뒤
+# impl(``domain.lookup_floorplan_candidates_impl``)을 다시 래핑하고 프롬프트의 도면 단계에
+# '보유 도면 확인'을 되살리면 된다.
 TOOL_KINDS: dict[str, str] = {
     "search_address": "external_api",
     "confirm_address": "external_api",
-    "lookup_floorplan_candidates": "external_api",
     "segment_floorplan": "ai_model",
     "check_building_register": "external_api",
     "get_building_register": "external_api",
@@ -74,13 +79,6 @@ def build_tools(
     async def search_address(keyword: str) -> dict[str, Any]:
         """도로명주소 API로 주소 후보를 검색한다. 사용자가 정확한 주소를 모를 때 사용."""
         return await search_address_impl(keyword=keyword)
-
-    @tool
-    async def lookup_floorplan_candidates() -> dict[str, Any]:
-        """확정된 주소(아파트명)로 **내부 보유 도면**을 검색한다. 주소 확정 후 도면 단계
-        진입 전에 호출하라. count>0 이면 후보가 있으니 사용자가 고르게 하고, count==0 이면
-        보유 도면이 없으니 emit_floorplan_request 로 업로드를 요청하라."""
-        return await lookup_floorplan_candidates_impl(session_id=session_id)
 
     @tool
     async def confirm_address(
@@ -198,11 +196,14 @@ def build_tools(
     @tool
     async def emit_floorplan_request(reason: str | None = None) -> dict[str, Any]:
         """평면도가 필요한데 아직 첨부되지 않았을 때, **또는 다른 평면도로 재업로드가
-        필요할 때**(분석 결과 벽·창호 후보 0, 도면 판독 불가, 사용자가 교체를 원할 때)
-        사용자에게 **도면 업로드 카드**를 띄운다. 이미 도면이 첨부돼 있어도 새 도면을
-        받아야 하면 이 도구를 다시 호출하라(새로 올라온 도면이 기존 도면을 대체한다).
-        본문에 업로드 방법을 텍스트로 설명하지 말고 이 도구를 호출하라. reason 에 왜
-        (새) 도면이 필요한지 한 문장."""
+        필요할 때**(분석 결과 벽·창호 후보 0, 평면도 아님 판정, 사용자가 교체를 원할 때)
+        사용자에게 **도면 업로드 카드**를 띄운다. 카드에는 **단위세대 평면도 예시 사진
+        2장**(클릭하면 확대)과 촬영 안내(전체가 잘리지 않게·글자가 읽힐 만큼 선명하게)가
+        함께 표시되니 본문에 업로드 방법을 텍스트로 설명하지 말고 이 도구를 호출하라.
+        이미 도면이 첨부돼 있어도 새 도면을 받아야 하면 다시 호출하라(새로 올라온 도면이
+        기존 도면을 대체한다). reason 은 사용자에게 그대로 보이는 생활어 한 문장 — 재요청이면
+        왜 이전 도면으로는 안 되는지(예: 벽이 선 하나로만 그려진 부동산 앱 평면도라 벽 구조를
+        가를 수 없음)와 "예시처럼 단위세대 평면도를 올려 달라"는 뜻을 담아라."""
         return await emit_floorplan_request_impl(
             run_context=run_context,
             run_id=run_id,
@@ -277,7 +278,6 @@ def build_tools(
 
     return [
         search_address,
-        lookup_floorplan_candidates,
         confirm_address,
         segment_floorplan,
         check_building_register,

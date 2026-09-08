@@ -1371,8 +1371,8 @@ async def segment_session_floorplan(
             False,
             error_code="SEGMENTATION_NOT_FLOORPLAN",
             summary=(
-                "업로드하신 이미지가 평면도가 아닌 것 같아요. 집 평면도(도면) 이미지를 "
-                "올려 주세요."
+                "업로드하신 이미지가 평면도가 아닌 것 같아요. 우리 집 한 세대의 벽 두께가 "
+                "그려진 단위세대 평면도 이미지를 전체가 보이게 올려 주세요."
             ),
         )
 

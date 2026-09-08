@@ -169,6 +169,47 @@ describe('FloorplanRequestCard 형제 카드 동기화 (#floorplan-cards-broadca
   });
 });
 
+describe('FloorplanRequestCard 단위세대 평면도 예시 안내', () => {
+  function GuideCard({
+    assetId,
+    payload
+  }: {
+    assetId: string | null;
+    payload: FloorplanRequestPayload;
+  }) {
+    return (
+      <ChatActionsProvider
+        value={{
+          sessionId: 'session-1',
+          busy: false,
+          sendMessage: vi.fn(),
+          selectedFloorplanAssetId: assetId
+        }}
+      >
+        <FloorplanRequestCard payload={payload} />
+      </ChatActionsProvider>
+    );
+  }
+
+  it('업로드 폼 상태에서는 예시 도면 2장과 촬영 안내가 함께 보인다', () => {
+    render(<GuideCard assetId={null} payload={{ prior_asset_id: null }} />);
+
+    expect(screen.getByText('평면도를 올려 주세요')).toBeTruthy();
+    expect(screen.getByTestId('floorplan-sample-guide')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /크게 보기$/ })).toHaveLength(2);
+    expect(screen.getByText('이런 도면을 올려 주세요 — 단위세대 평면도')).toBeTruthy();
+  });
+
+  it('첨부 완료로 잠긴 카드에는 예시 안내가 없다', async () => {
+    render(<GuideCard assetId="asset-2" payload={{ prior_asset_id: 'asset-1' }} />);
+
+    await waitFor(() =>
+      expect(screen.getByText('평면도를 받았어요')).toBeTruthy()
+    );
+    expect(screen.queryByTestId('floorplan-sample-guide')).toBeNull();
+  });
+});
+
 describe('isFloorplanRequestPayload', () => {
   it('prior_asset_id 는 string/null/생략만 허용한다', () => {
     expect(isFloorplanRequestPayload({})).toBe(true);

@@ -17,6 +17,10 @@
  * 스탬프가 없는 구 카드들은 종전대로 "도면이 있으면 첨부 완료"로 처리하되, '다른 도면으로
  * 다시 올리기'로 언제든 폼을 되열 수 있다(재제출 — 기존 도면은 삭제하지 않고 대체).
  *
+ * 업로드 폼 상태에서는 `FloorplanSampleGuide`(단위세대 평면도 예시 2장 + 촬영 안내)를
+ * 함께 보여 준다 — 부동산 앱의 간이 평면도·흐릿한 사진처럼 벽 구조를 가를 수 없는
+ * 도면이 올라와 분석이 실패하던 운영 케이스를 업로드 전에 줄이기 위해서다.
+ *
  * 보안/검증: payload 는 LLM/서버 유래라 런타임 형태가 임의일 수 있다. `isPlainObject`
  * 로 객체임을 좁힌 뒤 `reason` 이 string 일 때만 채택한다(아니면 기본 문구). 모든
  * 사용자/LLM 문자열은 React 텍스트 노드로만 렌더해 raw HTML 주입을 막는다.
@@ -41,6 +45,7 @@ import {
   uploadSessionFloorplan
 } from '@/lib/sessions/upload';
 import { CardHeader, CardRule, CardShell } from './CardShell';
+import { FloorplanSampleGuide } from './FloorplanSampleGuide';
 
 export type FloorplanRequestPayload = {
   reason?: string;
@@ -269,6 +274,10 @@ export function FloorplanRequestCard({
           >
             {reason}
           </Text>
+
+          {/* 어떤 도면을 올려야 하는지 — 단위세대 평면도 예시(클릭 → 확대/줌) + 촬영 안내.
+              첨부 완료로 잠긴 카드에는 보이지 않는다(폼 상태 전용). */}
+          <FloorplanSampleGuide />
 
           {interactive ? (
             <Stack gap="xs">
