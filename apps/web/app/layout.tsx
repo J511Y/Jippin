@@ -1,5 +1,5 @@
 import { Box, ColorSchemeScript, mantineHtmlProps } from '@mantine/core';
-import { GoogleTagManager } from '@next/third-parties/google';
+import { GoogleAnalytics, GoogleTagManager } from '@next/third-parties/google';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import { AnonymousLeadClaimer } from '@/components/AnonymousLeadClaimer';
@@ -8,6 +8,7 @@ import { MobileLegalFooter } from '@/components/MobileLegalFooter';
 import { WebVitals } from '@/components/WebVitals';
 import { Providers } from '@/lib/providers';
 import {
+  GOOGLE_ADS_TAG_ID,
   GTM_CONTAINER_ID,
   NAVER_SITE_VERIFICATION,
   SITE_DESCRIPTION,
@@ -128,6 +129,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           환경별로 주입하는 NEXT_PUBLIC_VERCEL_ENV 로 게이트해야 Production 만 잡힌다. */}
       {process.env.NEXT_PUBLIC_VERCEL_ENV === 'production' && GTM_CONTAINER_ID ? (
         <GoogleTagManager gtmId={GTM_CONTAINER_ID} />
+      ) : null}
+      {/* Google Ads 기반 태그(gtag.js, AW-…). `GoogleAnalytics` 는 이름과 달리
+          범용 gtag.js 로더다 — `gtag/js?id=<ID>` 스크립트 + `gtag('js')`·
+          `gtag('config', <ID>)` 인라인 초기화를 그대로 렌더하므로 Google Ads 가
+          안내한 "Google 태그" 스니펫과 동일하다. 전역 `gtag()` 도 정의되어
+          이후 전환 이벤트 스니펫(`gtag('event','conversion',…)`)을 그대로 쓸 수 있다.
+          GTM 과 dataLayer 를 공유하며 공존 가능. 게이트는 GTM 과 동일. */}
+      {process.env.NEXT_PUBLIC_VERCEL_ENV === 'production' && GOOGLE_ADS_TAG_ID ? (
+        <GoogleAnalytics gaId={GOOGLE_ADS_TAG_ID} />
       ) : null}
     </html>
   );
