@@ -46,6 +46,18 @@ export const NAVER_SITE_VERIFICATION =
   'e9aa6d7acb921967c5a3ec2b123815c295ca806c';
 
 /**
+ * 기능별 이용가이드 PDF 경로 — `public/guides/*.pdf` 정적 파일. 각 기능 진입 화면의
+ * "사용 가이드" 버튼이 새 탭(`target="_blank"`)으로 연다. 파일명은 URL 인코딩·CDN
+ * 캐시 키 문제를 피하려고 ASCII 로 두고, 원본(한글 제목)은 운영자가 관리한다.
+ */
+export const USAGE_GUIDE_URLS = {
+  /** 사전검토(벽 철거·확장 도면 검토) 이용가이드 — `/sessions` 진입 화면. */
+  precheck: '/guides/precheck-guide.pdf',
+  /** 우리집 체크(건축물대장 위반건축물 셀프 진단) 이용가이드 — `/home-check`. */
+  homeCheck: '/guides/home-check-guide.pdf'
+} as const;
+
+/**
  * 검색·LLM 인입 키워드. 사용자 지정 핵심 키워드 + 동의어/롱테일.
  * (베란다 확장 / 인테리어 / 아파트 확장 / 화단철거 / 가벽철거 / 사전검토)
  */
