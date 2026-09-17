@@ -9,9 +9,8 @@
  * activeId 가 있으면 곧장 대화 레이아웃(Conversation)을 마운트한다.
  */
 
-import { ActionIcon, Box, Loader, Stack, Text } from '@mantine/core';
-import { IconArrowDown } from '@tabler/icons-react';
-import Image from 'next/image';
+import { ActionIcon, Box, Button, Loader, Stack, Text } from '@mantine/core';
+import { IconArrowDown, IconExternalLink } from '@tabler/icons-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -20,6 +19,7 @@ import { trackPrecheckSessionStart } from '@/lib/analytics/sessions-funnel';
 import { ensureAnonymousSession } from '@/lib/leads/ensure-anonymous-session';
 import { useAgentStream } from '@/lib/agent/useAgentStream';
 import { createSession, getSession, warmupSegmentation } from '@/lib/sessions/api';
+import { USAGE_GUIDE_URLS } from '@/lib/site';
 
 import { MessageComposer } from './MessageComposer';
 import { MessageThread } from './MessageThread';
@@ -34,8 +34,6 @@ const EXAMPLE_QUESTIONS = [
 ];
 
 const GREETING = '우리집 구조, 무엇이든 물어보세요';
-const SUBGREETING =
-  '주소와 도면을 바탕으로 벽 철거·확장 같은 리모델링 가능성을 함께 확인해 드려요.';
 
 // 도면 추론 엔드포인트 keep-alive 재핑 간격 — 서버 scale-to-zero idle(15분)보다 짧게
 // 잡아 세션이 활성인 동안 잠들지 않게 한다(백엔드 /health 핑이 idle 타이머를 리셋).
@@ -245,25 +243,21 @@ function Compose({
       <Box className="chat-compose">
         <Stack className="chat-column" gap="xl" align="center">
           <Stack gap="xs" align="center">
-            {/* 브랜드 마크 — MessageThread 아바타와 같은 로고(public/logo.png)로 통일.
-                '집' 글자 원형은 임시 마크였다. */}
-            <Box
-              aria-hidden
-              style={{
-                width: 52,
-                height: 52,
-                borderRadius: 999,
-                display: 'grid',
-                placeItems: 'center',
-                background: 'var(--jippin-brand-surface-alt, #FFFFFF)',
-                border: '1px solid var(--jippin-brand-border)',
-                boxShadow: '0 1px 2px rgba(13, 27, 42, 0.10)',
-                overflow: 'hidden',
-                marginBottom: 4
-              }}
+            {/* 이용가이드 진입 — 예전 브랜드 마크(로고 원형) 자리를 대신한다(2026-09-17
+                운영자 지시). PDF 를 새 탭으로 열어 compose 상태를 잃지 않게 한다.
+                radius="xl"(pill) 은 같은 지시의 명시 요구 — 기본 radius 규칙의 예외. */}
+            <Button
+              component="a"
+              href={USAGE_GUIDE_URLS.precheck}
+              target="_blank"
+              rel="noopener noreferrer"
+              color="jippin"
+              radius="xl"
+              rightSection={<IconExternalLink size={16} />}
+              mb={4}
             >
-              <Image src="/logo.png" alt="" width={32} height={32} style={{ display: 'block' }} />
-            </Box>
+              사용 가이드
+            </Button>
             {/* 원-퀘스천 헤딩 — display 토큰(판정·대화형 헤딩 전용 단계)만 쓴다. */}
             <Text
               fz="var(--jippin-fz-display)"
@@ -272,9 +266,6 @@ function Compose({
               style={{ wordBreak: 'keep-all' }}
             >
               {GREETING}
-            </Text>
-            <Text c="dimmed" ta="center" maw={440} style={{ wordBreak: 'keep-all' }}>
-              {SUBGREETING}
             </Text>
           </Stack>
 

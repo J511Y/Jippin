@@ -11,6 +11,7 @@ import {
   IconArrowRight,
   IconBuildingCommunity,
   IconCheck,
+  IconExternalLink,
   IconHome,
   IconX
 } from '@tabler/icons-react';
@@ -18,7 +19,7 @@ import type { Metadata } from 'next';
 
 import { HomeCheckWorkerWarmup } from '@/components/home-check/HomeCheckWorkerWarmup';
 import { PageColumn, PageHeader } from '@/components/ui';
-import { buildHomeCheckJsonLd, safeJsonLd } from '@/lib/site';
+import { USAGE_GUIDE_URLS, buildHomeCheckJsonLd, safeJsonLd } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: '우리집 체크 — 위반건축물 셀프 진단',
@@ -113,16 +114,32 @@ export default function HomeCheckLandingPage() {
             (상담·견적) 전용이고 이 페이지엔 전환 CTA 가 없다. 풀폭으로 시선을 모으고,
             클릭 시 곧장 첫 질문(주소)으로 진입한다(퍼널에 별도 인트로 없음).
             서버 컴포넌트라 component={Link} 는 SSG 프리렌더가 깨져 component="a" 유지. */}
-        <Button
-          component="a"
-          href="/home-check/new"
-          size="lg"
-          color="jippin"
-          fullWidth
-          rightSection={<IconArrowRight size={18} />}
-        >
-          내 집 체크 시작
-        </Button>
+        <Stack gap="sm" align="center">
+          <Button
+            component="a"
+            href="/home-check/new"
+            size="lg"
+            color="jippin"
+            fullWidth
+            rightSection={<IconArrowRight size={18} />}
+          >
+            내 집 체크 시작
+          </Button>
+          {/* 이용가이드(PDF) — 1차 CTA 바로 아래, 새 탭으로 연다(2026-09-17 운영자 지시:
+              jippin 색 + pill). 위계는 폭·크기로 구분한다 — CTA 는 풀폭 lg, 가이드는
+              콘텐츠 폭 md 중앙 정렬. radius="xl" 은 같은 지시의 명시 요구. */}
+          <Button
+            component="a"
+            href={USAGE_GUIDE_URLS.homeCheck}
+            target="_blank"
+            rel="noopener noreferrer"
+            color="jippin"
+            radius="xl"
+            rightSection={<IconExternalLink size={16} />}
+          >
+            사용 가이드
+          </Button>
+        </Stack>
 
         <Text className="a2ui-legal" style={{ wordBreak: 'keep-all' }}>
           본 서비스는 건축물대장 기재사항을 조회 시점 기준으로 제공하는 참고용 정보이며,
