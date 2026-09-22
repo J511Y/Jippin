@@ -1,41 +1,70 @@
 'use client';
 
+/**
+ * 사전검토 리포트 화면 (2026-09 디자인 감사 재설계).
+ *
+ * 구조 — TYPOGRAPHY.md §3 결과 카드 4구간을 화면 전체에 적용한다.
+ *   1. 결론 한 장: 판정 히어로(display 1줄 + 행위허가 칩 + 한 줄 사유) → 3행 요약(대상 벽체 ·
+ *      행위허가 · 추가 확인) → 선택 도면 오버레이. 상태색은 히어로 한 곳에만.
+ *   2. 다음 행동: PDF 로 받기(jippin filled) + 전문가 상담(코랄, 이 화면의 코랄 1회).
+ *   3. 근거·상세: 법적 근거·추가 확인·안전시설·예상 견적을 접이식으로. 결론과 근거가 같은
+ *      시야에 있도록 법적 근거와 추가 확인은 기본 펼침(DESIGN §2.1).
+ *   4. 법적 고지(봉인 문구, AGENTS §4.6).
+ *
+ * 이전 화면의 문제(감사): 같은 무게 카드 6장 나열 → 위계 없음, 판정 2회 반복, 도면·주소·
+ * 날짜 부재, xs dimmed 단락 연속, PDF 발부가 6번째 카드.
+ */
+
 import {
+  Accordion,
   Alert,
   Badge,
   Button,
-  Card,
   Group,
   List,
-  Loader,
+  Skeleton,
   Stack,
   Text,
-  Title
+  Title,
+  VisuallyHidden
 } from '@mantine/core';
+import {
+  IconAlertTriangle,
+  IconArrowLeft,
+  IconCircleCheck,
+  IconCircleX,
+  IconFileDownload,
+  IconHelpCircle
+} from '@tabler/icons-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 import { LegalNotice } from '@/components/LegalNotice';
 import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
+import { ReportFloorplan, selectedIdsOf } from '@/components/report/ReportFloorplan';
 import { trackPrecheckReportView } from '@/lib/analytics/sessions-funnel';
 import { friendlyApiMessage, parseApiError } from '@/lib/api/error';
 import {
+  getSession,
   getSessionReport,
   issueSessionReportPdf,
   syncExistingToken,
   type EstimateResult,
-  type SessionReportResponse
+  type SessionReportResponse,
+  type SessionResponse
 } from '@/lib/sessions/api';
 
-// 판정 색은 전부 상태 토큰 팔레트(success/warning/danger/info) — Mantine 기본색
-// (yellow/red/gray)은 브랜드 팔레트 밖이라 쓰지 않는다. HOLD(데이터 부족)는 경고도
-// 실패도 아니어서 info(중립 안내)로 둔다.
-const VERDICT: Record<string, { label: string; color: string }> = {
-  ALLOW: { label: '가능성 있음', color: 'success' },
-  WARN: { label: '조건부 가능', color: 'warning' },
-  HOLD: { label: '추가 확인 필요', color: 'info' },
-  DENY: { label: '어려움', color: 'danger' }
+// 판정 표기 — 색 + 라벨 + 아이콘 셋을 동시에 전달(DESIGN §2.4). 색은 상태 토큰만
+// (success/warning/danger/info). HOLD(데이터 부족)는 경고도 실패도 아니어서 info.
+const VERDICT: Record<
+  string,
+  { label: string; tone: 'success' | 'warning' | 'danger' | 'info'; icon: ReactNode }
+> = {
+  ALLOW: { label: '가능성 있음', tone: 'success', icon: <IconCircleCheck size={22} /> },
+  WARN: { label: '조건부 가능', tone: 'warning', icon: <IconAlertTriangle size={22} /> },
+  HOLD: { label: '추가 확인 필요', tone: 'info', icon: <IconHelpCircle size={22} /> },
+  DENY: { label: '어려움', tone: 'danger', icon: <IconCircleX size={22} /> }
 };
 
 type Facility = { label?: string; measurement_basis?: string };
@@ -45,11 +74,46 @@ type LegalBasis = {
   summary?: string;
   url?: string | null;
 };
+type RuleEval = {
+  verdict?: string;
+  user_message?: string;
+  permit_required?: boolean;
+  required_facilities?: Facility[];
+  legal_basis?: LegalBasis[];
+  additional_checks?: string[];
+  ruleset_version?: string;
+};
+
+/** 주소 한 줄 — PDF `_address_line` 과 같은 조립 규칙(도로명 + 단지 + 동 + 호). */
+export function addressLineOf(address: Record<string, unknown> | null | undefined): string | null {
+  if (!address) return null;
+  const str = (k: string) => (typeof address[k] === 'string' ? (address[k] as string).trim() : '');
+  const parts = [str('road_address') || str('jibun_address'), str('apartment_name')].filter(Boolean);
+  const dong = str('building_dong');
+  if (dong) parts.push(dong.endsWith('동') ? dong : `${dong}동`);
+  const ho = str('unit_ho');
+  if (ho) parts.push(ho.endsWith('호') ? ho : `${ho}호`);
+  const line = parts.join(' ').trim();
+  return line || null;
+}
+
+function formatDateKr(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat('ko-KR', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'Asia/Seoul'
+  }).format(d);
+}
 
 export default function SessionReportPage() {
   const params = useParams<{ sessionId: string }>();
   const sessionId = params.sessionId;
   const [report, setReport] = useState<SessionReportResponse | null>(null);
+  const [session, setSession] = useState<SessionResponse | null>(null);
   const [notReady, setNotReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -86,10 +150,16 @@ export default function SessionReportPage() {
       try {
         await syncExistingToken();
         const data = await getSessionReport(sessionId);
-        if (!ignore) {
-          setReport(data);
-          // 퍼널: 리포트 진입(판정 준비됨).
-          trackPrecheckReportView(true);
+        if (ignore) return;
+        setReport(data);
+        // 퍼널: 리포트 진입(판정 준비됨).
+        trackPrecheckReportView(true);
+        // 도면 오버레이용 세션 메타(선택 도면·판단스키마) — 실패해도 리포트는 성립(best-effort).
+        try {
+          const row = await getSession(sessionId);
+          if (!ignore) setSession(row);
+        } catch {
+          /* 도면 없이 렌더 */
         }
       } catch (err) {
         const parsed = parseApiError(err);
@@ -106,54 +176,58 @@ export default function SessionReportPage() {
     };
   }, [sessionId]);
 
-  const result = report?.rule_eval_result as
-    | {
-        verdict?: string;
-        user_message?: string;
-        permit_required?: boolean;
-        required_facilities?: Facility[];
-        legal_basis?: LegalBasis[];
-        additional_checks?: string[];
-        ruleset_version?: string;
-      }
-    | undefined;
+  const result = report?.rule_eval_result as RuleEval | undefined;
   const verdict = result?.verdict ? VERDICT[result.verdict] : undefined;
   const additionalChecks = (result?.additional_checks ?? []).filter(
     (c): c is string => typeof c === 'string' && c.length > 0
   );
+  const facilities = result?.required_facilities ?? [];
+  const legalBasis = result?.legal_basis ?? [];
+  const addressLine = addressLineOf(report?.address);
+  const evaluatedKr = formatDateKr(report?.evaluated_at);
+  const selectedCount = selectedIdsOf(session?.judgment_schema).length;
+  // HOLD(데이터 부족)면 엔진이 permit_required 를 보수적으로 true 로 직렬화하지만 실제
+  // 행위허가 필요 여부는 미정이다. boolean 만 보고 '필요'로 단정하지 않는다.
+  const permit =
+    result?.verdict === 'HOLD'
+      ? { text: '미정 · 추가 확인 필요', tone: 'info' as const }
+      : result?.permit_required
+        ? { text: '필요', tone: 'warning' as const }
+        : { text: '불요(또는 신고 대상)', tone: 'success' as const };
+
+  const detailsDefault = [
+    ...(legalBasis.length ? ['legal'] : []),
+    ...(additionalChecks.length ? ['checks'] : [])
+  ];
 
   return (
-    <Stack gap="lg">
-      {/* 리포트 헤더 — Blueprint Navy 전문 축(가벼운 표현: 상단 보더 + 네이비 헤딩).
-          판정이 준비되면 '한 줄 판정'을 display 토큰으로 최상단에 크게 보여 준다. */}
+    <Stack gap="lg" maw={760} mx="auto">
+      {/* 헤더 — Blueprint Navy 전문 축(상단 보더 + 네이비 아이브로). 제목 대신 주소·날짜가
+          이 리포트가 '어느 집·언제' 것인지 말한다. 결론(display)은 바로 아래 히어로가 맡는다. */}
       <Stack
-        gap="xs"
+        gap={4}
         style={{
           borderTop: '3px solid var(--jippin-brand-professional)',
           paddingTop: 'var(--mantine-spacing-md)'
         }}
       >
-        <Title order={1} c="var(--jippin-brand-professional)">
+        <Text size="sm" fw={600} c="var(--jippin-brand-professional)">
           AI 사전검토 리포트
-        </Title>
-        {report !== null && result && (
-          <Text
-            component="p"
-            fw={700}
-            style={{
-              margin: 0,
-              fontSize: 'var(--jippin-fz-display)',
-              lineHeight: 1.35,
-              wordBreak: 'keep-all'
-            }}
-          >
-            {verdict?.label ?? result.verdict ?? '판정'}
-          </Text>
-        )}
-        <Text c="dimmed" size="sm" style={{ wordBreak: 'keep-all' }}>
-          도면과 주소 분석을 바탕으로 정리한 사전 판단 결과입니다. 최종 행위허가는
-          관할 기관 판단에 따라 달라질 수 있어요.
         </Text>
+        {report !== null ? (
+          <Group gap="xs" align="baseline" wrap="wrap">
+            {addressLine ? (
+              <Text fw={600} style={{ wordBreak: 'keep-all' }}>
+                {addressLine}
+              </Text>
+            ) : null}
+            {evaluatedKr ? (
+              <Text size="sm" c="dimmed">
+                {evaluatedKr} 판정
+              </Text>
+            ) : null}
+          </Group>
+        ) : null}
       </Stack>
 
       {error && (
@@ -163,182 +237,262 @@ export default function SessionReportPage() {
       )}
 
       {notReady && (
-        <Card withBorder radius="md" padding="lg">
-          <Stack gap="sm">
-            <Text fw={600}>리포트가 아직 준비되지 않았어요</Text>
-            <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-              AI 도우미와의 대화를 완료하면 판정 결과가 여기에 표시됩니다.
-            </Text>
-            <Button
-              component={Link}
-              href={`/sessions/${sessionId}`}
-              color="jippin"
-              radius="md"
-              w="fit-content"
-            >
-              대화로 돌아가기 →
-            </Button>
-          </Stack>
-        </Card>
+        <Stack gap="sm" className="report-hero">
+          <Text fw={600}>리포트가 아직 준비되지 않았어요</Text>
+          <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+            AI 도우미와의 대화를 마치면 판정 결과가 여기에 표시됩니다.
+          </Text>
+          <Button
+            component={Link}
+            href={`/sessions/${sessionId}`}
+            color="jippin"
+            radius="md"
+            w="fit-content"
+            leftSection={<IconArrowLeft size={16} aria-hidden />}
+          >
+            대화로 돌아가기
+          </Button>
+        </Stack>
       )}
 
       {report === null && !notReady && !error && (
-        <Group justify="center" py="lg">
-          <Loader size="sm" color="jippin" />
-        </Group>
+        <Stack gap="md" aria-busy="true" aria-label="리포트 불러오는 중">
+          <Skeleton height={132} radius={14} />
+          <Skeleton height={220} radius={12} />
+          <Group grow>
+            <Skeleton height={44} radius="md" />
+            <Skeleton height={44} radius="md" />
+          </Group>
+        </Stack>
       )}
 
       {report !== null && result && (
         <>
-          <Card withBorder radius="md" padding="md">
-            <Stack gap="sm">
-              <Group justify="space-between">
-                <Text fw={600}>판단 결과</Text>
-                <Badge color={verdict?.color ?? 'gray'} variant="filled">
+          {/* ── 1. 결론 한 장 ── */}
+          <section
+            className={`report-hero report-hero--${verdict?.tone ?? 'info'}`}
+            aria-labelledby="report-verdict"
+          >
+            <Group gap="md" align="center" wrap="nowrap">
+              <span className="report-hero__disc" aria-hidden>
+                {verdict?.icon ?? <IconHelpCircle size={22} />}
+              </span>
+              <Stack gap={2} style={{ minWidth: 0 }}>
+                <Title order={1} id="report-verdict" className="report-hero__label">
+                  <VisuallyHidden>사전검토 결과: </VisuallyHidden>
                   {verdict?.label ?? result.verdict ?? '판정'}
-                </Badge>
-              </Group>
-              {result.user_message && (
-                <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-                  {result.user_message}
-                </Text>
-              )}
-              {/* HOLD(데이터 부족)면 엔진이 permit_required 를 보수적으로 true 로 직렬화하지만
-                  실제 행위허가 필요 여부는 미정이다. boolean 만 보고 '필요'로 단정하지 않는다. */}
-              <Text size="xs" c="dimmed">
-                행위허가{' '}
-                {result.verdict === 'HOLD'
-                  ? '미정 (추가 확인 필요)'
-                  : result.permit_required
-                    ? '필요'
-                    : '불요(또는 신고 대상)'}
+                </Title>
+              </Stack>
+            </Group>
+            {result.user_message && (
+              <Text mt="sm" style={{ wordBreak: 'keep-all', lineHeight: 1.6 }}>
+                {result.user_message}
               </Text>
-            </Stack>
-          </Card>
-
-          {/* REPORT-001 '판단 상태' — 보류/보수 가정 시 현장에서 확인할 체크리스트. */}
-          {additionalChecks.length > 0 && (
-            <Card withBorder radius="md" padding="md">
-              <Stack gap="xs">
-                <Text fw={600}>추가로 확인하면 좋아요</Text>
-                <List size="sm" spacing={4}>
-                  {additionalChecks.map((check, i) => (
-                    <List.Item key={i}>{check}</List.Item>
-                  ))}
-                </List>
-              </Stack>
-            </Card>
-          )}
-
-          {(result.required_facilities ?? []).length > 0 && (
-            <Card withBorder radius="md" padding="md">
-              <Stack gap="xs">
-                <Text fw={600}>필요 안전시설</Text>
-                <List size="sm" spacing={4}>
-                  {(result.required_facilities ?? []).map((f, i) => (
-                    <List.Item key={i}>
-                      {f.label}
-                      {f.measurement_basis ? ` — ${f.measurement_basis}` : ''}
-                    </List.Item>
-                  ))}
-                </List>
-              </Stack>
-            </Card>
-          )}
-
-          {(result.legal_basis ?? []).length > 0 && (
-            <Card withBorder radius="md" padding="md">
-              <Stack gap="xs">
-                <Text fw={600}>법적 근거</Text>
-                <List size="sm" spacing={4}>
-                  {(result.legal_basis ?? []).map((l, i) => (
-                    <List.Item key={i}>
-                      {l.url ? (
-                        // FR-REPORT-009 — 법령 원문 링크가 있으면 조문 표기를 링크로 연다.
-                        <a
-                          href={l.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ color: 'var(--jippin-brand-primary)' }}
-                        >
-                          {[l.statute, l.article].filter(Boolean).join(' ')}
-                        </a>
-                      ) : (
-                        [l.statute, l.article].filter(Boolean).join(' ')
-                      )}
-                      {l.summary ? ` — ${l.summary}` : ''}
-                    </List.Item>
-                  ))}
-                </List>
-                {result.ruleset_version && (
-                  // RULE-003 — 판정 결정성 추적 키(적용 룰셋 버전) 노출.
-                  <Text size="xs" c="dimmed">
-                    적용 룰셋 버전 {result.ruleset_version}
-                  </Text>
-                )}
-              </Stack>
-            </Card>
-          )}
-
-          {report.estimate && <EstimateCard estimate={report.estimate} />}
-
-          {/* PDF 리포트 발부 — 도면 오버레이·벽체 판단·견적·일정·상담을 담은 디자인
-              리포트를 서버에서 생성해 단기 서명 URL 로 내려준다. */}
-          <Card withBorder radius="md" padding="md">
-            <Stack gap="sm">
-              <Group justify="space-between" align="center" wrap="nowrap">
-                <Stack gap={2} style={{ flex: 1 }}>
-                  <Text fw={600}>PDF 리포트 발부</Text>
-                  <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-                    도면 분석·벽체 판단·예상 견적·진행 일정·상담 안내를 담은 리포트를
-                    PDF 로 내려받을 수 있어요.
-                  </Text>
-                </Stack>
-                <Button
-                  color="jippin"
-                  radius="md"
-                  onClick={handleIssuePdf}
-                  loading={pdfLoading}
-                  style={{ whiteSpace: 'nowrap' }}
+            )}
+            <dl className="report-facts" style={{ margin: 0 }}>
+              <div className="report-fact">
+                <Text component="dt" size="sm" c="dimmed">
+                  대상 벽체·창호
+                </Text>
+                <Text component="dd" size="sm" fw={600} m={0}>
+                  {selectedCount > 0 ? `${selectedCount}곳 선택` : '선택 정보 없음'}
+                </Text>
+              </div>
+              <div className="report-fact">
+                <Text component="dt" size="sm" c="dimmed">
+                  행위허가
+                </Text>
+                <Badge
+                  component="dd"
+                  color={permit.tone}
+                  variant="dot"
+                  radius="sm"
+                  size="lg"
+                  m={0}
+                  styles={{ root: { textTransform: 'none', fontWeight: 600 } }}
                 >
-                  PDF로 받기
-                </Button>
-              </Group>
-              {pdfError && (
-                <Alert color="danger" variant="light" radius="md" py="xs">
-                  {pdfError}
-                </Alert>
-              )}
-            </Stack>
-          </Card>
+                  {permit.text}
+                </Badge>
+              </div>
+              <div className="report-fact">
+                <Text component="dt" size="sm" c="dimmed">
+                  추가 확인
+                </Text>
+                <Badge
+                  component="dd"
+                  color={additionalChecks.length ? 'warning' : 'success'}
+                  variant="dot"
+                  radius="sm"
+                  size="lg"
+                  m={0}
+                  styles={{ root: { textTransform: 'none', fontWeight: 600 } }}
+                >
+                  {additionalChecks.length ? `${additionalChecks.length}건` : '없음'}
+                </Badge>
+              </div>
+            </dl>
+          </section>
+
+          {session?.selected_floorplan_asset_id ? (
+            <ReportFloorplan
+              sessionId={sessionId}
+              assetId={session.selected_floorplan_asset_id}
+              judgment={session.judgment_schema}
+            />
+          ) : null}
+
+          {/* ── 2. 다음 행동 — PDF(제품 기능) + 상담(전환, 코랄 1회) ── */}
+          <Stack gap="xs">
+            <div className="report-actions">
+              <Button
+                color="jippin"
+                radius="md"
+                size="md"
+                onClick={handleIssuePdf}
+                loading={pdfLoading}
+                leftSection={<IconFileDownload size={18} aria-hidden />}
+              >
+                PDF 리포트 받기
+              </Button>
+              <LeadCtaButton
+                cta="report_bottom"
+                fromSession={sessionId}
+                size="md"
+                color="coral"
+                radius="md"
+              >
+                전문가 상담 신청하기
+              </LeadCtaButton>
+            </div>
+            <Text size="xs" c="dimmed" ta="center" style={{ wordBreak: 'keep-all' }}>
+              PDF 에는 도면 분석·챙겨야 할 요소·예상 견적·진행 일정이 함께 담겨요.
+            </Text>
+            {pdfError && (
+              <Alert color="danger" variant="light" radius="md" py="xs">
+                {pdfError}
+              </Alert>
+            )}
+          </Stack>
+
+          {/* ── 3. 근거·상세(접이식) ── */}
+          <Accordion
+            multiple
+            defaultValue={detailsDefault}
+            variant="separated"
+            radius="md"
+            className="report-details"
+          >
+            {legalBasis.length > 0 && (
+              <Accordion.Item value="legal">
+                <Accordion.Control>법적 근거</Accordion.Control>
+                <Accordion.Panel>
+                  <List size="sm" spacing={6}>
+                    {legalBasis.map((l, i) => (
+                      <List.Item key={i}>
+                        {l.url ? (
+                          // FR-REPORT-009 — 법령 원문 링크가 있으면 조문 표기를 링크로 연다.
+                          <a
+                            href={l.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: 'var(--jippin-brand-primary)', fontWeight: 600 }}
+                          >
+                            {[l.statute, l.article].filter(Boolean).join(' ')}
+                          </a>
+                        ) : (
+                          <Text component="span" fw={600}>
+                            {[l.statute, l.article].filter(Boolean).join(' ')}
+                          </Text>
+                        )}
+                        {l.summary ? (
+                          <Text component="span" c="dimmed">
+                            {' '}
+                            — {l.summary}
+                          </Text>
+                        ) : null}
+                      </List.Item>
+                    ))}
+                  </List>
+                  {result.ruleset_version && (
+                    // RULE-003 — 판정 결정성 추적 키(적용 룰셋 버전) 노출.
+                    <Text size="xs" c="dimmed" mt="xs">
+                      적용 룰셋 버전 {result.ruleset_version}
+                    </Text>
+                  )}
+                </Accordion.Panel>
+              </Accordion.Item>
+            )}
+
+            {additionalChecks.length > 0 && (
+              // REPORT-001 '판단 상태' — 보류/보수 가정 시 현장에서 확인할 체크리스트.
+              <Accordion.Item value="checks">
+                <Accordion.Control>추가로 확인하면 좋아요</Accordion.Control>
+                <Accordion.Panel>
+                  <List size="sm" spacing={6}>
+                    {additionalChecks.map((check, i) => (
+                      <List.Item key={i}>{check}</List.Item>
+                    ))}
+                  </List>
+                </Accordion.Panel>
+              </Accordion.Item>
+            )}
+
+            {facilities.length > 0 && (
+              <Accordion.Item value="facilities">
+                <Accordion.Control>필요 안전시설</Accordion.Control>
+                <Accordion.Panel>
+                  <List size="sm" spacing={6}>
+                    {facilities.map((f, i) => (
+                      <List.Item key={i}>
+                        <Text component="span" fw={600}>
+                          {f.label}
+                        </Text>
+                        {f.measurement_basis ? (
+                          <Text component="span" c="dimmed">
+                            {' '}
+                            — {f.measurement_basis}
+                          </Text>
+                        ) : null}
+                      </List.Item>
+                    ))}
+                  </List>
+                </Accordion.Panel>
+              </Accordion.Item>
+            )}
+
+            {report.estimate && result.verdict !== 'DENY' && (
+              <Accordion.Item value="estimate">
+                <Accordion.Control>예상 견적</Accordion.Control>
+                <Accordion.Panel>
+                  <EstimateBody estimate={report.estimate} />
+                </Accordion.Panel>
+              </Accordion.Item>
+            )}
+          </Accordion>
         </>
       )}
 
       {/* AGENTS.md §4.6: 리포트 화면 안에 inline LegalNotice 를 보장. */}
       <LegalNotice variant="inline" />
 
-      <Stack gap="sm">
-        <LeadCtaButton
-          cta="report_bottom"
-          fromSession={sessionId}
-          size="lg"
-          color="coral"
-          radius="md"
-          fullWidth
-        >
-          전문가 상담 신청하기
-        </LeadCtaButton>
-        <Button
-          component={Link}
-          href="/sessions"
-          variant="subtle"
-          color="jippin"
-          radius="md"
-          fullWidth
-        >
-          세션 목록으로
-        </Button>
-      </Stack>
+      {/* 보조 내비 — 미준비 상태는 위 카드가 '대화로 돌아가기'를 이미 제공하므로 생략. */}
+      {report !== null ? (
+        <Group justify="space-between">
+          <Button
+            component={Link}
+            href={`/sessions/${sessionId}`}
+            variant="subtle"
+            color="jippin"
+            radius="md"
+            leftSection={<IconArrowLeft size={16} aria-hidden />}
+          >
+            대화로 돌아가기
+          </Button>
+          <Button component={Link} href="/sessions" variant="subtle" color="gray" radius="md">
+            세션 목록
+          </Button>
+        </Group>
+      ) : null}
     </Stack>
   );
 }
@@ -362,88 +516,90 @@ function amountText(item: NonNullable<EstimateResult['items']>[number]): string 
   return '별도 견적';
 }
 
-/** 예상 견적 카드(REPORT-003) — estimate-result 계약(1.1.0) 기반 예비 안내. */
-function EstimateCard({ estimate }: { estimate: EstimateResult }) {
+/** 예상 견적(REPORT-003) — estimate-result 계약(1.1.0) 기반 예비 안내. */
+function EstimateBody({ estimate }: { estimate: EstimateResult }) {
   const items = estimate.items ?? [];
   // 배포 스큐 방어: 구(1.0.0) API 응답엔 1.1.0 필드가 없다 — 전부 옵셔널로 접근한다.
   const assumptions = estimate.assumptions ?? [];
   const total = estimate.total_range;
   const hasTotal = total && total.max > 0;
   return (
-    <Card withBorder radius="md" padding="md">
-      <Stack gap="sm">
-        <Group justify="space-between" align="center">
-          <Text fw={600}>예상 견적</Text>
-          <Badge color="gray" variant="light">
-            참고용{estimate.vat_included ? ' · 부가세 포함' : ''}
-          </Badge>
-        </Group>
+    <Stack gap="sm">
+      <Group justify="space-between" align="center">
+        <Text size="xs" c="dimmed">
+          참고용{estimate.vat_included ? ' · 부가세 포함' : ''}
+        </Text>
+      </Group>
 
-        <Stack gap={6}>
-          {items.map((item) => (
-            <Group key={item.code} justify="space-between" align="flex-start" wrap="nowrap">
-              <Stack gap={0} style={{ flex: 1 }}>
-                <Text size="sm" fw={500}>
-                  {item.label}
-                </Text>
-                {item.note && (
-                  <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-                    {item.note}
-                  </Text>
-                )}
-              </Stack>
-              <Text size="sm" fw={600} style={{ whiteSpace: 'nowrap' }}>
-                {amountText(item)}
+      <Stack gap={6}>
+        {items.map((item) => (
+          <Group key={item.code} justify="space-between" align="flex-start" wrap="nowrap">
+            <Stack gap={0} style={{ flex: 1 }}>
+              <Text size="sm" fw={500}>
+                {item.label}
               </Text>
-            </Group>
-          ))}
-        </Stack>
-
-        {hasTotal && (
-          <Group justify="space-between" align="center">
-            <Text size="sm" fw={600}>
-              합계 (예상 범위)
-            </Text>
-            {/* 금액 강조는 굵기만 — coral 은 전환 CTA 전용이라 금액에 쓰지 않는다. */}
-            <Text size="sm" fw={700}>
-              {total.max > total.min ? `${won(total.min)}~${won(total.max)}` : won(total.min)}
-              {estimate.consultation_required ? ' + 현장 견적 항목' : ''}
+              {item.note && (
+                <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                  {item.note}
+                </Text>
+              )}
+            </Stack>
+            <Text size="sm" fw={600} style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+              {amountText(item)}
             </Text>
           </Group>
-        )}
-
-        {assumptions.length > 0 && (
-          <List size="xs" spacing={2} c="dimmed">
-            {assumptions.map((assumption, i) => (
-              <List.Item key={i}>{assumption}</List.Item>
-            ))}
-          </List>
-        )}
-
-        {(estimate.variance_notes ?? []).map((note, i) => (
-          <Text key={i} size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-            {note}
-          </Text>
         ))}
-
-        {estimate.disclaimer && (
-          <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-            {estimate.disclaimer}
-          </Text>
-        )}
-        {estimate.source_url && (
-          <Button
-            component={Link}
-            href={estimate.source_url}
-            variant="subtle"
-            color="jippin"
-            size="compact-sm"
-            w="fit-content"
-          >
-            비용 안내 자세히 보기 →
-          </Button>
-        )}
       </Stack>
-    </Card>
+
+      {hasTotal && (
+        <Group
+          justify="space-between"
+          align="center"
+          pt="xs"
+          style={{ borderTop: '1px solid var(--jippin-brand-border)' }}
+        >
+          <Text size="sm" fw={600}>
+            합계 (예상 범위)
+          </Text>
+          {/* 금액 강조는 굵기만 — coral 은 전환 CTA 전용이라 금액에 쓰지 않는다. */}
+          <Text size="sm" fw={700} style={{ fontVariantNumeric: 'tabular-nums' }}>
+            {total.max > total.min ? `${won(total.min)}~${won(total.max)}` : won(total.min)}
+            {estimate.consultation_required ? ' + 현장 견적 항목' : ''}
+          </Text>
+        </Group>
+      )}
+
+      {assumptions.length > 0 && (
+        <List size="xs" spacing={2} c="dimmed">
+          {assumptions.map((assumption, i) => (
+            <List.Item key={i}>{assumption}</List.Item>
+          ))}
+        </List>
+      )}
+
+      {(estimate.variance_notes ?? []).map((note, i) => (
+        <Text key={i} size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+          {note}
+        </Text>
+      ))}
+
+      {estimate.disclaimer && (
+        <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+          {estimate.disclaimer}
+        </Text>
+      )}
+      {estimate.source_url && (
+        <Button
+          component={Link}
+          href={estimate.source_url}
+          variant="subtle"
+          color="jippin"
+          size="compact-sm"
+          w="fit-content"
+        >
+          비용 안내 자세히 보기 →
+        </Button>
+      )}
+    </Stack>
   );
 }

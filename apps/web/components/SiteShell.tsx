@@ -225,6 +225,20 @@ export function SiteShell({ children }: { children: ReactNode }) {
             </Group>
 
             <Group gap="xs" wrap="nowrap">
+              {/* 헤더 1차 액션(제품 진입) — 랜딩 Z패턴의 우상단 자리. 사전검토 흐름 안
+                  (/sessions*)에서는 중복이라 숨긴다. 코랄이 아닌 jippin filled(제품 기능 진입). */}
+              {!pathname.startsWith('/sessions') ? (
+                <Button
+                  component={Link}
+                  href="/sessions"
+                  size="sm"
+                  color="jippin"
+                  radius="md"
+                  visibleFrom="sm"
+                >
+                  무료 사전검토
+                </Button>
+              ) : null}
               {isMember ? (
                 <Group gap={4} wrap="nowrap" visibleFrom="sm">
                   <Tooltip label="마이페이지" withArrow position="bottom">
@@ -329,6 +343,19 @@ export function SiteShell({ children }: { children: ReactNode }) {
             />
           ))}
           <Box mt="md">
+            {!pathname.startsWith('/sessions') ? (
+              <Button
+                component={Link}
+                href="/sessions"
+                onClick={drawer.close}
+                fullWidth
+                color="jippin"
+                radius="md"
+                mb="xs"
+              >
+                무료 사전검토 시작
+              </Button>
+            ) : null}
             {isMember ? (
               <Stack gap="xs">
                 <Button

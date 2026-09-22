@@ -16,15 +16,18 @@
  * risks 는 string 배열일 때만 채택. 형태가 어긋나면 null 반환 → JSON fallback.
  */
 
-import { Stack, Text } from '@mantine/core';
+import { Button, Stack, Text } from '@mantine/core';
 import {
+  IconArrowRight,
   IconCircleCheck,
   IconCircleX,
   IconHeadset,
   IconInfoCircle,
+  IconReportAnalytics,
   IconScale,
   IconUserSearch
 } from '@tabler/icons-react';
+import Link from 'next/link';
 import {
   useEffect,
   useId,
@@ -36,7 +39,6 @@ import {
 import { LEGAL_NOTICE_TEXT } from '@/components/LegalNotice';
 import { useChatActions } from '@/components/agent/chat-actions';
 import { QuickPrecheckConsultForm } from '@/components/leads/QuickPrecheckConsultForm';
-import { CtaButton } from '@/components/ui';
 import { getSession } from '@/lib/sessions/api';
 
 import { type CardAccent, CardHeader, CardRule, CardShell } from './CardShell';
@@ -253,6 +255,15 @@ export function JudgmentSummaryCard({
   }, [sessionIdForKey, stampedSelectionKey]);
   const stale = staleFloorplan || staleSelection;
 
+  // 리포트 진입(2026-09 감사, 1차 액션) — 판정이 영속돼 리포트가 준비됐을 때만 띄운다.
+  // 호스트 브로드캐스트(has_report)가 정본, 없으면 payload.rule_backed 로 폴백. 도면·선택이
+  // 바뀐 옛 카드에서는 상담과 같은 이유로 막는다(현재 리포트는 새 결론이라 카드와 어긋남).
+  const reportReady = actions?.hasReport ?? payload.rule_backed === true;
+  const reportHref =
+    reportReady && !stale && sessionIdForKey
+      ? `/sessions/${sessionIdForKey}/report`
+      : null;
+
   // CTA 클릭 시점 재검증 — 서버의 현재 세션을 새로 읽어 이 결과가 아직 유효한지
   // 확인한다. 확인 실패(네트워크)나 응답 필드 부재는 상담을 막지 않는다(전환 크리티컬
   // CTA, best-effort 가드 — 확실한 stale 증거가 있을 때만 차단).
@@ -370,6 +381,24 @@ export function JudgmentSummaryCard({
 
       <CardRule />
 
+      {/* 1차 액션 = 리포트 보기(jippin filled). 결과 카드의 다음 행동은 '리포트' 다 —
+          판정·근거·도면·견적을 한 화면에서 보고 PDF 로 받는 곳. 상담은 리포트 화면이
+          코랄 CTA 로 이어받으므로(한 화면 코랄 1회) 여기서는 2차(light)로 둔다. */}
+      {reportHref ? (
+        <Button
+          component={Link}
+          href={reportHref}
+          fullWidth
+          color="jippin"
+          radius="md"
+          mb="xs"
+          leftSection={<IconReportAnalytics size={18} aria-hidden />}
+          rightSection={<IconArrowRight size={16} aria-hidden />}
+        >
+          사전검토 리포트 보기
+        </Button>
+      ) : null}
+
       {/* 상담 인입 — 결과를 본 직후 전문가 상담으로 자연스럽게 잇는다. 클릭하면 같은
           대화 화면에서 빠른 상담폼이 펼쳐지고, 주소 등은 이미 세션이 알고 있어 바로 제출.
           도면이 교체된 옛 결과 카드에서는 CTA 를 막는다 — 상담 lead 에는 세션의 **현재**
@@ -406,16 +435,20 @@ export function JudgmentSummaryCard({
           />
         </Stack>
       ) : (
-        // 전환 CTA(상담) 표준 — CtaButton(coral). 이 카드 화면에서 코랄은 이 1회뿐.
-        <CtaButton
+        // 상담은 2차 액션(light) — 코랄 전환 CTA 는 리포트 화면 하단 1회로 모은다.
+        // 리포트가 아직 없는 예비 결과(rule_backed=false)에서는 이 버튼이 유일한 액션.
+        <Button
           fullWidth
           mb="sm"
+          variant={reportHref ? 'light' : 'filled'}
+          color="jippin"
+          radius="md"
           leftSection={<IconHeadset size={18} aria-hidden />}
           onClick={() => void handleConsultClick()}
           disabled={checkingConsult}
         >
           전문가 상담 신청하기
-        </CtaButton>
+        </Button>
       )}
 
       {/* 결과 화면 법적 고지 — 봉인된 SSOT 문구 그대로(TYPOGRAPHY §4.5/BRAND §6, 단축 금지). */}

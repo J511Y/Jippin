@@ -9,8 +9,8 @@
  * activeId 가 있으면 곧장 대화 레이아웃(Conversation)을 마운트한다.
  */
 
-import { ActionIcon, Box, Loader, Stack, Text } from '@mantine/core';
-import { IconArrowDown } from '@tabler/icons-react';
+import { ActionIcon, Box, Button, Loader, Stack, Text } from '@mantine/core';
+import { IconArrowDown, IconArrowRight, IconReportAnalytics } from '@tabler/icons-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -161,23 +161,39 @@ function Conversation({
         sendMessage: send,
         busy,
         refreshSession,
-        selectedFloorplanAssetId
+        selectedFloorplanAssetId,
+        hasReport
       }}
     >
       <Box className="chat-shell">
         <Box className="chat-main">
           {hasReport ? (
-            <Box className="chat-report-link">
+            // 리포트 준비 배너 — 판정이 영속되는 순간 사용자가 알아채야 하는 1순위 신호
+            // (2026-09 감사: 우상단 14px 텍스트 링크는 아무도 못 봤다). role=status 로
+            // 보조기기에도 즉시 알리고, 결과 카드 안의 '리포트 보기' 버튼과 짝을 이룬다.
+            <Box className="chat-report-banner" role="status" aria-live="polite">
+              <span className="chat-report-banner__icon" aria-hidden>
+                <IconReportAnalytics size={18} />
+              </span>
+              <Box className="chat-report-banner__text">
+                <Text size="sm" fw={600} c="var(--jippin-brand-ink)">
+                  사전검토 리포트가 준비됐어요
+                </Text>
+                <Text size="xs" c="dimmed" className="chat-report-banner__sub">
+                  판정·근거·예상 견적을 한 화면에서 보고 PDF 로 받을 수 있어요.
+                </Text>
+              </Box>
               {/* 내부 내비게이션은 next/link — 클라이언트 컴포넌트라 RSC 제약 없음. */}
-              <Text
+              <Button
                 component={Link}
                 href={`/sessions/${sessionId}/report`}
+                color="jippin"
                 size="sm"
-                c="jippin.7"
-                fw={600}
+                radius="md"
+                rightSection={<IconArrowRight size={16} aria-hidden />}
               >
-                리포트 보기 →
-              </Text>
+                리포트 보기
+              </Button>
             </Box>
           ) : null}
 

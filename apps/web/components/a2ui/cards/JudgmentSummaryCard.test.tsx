@@ -305,3 +305,53 @@ describe('JudgmentSummaryCard 재선택 감지 (#judgment-selection-stamp)', () 
     expect(form.getAttribute('data-expected-selection')).toBe('wall:1|#');
   });
 });
+
+describe('JudgmentSummaryCard 리포트 진입 (2026-09 감사)', () => {
+  const basePayload = {
+    decision: 'possible' as const,
+    title: '검토 결과',
+    summary: '선택한 벽과 창호를 기준으로 검토한 결과예요.',
+    session_id: 'sess-1'
+  };
+
+  it('호스트가 has_report 를 주면 리포트 보기가 1차 액션(링크)으로 붙고 상담은 2차가 된다', () => {
+    render(
+      <ChatActionsProvider
+        value={{ sessionId: 'sess-1', sendMessage: vi.fn(), busy: false, hasReport: true }}
+      >
+        <JudgmentSummaryCard payload={basePayload} />
+      </ChatActionsProvider>
+    );
+    const link = screen.getByRole('link', { name: '사전검토 리포트 보기' });
+    expect(link.getAttribute('href')).toBe('/sessions/sess-1/report');
+    expect(screen.getByRole('button', { name: '전문가 상담 신청하기' })).toBeTruthy();
+  });
+
+  it('리포트가 없는 예비 결과(rule_backed 없음·has_report 없음)에는 리포트 링크가 없다', () => {
+    render(<JudgmentSummaryCard payload={basePayload} />);
+    expect(screen.queryByRole('link', { name: '사전검토 리포트 보기' })).toBeNull();
+    expect(screen.getByRole('button', { name: '전문가 상담 신청하기' })).toBeTruthy();
+  });
+
+  it('호스트 브로드캐스트가 없으면 payload.rule_backed 로 폴백한다', () => {
+    render(<JudgmentSummaryCard payload={{ ...basePayload, rule_backed: true }} />);
+    expect(screen.getByRole('link', { name: '사전검토 리포트 보기' })).toBeTruthy();
+  });
+
+  it('도면이 교체된 옛 카드에서는 리포트 링크도 막는다', () => {
+    render(
+      <ChatActionsProvider
+        value={{
+          sessionId: 'sess-1',
+          sendMessage: vi.fn(),
+          busy: false,
+          hasReport: true,
+          selectedFloorplanAssetId: 'asset-new'
+        }}
+      >
+        <JudgmentSummaryCard payload={{ ...basePayload, asset_id: 'asset-old' }} />
+      </ChatActionsProvider>
+    );
+    expect(screen.queryByRole('link', { name: '사전검토 리포트 보기' })).toBeNull();
+  });
+});

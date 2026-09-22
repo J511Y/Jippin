@@ -28,6 +28,12 @@ export interface ChatActions {
    */
   selectedFloorplanAssetId?: string | null;
   /**
+   * 세션에 리포트(영속 판정)가 준비됐는지 — 호스트가 `getSession().has_report` 를 브로드
+   * 캐스트한다. 결과 카드가 '리포트 보기' 1차 액션을 띄울지 판단하는 데 쓴다. 값을 못 주는
+   * 호스트(테스트·미리보기)에서는 카드가 payload.rule_backed 로 폴백한다.
+   */
+  hasReport?: boolean;
+  /**
    * 미리보기 전용 — true 면 도면 카드가 업로드/등록/전송을 실제로 하지 않고 첨부 완료
    * 상태만 재현한다. `/a2ui-preview` 는 공개 경로라 익명 세션 발급·잘못된 session_id 로의
    * 업로드 호출(422)이 일어나면 안 된다. 실서비스 호스트(SessionChat)는 설정하지 않는다.
