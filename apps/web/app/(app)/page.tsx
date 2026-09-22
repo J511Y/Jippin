@@ -291,7 +291,8 @@ export default function HomePage() {
                     ))}
                   </Stack>
                   {/* 목업 장식 — 동작 없는 리포트 화면 예시라 실제 버튼 대신
-                      비인터랙티브 표현을 쓴다(죽은 버튼 오탭 방지). */}
+                      비인터랙티브 표현을 쓴다(죽은 버튼 오탭 방지). 색은 제품 진입
+                      (jippin) 틴트 — 코랄은 이 화면의 실제 전환 CTA(빠른 상담 폼) 1회 전용. */}
                   <Box
                     aria-hidden="true"
                     mt="xs"
@@ -299,13 +300,13 @@ export default function HomePage() {
                       textAlign: 'center',
                       padding: '10px 16px',
                       borderRadius: 'var(--mantine-radius-md)',
-                      background: 'var(--mantine-color-coral-0)',
-                      color: 'var(--mantine-color-coral-8)',
+                      background: 'var(--mantine-color-jippin-0)',
+                      color: 'var(--mantine-color-jippin-8)',
                       fontSize: 'var(--mantine-font-size-sm)',
                       fontWeight: 600
                     }}
                   >
-                    전문가 상담으로 전환
+                    PDF 리포트 받기
                   </Box>
                 </Stack>
               </Card>
@@ -343,8 +344,9 @@ export default function HomePage() {
             가로 캐러셀은 2번째 단계부터 보이지 않아 폐지(2026-09 감사). 레이아웃은
             globals.css .landing-steps / .landing-step. */}
         <Box style={{ position: 'relative' }}>
+          {/* 레일은 4열 구간(75em+)에서만 — globals.css .landing-steps__rail 이 노출을 제어. */}
           <Box
-            visibleFrom="lg"
+            className="landing-steps__rail"
             aria-hidden
             style={{
               position: 'absolute',

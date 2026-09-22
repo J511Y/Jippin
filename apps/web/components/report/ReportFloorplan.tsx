@@ -138,16 +138,19 @@ export function FloorplanUnavailable({ onRetry }: { onRetry: () => void }) {
       <Text size="sm" fw={600}>
         도면 이미지를 지금 불러올 수 없어요
       </Text>
+      {/* PDF 도 같은 저장 객체를 읽으므로 '도면이 PDF 엔 있다'고 약속하지 않는다(중립 문구). */}
       <Text size="xs" c="dimmed" mt={4} style={{ wordBreak: 'keep-all' }}>
-        판정과 근거는 그대로 유효해요. PDF 리포트에는 도면 분석이 함께 담깁니다.
+        판정과 근거는 그대로 유효해요. 잠시 후 다시 시도해 주세요.
       </Text>
+      {/* 모바일 터치 타깃 ≥44px(AGENTS §4.8.1) — 실패 복구의 유일한 액션. */}
       <Button
         mt="sm"
-        size="xs"
+        size="sm"
+        mih={44}
         variant="light"
         color="jippin"
         radius="md"
-        leftSection={<IconRefresh size={14} aria-hidden />}
+        leftSection={<IconRefresh size={16} aria-hidden />}
         onClick={onRetry}
       >
         다시 시도

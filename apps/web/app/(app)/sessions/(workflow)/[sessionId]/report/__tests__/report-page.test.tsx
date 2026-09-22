@@ -181,5 +181,8 @@ describe('리포트 스냅샷 재시도', () => {
     await screen.findByRole('heading', { level: 1 });
     expect(screen.getByText('도면 이미지를 지금 불러올 수 없어요')).toBeTruthy();
     expect(screen.getByRole('button', { name: '다시 시도' })).toBeTruthy();
+    // 선택 수도 0 을 사실처럼 말하지 않는다.
+    expect(screen.getByText('불러올 수 없음')).toBeTruthy();
+    expect(screen.queryByText('선택 정보 없음')).toBeNull();
   });
 });

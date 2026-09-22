@@ -185,7 +185,8 @@ function Conversation({
                   사전검토 리포트가 준비됐어요
                 </Text>
                 <Text size="xs" c="dimmed" className="chat-report-banner__sub">
-                  판정·근거·예상 견적을 한 화면에서 보고 PDF 로 받을 수 있어요.
+                  {/* 판정별로 섹션이 달라(DENY 는 견적 없음) 중립 문구로 둔다. */}
+                  판정과 근거를 한 화면에서 보고 PDF 로 받을 수 있어요.
                 </Text>
               </Box>
               {/* 내부 내비게이션은 next/link — 클라이언트 컴포넌트라 RSC 제약 없음. */}

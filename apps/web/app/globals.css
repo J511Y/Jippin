@@ -344,9 +344,17 @@ a {
   }
 }
 
+/* 연결 레일은 4열(75em+)에서만 — 2열 구간에서는 첫 줄만 가로질러 3·4단계가 끊겨 보인다. */
+.landing-steps__rail {
+  display: none;
+}
+
 @media (min-width: 75em) {
   .landing-steps {
     grid-template-columns: repeat(4, 1fr);
+  }
+  .landing-steps__rail {
+    display: block;
   }
 }
 

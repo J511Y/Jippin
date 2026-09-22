@@ -387,7 +387,12 @@ export default function SessionReportPage() {
                   대상 벽체·창호
                 </Text>
                 <Text component="dd" size="sm" fw={600} m={0}>
-                  {selectedCount > 0 ? `${selectedCount}곳 선택` : '선택 정보 없음'}
+                  {/* 세션 메타를 못 읽었으면 0 을 사실처럼 말하지 않는다. */}
+                  {sessionFailed
+                    ? '불러올 수 없음'
+                    : selectedCount > 0
+                      ? `${selectedCount}곳 선택`
+                      : '선택 정보 없음'}
                 </Text>
               </div>
               <div className="report-fact">
