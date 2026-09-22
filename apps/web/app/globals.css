@@ -215,9 +215,309 @@ a {
    덮어쓰며 드러낸다. js-reveal 클래스는 paint 전 인라인 스크립트(layout)가 붙이므로
    no-JS 사용자는 콘텐츠가 그대로 보이고, reduced-motion 사용자도 숨기지 않는다. */
 @media (prefers-reduced-motion: no-preference) {
-  html.js-reveal .reveal-scope [data-reveal] {
+  html.js-reveal .reveal-scope:not(.reveal-scope--immediate) [data-reveal] {
     opacity: 0;
   }
+
+  /* 어보브 더 폴드(히어로)는 CSS 키프레임으로 첫 페인트부터 드러난다 — JS/하이드레이션
+     대기 없음(LCP·JS 실패 안전). 순서는 마크업 data-reveal-order(1~4). */
+  .reveal-scope--immediate [data-reveal] {
+    animation: jippin-reveal-in 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  .reveal-scope--immediate [data-reveal-order='2'] {
+    animation-delay: 0.12s;
+  }
+  .reveal-scope--immediate [data-reveal-order='3'] {
+    animation-delay: 0.24s;
+  }
+  .reveal-scope--immediate [data-reveal-order='4'] {
+    animation-delay: 0.36s;
+  }
+}
+
+@keyframes jippin-reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ============================================================================
+   랜딩 — 진행 단계·서비스 카드. 모바일에서는 가로 캐러셀 대신 세로 리스트(아이콘 왼쪽,
+   글 오른쪽)로 전부 보여준다(2026-09 감사: 80% 폭 캐러셀은 2번째 카드부터 안 보였다).
+   ========================================================================== */
+.landing-steps {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.landing-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  text-align: left;
+}
+
+.landing-step__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  font-weight: 700;
+  color: var(--jippin-brand-primary-fg);
+  background: var(--jippin-brand-primary);
+  box-shadow: 0 0 0 6px var(--mantine-color-body);
+}
+
+.landing-features {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.landing-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--jippin-brand-border);
+  border-radius: var(--mantine-radius-md);
+  background: var(--jippin-brand-surface-alt);
+}
+
+.landing-feature__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--mantine-radius-md);
+  color: var(--jippin-brand-primary);
+  background: var(--mantine-color-jippin-0);
+}
+
+@media (min-width: 48em) {
+  .landing-steps {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 32px;
+  }
+  .landing-step {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 12px;
+  }
+  .landing-step__num {
+    width: 54px;
+    height: 54px;
+    font-size: var(--mantine-font-size-lg);
+  }
+  .landing-features {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+  .landing-feature {
+    flex-direction: column;
+    gap: 12px;
+    padding: 20px;
+  }
+  .landing-feature__icon {
+    width: 48px;
+    height: 48px;
+  }
+}
+
+@media (min-width: 62em) {
+  .landing-features {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* 연결 레일은 4열(75em+)에서만 — 2열 구간에서는 첫 줄만 가로질러 3·4단계가 끊겨 보인다. */
+.landing-steps__rail {
+  display: none;
+}
+
+@media (min-width: 75em) {
+  .landing-steps {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .landing-steps__rail {
+    display: block;
+  }
+}
+
+/* ============================================================================
+   사전검토 리포트 화면 — 결론 한 장(판정 히어로 + 3행 요약 + 도면) → 액션 → 상세(접이식).
+   상태색은 판정 히어로 한 곳에만, 코랄은 상담 CTA 1회, 깊이는 얇은 보더 하나로 통일.
+   ========================================================================== */
+.report-hero {
+  --report-tone: var(--mantine-color-gray-6);
+  --report-tone-surface: var(--jippin-brand-surface);
+  border: 1px solid var(--jippin-brand-border);
+  border-radius: var(--mantine-radius-lg);
+  background: var(--report-tone-surface);
+  padding: 18px 18px 16px;
+}
+
+.report-hero--success {
+  --report-tone: var(--mantine-color-success-6);
+  --report-tone-surface: var(--mantine-color-success-0);
+}
+.report-hero--warning {
+  --report-tone: var(--mantine-color-warning-6);
+  --report-tone-surface: var(--mantine-color-warning-0);
+}
+.report-hero--danger {
+  --report-tone: var(--mantine-color-danger-6);
+  --report-tone-surface: var(--mantine-color-danger-0);
+}
+.report-hero--info {
+  --report-tone: var(--mantine-color-info-6);
+  --report-tone-surface: var(--mantine-color-info-0);
+}
+
+.report-hero__disc {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--report-tone);
+}
+
+.report-hero__label {
+  margin: 0;
+  font-size: var(--jippin-fz-display);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--jippin-brand-ink);
+  word-break: keep-all;
+}
+
+/* 3행 요약(대상 벽체 · 행위허가 · 추가 확인) — 랜딩 목업과 같은 문법. */
+.report-facts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  margin-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--jippin-brand-ink) 10%, transparent);
+}
+
+.report-fact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--jippin-brand-ink) 8%, transparent);
+}
+
+.report-fact:last-child {
+  border-bottom: none;
+}
+
+.report-floorplan {
+  border: 1px solid var(--jippin-brand-border);
+  border-radius: var(--mantine-radius-lg);
+  background: var(--jippin-brand-surface-alt);
+  padding: 10px;
+}
+
+.report-floorplan--unavailable {
+  border-style: dashed;
+  background: var(--jippin-brand-surface);
+  text-align: center;
+  padding: 18px 16px;
+}
+
+.report-floorplan__stage {
+  position: relative;
+  width: 100%;
+  border-radius: var(--mantine-radius-md);
+  overflow: hidden;
+  background: var(--jippin-brand-surface);
+}
+
+.report-floorplan__stage svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 420px;
+}
+
+.report-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 8px;
+  font-size: var(--mantine-font-size-xs);
+  color: var(--jippin-brand-copy);
+}
+
+.report-legend span::before {
+  content: '';
+  display: inline-block;
+  width: 16px;
+  height: 3px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: middle;
+  background: var(--sw);
+}
+
+.report-legend .pick::before {
+  height: 6px;
+  background: var(--jippin-brand-professional);
+}
+
+.report-legend .dash::before {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--jippin-brand-copy) 0 5px,
+    transparent 5px 9px
+  );
+}
+
+.report-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+/* 공용 브레이크포인트(DESIGN §4.8)만 — base 는 1열, sm(48em)부터 2열. */
+@media (min-width: 48em) {
+  .report-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.report-details .mantine-Accordion-item {
+  border-color: var(--jippin-brand-border);
+}
+
+.report-details .mantine-Accordion-control {
+  padding-inline: 4px;
+}
+
+.report-details .mantine-Accordion-label {
+  font-weight: 600;
+  color: var(--jippin-brand-ink);
 }
 
 .mantine-active:active {
@@ -411,18 +711,54 @@ a[data-faq-row]:focus-visible {
   }
 }
 
-.chat-report-link {
+/* 리포트 준비 배너 — 판정이 영속된 순간 대화 상단에 고정 노출(2026-09 감사: 텍스트
+   링크 한 줄은 아무도 못 봤다). 브랜드 틸 틴트 + 아이콘 칩 + filled 버튼. 스크롤 영역
+   밖(chat-main 직계)이라 메시지를 내려도 항상 보인다. */
+.chat-report-banner {
   display: flex;
-  justify-content: flex-end;
-  padding: 2px 0 4px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 720px;
+  margin: 8px auto 0;
+  padding: 10px 12px 10px 14px;
+  border: 1px solid var(--mantine-color-jippin-2);
+  border-radius: var(--mantine-radius-lg);
+  background: var(--mantine-color-jippin-0);
 }
 
-.chat-report-link a {
-  text-decoration: none;
+.chat-report-banner__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--mantine-radius-md);
+  color: var(--jippin-brand-primary-fg);
+  background: var(--jippin-brand-primary);
 }
 
-.chat-report-link a:hover {
-  text-decoration: underline;
+.chat-report-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* base(모바일)에서는 부제를 숨기고 sm(48em)부터 보인다 — 공용 브레이크포인트만 사용. */
+.chat-report-banner__sub {
+  display: none;
+}
+
+@media (min-width: 48em) {
+  .chat-report-banner__sub {
+    display: block;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-report-banner {
+    animation: chat-fade-in 360ms ease both;
+  }
 }
 
 /* 대화 레이아웃 진입 시 부드러운 페이드+슬라이드인(컴포저가 중앙→하단으로 자리잡는

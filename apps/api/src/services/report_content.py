@@ -332,12 +332,12 @@ def consultation_view(origin: str) -> dict[str, str]:
     base = origin.rstrip("/")
     site = base.split("://", 1)[-1] if "://" in base else base
     return {
-        "headline": "전문가 상담은 100% 무료예요",
+        # BRAND.md §4.1 — "100%" 같은 단정 표현은 쓰지 않는다. 무료라는 사실만 담백하게.
+        "headline": "궁금한 점은 전문가 상담으로 이어가세요",
         "body": (
-            "리포트를 보시고 궁금한 점이 있으면 무료로 전문가 상담을 받아보세요. "
-            "사전검토 · 전문가 상담 · 행위허가 대행 · 방화 시공 중 필요한 단계만 "
+            "상담은 무료예요. 사전검토 · 행위허가 대행 · 방화 시공 중 필요한 단계만 "
             "골라 진행할 수 있어요. 2007년부터 행위허가 분야 전문성을 쌓아온 팀이 "
-            "처음부터 끝까지 함께합니다."
+            "함께합니다."
         ),
         "url": f"{base}/leads/new",
         "site": site,

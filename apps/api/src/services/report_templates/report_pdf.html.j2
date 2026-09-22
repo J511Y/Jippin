@@ -1,5 +1,12 @@
-{#- 집핀 AI 사전검토 PDF 리포트 — 모던 핀테크 톤(컬러 카드·판정 히어로·가로 스테퍼).
-    WeasyPrint 렌더(JS 없음). 컨텍스트 계약: report.* (services/report_pdf.py 조립). -#}
+{#- 집핀 AI 사전검토 PDF 리포트 — WeasyPrint 렌더(JS 없음). 컨텍스트 계약: report.*
+    (services/report_pdf.py 조립).
+
+    2026-09 디자인 감사 반영:
+      · 강조색을 브랜드 틸 1축 + 판정 상태색 1개로 줄인다(코랄은 상담 CTA 1회, 네이비는
+        전문 축 헤딩만). 견적 합계 코랄·weight 800 제거(COLOR_SYSTEM §2.1 / TYPOGRAPHY §2.1).
+      · 섹션 번호는 Jinja 카운터로 자동 부여 — 법적 근거가 없어도 3→5 로 건너뛰지 않는다.
+      · 본문 10pt·법적 고지 8pt 이상. 인쇄물 독자는 도면을 처음 보는 비전문가다.
+      · 깊이 전략은 '보더 카드' 하나로 통일 — 좌측 컬러바·틴트 박스 남발 제거. -#}
 {%- macro vicon(tone) -%}
   {%- if tone == 'success' -%}
     <svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.3L19 7" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -11,175 +18,164 @@
     <svg viewBox="0 0 24 24"><circle cx="12" cy="7.5" r="1.6" fill="#fff"/><path d="M12 11v8" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>
   {%- endif -%}
 {%- endmacro -%}
+{%- set sec = namespace(n=0) -%}
+{%- macro sec_head(title) -%}
+  {%- set sec.n = sec.n + 1 -%}
+  <div class="sec-head"><span class="sec-num">{{ sec.n }}</span><span class="sec-title">{{ title }}</span></div>
+{%- endmacro -%}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="utf-8" />
 <title>{{ report.report_id }} · 집핀 AI 사전검토 리포트</title>
 <style>
+  /* 토큰 — docs/design/COLOR_SYSTEM.md 정본 HEX 를 그대로 복사(주석에 토큰명 병기). */
   :root {
-    --teal: #147A73; --teal-d: #0F5F59; --navy: #153B5C; --coral: #F26B4F;
-    --ink: #0D1B2A; --copy: #51666F; --muted: #8A9CA3;
-    --page: #EEF3F2; --card: #FFFFFF; --line: #E3EAE8; --soft: #F5F8F7;
+    --teal: #147A73;      /* brand.primary */
+    --teal-d: #0F5F59;    /* content.linkHover */
+    --teal-s: #E7F3F1;    /* jippin-0 틴트 */
+    --navy: #153B5C;      /* brand.professional */
+    --coral: #F26B4F;     /* brand.cta — 상담 CTA 1회 전용 */
+    --ink: #0D1B2A;       /* brand.ink */
+    --copy: #48606A;      /* brand.copy */
+    --subtle: #6F8088;    /* content.subtle */
+    --card: #FFFFFF;      /* brand.surfaceAlt */
+    --soft: #F7FBFA;      /* brand.surface */
+    --line: #D9E3E1;      /* brand.border */
     --success: #1B7F46; --success-s: #E8F5EE;
-    --warning: #9A6300; --warning-s: #FFF4E2;
+    --warning: #995D00; --warning-s: #FFF3E0;
     --danger:  #C0392B; --danger-s: #FBEAE8;
     --info:    #1F6F8B; --info-s: #E8F1F5;
-    --neutral: #51666F; --neutral-s: #F1F4F5;
+    --neutral: #48606A; --neutral-s: #F1F4F5;
+    --wall-load: #C0392B; --wall-nonload: #1B7F46; --wall-unknown: #8A929B; --window: #3C8896;
   }
   @page {
-    size: A4; margin: 12mm 11mm 13mm 11mm; background: var(--page);
-    @bottom-left  { content: "집핀 AI 사전검토 리포트"; font-family: 'NanumGothic', sans-serif; font-size: 7.5pt; color: #9AAAB0; }
-    @bottom-center{ content: counter(page) " / " counter(pages); font-family: 'NanumGothic', sans-serif; font-size: 7.5pt; color: #9AAAB0; }
-    @bottom-right { content: "jippin.ai"; font-family: 'NanumGothic', sans-serif; font-size: 7.5pt; color: var(--teal); font-weight: 700; }
+    size: A4; margin: 14mm 13mm 15mm 13mm;
+    @bottom-left  { content: "집핀 AI 사전검토 리포트 · " string(report-id); font-family: 'NanumGothic', sans-serif; font-size: 8pt; color: var(--subtle); }
+    @bottom-center{ content: counter(page) " / " counter(pages); font-family: 'NanumGothic', sans-serif; font-size: 8pt; color: var(--subtle); }
+    @bottom-right { content: "jippin.ai"; font-family: 'NanumGothic', sans-serif; font-size: 8pt; color: var(--teal); font-weight: 700; }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
     font-family: 'NanumGothic', 'NanumBarunGothic', sans-serif;
-    font-size: 9.2pt; line-height: 1.45; color: var(--ink); word-break: keep-all;
+    font-size: 10pt; line-height: 1.55; color: var(--ink); word-break: keep-all;
   }
-  .display { font-family: 'NanumSquare', 'NanumGothic', sans-serif; }
-  p { margin: 0; }
+  p, ul { margin: 0; }
+  ul { padding-left: 13pt; }
+  li { margin-bottom: 2pt; }
 
-  /* ---- card scaffold ---- */
-  .card {
-    background: var(--card); border: 0.8pt solid var(--line); border-radius: 11pt;
-    padding: 8pt 11pt; margin-bottom: 13pt;
-  }
-  .sec-head { display: flex; align-items: center; gap: 7pt; margin-bottom: 7pt; break-after: avoid; }
-  .sec-num {
-    font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 9pt; color: #fff;
-    background: var(--teal); width: 17pt; height: 17pt; border-radius: 50%;
-    text-align: center; line-height: 17pt; flex: none;
-  }
-  .sec-title { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 12.5pt; color: var(--ink); }
+  /* ---- 카드 스캐폴드(단일 깊이 전략: 얇은 보더) ---- */
+  .card { background: var(--card); border: 0.8pt solid var(--line); border-radius: 8pt; padding: 11pt 13pt; margin-bottom: 11pt; break-inside: avoid; }
+  .sec-head { display: flex; align-items: center; gap: 7pt; margin-bottom: 8pt; break-after: avoid; }
+  .sec-num { font-weight: 700; font-size: 9pt; color: #fff; background: var(--teal); width: 17pt; height: 17pt; border-radius: 50%; text-align: center; line-height: 17pt; flex: none; }
+  .sec-title { font-weight: 700; font-size: 13pt; color: var(--navy); }
+  .muted { color: var(--copy); }
+  .small { font-size: 8.5pt; color: var(--copy); line-height: 1.5; }
 
-  /* ---- header (underline, not card) ---- */
-  .doc-head {
-    padding: 0 2pt 10pt; margin-bottom: 14pt; border-bottom: 1.5pt solid #CFD7D4;
-    display: flex; align-items: flex-end; justify-content: space-between;
-  }
-  .hh-brand .wm { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 22pt; letter-spacing: -0.5pt; line-height: 1; color: var(--teal); }
-  .hh-brand .sub { font-size: 8.5pt; color: var(--copy); margin-top: 4pt; }
-  .hh-meta { text-align: right; font-size: 8pt; color: var(--copy); line-height: 1.7; white-space: nowrap; }
+  /* ---- 문서 헤더 ---- */
+  .doc-head { display: flex; align-items: flex-end; justify-content: space-between; padding-bottom: 10pt; margin-bottom: 14pt; border-bottom: 1.5pt solid var(--navy); }
+  .wm { font-weight: 700; font-size: 20pt; letter-spacing: -0.5pt; line-height: 1; color: var(--teal); string-set: report-id "{{ report.report_id }}"; }
+  .doc-head .sub { font-size: 9pt; color: var(--copy); margin-top: 5pt; }
+  .hh-meta { text-align: right; font-size: 8.5pt; color: var(--copy); line-height: 1.7; }
   .hh-meta b { color: var(--ink); font-weight: 700; }
+  .hh-meta .addr { font-size: 10pt; color: var(--ink); font-weight: 700; }
 
-  /* ---- verdict hero ---- */
-  .verdict { border-radius: 10pt; padding: 9pt 12pt; margin-bottom: 14pt; break-inside: avoid; border: 0.8pt solid var(--line); color: var(--ink); }
+  /* ---- 판정 히어로 — 이 문서의 초점. 상태색은 여기 한 곳에만 쓴다. ---- */
+  .verdict { border-radius: 8pt; padding: 12pt 14pt; margin-bottom: 11pt; break-inside: avoid; border: 0.8pt solid var(--line); }
   .v-success { background: var(--success-s); } .v-warning { background: var(--warning-s); }
   .v-danger { background: var(--danger-s); } .v-info { background: var(--info-s); } .v-neutral { background: var(--neutral-s); }
-  .v-top { display: flex; align-items: center; gap: 9pt; }
-  .v-disc { width: 24pt; height: 24pt; border-radius: 50%; flex: none; padding: 5.5pt; }
+  .v-top { display: flex; align-items: center; gap: 10pt; }
+  .v-disc { width: 26pt; height: 26pt; border-radius: 50%; flex: none; padding: 6pt; }
   .v-disc svg { width: 100%; height: 100%; display: block; }
   .v-success .v-disc { background: var(--success); } .v-warning .v-disc { background: var(--warning); }
   .v-danger .v-disc { background: var(--danger); } .v-info .v-disc { background: var(--info); } .v-neutral .v-disc { background: var(--neutral); }
-  .v-head { flex: 1; }
-  .v-label { display: inline-block; font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 14pt; line-height: 1.15; letter-spacing: -0.3pt; white-space: nowrap; vertical-align: middle; }
-  .v-success .v-label { color: var(--success); } .v-warning .v-label { color: var(--warning); }
-  .v-danger .v-label { color: var(--danger); } .v-info .v-label { color: var(--info); } .v-neutral .v-label { color: var(--neutral); }
-  .v-permit { display: inline-block; font-size: 8pt; font-weight: 700; border: 1pt solid var(--line); border-radius: 20pt; padding: 1.5pt 9pt; margin-left: 8pt; color: var(--copy); background: #fff; vertical-align: middle; }
-  .v-summary { font-size: 9pt; line-height: 1.5; color: var(--copy); margin-top: 6pt; }
-  .v-checks { margin-top: 7pt; background: rgba(255,255,255,0.55); border-radius: 8pt; padding: 7pt 10pt; }
-  .v-checks-t { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 8.4pt; color: var(--navy); margin-bottom: 3pt; }
-  .v-checks ul { margin: 0; padding-left: 12pt; }
-  .v-checks li { font-size: 8.2pt; color: var(--copy); line-height: 1.5; }
+  .v-eyebrow { font-size: 8.5pt; font-weight: 700; color: var(--copy); letter-spacing: 0.3pt; }
+  .v-label { font-weight: 700; font-size: 17pt; line-height: 1.2; letter-spacing: -0.3pt; color: var(--ink); }
+  .v-permit { display: inline-block; font-size: 8.5pt; font-weight: 700; border: 0.8pt solid var(--line); border-radius: 20pt; padding: 2pt 9pt; margin-left: 8pt; color: var(--ink); background: #fff; vertical-align: middle; }
+  .v-summary { font-size: 10pt; line-height: 1.55; color: var(--ink); margin-top: 8pt; }
+  .v-checks { margin-top: 9pt; background: rgba(255,255,255,0.6); border-radius: 6pt; padding: 8pt 11pt; }
+  .v-checks-t { font-weight: 700; font-size: 9.5pt; color: var(--ink); margin-bottom: 4pt; }
+  .v-checks li { font-size: 9pt; color: var(--copy); }
 
-  /* ---- floor plan ---- */
-  .fp-wrap { background: var(--soft); border: 0.8pt solid var(--line); border-radius: 9pt; padding: 8pt; text-align: center; }
-  .fp-wrap svg { max-width: 100%; max-height: 50mm; width: auto; height: auto; border-radius: 4pt; }
-  .fp-cap { font-size: 7.8pt; color: var(--muted); margin-top: 5pt; }
-  .notice { background: var(--soft); border: 1pt dashed var(--line); border-radius: 8pt; padding: 14pt; text-align: center; font-size: 9pt; color: var(--copy); }
+  /* ---- 도면 ---- */
+  .fp-wrap { background: var(--soft); border: 0.8pt solid var(--line); border-radius: 6pt; padding: 8pt; text-align: center; }
+  .fp-wrap svg { max-width: 100%; max-height: 62mm; width: auto; height: auto; }
+  .fp-cap { font-size: 8.5pt; color: var(--copy); margin-top: 6pt; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4pt 12pt; justify-content: center; margin-top: 6pt; font-size: 8.5pt; color: var(--copy); }
+  .legend span::before { content: ''; display: inline-block; width: 14pt; height: 3pt; border-radius: 2pt; margin-right: 4pt; vertical-align: middle; background: var(--sw); }
+  .legend .pick::before { background: var(--navy); height: 5pt; }
+  .legend .dash::before { background: repeating-linear-gradient(90deg, var(--copy) 0 4pt, transparent 4pt 7pt); }
+  .notice { background: var(--soft); border: 0.8pt dashed var(--line); border-radius: 6pt; padding: 12pt; text-align: center; font-size: 9.5pt; color: var(--copy); }
 
-  .walls { margin-top: 8pt; }
-  .wall {
-    display: flex; align-items: flex-start; gap: 11pt; padding: 6pt 0; border-top: 0.8pt solid var(--line);
-  }
-  .wall:first-child { border-top: none; }
-  .w-tag { flex: none; width: 118pt; }
-  .w-top { display: flex; align-items: center; gap: 5pt; margin-bottom: 3pt; }
-  .w-num { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 11pt; color: var(--ink); margin-right: 1pt; }
-  .w-pick { font-size: 7pt; font-weight: 800; color: var(--coral); border: 1pt solid var(--coral); border-radius: 4pt; padding: 0.5pt 4pt; margin-left: 3pt; }
-  .chip { display: inline-block; font-size: 7.8pt; font-weight: 700; border-radius: 20pt; padding: 1.5pt 8pt; white-space: nowrap; }
-  .c-success { background: var(--success-s); color: var(--success); } .c-danger { background: var(--danger-s); color: var(--danger); }
-  .c-info { background: var(--info-s); color: var(--info); } .c-warning { background: var(--warning-s); color: var(--warning); }
-  .c-neutral { background: var(--neutral-s); color: var(--neutral); }
-  .w-desc { flex: 1; font-size: 8.7pt; color: var(--copy); line-height: 1.5; }
+  /* ---- 내력벽/비내력벽 짧은 설명(2열, 상태색 대신 라벨 텍스트만) ---- */
+  .edu { margin-top: 9pt; border-top: 0.8pt solid var(--line); padding-top: 8pt; }
+  .edu-t { font-weight: 700; font-size: 9.5pt; color: var(--ink); margin-bottom: 4pt; }
+  .edu-cols { display: flex; gap: 12pt; }
+  .edu-col { flex: 1; }
+  .edu-l { font-weight: 700; font-size: 9.5pt; margin-bottom: 1pt; }
+  .edu-l::before { content: ''; display: inline-block; width: 8pt; height: 8pt; border-radius: 2pt; margin-right: 5pt; vertical-align: -0.5pt; background: var(--sw); }
+  .edu-d { font-size: 9pt; color: var(--copy); line-height: 1.5; }
+  .edu-cav { margin-top: 7pt; font-size: 8.5pt; color: var(--copy); line-height: 1.5; }
 
-  /* ---- 내력벽/비내력벽 교육 박스 ---- */
-  .edu { margin-top: 8pt; border-top: 0.8pt solid var(--line); padding-top: 7pt; }
-  .edu-t { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 9.5pt; color: var(--ink); margin-bottom: 5pt; }
-  .edu-cols { display: flex; gap: 8pt; }
-  .edu-col { flex: 1; border-radius: 8pt; padding: 7pt 9pt; }
-  .edu-success { background: var(--success-s); } .edu-danger { background: var(--danger-s); }
-  .edu-info { background: var(--info-s); } .edu-neutral { background: var(--neutral-s); }
-  .edu-l { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 9.5pt; margin-bottom: 2pt; }
-  .edu-success .edu-l { color: var(--success); } .edu-danger .edu-l { color: var(--danger); }
-  .edu-info .edu-l { color: var(--info); } .edu-neutral .edu-l { color: var(--neutral); }
-  .edu-d { font-size: 8.2pt; color: var(--copy); line-height: 1.5; }
-  .edu-cav { margin-top: 7pt; font-size: 7.8pt; color: var(--muted); line-height: 1.45; }
-
-  /* ---- facilities ---- */
-  .fac { background: var(--soft); border-radius: 9pt; border-left: 3pt solid var(--teal); padding: 7pt 10pt; margin-bottom: 5pt; break-inside: avoid; }
-  .fac:last-child { margin-bottom: 0; }
+  /* ---- 챙겨야 할 요소 ---- */
+  .fac { padding: 7pt 0; border-top: 0.8pt solid var(--line); break-inside: avoid; }
+  .fac:first-of-type { border-top: none; padding-top: 0; }
   .fac-h { display: flex; align-items: baseline; gap: 7pt; margin-bottom: 3pt; }
-  .fac-tag { font-size: 7.6pt; font-weight: 800; color: #fff; background: var(--teal); border-radius: 4pt; padding: 1.5pt 7pt; flex: none; }
-  .fac-title { font-family: 'NanumSquare', sans-serif; font-weight: 700; font-size: 10pt; color: var(--ink); }
-  .fac ul { margin: 0; padding-left: 14pt; }
-  .fac li { font-size: 8.6pt; color: var(--copy); line-height: 1.45; }
+  .fac-tag { font-size: 8pt; font-weight: 700; color: var(--teal-d); background: var(--teal-s); border-radius: 4pt; padding: 1.5pt 6pt; flex: none; }
+  .fac-title { font-weight: 700; font-size: 10.5pt; color: var(--ink); }
+  .fac li { font-size: 9.5pt; color: var(--copy); }
 
-  /* ---- estimate ---- */
+  /* ---- 견적 ---- */
   .est { width: 100%; border-collapse: collapse; }
   .est td { padding: 6pt 2pt; border-bottom: 0.8pt solid var(--line); vertical-align: top; }
-  .est .lbl { font-weight: 700; color: var(--ink); font-size: 9.3pt; }
-  .est .note { font-size: 7.8pt; color: var(--muted); line-height: 1.4; margin-top: 1pt; }
-  .est .amt { text-align: right; white-space: nowrap; font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 10.5pt; color: var(--teal-d); }
-  .est-total td { border-bottom: none; padding-top: 9pt; }
-  .est-total .lbl { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 10.5pt; color: var(--navy); }
-  .est-total .amt { color: var(--coral); font-size: 15pt; }
-  .est-assume { margin: 8pt 0 0; padding-left: 12pt; }
-  .est-assume li { font-size: 8pt; color: var(--muted); line-height: 1.5; }
-  .est-foot { margin-top: 9pt; background: var(--soft); border-radius: 8pt; padding: 8pt 11pt; font-size: 8pt; color: var(--copy); line-height: 1.5; }
-  .est-foot .src { color: var(--info); margin-top: 3pt; }
-  .law-list { margin: 0; padding-left: 12pt; }
-  .law-list li { font-size: 8.6pt; color: var(--copy); line-height: 1.55; margin-bottom: 5pt; }
-  .law-list b { color: var(--navy); font-weight: 800; }
-  .law-list .src { font-size: 7.4pt; color: var(--info); margin-top: 1pt; }
+  .est .lbl { font-weight: 700; color: var(--ink); font-size: 10pt; }
+  .est .note { font-size: 8.5pt; color: var(--copy); line-height: 1.45; margin-top: 1pt; }
+  .est .amt { text-align: right; white-space: nowrap; font-weight: 700; font-size: 10.5pt; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .est-total td { border-bottom: none; padding-top: 8pt; }
+  .est-total .lbl { font-size: 10.5pt; }
+  .est-total .amt { font-size: 13pt; color: var(--teal-d); }
+  .est-assume { margin-top: 8pt; }
+  .est-assume li { font-size: 8.5pt; color: var(--copy); }
+  .est-foot { margin-top: 8pt; font-size: 8.5pt; color: var(--copy); line-height: 1.5; }
+  .src { color: var(--teal-d); }
 
-  /* ---- schedule stepper ---- */
-  .steps { display: flex; gap: 7pt; }
-  .step { flex: 1; background: var(--soft); border: 0.8pt solid var(--line); border-radius: 9pt; padding: 8pt 9pt; }
-  .step-b { display: inline-block; font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 7.5pt; color: #fff; background: var(--navy); border-radius: 20pt; padding: 1.5pt 8pt; }
-  .step-ph { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 10.5pt; color: var(--ink); margin: 6pt 0 5pt; }
-  .step ul { margin: 0; padding-left: 13pt; }
-  .step li { font-size: 8pt; color: var(--copy); line-height: 1.5; }
-  .step-d { margin-top: 6pt; font-size: 7.8pt; font-weight: 700; color: var(--teal-d); }
+  /* ---- 법적 근거 ---- */
+  .law-list li { font-size: 9.5pt; color: var(--copy); line-height: 1.55; margin-bottom: 5pt; }
+  .law-list b { color: var(--ink); font-weight: 700; }
+  .law-list .src { font-size: 8.5pt; margin-top: 1pt; }
 
-  /* ---- consultation ---- */
-  .consult { background: var(--navy); border-radius: 12pt; padding: 14pt 16pt; color: #fff; break-inside: avoid; display: flex; align-items: center; justify-content: space-between; gap: 14pt; }
-  .consult .free { display: inline-block; font-size: 8pt; font-weight: 800; background: var(--coral); border-radius: 20pt; padding: 2pt 10pt; }
-  .consult .ch { font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 14pt; margin: 6pt 0 5pt; line-height: 1.3; }
-  .consult .cb { font-size: 8.6pt; color: #C9D6E2; line-height: 1.55; }
+  /* ---- 진행 일정(3열) ---- */
+  .steps { display: flex; gap: 8pt; }
+  .step { flex: 1; border: 0.8pt solid var(--line); border-radius: 6pt; padding: 9pt 10pt; }
+  .step-b { font-size: 8pt; font-weight: 700; color: var(--teal-d); letter-spacing: 0.3pt; }
+  .step-ph { font-weight: 700; font-size: 11pt; color: var(--ink); margin: 3pt 0 5pt; }
+  .step li { font-size: 9pt; color: var(--copy); }
+  .step-d { margin-top: 6pt; font-size: 8.5pt; font-weight: 700; color: var(--copy); }
+
+  /* ---- 상담(네이비 전문 축 + 코랄 CTA 1회) ---- */
+  .consult { background: var(--navy); border-radius: 8pt; padding: 14pt 16pt; color: #fff; break-inside: avoid; display: flex; align-items: center; justify-content: space-between; gap: 14pt; }
+  .consult .ch { font-weight: 700; font-size: 13pt; line-height: 1.3; }
+  .consult .cb { font-size: 9.5pt; color: #C9D6E2; line-height: 1.55; margin-top: 5pt; }
   .consult .cbtn { flex: none; text-align: center; }
-  .consult .cbtn a { display: inline-block; font-family: 'NanumSquare', sans-serif; font-weight: 800; font-size: 10.5pt; color: var(--navy); background: #fff; border-radius: 8pt; padding: 9pt 16pt; text-decoration: none; white-space: nowrap; }
-  .consult .csite { display: block; font-size: 8pt; color: #C9D6E2; margin-top: 6pt; }
+  .consult .cbtn a { display: inline-block; font-weight: 700; font-size: 10.5pt; color: #fff; background: var(--coral); border-radius: 6pt; padding: 9pt 16pt; text-decoration: none; white-space: nowrap; }
+  .consult .csite { display: block; font-size: 8.5pt; color: #C9D6E2; margin-top: 6pt; }
 
-  .legal { margin-top: 6pt; padding: 0 4pt; font-size: 7pt; color: var(--muted); line-height: 1.5; }
-  .legal b { color: var(--copy); font-weight: 700; }
+  /* 법적 고지 — BRAND §6: 브랜드/상태색 강조 없이, 본문보다 한 단계 작게, 충분한 여백. */
+  .legal { margin-top: 10pt; padding: 0 2pt; font-size: 8.5pt; color: var(--copy); line-height: 1.55; }
 </style>
 </head>
 <body>
 
-  {# ── 헤더 (언더라인) ── #}
+  {# ── 헤더 ── #}
   <div class="doc-head">
-    <div class="hh-brand">
+    <div>
       <div class="wm">집핀</div>
       <div class="sub">우리집 체크 · AI 사전검토 리포트</div>
     </div>
     <div class="hh-meta">
-      발급일 <b>{{ report.generated_at_kr }}</b><br/>
-      리포트번호 <b>{{ report.report_id }}</b>
-      {% if report.address_line %}<br/><span style="color:#8A9CA3">{{ report.address_line }}</span>{% endif %}
+      {% if report.address_line %}<div class="addr">{{ report.address_line }}</div>{% endif %}
+      발급일 <b>{{ report.generated_at_kr }}</b> · 리포트번호 <b>{{ report.report_id }}</b>
     </div>
   </div>
 
@@ -187,8 +183,9 @@
   <div class="verdict v-{{ report.verdict.tone | default('neutral') }}">
     <div class="v-top">
       <div class="v-disc">{{ vicon(report.verdict.tone) }}</div>
-      <div class="v-head">
-        <div class="v-label">{{ report.verdict.label }}</div>
+      <div>
+        <div class="v-eyebrow">사전검토 결과</div>
+        <span class="v-label">{{ report.verdict.label }}</span>
         {% if report.verdict.permit_text %}<span class="v-permit">{{ report.verdict.permit_text }}</span>{% endif %}
       </div>
     </div>
@@ -201,13 +198,21 @@
     {% endif %}
   </div>
 
-  {# ── 1. 도면 분석 ── #}
+  {# ── 도면 분석 ── #}
   <div class="card">
-    <div class="sec-head"><span class="sec-num">1</span><span class="sec-title">희망 위치</span></div>
+    {{ sec_head('도면 분석 · 선택한 위치') }}
     {% if report.overlay and report.overlay.available %}
     <div class="fp-wrap">
       {{ report.overlay.svg | safe }}
-      {% if report.overlay.caption %}<div class="fp-cap">{{ report.overlay.caption }}</div>{% endif %}
+      <div class="legend">
+        <span class="pick">번호 = 선택한 철거 검토 대상</span>
+        <span class="dash">점선 = 선택 가능한 벽 · 실선 = 내력벽</span>
+        <span style="--sw: var(--wall-nonload)">비내력벽 후보</span>
+        <span style="--sw: var(--wall-load)">내력벽 후보(선택 불가)</span>
+        <span style="--sw: var(--window)">창호</span>
+        <span style="--sw: var(--wall-unknown)">미확정 벽</span>
+      </div>
+      {# 텍스트 캡션(report.overlay.caption)은 위 시각 범례와 같은 내용이라 중복 출력하지 않는다. #}
     </div>
     {% else %}
     <div class="notice">{{ (report.overlay.unavailable_reason if report.overlay else None) | default('도면 분석 이미지를 준비할 수 없습니다.') }}</div>
@@ -217,8 +222,8 @@
       <div class="edu-t">내력벽과 비내력벽, 무엇이 다른가요?</div>
       <div class="edu-cols">
         {% for e in report.wall_edu %}
-        <div class="edu-col edu-{{ e.tone | default('neutral') }}">
-          <div class="edu-l">{{ e.label }}</div>
+        <div class="edu-col">
+          <div class="edu-l" style="--sw: var(--wall-{{ 'nonload' if e.tone == 'success' else ('load' if e.tone == 'danger' else 'unknown') }})">{{ e.label }}</div>
           <div class="edu-d">{{ e.desc }}</div>
         </div>
         {% endfor %}
@@ -228,9 +233,9 @@
     {% endif %}
   </div>
 
-  {# ── 2. 철거 시 챙겨야 할 요소 ── #}
+  {# ── 철거 시 챙겨야 할 요소 ── #}
   <div class="card">
-    <div class="sec-head"><span class="sec-num">2</span><span class="sec-title">철거 시 챙겨야 할 요소</span></div>
+    {{ sec_head('철거 시 챙겨야 할 요소') }}
     {% if report.facilities %}
       {% for fac in report.facilities %}
       <div class="fac">
@@ -243,10 +248,26 @@
     {% endif %}
   </div>
 
-  {# ── 3. 예상 견적 ── #}
+  {# ── 법적 근거 (FR-REPORT-009 — 모든 화면 노출). 결론 바로 뒤에 둬 '근거가 보이게'. ── #}
+  {% if report.legal_basis %}
+  <div class="card">
+    {{ sec_head('법적 근거') }}
+    <ul class="law-list">
+      {% for b in report.legal_basis %}
+      <li>
+        <b>{{ b.statute }}{% if b.article %} {{ b.article }}{% endif %}</b>
+        {% if b.summary %} — {{ b.summary }}{% endif %}
+        {% if b.url %}<div class="src">{{ b.url }}</div>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {# ── 예상 견적(DENY 제외 — report_pdf.py 게이팅) ── #}
   {% if report.estimate %}
   <div class="card">
-    <div class="sec-head"><span class="sec-num">3</span><span class="sec-title">예상 견적</span></div>
+    {{ sec_head('예상 견적') }}
     {% if report.estimate['items'] %}
     <table class="est">
       {% for item in report.estimate['items'] %}
@@ -270,26 +291,10 @@
   </div>
   {% endif %}
 
-  {# ── 4. 법적 근거 (FR-REPORT-009 — 모든 화면 노출) ── #}
-  {% if report.legal_basis %}
-  <div class="card">
-    <div class="sec-head"><span class="sec-num">4</span><span class="sec-title">법적 근거</span></div>
-    <ul class="law-list">
-      {% for b in report.legal_basis %}
-      <li>
-        <b>{{ b.statute }}{% if b.article %} {{ b.article }}{% endif %}</b>
-        {% if b.summary %} — {{ b.summary }}{% endif %}
-        {% if b.url %}<div class="src">{{ b.url }}</div>{% endif %}
-      </li>
-      {% endfor %}
-    </ul>
-  </div>
-  {% endif %}
-
-  {# ── 5. 진행 일정 ── #}
+  {# ── 진행 일정(ALLOW·WARN 만 — report_pdf.py 게이팅) ── #}
   {% if report.schedule %}
   <div class="card">
-    <div class="sec-head"><span class="sec-num">5</span><span class="sec-title">진행 일정</span></div>
+    {{ sec_head('진행 일정') }}
     <div class="steps">
       {% for s in report.schedule %}
       <div class="step">
@@ -303,11 +308,10 @@
   </div>
   {% endif %}
 
-  {# ── 5. 상담 안내 ── #}
+  {# ── 상담 안내 ── #}
   {% if report.consultation %}
   <div class="consult">
     <div>
-      <span class="free">100% 무료</span>
       <div class="ch">{{ report.consultation.headline }}</div>
       <div class="cb">{{ report.consultation.body }}</div>
     </div>
@@ -321,8 +325,8 @@
   {% endif %}
 
   {% if report.legal_notice %}
-  <div class="legal"><b>법적 고지 · </b>{{ report.legal_notice }}
-    {% if report.ruleset_version %}<br/>적용 룰셋 버전 · <b>{{ report.ruleset_version }}</b> (동일 입력에 대해 동일 판정을 보장하는 기준 버전이에요){% endif %}
+  <div class="legal">{{ report.legal_notice }}
+    {% if report.ruleset_version %}<br/>적용 룰셋 버전 {{ report.ruleset_version }} · 같은 입력에는 같은 판정을 내는 기준 버전이에요.{% endif %}
   </div>
   {% endif %}
 

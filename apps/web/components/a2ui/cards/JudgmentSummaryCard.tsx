@@ -16,15 +16,19 @@
  * risks 는 string 배열일 때만 채택. 형태가 어긋나면 null 반환 → JSON fallback.
  */
 
-import { Stack, Text } from '@mantine/core';
+import { Button, Stack, Text } from '@mantine/core';
 import {
+  IconArrowRight,
   IconCircleCheck,
   IconCircleX,
   IconHeadset,
   IconInfoCircle,
+  IconReportAnalytics,
   IconScale,
   IconUserSearch
 } from '@tabler/icons-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   useEffect,
   useId,
@@ -195,6 +199,7 @@ export function JudgmentSummaryCard({
 }) {
   const decision = normalizeDecision(payload.decision);
   const style = DECISION_STYLES[decision];
+  const router = useRouter();
   const risks = (payload.risks ?? []).filter((r) => r.trim().length > 0);
   const titleId = useId();
   const [showConsult, setShowConsult] = useState(false);
@@ -252,6 +257,58 @@ export function JudgmentSummaryCard({
     };
   }, [sessionIdForKey, stampedSelectionKey]);
   const stale = staleFloorplan || staleSelection;
+
+  // 리포트 진입(2026-09 감사, 1차 액션) — 판정이 영속돼 리포트가 준비됐을 때만 띄운다.
+  // 호스트 브로드캐스트(has_report)가 정본, 없으면 payload.rule_backed 로 폴백. 도면·선택이
+  // 바뀐 옛 카드에서는 상담과 같은 이유로 막는다(현재 리포트는 새 결론이라 카드와 어긋남).
+  const reportReady = actions?.hasReport ?? payload.rule_backed === true;
+  // 레거시(스탬프 없는) 카드는 도면 교체를 스스로 감지하지 못한다 — 상담 경로가 클릭 시점에
+  // 세션의 교체 이력(floorplan_replaced)으로 차단하듯, 리포트 링크는 호스트가 브로드캐스트한
+  // 교체 이력(#legacy-judgment-freshness)이 '없음'으로 확인될 때만 띄운다(마운트 시 조회를
+  // 늘리지 않기 위해 브로드캐스트를 쓴다). 스탬프 카드는 위 stale 검사가 담당.
+  const legacyCard =
+    typeof payload.asset_id !== 'string' && stampedSelectionKey === undefined;
+  const legacyFresh = !legacyCard || actions?.floorplanReplaced === false;
+  const reportHref =
+    reportReady && !stale && legacyFresh && sessionIdForKey
+      ? `/sessions/${sessionIdForKey}/report`
+      : null;
+
+  // 리포트 링크 클릭 시점 재검증 — 마운트 후 다른 탭에서 벽을 다시 고르거나 도면을 바꿔
+  // 새 판정이 생기면 이 카드는 그대로인데 링크는 새 리포트를 연다. 상담과 같은 규칙으로
+  // 세션을 새로 읽어 스탬프(선택 지문·도면)와 대조하고, 어긋나면 이동 대신 '이전 기준'
+  // 표시로 바꾼다. 조회 실패는 이동을 막지 않는다(best-effort).
+  const [checkingReport, setCheckingReport] = useState(false);
+  async function handleReportClick(e: React.MouseEvent<HTMLAnchorElement>) {
+    if (!reportHref || !sessionIdForKey) return;
+    e.preventDefault();
+    setCheckingReport(true);
+    try {
+      const row = await getSession(sessionIdForKey);
+      if (
+        stampedSelectionKey !== undefined &&
+        selectionKeyOf(row.judgment_schema, row.verdict_revision) !== stampedSelectionKey
+      ) {
+        setStaleSelection(true);
+        return;
+      }
+      if (typeof payload.asset_id === 'string') {
+        const live = row.selected_floorplan_asset_id;
+        if (live != null && live !== payload.asset_id) {
+          setStaleOverride(true);
+          return;
+        }
+      } else if (row.floorplan_replaced === true) {
+        setStaleOverride(true);
+        return;
+      }
+    } catch {
+      /* 조회 실패 — 이동 진행(서버 리포트가 정본) */
+    } finally {
+      setCheckingReport(false);
+    }
+    router.push(reportHref);
+  }
 
   // CTA 클릭 시점 재검증 — 서버의 현재 세션을 새로 읽어 이 결과가 아직 유효한지
   // 확인한다. 확인 실패(네트워크)나 응답 필드 부재는 상담을 막지 않는다(전환 크리티컬
@@ -370,6 +427,27 @@ export function JudgmentSummaryCard({
 
       <CardRule />
 
+      {/* 1차 액션 = 리포트 보기(jippin filled). 결과 카드의 다음 행동은 '리포트' 다 —
+          판정·근거·도면·견적을 한 화면에서 보고 PDF 로 받는 곳. 상담은 리포트 화면이
+          코랄 CTA 로 이어받으므로(한 화면 코랄 1회) 여기서는 2차(light)로 둔다. */}
+      {reportHref ? (
+        <Button
+          component={Link}
+          href={reportHref}
+          onClick={(e: React.MouseEvent<HTMLAnchorElement>) => void handleReportClick(e)}
+          loading={checkingReport}
+          fullWidth
+          mih={44}
+          color="jippin"
+          radius="md"
+          mb="xs"
+          leftSection={<IconReportAnalytics size={18} aria-hidden />}
+          rightSection={<IconArrowRight size={16} aria-hidden />}
+        >
+          사전검토 리포트 보기
+        </Button>
+      ) : null}
+
       {/* 상담 인입 — 결과를 본 직후 전문가 상담으로 자연스럽게 잇는다. 클릭하면 같은
           대화 화면에서 빠른 상담폼이 펼쳐지고, 주소 등은 이미 세션이 알고 있어 바로 제출.
           도면이 교체된 옛 결과 카드에서는 CTA 를 막는다 — 상담 lead 에는 세션의 **현재**
@@ -405,10 +483,27 @@ export function JudgmentSummaryCard({
             onSubmitted={() => setConsultSubmitted(true)}
           />
         </Stack>
+      ) : reportHref ? (
+        // 리포트가 있으면 상담은 2차(light) — 코랄 전환 CTA 는 리포트 화면 하단 1회로 모은다.
+        <Button
+          fullWidth
+          mih={44}
+          mb="sm"
+          variant="light"
+          color="jippin"
+          radius="md"
+          leftSection={<IconHeadset size={18} aria-hidden />}
+          onClick={() => void handleConsultClick()}
+          disabled={checkingConsult}
+        >
+          전문가 상담 신청하기
+        </Button>
       ) : (
-        // 전환 CTA(상담) 표준 — CtaButton(coral). 이 카드 화면에서 코랄은 이 1회뿐.
+        // 리포트가 아직 없는 예비 결과에서는 상담이 이 화면의 유일한 전환 액션 —
+        // 공용 CtaButton(coral, 화면당 1회) 위계를 그대로 쓴다(AGENTS §4.8.1).
         <CtaButton
           fullWidth
+          mih={44}
           mb="sm"
           leftSection={<IconHeadset size={18} aria-hidden />}
           onClick={() => void handleConsultClick()}
