@@ -28,7 +28,7 @@ vi.mock('@/components/analytics/LeadCtaButton', () => ({
   )
 }));
 
-import SessionReportPage, { addressLineOf } from '../page';
+import SessionReportPage, { addressLineOf, sameVerdictSnapshot } from '../page';
 
 afterEach(() => {
   cleanup();
@@ -131,5 +131,43 @@ describe('SessionReportPage (2026-09 재설계)', () => {
     render(<SessionReportPage />);
     await waitFor(() => expect(screen.getByText('리포트가 아직 준비되지 않았어요')).toBeTruthy());
     expect(screen.getByRole('link', { name: '대화로 돌아가기' })).toBeTruthy();
+  });
+});
+
+describe('sameVerdictSnapshot (리포트·세션 스냅샷 대조)', () => {
+  it('evaluated_at 과 verdict_revision 이 같은 판정을 가리키면 통과(2ms 허용)', () => {
+    const at = '2026-06-29T03:00:00.123Z';
+    const rev = Date.parse(at);
+    expect(sameVerdictSnapshot({ evaluated_at: at }, { has_report: true, verdict_revision: rev })).toBe(true);
+    expect(sameVerdictSnapshot({ evaluated_at: at }, { has_report: true, verdict_revision: rev + 1 })).toBe(true);
+  });
+  it('세션이 더 새 판정(다른 리비전)이거나 판정이 지워졌으면 불일치', () => {
+    const at = '2026-06-29T03:00:00Z';
+    expect(
+      sameVerdictSnapshot({ evaluated_at: at }, { has_report: true, verdict_revision: Date.parse(at) + 5000 })
+    ).toBe(false);
+    expect(sameVerdictSnapshot({ evaluated_at: at }, { has_report: false, verdict_revision: null })).toBe(false);
+  });
+  it('구 API(리비전 없음)는 대조 불가 → 통과', () => {
+    expect(sameVerdictSnapshot({ evaluated_at: '2026-06-29T03:00:00Z' }, { has_report: true })).toBe(true);
+  });
+});
+
+describe('리포트 스냅샷 재시도', () => {
+  it('세션 리비전이 리포트와 어긋나면 리포트를 다시 읽고, 그래도 어긋나면 도면 없이 판정만 보여준다', async () => {
+    const stale = { ...REPORT, evaluated_at: '2026-06-29T03:00:00Z' };
+    apiMocks.getSessionReport.mockResolvedValueOnce(stale).mockResolvedValueOnce(stale);
+    apiMocks.getSession.mockResolvedValue({
+      has_report: true,
+      verdict_revision: Date.parse('2026-06-29T04:00:00Z'),
+      selected_floorplan_asset_id: 'asset-1',
+      judgment_schema: { selected_walls: ['w1'] }
+    });
+    render(<SessionReportPage />);
+    await screen.findByRole('heading', { level: 1 });
+    expect(apiMocks.getSessionReport).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('report-floorplan-loading')).toBeNull();
+    expect(screen.getByText('선택 정보 없음')).toBeTruthy();
+    apiMocks.getSession.mockReset();
   });
 });

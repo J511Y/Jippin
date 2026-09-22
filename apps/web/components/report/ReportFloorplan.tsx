@@ -6,19 +6,26 @@
  * 문법·같은 색). 채팅의 `FloorplanOverlayCard` 는 선택 인터랙션용이라 리포트에서는 쓰지 않는다.
  *
  * 좌표 정본: `judgment_schema.wall_objects[].coords` / `window_objects[].coords` 는 원본
- * 이미지 픽셀 좌표계의 폴리라인이다. 서명 URL 로 받은 원본 이미지의 natural 크기를 viewBox 로
- * 쓰면 별도 스케일 없이 겹친다.
+ * 이미지 픽셀 좌표계의 폴리라인이다. 계약상 0~1 정규화 좌표도 허용되므로(MaskCoord), PDF 와
+ * 같은 규칙으로 최대값이 1.5 이하면 이미지 크기로 환산한다.
  *
- * 이미지·좌표가 없으면 아무것도 렌더하지 않는다(리포트 본문이 도면 없이도 성립).
+ * 선택 강조색은 Blueprint Navy(`brand.professional`, 도면 분석 UI 강조 축) — coral 은 전환 CTA
+ * 전용이라 마커·배지에 쓰지 않는다(AGENTS §4.8.1).
+ *
+ * 이미지·좌표를 못 가져오면 '준비할 수 없음' 상태를 명시적으로 보여준다(조용히 사라지면
+ * 도면이 없는 리포트와 구분이 안 됨).
  */
 
-import { Skeleton, Text } from '@mantine/core';
-import { useEffect, useMemo, useState } from 'react';
+import { Button, Skeleton, Text } from '@mantine/core';
+import { IconRefresh } from '@tabler/icons-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { getFloorplanAssetSignedUrl } from '@/lib/sessions/api';
 
 type Pt = { x: number; y: number };
 type WallLike = { id: string; kind: 'wall' | 'window'; wallType: string; pts: Pt[] };
+
+const SELECT_STROKE = 'var(--jippin-brand-professional)';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -74,6 +81,23 @@ export function selectedIdsOf(judgment: unknown): string[] {
   return ids;
 }
 
+/**
+ * 0~1 정규화 좌표(MaskCoord)를 이미지 픽셀로 환산 — PDF `report_overlay.build_overlay` 와 같은
+ * 판정(폴리라인 최대값이 0 초과 1.5 이하면 정규화로 본다).
+ */
+export function scaleObjectsToImage(
+  objects: WallLike[],
+  dims: { w: number; h: number }
+): WallLike[] {
+  let maxV = 0;
+  for (const o of objects) for (const p of o.pts) maxV = Math.max(maxV, p.x, p.y);
+  if (!(maxV > 0 && maxV <= 1.5)) return objects;
+  return objects.map((o) => ({
+    ...o,
+    pts: o.pts.map((p) => ({ x: p.x * dims.w, y: p.y * dims.h }))
+  }));
+}
+
 function strokeOf(wallType: string): string {
   switch (wallType) {
     case 'NON_LOAD_BEARING':
@@ -99,6 +123,11 @@ function centroid(pts: Pt[]): Pt {
   };
 }
 
+type LoadState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; url: string; dims: { w: number; h: number } }
+  | { kind: 'failed' };
+
 export function ReportFloorplan({
   sessionId,
   assetId,
@@ -108,15 +137,16 @@ export function ReportFloorplan({
   assetId: string;
   judgment: unknown;
 }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [state, setState] = useState<LoadState>({ kind: 'loading' });
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
-  const objects = useMemo(() => overlayObjectsOf(judgment), [judgment]);
+  const rawObjects = useMemo(() => overlayObjectsOf(judgment), [judgment]);
   const selected = useMemo(() => selectedIdsOf(judgment), [judgment]);
 
   useEffect(() => {
     let ignore = false;
+    // attempt 가 바뀌면(재시도) 로딩부터 다시 — await 이후 setState 라 cascading 아님.
     void (async () => {
       try {
         const signed = await getFloorplanAssetSignedUrl(sessionId, assetId);
@@ -125,27 +155,57 @@ export function ReportFloorplan({
         const img = new Image();
         img.onload = () => {
           if (ignore) return;
-          setDims({ w: img.naturalWidth, h: img.naturalHeight });
-          setUrl(signed);
+          setState({
+            kind: 'ready',
+            url: signed,
+            dims: { w: img.naturalWidth, h: img.naturalHeight }
+          });
         };
         img.onerror = () => {
-          if (!ignore) setFailed(true);
+          if (!ignore) setState({ kind: 'failed' });
         };
         img.src = signed;
       } catch {
-        if (!ignore) setFailed(true);
+        if (!ignore) setState({ kind: 'failed' });
       }
     })();
     return () => {
       ignore = true;
     };
-  }, [sessionId, assetId]);
+  }, [sessionId, assetId, attempt]);
 
-  if (failed) return null;
-  if (!url || !dims) {
+  if (state.kind === 'failed') {
+    return (
+      <div className="report-floorplan report-floorplan--unavailable" role="status">
+        <Text size="sm" fw={600}>
+          도면 이미지를 지금 불러올 수 없어요
+        </Text>
+        <Text size="xs" c="dimmed" mt={4} style={{ wordBreak: 'keep-all' }}>
+          판정과 근거는 그대로 유효해요. PDF 리포트에는 도면 분석이 함께 담깁니다.
+        </Text>
+        <Button
+          mt="sm"
+          size="xs"
+          variant="light"
+          color="jippin"
+          radius="md"
+          leftSection={<IconRefresh size={14} aria-hidden />}
+          onClick={() => {
+            setState({ kind: 'loading' });
+            retry();
+          }}
+        >
+          다시 시도
+        </Button>
+      </div>
+    );
+  }
+  if (state.kind === 'loading') {
     return <Skeleton height={220} radius="md" data-testid="report-floorplan-loading" />;
   }
 
+  const { url, dims } = state;
+  const objects = scaleObjectsToImage(rawObjects, dims);
   const base = Math.max(dims.w, dims.h);
   const lineW = Math.max(2, base / 220);
   const badgeR = Math.max(10, base / 36);
@@ -163,7 +223,7 @@ export function ReportFloorplan({
           }
         >
           <image href={url} width={dims.w} height={dims.h} />
-          {/* 선택 대상은 코랄 헤일로 + 진한 선, 나머지는 옅게 — PDF 와 동일 위계. */}
+          {/* 선택 대상은 네이비 헤일로 + 진한 선, 나머지는 옅게 — PDF 와 동일 위계. */}
           {objects.map((o) => {
             const picked = selected.includes(o.id);
             const attr = pointsAttr(o.pts);
@@ -172,8 +232,8 @@ export function ReportFloorplan({
                 <polyline
                   points={attr}
                   fill="none"
-                  stroke="var(--jippin-brand-cta)"
-                  strokeOpacity={0.45}
+                  stroke={SELECT_STROKE}
+                  strokeOpacity={0.4}
                   strokeWidth={lineW * 3.2}
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -210,7 +270,7 @@ export function ReportFloorplan({
                   cx={c.x}
                   cy={c.y}
                   r={badgeR}
-                  fill="var(--jippin-brand-cta)"
+                  fill={SELECT_STROKE}
                   stroke="#FFFFFF"
                   strokeWidth={badgeR * 0.12}
                 />

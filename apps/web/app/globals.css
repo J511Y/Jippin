@@ -431,6 +431,13 @@ a {
   padding: 10px;
 }
 
+.report-floorplan--unavailable {
+  border-style: dashed;
+  background: var(--jippin-brand-surface);
+  text-align: center;
+  padding: 18px 16px;
+}
+
 .report-floorplan__stage {
   position: relative;
   width: 100%;
@@ -468,7 +475,7 @@ a {
 
 .report-legend .pick::before {
   height: 6px;
-  background: var(--jippin-brand-cta);
+  background: var(--jippin-brand-professional);
 }
 
 .report-actions {

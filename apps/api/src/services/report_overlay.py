@@ -117,7 +117,7 @@ def build_overlay(
 
     # 색 의미는 웹 오버레이 카드와 동일하게 유지한다(파랑=창호, #color-semantics).
     caption = (
-        "주황 강조 = 선택한 철거 검토 대상 · 초록 = 비내력벽 후보 · "
+        "네이비 강조 = 선택한 철거 검토 대상 · 초록 = 비내력벽 후보 · "
         "빨강 = 내력벽 후보(선택 불가) · 파랑 = 창호 · 회색 = 미확정 벽"
     )
 
@@ -212,9 +212,9 @@ def build_overlay(
         is_selected = isinstance(wid, str) and wid in selected_ids
         attr = _points_attr(pts)
         if is_selected:
-            # 강조: 굵은 주황 헤일로 + 종류 톤 실선.
+            # 강조: 굵은 네이비(brand.professional) 헤일로 + 종류 톤 실선 — coral 은 전환 CTA 전용(AGENTS §4.8.1).
             parts.append(
-                f'<polyline points="{attr}" fill="none" stroke="#F26B4F" '
+                f'<polyline points="{attr}" fill="none" stroke="#153B5C" '
                 f'stroke-opacity="0.45" stroke-width="{line_w * 3.2:.2f}" '
                 f'stroke-linecap="round" stroke-linejoin="round"/>'
             )
@@ -244,7 +244,7 @@ def build_overlay(
         num = index_by_id[wid]
         parts.append(
             f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{badge_r:.1f}" '
-            f'fill="#F26B4F" stroke="#FFFFFF" stroke-width="{badge_r * 0.12:.2f}"/>'
+            f'fill="#153B5C" stroke="#FFFFFF" stroke-width="{badge_r * 0.12:.2f}"/>'
         )
         parts.append(
             f'<text x="{cx:.1f}" y="{cy:.1f}" fill="#FFFFFF" '

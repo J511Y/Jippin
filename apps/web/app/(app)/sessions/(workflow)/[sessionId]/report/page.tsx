@@ -43,6 +43,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { LegalNotice } from '@/components/LegalNotice';
 import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
 import { ReportFloorplan, selectedIdsOf } from '@/components/report/ReportFloorplan';
+import { PageColumn } from '@/components/ui';
 import { trackPrecheckReportView } from '@/lib/analytics/sessions-funnel';
 import { friendlyApiMessage, parseApiError } from '@/lib/api/error';
 import {
@@ -97,6 +98,23 @@ export function addressLineOf(address: Record<string, unknown> | null | undefine
   return line || null;
 }
 
+/**
+ * 리포트(evaluated_at = rule_evaluated_at)와 세션(verdict_revision = 같은 값의 epoch ms)이
+ * 같은 판정을 가리키는지. 어느 쪽이든 리비전 정보가 없으면(구 API) 대조 불가 → 통과.
+ * ms 반올림 차이(파이썬 int(ts*1000) vs JS Date.parse)를 2ms 허용한다.
+ */
+export function sameVerdictSnapshot(
+  report: Pick<SessionReportResponse, 'evaluated_at'>,
+  row: Pick<SessionResponse, 'has_report' | 'verdict_revision'>
+): boolean {
+  if (row.has_report === false) return false;
+  const rev = row.verdict_revision;
+  if (typeof rev !== 'number' || !report.evaluated_at) return true;
+  const at = Date.parse(report.evaluated_at);
+  if (Number.isNaN(at)) return true;
+  return Math.abs(at - rev) <= 2;
+}
+
 function formatDateKr(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -149,18 +167,29 @@ export default function SessionReportPage() {
     void (async () => {
       try {
         await syncExistingToken();
-        const data = await getSessionReport(sessionId);
+        // 리포트(판정)와 세션 메타(선택 도면·판단스키마)를 **한 스냅샷**으로 맞춘다 — 두 요청
+        // 사이에 다른 탭에서 벽을 다시 고르거나 도면을 바꾸면 옛 결론 위에 새 도면이 얹힐 수
+        // 있다. 세션의 verdict_revision(rule_evaluated_at epoch ms)이 리포트의 evaluated_at 과
+        // 다르거나 has_report 가 꺼져 있으면 리포트를 다시 읽는다(1회 재시도, 그래도 어긋나면
+        // 도면 없이 판정만 보여준다 — 판정은 서버 정본이라 항상 유효).
+        let data = await getSessionReport(sessionId);
+        let row: SessionResponse | null = null;
+        for (let i = 0; i < 2; i += 1) {
+          try {
+            row = await getSession(sessionId);
+          } catch {
+            row = null; // 도면 없이 렌더(best-effort)
+            break;
+          }
+          if (sameVerdictSnapshot(data, row)) break;
+          if (i === 0) data = await getSessionReport(sessionId);
+          else row = null;
+        }
         if (ignore) return;
         setReport(data);
+        setSession(row);
         // 퍼널: 리포트 진입(판정 준비됨).
         trackPrecheckReportView(true);
-        // 도면 오버레이용 세션 메타(선택 도면·판단스키마) — 실패해도 리포트는 성립(best-effort).
-        try {
-          const row = await getSession(sessionId);
-          if (!ignore) setSession(row);
-        } catch {
-          /* 도면 없이 렌더 */
-        }
       } catch (err) {
         const parsed = parseApiError(err);
         if (ignore) return;
@@ -199,9 +228,19 @@ export default function SessionReportPage() {
     ...(legalBasis.length ? ['legal'] : []),
     ...(additionalChecks.length ? ['checks'] : [])
   ];
+  // PDF 안내 문구는 실제로 실리는 섹션만 말한다(report_pdf.py 게이팅: 일정은 ALLOW·WARN,
+  // 견적은 DENY 제외).
+  const pdfSections = [
+    '도면 분석',
+    '챙겨야 할 요소',
+    ...(result?.verdict !== 'DENY' ? ['예상 견적'] : []),
+    ...(result?.verdict === 'ALLOW' || result?.verdict === 'WARN' ? ['진행 일정'] : [])
+  ];
 
   return (
-    <Stack gap="lg" maw={760} mx="auto">
+    // AGENTS §4.8.1 — 좁은 읽기 컬럼은 PageColumn(prose 720)으로.
+    <PageColumn width="prose">
+    <Stack gap="lg">
       {/* 헤더 — Blueprint Navy 전문 축(상단 보더 + 네이비 아이브로). 제목 대신 주소·날짜가
           이 리포트가 '어느 집·언제' 것인지 말한다. 결론(display)은 바로 아래 히어로가 맡는다. */}
       <Stack
@@ -365,7 +404,7 @@ export default function SessionReportPage() {
               </LeadCtaButton>
             </div>
             <Text size="xs" c="dimmed" ta="center" style={{ wordBreak: 'keep-all' }}>
-              PDF 에는 도면 분석·챙겨야 할 요소·예상 견적·진행 일정이 함께 담겨요.
+              PDF 에는 {pdfSections.join('·')}이 함께 담겨요.
             </Text>
             {pdfError && (
               <Alert color="danger" variant="light" radius="md" py="xs">
@@ -494,6 +533,7 @@ export default function SessionReportPage() {
         </Group>
       ) : null}
     </Stack>
+    </PageColumn>
   );
 }
 
