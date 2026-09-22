@@ -366,7 +366,7 @@ a {
   --report-tone: var(--mantine-color-gray-6);
   --report-tone-surface: var(--jippin-brand-surface);
   border: 1px solid var(--jippin-brand-border);
-  border-radius: 14px;
+  border-radius: var(--mantine-radius-lg);
   background: var(--report-tone-surface);
   padding: 18px 18px 16px;
 }
@@ -434,7 +434,7 @@ a {
 
 .report-floorplan {
   border: 1px solid var(--jippin-brand-border);
-  border-radius: 12px;
+  border-radius: var(--mantine-radius-lg);
   background: var(--jippin-brand-surface-alt);
   padding: 10px;
 }
@@ -449,7 +449,7 @@ a {
 .report-floorplan__stage {
   position: relative;
   width: 100%;
-  border-radius: 8px;
+  border-radius: var(--mantine-radius-md);
   overflow: hidden;
   background: var(--jippin-brand-surface);
 }
@@ -714,7 +714,7 @@ a[data-faq-row]:focus-visible {
   margin: 8px auto 0;
   padding: 10px 12px 10px 14px;
   border: 1px solid var(--mantine-color-jippin-2);
-  border-radius: 12px;
+  border-radius: var(--mantine-radius-lg);
   background: var(--mantine-color-jippin-0);
 }
 
@@ -725,7 +725,7 @@ a[data-faq-row]:focus-visible {
   flex-shrink: 0;
   width: 34px;
   height: 34px;
-  border-radius: 10px;
+  border-radius: var(--mantine-radius-md);
   color: var(--jippin-brand-primary-fg);
   background: var(--jippin-brand-primary);
 }

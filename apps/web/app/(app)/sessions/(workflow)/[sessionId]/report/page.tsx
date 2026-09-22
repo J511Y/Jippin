@@ -284,9 +284,17 @@ export default function SessionReportPage() {
           paddingTop: 'var(--mantine-spacing-md)'
         }}
       >
-        <Text size="sm" fw={600} c="var(--jippin-brand-professional)">
+        {/* 페이지 h1 — 로딩·미준비·오류·판정 갱신 상태에서도 헤딩 내비게이션으로 이 화면을
+            식별할 수 있게 항상 렌더한다. 판정 한 줄은 아래 히어로의 h2(display 크기). */}
+        <Title
+          order={1}
+          fz="sm"
+          fw={600}
+          c="var(--jippin-brand-professional)"
+          style={{ lineHeight: 1.4 }}
+        >
           AI 사전검토 리포트
-        </Text>
+        </Title>
         {report !== null ? (
           <Group gap="xs" align="baseline" wrap="wrap">
             {addressLine ? (
@@ -304,8 +312,35 @@ export default function SessionReportPage() {
       </Stack>
 
       {error && (
+        // 일시 오류(네트워크·5xx)에도 복구 경로를 준다 — 다시 시도(전체 재조회) + 대화 복귀.
         <Alert color="danger" variant="light" radius="md">
-          {error}
+          <Stack gap="sm">
+            <Text size="sm">{error}</Text>
+            <Group gap="xs">
+              <Button
+                size="sm"
+                mih={44}
+                color="jippin"
+                radius="md"
+                leftSection={<IconRefresh size={16} aria-hidden />}
+                onClick={reload}
+              >
+                다시 시도
+              </Button>
+              <Button
+                component={Link}
+                href={`/sessions/${sessionId}`}
+                size="sm"
+                mih={44}
+                variant="light"
+                color="jippin"
+                radius="md"
+                leftSection={<IconArrowLeft size={16} aria-hidden />}
+              >
+                대화로 돌아가기
+              </Button>
+            </Group>
+          </Stack>
         </Alert>
       )}
 
@@ -370,7 +405,7 @@ export default function SessionReportPage() {
                 {verdict?.icon ?? <IconHelpCircle size={22} />}
               </span>
               <Stack gap={2} style={{ minWidth: 0 }}>
-                <Title order={1} id="report-verdict" className="report-hero__label">
+                <Title order={2} id="report-verdict" className="report-hero__label">
                   <VisuallyHidden>사전검토 결과: </VisuallyHidden>
                   {verdict?.label ?? result.verdict ?? '판정'}
                 </Title>

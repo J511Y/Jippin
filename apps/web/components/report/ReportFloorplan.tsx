@@ -305,8 +305,9 @@ export function ReportFloorplan({
           })}
         </svg>
       </div>
-      {/* 색 단독 전달 금지(DESIGN §2.4) — 범례 라벨을 항상 붙인다. */}
-      <div className="report-legend" aria-hidden>
+      {/* 색 단독 전달 금지(DESIGN §2.4) — 범례 라벨을 항상 붙이고, 보조기기에도 읽히게
+          aria-hidden 을 두지 않는다(선 색이 뜻하는 벽 종류는 여기서만 설명된다). */}
+      <div className="report-legend" aria-label="도면 범례">
         <span className="pick">번호 = 선택한 철거 검토 대상</span>
         <span style={{ '--sw': 'var(--floorplan-wall-nonload)' } as React.CSSProperties}>
           비내력벽 후보

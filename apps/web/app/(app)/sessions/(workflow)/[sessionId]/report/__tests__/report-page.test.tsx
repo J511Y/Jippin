@@ -82,8 +82,10 @@ describe('SessionReportPage (2026-09 재설계)', () => {
     });
     render(<SessionReportPage />);
 
-    const h1 = await screen.findByRole('heading', { level: 1 });
-    expect(h1.textContent).toContain('조건부 가능');
+    // 페이지 h1 은 항상 '리포트' 정체성, 판정은 h2(display) — 실패/미준비 상태에서도 헤딩이 남는다.
+    const h2 = await screen.findByRole('heading', { level: 2, name: /조건부 가능/ });
+    expect(h2.textContent).toContain('조건부 가능');
+    expect(screen.getByRole('heading', { level: 1, name: 'AI 사전검토 리포트' })).toBeTruthy();
     // 판정은 한 번만 — 옛 화면의 '판단 결과' 카드 중복 제거.
     expect(screen.getAllByText('조건부 가능')).toHaveLength(1);
     expect(screen.getByText('서울특별시 강남구 테헤란로 101 래미안아파트 103동 1201호')).toBeTruthy();
@@ -116,7 +118,7 @@ describe('SessionReportPage (2026-09 재설계)', () => {
     });
     apiMocks.getSession.mockResolvedValueOnce({ selected_floorplan_asset_id: null, judgment_schema: {} });
     render(<SessionReportPage />);
-    await screen.findByRole('heading', { level: 1 });
+    await screen.findByRole('heading', { level: 2, name: /어려움/ });
     expect(screen.queryByText('예상 견적')).toBeNull();
   });
 
@@ -133,6 +135,15 @@ describe('SessionReportPage (2026-09 재설계)', () => {
     render(<SessionReportPage />);
     await waitFor(() => expect(screen.getByText('리포트가 아직 준비되지 않았어요')).toBeTruthy());
     expect(screen.getByRole('link', { name: '대화로 돌아가기' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'AI 사전검토 리포트' })).toBeTruthy();
+  });
+
+  it('일반 오류(네트워크·5xx)면 다시 시도와 대화로 돌아가기를 제공한다', async () => {
+    apiMocks.getSessionReport.mockRejectedValueOnce(new Error('network down'));
+    render(<SessionReportPage />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '다시 시도' })).toBeTruthy());
+    expect(screen.getByRole('link', { name: '대화로 돌아가기' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'AI 사전검토 리포트' })).toBeTruthy();
   });
 });
 
@@ -168,7 +179,8 @@ describe('리포트 스냅샷 재시도', () => {
     render(<SessionReportPage />);
     await screen.findByText('판정이 방금 갱신됐어요');
     expect(apiMocks.getSessionReport).toHaveBeenCalledTimes(2);
-    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'AI 사전검토 리포트' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'PDF 리포트 받기' })).toBeNull();
     expect(screen.getByRole('button', { name: '최신 리포트 불러오기' })).toBeTruthy();
     apiMocks.getSession.mockReset();
@@ -178,7 +190,7 @@ describe('리포트 스냅샷 재시도', () => {
     apiMocks.getSessionReport.mockResolvedValueOnce(REPORT);
     apiMocks.getSession.mockRejectedValueOnce(new Error('network'));
     render(<SessionReportPage />);
-    await screen.findByRole('heading', { level: 1 });
+    await screen.findByRole('heading', { level: 2 });
     expect(screen.getByText('도면 이미지를 지금 불러올 수 없어요')).toBeTruthy();
     expect(screen.getByRole('button', { name: '다시 시도' })).toBeTruthy();
     // 선택 수도 0 을 사실처럼 말하지 않는다.

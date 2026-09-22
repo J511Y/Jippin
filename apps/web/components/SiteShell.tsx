@@ -349,6 +349,7 @@ export function SiteShell({ children }: { children: ReactNode }) {
                 href="/sessions"
                 onClick={drawer.close}
                 fullWidth
+                mih={44}
                 color="jippin"
                 radius="md"
                 mb="xs"
