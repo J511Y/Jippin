@@ -262,13 +262,13 @@ export default function SessionReportPage() {
     ...(legalBasis.length ? ['legal'] : []),
     ...(additionalChecks.length ? ['checks'] : [])
   ];
-  // PDF 안내 문구는 실제로 실리는 섹션만 말한다(report_pdf.py 게이팅: 일정은 ALLOW·WARN,
-  // 견적은 DENY 제외).
+  // PDF 안내 문구는 실제로 실리는 섹션만 말한다 — 견적·일정 모두 ALLOW·WARN 에서만
+  // (운영 estimate.compute_estimate 의 _ESTIMABLE_VERDICTS 와 report_pdf.py 게이팅 동일).
+  const estimable = result?.verdict === 'ALLOW' || result?.verdict === 'WARN';
   const pdfSections = [
     '도면 분석',
     '챙겨야 할 요소',
-    ...(result?.verdict !== 'DENY' ? ['예상 견적'] : []),
-    ...(result?.verdict === 'ALLOW' || result?.verdict === 'WARN' ? ['진행 일정'] : [])
+    ...(estimable ? ['예상 견적', '진행 일정'] : [])
   ];
 
   return (
@@ -375,8 +375,8 @@ export default function SessionReportPage() {
 
       {report === null && !notReady && !error && !verdictChanged && (
         <Stack gap="md" aria-busy="true" aria-label="리포트 불러오는 중">
-          <Skeleton height={132} radius={14} />
-          <Skeleton height={220} radius={12} />
+          <Skeleton height={132} radius="lg" />
+          <Skeleton height={220} radius="lg" />
           <Group grow>
             <Skeleton height={44} radius="md" />
             <Skeleton height={44} radius="md" />

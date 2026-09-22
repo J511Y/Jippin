@@ -111,6 +111,14 @@ function strokeOf(wallType: string): string {
   }
 }
 
+/**
+ * 색 단독 전달 금지(COLOR_SYSTEM §4.2.1) — 선택 가능한 벽(비내력·미확정·창호)은 점선, 내력벽은
+ * 실선. 적록색맹 사용자도 선 모양으로 구분한다. 선택된 대상은 실선 + 헤일로 + 번호.
+ */
+function dashFor(wallType: string, lineW: number): string | undefined {
+  return wallType === 'LOAD_BEARING' ? undefined : `${(lineW * 3).toFixed(1)} ${(lineW * 2).toFixed(1)}`;
+}
+
 function pointsAttr(pts: Pt[]): string {
   return pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
 }
@@ -270,6 +278,7 @@ export function ReportFloorplan({
                 stroke={strokeOf(o.wallType)}
                 strokeOpacity={0.55}
                 strokeWidth={lineW * 1.1}
+                strokeDasharray={dashFor(o.wallType, lineW)}
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
@@ -309,6 +318,7 @@ export function ReportFloorplan({
           aria-hidden 을 두지 않는다(선 색이 뜻하는 벽 종류는 여기서만 설명된다). */}
       <div className="report-legend" aria-label="도면 범례">
         <span className="pick">번호 = 선택한 철거 검토 대상</span>
+        <span className="dash">점선 = 선택 가능한 벽 · 실선 = 내력벽</span>
         <span style={{ '--sw': 'var(--floorplan-wall-nonload)' } as React.CSSProperties}>
           비내력벽 후보
         </span>

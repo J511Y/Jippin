@@ -34,6 +34,11 @@ export interface ChatActions {
    */
   hasReport?: boolean;
   /**
+   * 세션의 도면 교체 이력(단건 GET 의 floorplan_replaced) — 스탬프 없는 옛 결과 카드가 리포트
+   * 링크를 띄워도 되는지 판단하는 데 쓴다. undefined = 아직 모름(조회 전/실패).
+   */
+  floorplanReplaced?: boolean;
+  /**
    * 미리보기 전용 — true 면 도면 카드가 업로드/등록/전송을 실제로 하지 않고 첨부 완료
    * 상태만 재현한다. `/a2ui-preview` 는 공개 경로라 익명 세션 발급·잘못된 session_id 로의
    * 업로드 호출(422)이 일어나면 안 된다. 실서비스 호스트(SessionChat)는 설정하지 않는다.

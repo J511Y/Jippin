@@ -317,7 +317,13 @@ describe('JudgmentSummaryCard 리포트 진입 (2026-09 감사)', () => {
   it('호스트가 has_report 를 주면 리포트 보기가 1차 액션(링크)으로 붙고 상담은 2차가 된다', () => {
     render(
       <ChatActionsProvider
-        value={{ sessionId: 'sess-1', sendMessage: vi.fn(), busy: false, hasReport: true }}
+        value={{
+          sessionId: 'sess-1',
+          sendMessage: vi.fn(),
+          busy: false,
+          hasReport: true,
+          floorplanReplaced: false
+        }}
       >
         <JudgmentSummaryCard payload={basePayload} />
       </ChatActionsProvider>
@@ -333,8 +339,31 @@ describe('JudgmentSummaryCard 리포트 진입 (2026-09 감사)', () => {
     expect(screen.getByRole('button', { name: '전문가 상담 신청하기' })).toBeTruthy();
   });
 
-  it('호스트 브로드캐스트가 없으면 payload.rule_backed 로 폴백한다', () => {
-    render(<JudgmentSummaryCard payload={{ ...basePayload, rule_backed: true }} />);
+  it('호스트 브로드캐스트가 없으면 payload.rule_backed 로 폴백한다(스탬프 카드)', () => {
+    render(
+      <JudgmentSummaryCard payload={{ ...basePayload, rule_backed: true, asset_id: 'asset-1' }} />
+    );
+    expect(screen.getByRole('link', { name: '사전검토 리포트 보기' })).toBeTruthy();
+  });
+
+  it('스탬프 없는 옛 카드는 호스트가 교체 이력 없음을 확인했을 때만 리포트 링크를 띄운다', () => {
+    const legacy = { ...basePayload, rule_backed: true };
+    const { unmount } = render(
+      <ChatActionsProvider
+        value={{ sessionId: 'sess-1', sendMessage: vi.fn(), busy: false, hasReport: true, floorplanReplaced: true }}
+      >
+        <JudgmentSummaryCard payload={legacy} />
+      </ChatActionsProvider>
+    );
+    expect(screen.queryByRole('link', { name: '사전검토 리포트 보기' })).toBeNull();
+    unmount();
+    render(
+      <ChatActionsProvider
+        value={{ sessionId: 'sess-1', sendMessage: vi.fn(), busy: false, hasReport: true, floorplanReplaced: false }}
+      >
+        <JudgmentSummaryCard payload={legacy} />
+      </ChatActionsProvider>
+    );
     expect(screen.getByRole('link', { name: '사전검토 리포트 보기' })).toBeTruthy();
   });
 
@@ -368,7 +397,8 @@ describe('JudgmentSummaryCard 리포트 상태 미확정(hasReport undefined)', 
             title: '검토 결과',
             summary: '요약',
             session_id: 'sess-1',
-            rule_backed: true
+            rule_backed: true,
+            asset_id: 'asset-1'
           }}
         />
       </ChatActionsProvider>

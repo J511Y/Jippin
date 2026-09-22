@@ -225,9 +225,16 @@ def build_overlay(
             )
         else:
             # 비선택 벽도 종류 색으로 옅게 — 사용자가 왜 일부만 선택 가능한지 보이게.
+            # 색 단독 전달 금지(COLOR_SYSTEM §4.2.1): 선택 가능한 벽(비내력·미확정·창호)은
+            # 점선, 내력벽은 실선 — 웹 ReportFloorplan 과 같은 인코딩.
+            dash = (
+                ""
+                if wt == "LOAD_BEARING"
+                else f' stroke-dasharray="{line_w * 3:.1f} {line_w * 2:.1f}"'
+            )
             parts.append(
                 f'<polyline points="{attr}" fill="none" stroke="{_tone_stroke(wt)}" '
-                f'stroke-opacity="0.55" stroke-width="{line_w * 1.1:.2f}" '
+                f'stroke-opacity="0.55" stroke-width="{line_w * 1.1:.2f}"{dash} '
                 f'stroke-linecap="round" stroke-linejoin="round"/>'
             )
 

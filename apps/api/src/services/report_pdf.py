@@ -206,10 +206,10 @@ def _build_context(
     # 판정별 섹션 게이팅(2026-09 디자인 감사) — 고정 안내를 판정과 무관하게 전부 싣지
     # 않는다. '철거 어려움'(DENY) 리포트에 공사 일정·견적이 실리면 결론과 모순되고,
     # '추가 확인 필요'(HOLD) 는 아직 진행 단계가 아니라 일정을 보여주지 않는다.
-    #   - 진행 일정: ALLOW·WARN 만.
-    #   - 예상 견적: DENY 제외(HOLD 는 참고용으로 유지).
+    #   - 진행 일정·예상 견적: ALLOW·WARN 만(운영 estimate.compute_estimate 의
+    #     _ESTIMABLE_VERDICTS 와 동일 — HOLD 는 견적 자체가 산출되지 않는다).
     show_schedule = verdict["code"] in ("ALLOW", "WARN")
-    show_estimate = verdict["code"] != "DENY"
+    show_estimate = show_schedule
     return {
         "report": {
             "generated_at_kr": _generated_at_kr(now),

@@ -260,8 +260,15 @@ export function JudgmentSummaryCard({
   // 호스트 브로드캐스트(has_report)가 정본, 없으면 payload.rule_backed 로 폴백. 도면·선택이
   // 바뀐 옛 카드에서는 상담과 같은 이유로 막는다(현재 리포트는 새 결론이라 카드와 어긋남).
   const reportReady = actions?.hasReport ?? payload.rule_backed === true;
+  // 레거시(스탬프 없는) 카드는 도면 교체를 스스로 감지하지 못한다 — 상담 경로가 클릭 시점에
+  // 세션의 교체 이력(floorplan_replaced)으로 차단하듯, 리포트 링크는 호스트가 브로드캐스트한
+  // 교체 이력(#legacy-judgment-freshness)이 '없음'으로 확인될 때만 띄운다(마운트 시 조회를
+  // 늘리지 않기 위해 브로드캐스트를 쓴다). 스탬프 카드는 위 stale 검사가 담당.
+  const legacyCard =
+    typeof payload.asset_id !== 'string' && stampedSelectionKey === undefined;
+  const legacyFresh = !legacyCard || actions?.floorplanReplaced === false;
   const reportHref =
-    reportReady && !stale && sessionIdForKey
+    reportReady && !stale && legacyFresh && sessionIdForKey
       ? `/sessions/${sessionIdForKey}/report`
       : null;
 
@@ -390,6 +397,7 @@ export function JudgmentSummaryCard({
           component={Link}
           href={reportHref}
           fullWidth
+          mih={44}
           color="jippin"
           radius="md"
           mb="xs"
@@ -439,6 +447,7 @@ export function JudgmentSummaryCard({
         // 리포트가 있으면 상담은 2차(light) — 코랄 전환 CTA 는 리포트 화면 하단 1회로 모은다.
         <Button
           fullWidth
+          mih={44}
           mb="sm"
           variant="light"
           color="jippin"
@@ -454,6 +463,7 @@ export function JudgmentSummaryCard({
         // 공용 CtaButton(coral, 화면당 1회) 위계를 그대로 쓴다(AGENTS §4.8.1).
         <CtaButton
           fullWidth
+          mih={44}
           mb="sm"
           leftSection={<IconHeadset size={18} aria-hidden />}
           onClick={() => void handleConsultClick()}

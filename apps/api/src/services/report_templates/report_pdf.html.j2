@@ -105,6 +105,7 @@
   .legend { display: flex; flex-wrap: wrap; gap: 4pt 12pt; justify-content: center; margin-top: 6pt; font-size: 8.5pt; color: var(--copy); }
   .legend span::before { content: ''; display: inline-block; width: 14pt; height: 3pt; border-radius: 2pt; margin-right: 4pt; vertical-align: middle; background: var(--sw); }
   .legend .pick::before { background: var(--navy); height: 5pt; }
+  .legend .dash::before { background: repeating-linear-gradient(90deg, var(--copy) 0 4pt, transparent 4pt 7pt); }
   .notice { background: var(--soft); border: 0.8pt dashed var(--line); border-radius: 6pt; padding: 12pt; text-align: center; font-size: 9.5pt; color: var(--copy); }
 
   /* ---- 내력벽/비내력벽 짧은 설명(2열, 상태색 대신 라벨 텍스트만) ---- */
@@ -205,6 +206,7 @@
       {{ report.overlay.svg | safe }}
       <div class="legend">
         <span class="pick">번호 = 선택한 철거 검토 대상</span>
+        <span class="dash">점선 = 선택 가능한 벽 · 실선 = 내력벽</span>
         <span style="--sw: var(--wall-nonload)">비내력벽 후보</span>
         <span style="--sw: var(--wall-load)">내력벽 후보(선택 불가)</span>
         <span style="--sw: var(--window)">창호</span>

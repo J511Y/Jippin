@@ -59,6 +59,7 @@ function Conversation({
   // undefined = 아직 조회 전/조회 실패(모름). 카드는 이때 payload.rule_backed 로 폴백한다 —
   // false 를 성급히 브로드캐스트하면 일시적 메타 조회 실패가 리포트 진입점을 전부 지운다.
   const [hasReport, setHasReport] = useState<boolean | undefined>(undefined);
+  const [floorplanReplaced, setFloorplanReplaced] = useState<boolean | undefined>(undefined);
   // 선택 도면 asset — 컨텍스트로 카드들에 브로드캐스트한다(#floorplan-cards-broadcast).
   // undefined = 아직 조회 전(카드가 자체 조회로 폴백).
   const [selectedFloorplanAssetId, setSelectedFloorplanAssetId] = useState<
@@ -115,6 +116,7 @@ function Conversation({
     (seq: number, row: Awaited<ReturnType<typeof getSession>>) => {
       if (seq !== sessionFetchSeq.current) return; // 더 새 조회가 이미 시작됨 — 폐기.
       setHasReport(row.has_report);
+      setFloorplanReplaced(row.floorplan_replaced === true);
       setSelectedFloorplanAssetId(row.selected_floorplan_asset_id ?? null);
     },
     []
@@ -167,7 +169,8 @@ function Conversation({
         busy,
         refreshSession,
         selectedFloorplanAssetId,
-        hasReport
+        hasReport,
+        floorplanReplaced
       }}
     >
       <Box className="chat-shell">

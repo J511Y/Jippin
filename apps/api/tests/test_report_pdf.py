@@ -554,10 +554,12 @@ def test_deny_report_omits_schedule_and_estimate() -> None:
     assert 'class="sec-title">예상 견적<' not in html
 
 
-def test_hold_report_keeps_estimate_but_no_schedule() -> None:
+def test_hold_report_omits_estimate_and_schedule() -> None:
+    # 운영 estimate.compute_estimate 는 ALLOW·WARN 만 산출(_ESTIMABLE_VERDICTS) — HOLD 에
+    # 견적을 실으면 웹·PDF 안내와 어긋난다.
     ctx = _ctx_for("HOLD")
     assert ctx["schedule"] is None
-    assert ctx["estimate"] is not None
+    assert ctx["estimate"] is None
 
 
 def test_allow_and_warn_keep_schedule() -> None:
