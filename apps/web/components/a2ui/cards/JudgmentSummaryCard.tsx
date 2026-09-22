@@ -28,6 +28,7 @@ import {
   IconUserSearch
 } from '@tabler/icons-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   useEffect,
   useId,
@@ -198,6 +199,7 @@ export function JudgmentSummaryCard({
 }) {
   const decision = normalizeDecision(payload.decision);
   const style = DECISION_STYLES[decision];
+  const router = useRouter();
   const risks = (payload.risks ?? []).filter((r) => r.trim().length > 0);
   const titleId = useId();
   const [showConsult, setShowConsult] = useState(false);
@@ -271,6 +273,42 @@ export function JudgmentSummaryCard({
     reportReady && !stale && legacyFresh && sessionIdForKey
       ? `/sessions/${sessionIdForKey}/report`
       : null;
+
+  // 리포트 링크 클릭 시점 재검증 — 마운트 후 다른 탭에서 벽을 다시 고르거나 도면을 바꿔
+  // 새 판정이 생기면 이 카드는 그대로인데 링크는 새 리포트를 연다. 상담과 같은 규칙으로
+  // 세션을 새로 읽어 스탬프(선택 지문·도면)와 대조하고, 어긋나면 이동 대신 '이전 기준'
+  // 표시로 바꾼다. 조회 실패는 이동을 막지 않는다(best-effort).
+  const [checkingReport, setCheckingReport] = useState(false);
+  async function handleReportClick(e: React.MouseEvent<HTMLAnchorElement>) {
+    if (!reportHref || !sessionIdForKey) return;
+    e.preventDefault();
+    setCheckingReport(true);
+    try {
+      const row = await getSession(sessionIdForKey);
+      if (
+        stampedSelectionKey !== undefined &&
+        selectionKeyOf(row.judgment_schema, row.verdict_revision) !== stampedSelectionKey
+      ) {
+        setStaleSelection(true);
+        return;
+      }
+      if (typeof payload.asset_id === 'string') {
+        const live = row.selected_floorplan_asset_id;
+        if (live != null && live !== payload.asset_id) {
+          setStaleOverride(true);
+          return;
+        }
+      } else if (row.floorplan_replaced === true) {
+        setStaleOverride(true);
+        return;
+      }
+    } catch {
+      /* 조회 실패 — 이동 진행(서버 리포트가 정본) */
+    } finally {
+      setCheckingReport(false);
+    }
+    router.push(reportHref);
+  }
 
   // CTA 클릭 시점 재검증 — 서버의 현재 세션을 새로 읽어 이 결과가 아직 유효한지
   // 확인한다. 확인 실패(네트워크)나 응답 필드 부재는 상담을 막지 않는다(전환 크리티컬
@@ -396,6 +434,8 @@ export function JudgmentSummaryCard({
         <Button
           component={Link}
           href={reportHref}
+          onClick={(e: React.MouseEvent<HTMLAnchorElement>) => void handleReportClick(e)}
+          loading={checkingReport}
           fullWidth
           mih={44}
           color="jippin"

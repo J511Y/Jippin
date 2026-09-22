@@ -198,6 +198,7 @@ function Conversation({
                 href={`/sessions/${sessionId}/report`}
                 color="jippin"
                 size="sm"
+                mih={44}
                 radius="md"
                 rightSection={<IconArrowRight size={16} aria-hidden />}
               >

@@ -224,7 +224,7 @@ export function ReportFloorplan({
     );
   }
   if (state.kind === 'loading') {
-    return <Skeleton height={220} radius="md" data-testid="report-floorplan-loading" />;
+    return <Skeleton height={220} radius="lg" data-testid="report-floorplan-loading" />;
   }
 
   const { url, dims } = state;

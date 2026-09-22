@@ -614,11 +614,19 @@ export default function SessionReportPage() {
             variant="subtle"
             color="jippin"
             radius="md"
+            mih={44}
             leftSection={<IconArrowLeft size={16} aria-hidden />}
           >
             대화로 돌아가기
           </Button>
-          <Button component={Link} href="/sessions" variant="subtle" color="gray" radius="md">
+          <Button
+            component={Link}
+            href="/sessions"
+            variant="subtle"
+            color="gray"
+            radius="md"
+            mih={44}
+          >
             세션 목록
           </Button>
         </Group>

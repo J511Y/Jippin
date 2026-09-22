@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@/test-utils';
+import { cleanup, render, screen, waitFor } from '@/test-utils';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,6 +14,9 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/sessions/api', () => apiMocks);
+
+const routerMocks = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => routerMocks }));
 
 vi.mock('@/components/leads/QuickPrecheckConsultForm', () => ({
   QuickPrecheckConsultForm: ({
@@ -413,5 +416,34 @@ describe('JudgmentSummaryCard 리포트 상태 미확정(hasReport undefined)', 
     const consult = screen.getByRole('button', { name: '전문가 상담 신청하기' });
     expect(consult.getAttribute('data-variant')).toBe('filled');
     expect(consult.getAttribute('style') ?? '').toContain('coral');
+  });
+});
+
+describe('JudgmentSummaryCard 리포트 링크 클릭 시점 재검증', () => {
+  const stamped = {
+    decision: 'possible' as const,
+    title: '검토 결과',
+    summary: '요약',
+    session_id: 'sess-1',
+    rule_backed: true,
+    asset_id: 'asset-1'
+  };
+
+  it('클릭 시 세션을 다시 읽어 도면이 바뀌었으면 이동하지 않고 이전 도면 기준으로 표시한다', async () => {
+    const user = userEvent.setup();
+    apiMocks.getSession.mockResolvedValueOnce({ selected_floorplan_asset_id: 'asset-2' });
+    render(<JudgmentSummaryCard payload={stamped} />);
+    await user.click(screen.getByRole('link', { name: '사전검토 리포트 보기' }));
+    await screen.findByText(/이전에 올렸던 도면 기준/);
+    expect(routerMocks.push).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: '사전검토 리포트 보기' })).toBeNull();
+  });
+
+  it('세션이 그대로면 리포트로 이동한다', async () => {
+    const user = userEvent.setup();
+    apiMocks.getSession.mockResolvedValueOnce({ selected_floorplan_asset_id: 'asset-1' });
+    render(<JudgmentSummaryCard payload={stamped} />);
+    await user.click(screen.getByRole('link', { name: '사전검토 리포트 보기' }));
+    await waitFor(() => expect(routerMocks.push).toHaveBeenCalledWith('/sessions/sess-1/report'));
   });
 });
