@@ -56,7 +56,9 @@ function Conversation({
 }) {
   const { messages, streamingText, activity, plan, status, error, send } =
     useAgentStream(sessionId);
-  const [hasReport, setHasReport] = useState(false);
+  // undefined = 아직 조회 전/조회 실패(모름). 카드는 이때 payload.rule_backed 로 폴백한다 —
+  // false 를 성급히 브로드캐스트하면 일시적 메타 조회 실패가 리포트 진입점을 전부 지운다.
+  const [hasReport, setHasReport] = useState<boolean | undefined>(undefined);
   // 선택 도면 asset — 컨텍스트로 카드들에 브로드캐스트한다(#floorplan-cards-broadcast).
   // undefined = 아직 조회 전(카드가 자체 조회로 폴백).
   const [selectedFloorplanAssetId, setSelectedFloorplanAssetId] = useState<
@@ -170,7 +172,7 @@ function Conversation({
     >
       <Box className="chat-shell">
         <Box className="chat-main">
-          {hasReport ? (
+          {hasReport === true ? (
             // 리포트 준비 배너 — 판정이 영속되는 순간 사용자가 알아채야 하는 1순위 신호
             // (2026-09 감사: 우상단 14px 텍스트 링크는 아무도 못 봤다). role=status 로
             // 보조기기에도 즉시 알리고, 결과 카드 안의 '리포트 보기' 버튼과 짝을 이룬다.

@@ -128,6 +128,34 @@ type LoadState =
   | { kind: 'ready'; url: string; dims: { w: number; h: number } }
   | { kind: 'failed' };
 
+/**
+ * 도면 구역의 '불러올 수 없음' 상태 — 리포트 화면이 세션 메타 조회에 실패했을 때와,
+ * 이 컴포넌트가 서명 URL·이미지 로드에 실패했을 때 같은 모양으로 보여준다.
+ */
+export function FloorplanUnavailable({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="report-floorplan report-floorplan--unavailable" role="status">
+      <Text size="sm" fw={600}>
+        도면 이미지를 지금 불러올 수 없어요
+      </Text>
+      <Text size="xs" c="dimmed" mt={4} style={{ wordBreak: 'keep-all' }}>
+        판정과 근거는 그대로 유효해요. PDF 리포트에는 도면 분석이 함께 담깁니다.
+      </Text>
+      <Button
+        mt="sm"
+        size="xs"
+        variant="light"
+        color="jippin"
+        radius="md"
+        leftSection={<IconRefresh size={14} aria-hidden />}
+        onClick={onRetry}
+      >
+        다시 시도
+      </Button>
+    </div>
+  );
+}
+
 export function ReportFloorplan({
   sessionId,
   assetId,
@@ -176,28 +204,12 @@ export function ReportFloorplan({
 
   if (state.kind === 'failed') {
     return (
-      <div className="report-floorplan report-floorplan--unavailable" role="status">
-        <Text size="sm" fw={600}>
-          도면 이미지를 지금 불러올 수 없어요
-        </Text>
-        <Text size="xs" c="dimmed" mt={4} style={{ wordBreak: 'keep-all' }}>
-          판정과 근거는 그대로 유효해요. PDF 리포트에는 도면 분석이 함께 담깁니다.
-        </Text>
-        <Button
-          mt="sm"
-          size="xs"
-          variant="light"
-          color="jippin"
-          radius="md"
-          leftSection={<IconRefresh size={14} aria-hidden />}
-          onClick={() => {
-            setState({ kind: 'loading' });
-            retry();
-          }}
-        >
-          다시 시도
-        </Button>
-      </div>
+      <FloorplanUnavailable
+        onRetry={() => {
+          setState({ kind: 'loading' });
+          retry();
+        }}
+      />
     );
   }
   if (state.kind === 'loading') {

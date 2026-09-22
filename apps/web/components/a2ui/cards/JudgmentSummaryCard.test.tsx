@@ -355,3 +355,33 @@ describe('JudgmentSummaryCard 리포트 진입 (2026-09 감사)', () => {
     expect(screen.queryByRole('link', { name: '사전검토 리포트 보기' })).toBeNull();
   });
 });
+
+describe('JudgmentSummaryCard 리포트 상태 미확정(hasReport undefined)', () => {
+  it('호스트가 아직 모르면(undefined) payload.rule_backed 폴백이 살아 있고, 상담은 코랄 CtaButton 이 아니다', () => {
+    render(
+      <ChatActionsProvider
+        value={{ sessionId: 'sess-1', sendMessage: vi.fn(), busy: false, hasReport: undefined }}
+      >
+        <JudgmentSummaryCard
+          payload={{
+            decision: 'possible',
+            title: '검토 결과',
+            summary: '요약',
+            session_id: 'sess-1',
+            rule_backed: true
+          }}
+        />
+      </ChatActionsProvider>
+    );
+    expect(screen.getByRole('link', { name: '사전검토 리포트 보기' })).toBeTruthy();
+    const consult = screen.getByRole('button', { name: '전문가 상담 신청하기' });
+    expect(consult.getAttribute('data-variant')).toBe('light');
+  });
+
+  it('리포트가 없는 예비 결과에서는 상담이 유일한 전환 액션이라 CtaButton(coral filled)', () => {
+    render(<JudgmentSummaryCard payload={{ decision: 'possible', title: 't', summary: 's' }} />);
+    const consult = screen.getByRole('button', { name: '전문가 상담 신청하기' });
+    expect(consult.getAttribute('data-variant')).toBe('filled');
+    expect(consult.getAttribute('style') ?? '').toContain('coral');
+  });
+});

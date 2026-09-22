@@ -39,6 +39,7 @@ import {
 import { LEGAL_NOTICE_TEXT } from '@/components/LegalNotice';
 import { useChatActions } from '@/components/agent/chat-actions';
 import { QuickPrecheckConsultForm } from '@/components/leads/QuickPrecheckConsultForm';
+import { CtaButton } from '@/components/ui';
 import { getSession } from '@/lib/sessions/api';
 
 import { type CardAccent, CardHeader, CardRule, CardShell } from './CardShell';
@@ -434,13 +435,12 @@ export function JudgmentSummaryCard({
             onSubmitted={() => setConsultSubmitted(true)}
           />
         </Stack>
-      ) : (
-        // 상담은 2차 액션(light) — 코랄 전환 CTA 는 리포트 화면 하단 1회로 모은다.
-        // 리포트가 아직 없는 예비 결과(rule_backed=false)에서는 이 버튼이 유일한 액션.
+      ) : reportHref ? (
+        // 리포트가 있으면 상담은 2차(light) — 코랄 전환 CTA 는 리포트 화면 하단 1회로 모은다.
         <Button
           fullWidth
           mb="sm"
-          variant={reportHref ? 'light' : 'filled'}
+          variant="light"
           color="jippin"
           radius="md"
           leftSection={<IconHeadset size={18} aria-hidden />}
@@ -449,6 +449,18 @@ export function JudgmentSummaryCard({
         >
           전문가 상담 신청하기
         </Button>
+      ) : (
+        // 리포트가 아직 없는 예비 결과에서는 상담이 이 화면의 유일한 전환 액션 —
+        // 공용 CtaButton(coral, 화면당 1회) 위계를 그대로 쓴다(AGENTS §4.8.1).
+        <CtaButton
+          fullWidth
+          mb="sm"
+          leftSection={<IconHeadset size={18} aria-hidden />}
+          onClick={() => void handleConsultClick()}
+          disabled={checkingConsult}
+        >
+          전문가 상담 신청하기
+        </CtaButton>
       )}
 
       {/* 결과 화면 법적 고지 — 봉인된 SSOT 문구 그대로(TYPOGRAPHY §4.5/BRAND §6, 단축 금지). */}

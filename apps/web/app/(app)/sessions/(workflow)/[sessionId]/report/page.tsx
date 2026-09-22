@@ -34,7 +34,8 @@ import {
   IconCircleCheck,
   IconCircleX,
   IconFileDownload,
-  IconHelpCircle
+  IconHelpCircle,
+  IconRefresh
 } from '@tabler/icons-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -42,7 +43,11 @@ import { useEffect, useState, type ReactNode } from 'react';
 
 import { LegalNotice } from '@/components/LegalNotice';
 import { LeadCtaButton } from '@/components/analytics/LeadCtaButton';
-import { ReportFloorplan, selectedIdsOf } from '@/components/report/ReportFloorplan';
+import {
+  FloorplanUnavailable,
+  ReportFloorplan,
+  selectedIdsOf
+} from '@/components/report/ReportFloorplan';
 import { PageColumn } from '@/components/ui';
 import { trackPrecheckReportView } from '@/lib/analytics/sessions-funnel';
 import { friendlyApiMessage, parseApiError } from '@/lib/api/error';
@@ -89,7 +94,10 @@ type RuleEval = {
 export function addressLineOf(address: Record<string, unknown> | null | undefined): string | null {
   if (!address) return null;
   const str = (k: string) => (typeof address[k] === 'string' ? (address[k] as string).trim() : '');
-  const parts = [str('road_address') || str('jibun_address'), str('apartment_name')].filter(Boolean);
+  const base = str('road_address') || str('jibun_address');
+  const apt = str('apartment_name');
+  // 도로명에 단지명이 이미 들어 있으면 반복하지 않는다(PDF _address_line 과 같은 포함 검사).
+  const parts = [base, apt && !base.includes(apt) ? apt : ''].filter(Boolean);
   const dong = str('building_dong');
   if (dong) parts.push(dong.endsWith('동') ? dong : `${dong}동`);
   const ho = str('unit_ho');
@@ -132,7 +140,22 @@ export default function SessionReportPage() {
   const sessionId = params.sessionId;
   const [report, setReport] = useState<SessionReportResponse | null>(null);
   const [session, setSession] = useState<SessionResponse | null>(null);
+  // 세션 메타(도면·판단스키마) 조회 실패 — 리포트는 성립하되 도면 구역은 '불러올 수 없음'으로.
+  const [sessionFailed, setSessionFailed] = useState(false);
+  // 리포트·세션 스냅샷이 재시도 뒤에도 어긋남 — 다른 탭에서 판정이 막 바뀐 상황. 옛 결론을
+  // 보여주지 않고 다시 불러오기를 권한다.
+  const [verdictChanged, setVerdictChanged] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [notReady, setNotReady] = useState(false);
+  const reload = () => {
+    setReport(null);
+    setSession(null);
+    setSessionFailed(false);
+    setVerdictChanged(false);
+    setError(null);
+    setNotReady(false);
+    setAttempt((n) => n + 1);
+  };
   const [error, setError] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -170,24 +193,35 @@ export default function SessionReportPage() {
         // 리포트(판정)와 세션 메타(선택 도면·판단스키마)를 **한 스냅샷**으로 맞춘다 — 두 요청
         // 사이에 다른 탭에서 벽을 다시 고르거나 도면을 바꾸면 옛 결론 위에 새 도면이 얹힐 수
         // 있다. 세션의 verdict_revision(rule_evaluated_at epoch ms)이 리포트의 evaluated_at 과
-        // 다르거나 has_report 가 꺼져 있으면 리포트를 다시 읽는다(1회 재시도, 그래도 어긋나면
-        // 도면 없이 판정만 보여준다 — 판정은 서버 정본이라 항상 유효).
+        // 다르거나 has_report 가 꺼져 있으면 리포트를 다시 읽는다(1회 재시도). 그래도 어긋나면
+        // 옛 결론을 띄우지 않고 '판정이 갱신됨 · 다시 불러오기' 상태로 멈춘다.
         let data = await getSessionReport(sessionId);
         let row: SessionResponse | null = null;
+        let rowFailed = false;
+        let mismatch = false;
         for (let i = 0; i < 2; i += 1) {
           try {
             row = await getSession(sessionId);
           } catch {
-            row = null; // 도면 없이 렌더(best-effort)
+            row = null;
+            rowFailed = true; // 도면 구역은 '불러올 수 없음'으로 렌더(리포트는 성립)
             break;
           }
-          if (sameVerdictSnapshot(data, row)) break;
+          if (sameVerdictSnapshot(data, row)) {
+            mismatch = false;
+            break;
+          }
+          mismatch = true;
           if (i === 0) data = await getSessionReport(sessionId);
-          else row = null;
         }
         if (ignore) return;
+        if (mismatch) {
+          setVerdictChanged(true);
+          return;
+        }
         setReport(data);
         setSession(row);
+        setSessionFailed(rowFailed);
         // 퍼널: 리포트 진입(판정 준비됨).
         trackPrecheckReportView(true);
       } catch (err) {
@@ -203,7 +237,7 @@ export default function SessionReportPage() {
     return () => {
       ignore = true;
     };
-  }, [sessionId]);
+  }, [sessionId, attempt]);
 
   const result = report?.rule_eval_result as RuleEval | undefined;
   const verdict = result?.verdict ? VERDICT[result.verdict] : undefined;
@@ -275,6 +309,25 @@ export default function SessionReportPage() {
         </Alert>
       )}
 
+      {verdictChanged && (
+        <Stack gap="sm" className="report-hero" role="status">
+          <Text fw={600}>판정이 방금 갱신됐어요</Text>
+          <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+            다른 탭에서 벽·창호 선택이나 도면이 바뀌어 결과가 새로 계산됐어요. 최신 리포트를
+            다시 불러와 주세요.
+          </Text>
+          <Button
+            color="jippin"
+            radius="md"
+            w="fit-content"
+            leftSection={<IconRefresh size={16} aria-hidden />}
+            onClick={reload}
+          >
+            최신 리포트 불러오기
+          </Button>
+        </Stack>
+      )}
+
       {notReady && (
         <Stack gap="sm" className="report-hero">
           <Text fw={600}>리포트가 아직 준비되지 않았어요</Text>
@@ -294,7 +347,7 @@ export default function SessionReportPage() {
         </Stack>
       )}
 
-      {report === null && !notReady && !error && (
+      {report === null && !notReady && !error && !verdictChanged && (
         <Stack gap="md" aria-busy="true" aria-label="리포트 불러오는 중">
           <Skeleton height={132} radius={14} />
           <Skeleton height={220} radius={12} />
@@ -372,7 +425,11 @@ export default function SessionReportPage() {
             </dl>
           </section>
 
-          {session?.selected_floorplan_asset_id ? (
+          {/* 도면: 세션 메타를 못 읽었으면(네트워크) 조용히 빼지 않고 '불러올 수 없음'을 보여준다.
+              세션은 읽었지만 선택 도면이 없는 리포트(도면 없이 진행)만 구역 자체를 생략. */}
+          {sessionFailed ? (
+            <FloorplanUnavailable onRetry={reload} />
+          ) : session?.selected_floorplan_asset_id ? (
             <ReportFloorplan
               sessionId={sessionId}
               assetId={session.selected_floorplan_asset_id}

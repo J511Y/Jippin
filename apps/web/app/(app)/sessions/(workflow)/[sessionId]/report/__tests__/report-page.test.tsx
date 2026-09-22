@@ -68,6 +68,8 @@ describe('addressLineOf', () => {
       '서울특별시 강남구 테헤란로 101 래미안아파트 103동 1201호'
     );
     expect(addressLineOf(null)).toBeNull();
+    // 도로명에 단지명이 이미 있으면 반복하지 않는다(PDF _address_line 동일).
+    expect(addressLineOf({ road_address: '서울 강남구 테헤란로 101 래미안아파트', apartment_name: '래미안아파트' })).toBe('서울 강남구 테헤란로 101 래미안아파트');
   });
 });
 
@@ -154,7 +156,7 @@ describe('sameVerdictSnapshot (리포트·세션 스냅샷 대조)', () => {
 });
 
 describe('리포트 스냅샷 재시도', () => {
-  it('세션 리비전이 리포트와 어긋나면 리포트를 다시 읽고, 그래도 어긋나면 도면 없이 판정만 보여준다', async () => {
+  it('세션 리비전이 리포트와 어긋나면 리포트를 다시 읽고, 그래도 어긋나면 옛 결론 대신 갱신 안내를 보여준다', async () => {
     const stale = { ...REPORT, evaluated_at: '2026-06-29T03:00:00Z' };
     apiMocks.getSessionReport.mockResolvedValueOnce(stale).mockResolvedValueOnce(stale);
     apiMocks.getSession.mockResolvedValue({
@@ -164,10 +166,20 @@ describe('리포트 스냅샷 재시도', () => {
       judgment_schema: { selected_walls: ['w1'] }
     });
     render(<SessionReportPage />);
-    await screen.findByRole('heading', { level: 1 });
+    await screen.findByText('판정이 방금 갱신됐어요');
     expect(apiMocks.getSessionReport).toHaveBeenCalledTimes(2);
-    expect(screen.queryByTestId('report-floorplan-loading')).toBeNull();
-    expect(screen.getByText('선택 정보 없음')).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'PDF 리포트 받기' })).toBeNull();
+    expect(screen.getByRole('button', { name: '최신 리포트 불러오기' })).toBeTruthy();
     apiMocks.getSession.mockReset();
+  });
+
+  it('세션 메타 조회가 실패하면 도면 구역을 조용히 빼지 않고 불러올 수 없음 상태를 보여준다', async () => {
+    apiMocks.getSessionReport.mockResolvedValueOnce(REPORT);
+    apiMocks.getSession.mockRejectedValueOnce(new Error('network'));
+    render(<SessionReportPage />);
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.getByText('도면 이미지를 지금 불러올 수 없어요')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '다시 시도' })).toBeTruthy();
   });
 });
