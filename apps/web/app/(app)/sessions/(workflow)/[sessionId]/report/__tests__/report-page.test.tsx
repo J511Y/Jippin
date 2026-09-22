@@ -88,7 +88,8 @@ describe('SessionReportPage (2026-09 재설계)', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'AI 사전검토 리포트' })).toBeTruthy();
     // 판정은 한 번만 — 옛 화면의 '판단 결과' 카드 중복 제거.
     expect(screen.getAllByText('조건부 가능')).toHaveLength(1);
-    expect(screen.getByText('서울특별시 강남구 테헤란로 101 래미안아파트 103동 1201호')).toBeTruthy();
+    // PageHeader 부제: 주소 · 판정일 한 줄.
+    expect(screen.getByText(/서울특별시 강남구 테헤란로 101 래미안아파트 103동 1201호 · .*판정/)).toBeTruthy();
     expect(screen.getByText('2곳 선택')).toBeTruthy();
     expect(screen.getByText('필요')).toBeTruthy();
     expect(screen.getByText('1건')).toBeTruthy();

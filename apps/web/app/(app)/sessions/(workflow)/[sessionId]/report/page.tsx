@@ -48,7 +48,7 @@ import {
   ReportFloorplan,
   selectedIdsOf
 } from '@/components/report/ReportFloorplan';
-import { PageColumn } from '@/components/ui';
+import { PageColumn, PageHeader } from '@/components/ui';
 import { trackPrecheckReportView } from '@/lib/analytics/sessions-funnel';
 import { friendlyApiMessage, parseApiError } from '@/lib/api/error';
 import {
@@ -277,39 +277,30 @@ export default function SessionReportPage() {
     <Stack gap="lg">
       {/* 헤더 — Blueprint Navy 전문 축(상단 보더 + 네이비 아이브로). 제목 대신 주소·날짜가
           이 리포트가 '어느 집·언제' 것인지 말한다. 결론(display)은 바로 아래 히어로가 맡는다. */}
-      <Stack
-        gap={4}
+      <div
         style={{
           borderTop: '3px solid var(--jippin-brand-professional)',
           paddingTop: 'var(--mantine-spacing-md)'
         }}
       >
-        {/* 페이지 h1 — 로딩·미준비·오류·판정 갱신 상태에서도 헤딩 내비게이션으로 이 화면을
-            식별할 수 있게 항상 렌더한다. 판정 한 줄은 아래 히어로의 h2(display 크기). */}
-        <Title
-          order={1}
-          fz="sm"
-          fw={600}
-          c="var(--jippin-brand-professional)"
-          style={{ lineHeight: 1.4 }}
-        >
-          AI 사전검토 리포트
-        </Title>
-        {report !== null ? (
-          <Group gap="xs" align="baseline" wrap="wrap">
-            {addressLine ? (
-              <Text fw={600} style={{ wordBreak: 'keep-all' }}>
-                {addressLine}
-              </Text>
-            ) : null}
-            {evaluatedKr ? (
-              <Text size="sm" c="dimmed">
-                {evaluatedKr} 판정
-              </Text>
-            ) : null}
-          </Group>
-        ) : null}
-      </Stack>
+        {/* 페이지 h1 은 공용 PageHeader(theme h1 크기) — 로딩·미준비·오류·판정 갱신 상태에서도
+            항상 렌더해 헤딩 내비게이션으로 이 화면을 식별한다. 판정 한 줄은 아래 히어로의
+            h2(display 크기). 부제는 '어느 집·언제' 리포트인지. */}
+        <PageHeader
+          title={
+            <Text component="span" inherit c="var(--jippin-brand-professional)">
+              AI 사전검토 리포트
+            </Text>
+          }
+          subtitle={
+            report !== null && (addressLine || evaluatedKr)
+              ? [addressLine, evaluatedKr ? `${evaluatedKr} 판정` : null]
+                  .filter(Boolean)
+                  .join(' · ')
+              : undefined
+          }
+        />
+      </div>
 
       {error && (
         // 일시 오류(네트워크·5xx)에도 복구 경로를 준다 — 다시 시도(전체 재조회) + 대화 복귀.
@@ -480,10 +471,12 @@ export default function SessionReportPage() {
           {/* ── 2. 다음 행동 — PDF(제품 기능) + 상담(전환, 코랄 1회) ── */}
           <Stack gap="xs">
             <div className="report-actions">
+              {/* 모바일 터치 타깃 ≥44px(AGENTS §4.8.1) — md 버튼은 42px 이라 mih 로 보강. */}
               <Button
                 color="jippin"
                 radius="md"
                 size="md"
+                mih={44}
                 onClick={handleIssuePdf}
                 loading={pdfLoading}
                 leftSection={<IconFileDownload size={18} aria-hidden />}
@@ -494,6 +487,7 @@ export default function SessionReportPage() {
                 cta="report_bottom"
                 fromSession={sessionId}
                 size="md"
+                mih={44}
                 color="coral"
                 radius="md"
               >
