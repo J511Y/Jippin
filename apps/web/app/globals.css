@@ -359,113 +359,13 @@ a {
 }
 
 /* ============================================================================
-   사전검토 리포트 화면 — 결론 한 장(판정 히어로 + 3행 요약 + 도면) → 액션 → 상세(접이식).
-   상태색은 판정 히어로 한 곳에만, 코랄은 상담 CTA 1회, 깊이는 얇은 보더 하나로 통일.
+   사전검토 리포트 — 도면 범례 스와치. 카드·판정·아코디언은 Mantine 공통 컴포넌트(Card ·
+   Accordion)와 theme 기본값을 그대로 쓰므로 페이지 전용 CSS 는 이 범례 하나뿐이다.
    ========================================================================== */
-.report-hero {
-  --report-tone: var(--mantine-color-gray-6);
-  --report-tone-surface: var(--jippin-brand-surface);
-  border: 1px solid var(--jippin-brand-border);
-  border-radius: var(--mantine-radius-lg);
-  background: var(--report-tone-surface);
-  padding: 18px 18px 16px;
-}
-
-.report-hero--success {
-  --report-tone: var(--mantine-color-success-6);
-  --report-tone-surface: var(--mantine-color-success-0);
-}
-.report-hero--warning {
-  --report-tone: var(--mantine-color-warning-6);
-  --report-tone-surface: var(--mantine-color-warning-0);
-}
-.report-hero--danger {
-  --report-tone: var(--mantine-color-danger-6);
-  --report-tone-surface: var(--mantine-color-danger-0);
-}
-.report-hero--info {
-  --report-tone: var(--mantine-color-info-6);
-  --report-tone-surface: var(--mantine-color-info-0);
-}
-
-.report-hero__disc {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  color: #fff;
-  background: var(--report-tone);
-}
-
-.report-hero__label {
-  margin: 0;
-  font-size: var(--jippin-fz-display);
-  font-weight: 700;
-  line-height: 1.25;
-  letter-spacing: -0.01em;
-  color: var(--jippin-brand-ink);
-  word-break: keep-all;
-}
-
-/* 3행 요약(대상 벽체 · 행위허가 · 추가 확인) — 랜딩 목업과 같은 문법. */
-.report-facts {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0;
-  margin-top: 14px;
-  border-top: 1px solid color-mix(in srgb, var(--jippin-brand-ink) 10%, transparent);
-}
-
-.report-fact {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--jippin-brand-ink) 8%, transparent);
-}
-
-.report-fact:last-child {
-  border-bottom: none;
-}
-
-.report-floorplan {
-  border: 1px solid var(--jippin-brand-border);
-  border-radius: var(--mantine-radius-lg);
-  background: var(--jippin-brand-surface-alt);
-  padding: 10px;
-}
-
-.report-floorplan--unavailable {
-  border-style: dashed;
-  background: var(--jippin-brand-surface);
-  text-align: center;
-  padding: 18px 16px;
-}
-
-.report-floorplan__stage {
-  position: relative;
-  width: 100%;
-  border-radius: var(--mantine-radius-md);
-  overflow: hidden;
-  background: var(--jippin-brand-surface);
-}
-
-.report-floorplan__stage svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  max-height: 420px;
-}
-
 .report-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 14px;
-  margin-top: 8px;
   font-size: var(--mantine-font-size-xs);
   color: var(--jippin-brand-copy);
 }
@@ -492,32 +392,6 @@ a {
     var(--jippin-brand-copy) 0 5px,
     transparent 5px 9px
   );
-}
-
-.report-actions {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-}
-
-/* 공용 브레이크포인트(DESIGN §4.8)만 — base 는 1열, sm(48em)부터 2열. */
-@media (min-width: 48em) {
-  .report-actions {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-.report-details .mantine-Accordion-item {
-  border-color: var(--jippin-brand-border);
-}
-
-.report-details .mantine-Accordion-control {
-  padding-inline: 4px;
-}
-
-.report-details .mantine-Accordion-label {
-  font-weight: 600;
-  color: var(--jippin-brand-ink);
 }
 
 .mantine-active:active {

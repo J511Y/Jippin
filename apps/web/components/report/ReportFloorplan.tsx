@@ -16,7 +16,7 @@
  * 도면이 없는 리포트와 구분이 안 됨).
  */
 
-import { Button, Skeleton, Text } from '@mantine/core';
+import { Button, Card, Skeleton, Stack, Text } from '@mantine/core';
 import { IconRefresh } from '@tabler/icons-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -142,28 +142,27 @@ type LoadState =
  */
 export function FloorplanUnavailable({ onRetry }: { onRetry: () => void }) {
   return (
-    <div className="report-floorplan report-floorplan--unavailable" role="status">
-      <Text size="sm" fw={600}>
-        도면 이미지를 지금 불러올 수 없어요
-      </Text>
-      {/* PDF 도 같은 저장 객체를 읽으므로 '도면이 PDF 엔 있다'고 약속하지 않는다(중립 문구). */}
-      <Text size="xs" c="dimmed" mt={4} style={{ wordBreak: 'keep-all' }}>
-        판정과 근거는 그대로 유효해요. 잠시 후 다시 시도해 주세요.
-      </Text>
-      {/* 모바일 터치 타깃 ≥44px(AGENTS §4.8.1) — 실패 복구의 유일한 액션. */}
-      <Button
-        mt="sm"
-        size="sm"
-        mih={44}
-        variant="light"
-        color="jippin"
-        radius="md"
-        leftSection={<IconRefresh size={16} aria-hidden />}
-        onClick={onRetry}
-      >
-        다시 시도
-      </Button>
-    </div>
+    <Card withBorder role="status" ta="center" style={{ borderStyle: 'dashed' }}>
+      <Stack gap="sm" align="center">
+        <Text fw={600}>도면 이미지를 지금 불러올 수 없어요</Text>
+        {/* PDF 도 같은 저장 객체를 읽으므로 '도면이 PDF 엔 있다'고 약속하지 않는다(중립 문구). */}
+        <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+          판정과 근거는 그대로 유효해요. 잠시 후 다시 시도해 주세요.
+        </Text>
+        {/* 모바일 터치 타깃 ≥44px(AGENTS §4.8.1) — 실패 복구의 유일한 액션. */}
+        <Button
+          size="sm"
+          mih={44}
+          variant="light"
+          color="jippin"
+          radius="md"
+          leftSection={<IconRefresh size={16} aria-hidden />}
+          onClick={onRetry}
+        >
+          다시 시도
+        </Button>
+      </Stack>
+    </Card>
   );
 }
 
@@ -234,106 +233,110 @@ export function ReportFloorplan({
   const badgeR = Math.max(10, base / 36);
 
   return (
-    <div className="report-floorplan">
-      <div className="report-floorplan__stage">
-        <svg
-          viewBox={`0 0 ${dims.w} ${dims.h}`}
-          role="img"
-          aria-label={
-            selected.length
-              ? `도면 위에 선택한 철거 검토 대상 ${selected.length}곳을 번호로 표시`
-              : '분석한 도면'
-          }
-        >
-          <image href={url} width={dims.w} height={dims.h} />
-          {/* 선택 대상은 네이비 헤일로 + 진한 선, 나머지는 옅게 — PDF 와 동일 위계. */}
-          {objects.map((o) => {
-            const picked = selected.includes(o.id);
-            const attr = pointsAttr(o.pts);
-            return picked ? (
-              <g key={o.id}>
+    // 카드 패딩 lg(20px) · 세로 리듬 sm(12px) — 판정 카드와 같은 표면 문법(theme Card 기본값).
+    <Card withBorder>
+      <Stack gap="sm">
+        <div style={{ borderRadius: 'var(--mantine-radius-md)', overflow: 'hidden' }}>
+          <svg
+            viewBox={`0 0 ${dims.w} ${dims.h}`}
+            role="img"
+            style={{ display: 'block', width: '100%', height: 'auto', maxHeight: 420 }}
+            aria-label={
+              selected.length
+                ? `도면 위에 선택한 철거 검토 대상 ${selected.length}곳을 번호로 표시`
+                : '분석한 도면'
+            }
+          >
+            <image href={url} width={dims.w} height={dims.h} />
+            {/* 선택 대상은 네이비 헤일로 + 진한 선, 나머지는 옅게 — PDF 와 동일 위계. */}
+            {objects.map((o) => {
+              const picked = selected.includes(o.id);
+              const attr = pointsAttr(o.pts);
+              return picked ? (
+                <g key={o.id}>
+                  <polyline
+                    points={attr}
+                    fill="none"
+                    stroke={SELECT_STROKE}
+                    strokeOpacity={0.4}
+                    strokeWidth={lineW * 3.2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <polyline
+                    points={attr}
+                    fill="none"
+                    stroke={strokeOf(o.wallType)}
+                    strokeWidth={lineW * 1.6}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </g>
+              ) : (
                 <polyline
-                  points={attr}
-                  fill="none"
-                  stroke={SELECT_STROKE}
-                  strokeOpacity={0.4}
-                  strokeWidth={lineW * 3.2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <polyline
+                  key={o.id}
                   points={attr}
                   fill="none"
                   stroke={strokeOf(o.wallType)}
-                  strokeWidth={lineW * 1.6}
+                  strokeOpacity={0.55}
+                  strokeWidth={lineW * 1.1}
+                  strokeDasharray={dashFor(o.wallType, lineW)}
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
-              </g>
-            ) : (
-              <polyline
-                key={o.id}
-                points={attr}
-                fill="none"
-                stroke={strokeOf(o.wallType)}
-                strokeOpacity={0.55}
-                strokeWidth={lineW * 1.1}
-                strokeDasharray={dashFor(o.wallType, lineW)}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            );
-          })}
-          {selected.map((id, i) => {
-            const o = objects.find((x) => x.id === id);
-            if (!o) return null;
-            const c = centroid(o.pts);
-            return (
-              <g key={`badge-${id}`}>
-                <circle
-                  cx={c.x}
-                  cy={c.y}
-                  r={badgeR}
-                  fill={SELECT_STROKE}
-                  stroke="#FFFFFF"
-                  strokeWidth={badgeR * 0.12}
-                />
-                <text
-                  x={c.x}
-                  y={c.y}
-                  fill="#FFFFFF"
-                  fontSize={badgeR * 1.2}
-                  fontWeight={700}
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                >
-                  {i + 1}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-      {/* 색 단독 전달 금지(DESIGN §2.4) — 범례 라벨을 항상 붙이고, 보조기기에도 읽히게
-          aria-hidden 을 두지 않는다(선 색이 뜻하는 벽 종류는 여기서만 설명된다). */}
-      <div className="report-legend" aria-label="도면 범례">
-        <span className="pick">번호 = 선택한 철거 검토 대상</span>
-        <span className="dash">점선 = 선택 가능한 벽 · 실선 = 내력벽</span>
-        <span style={{ '--sw': 'var(--floorplan-wall-nonload)' } as React.CSSProperties}>
-          비내력벽 후보
-        </span>
-        <span style={{ '--sw': 'var(--floorplan-wall-load)' } as React.CSSProperties}>
-          내력벽 후보(선택 불가)
-        </span>
-        <span style={{ '--sw': 'var(--floorplan-window)' } as React.CSSProperties}>창호</span>
-        <span style={{ '--sw': 'var(--floorplan-wall-uncertain)' } as React.CSSProperties}>
-          미확정 벽
-        </span>
-      </div>
-      <Text size="xs" c="dimmed" mt={6} style={{ wordBreak: 'keep-all' }}>
-        도면상 비내력벽으로 보여도 실제 시공·현장 조건에 따라 다를 수 있어요. 최종 철거 가부는
-        전문가 정밀 검토와 구조안전확인서로 확정합니다.
-      </Text>
-    </div>
+              );
+            })}
+            {selected.map((id, i) => {
+              const o = objects.find((x) => x.id === id);
+              if (!o) return null;
+              const c = centroid(o.pts);
+              return (
+                <g key={`badge-${id}`}>
+                  <circle
+                    cx={c.x}
+                    cy={c.y}
+                    r={badgeR}
+                    fill={SELECT_STROKE}
+                    stroke="#FFFFFF"
+                    strokeWidth={badgeR * 0.12}
+                  />
+                  <text
+                    x={c.x}
+                    y={c.y}
+                    fill="#FFFFFF"
+                    fontSize={badgeR * 1.2}
+                    fontWeight={700}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                  >
+                    {i + 1}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+        {/* 색 단독 전달 금지(DESIGN §2.4) — 범례 라벨을 항상 붙이고, 보조기기에도 읽히게
+            aria-hidden 을 두지 않는다(선 색이 뜻하는 벽 종류는 여기서만 설명된다). */}
+        <div className="report-legend" aria-label="도면 범례">
+          <span className="pick">번호 = 선택한 철거 검토 대상</span>
+          <span className="dash">점선 = 선택 가능한 벽 · 실선 = 내력벽</span>
+          <span style={{ '--sw': 'var(--floorplan-wall-nonload)' } as React.CSSProperties}>
+            비내력벽 후보
+          </span>
+          <span style={{ '--sw': 'var(--floorplan-wall-load)' } as React.CSSProperties}>
+            내력벽 후보(선택 불가)
+          </span>
+          <span style={{ '--sw': 'var(--floorplan-window)' } as React.CSSProperties}>창호</span>
+          <span style={{ '--sw': 'var(--floorplan-wall-uncertain)' } as React.CSSProperties}>
+            미확정 벽
+          </span>
+        </div>
+        <Text size="xs" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+          도면상 비내력벽으로 보여도 실제 시공·현장 조건에 따라 다를 수 있어요. 최종 철거 가부는
+          전문가 정밀 검토와 구조안전확인서로 확정합니다.
+        </Text>
+      </Stack>
+    </Card>
   );
 }
