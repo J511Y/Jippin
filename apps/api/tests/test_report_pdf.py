@@ -516,3 +516,66 @@ def test_pdf_bytes_when_weasyprint_available() -> None:
         pytest.skip(f"WeasyPrint unavailable: {exc}")
     assert pdf[:5] == b"%PDF-"
     assert len(pdf) > 1000
+
+
+# ───────────────── 2026-09 디자인 감사: 판정별 게이팅 · 섹션 번호 ─────────────────
+
+
+def _ctx_for(verdict: str) -> dict:
+    return report_pdf._build_context(
+        session_id=uuid.uuid4(),
+        rule_eval_result=_rule(verdict=verdict),
+        estimate_dict={
+            "items": [{"label": "행위허가 대행", "amount_min": 330_000}],
+            "fixed_total_min": 330_000,
+            "has_variable_items": False,
+            "source_url": "/faq?category=cost",
+            "disclaimer": "예상 범위예요.",
+        },
+        address=None,
+        judgment_schema={},
+        overlay={
+            "available": False,
+            "svg": None,
+            "caption": "",
+            "unavailable_reason": "x",
+        },
+        origin="https://jippin.ai",
+        now=datetime(2026, 6, 29, tzinfo=timezone.utc),
+    )["report"]
+
+
+def test_deny_report_omits_schedule_and_estimate() -> None:
+    ctx = _ctx_for("DENY")
+    assert ctx["schedule"] is None
+    assert ctx["estimate"] is None
+    html = report_pdf.render_html({"report": ctx})
+    assert 'class="sec-title">진행 일정<' not in html
+    assert 'class="sec-title">예상 견적<' not in html
+
+
+def test_hold_report_omits_estimate_and_schedule() -> None:
+    # 운영 estimate.compute_estimate 는 ALLOW·WARN 만 산출(_ESTIMABLE_VERDICTS) — HOLD 에
+    # 견적을 실으면 웹·PDF 안내와 어긋난다.
+    ctx = _ctx_for("HOLD")
+    assert ctx["schedule"] is None
+    assert ctx["estimate"] is None
+
+
+def test_allow_and_warn_keep_schedule() -> None:
+    assert _ctx_for("ALLOW")["schedule"] == report_content.SCHEDULE
+    assert _ctx_for("WARN")["schedule"] == report_content.SCHEDULE
+
+
+def test_section_numbers_are_consecutive_without_legal_basis() -> None:
+    import re
+
+    html = report_pdf.render_html(_sample_context())  # WARN · legal_basis 없음
+    nums = [int(n) for n in re.findall(r'class="sec-num">(\d+)<', html)]
+    assert nums == list(range(1, len(nums) + 1))
+    assert nums == [1, 2, 3, 4]  # 도면 · 요소 · 견적 · 일정
+
+
+def test_consultation_copy_has_no_absolute_claims() -> None:
+    c = report_content.consultation_view("https://jippin.ai")
+    assert "100%" not in c["headline"] and "100%" not in c["body"]

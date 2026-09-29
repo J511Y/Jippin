@@ -202,12 +202,20 @@ def _build_context(
         judgment_schema, current_address=address
     )
     ruleset_version = rule_eval_result.get("ruleset_version")
+    verdict = report_content.verdict_view(rule_eval_result)
+    # 판정별 섹션 게이팅(2026-09 디자인 감사) — 고정 안내를 판정과 무관하게 전부 싣지
+    # 않는다. '철거 어려움'(DENY) 리포트에 공사 일정·견적이 실리면 결론과 모순되고,
+    # '추가 확인 필요'(HOLD) 는 아직 진행 단계가 아니라 일정을 보여주지 않는다.
+    #   - 진행 일정·예상 견적: ALLOW·WARN 만(운영 estimate.compute_estimate 의
+    #     _ESTIMABLE_VERDICTS 와 동일 — HOLD 는 견적 자체가 산출되지 않는다).
+    show_schedule = verdict["code"] in ("ALLOW", "WARN")
+    show_estimate = show_schedule
     return {
         "report": {
             "generated_at_kr": _generated_at_kr(now),
             "report_id": _report_id(session_id),
             "address_line": _address_line(address),
-            "verdict": report_content.verdict_view(rule_eval_result),
+            "verdict": verdict,
             "additional_checks": additional_checks,
             "overlay": overlay,
             "wall_edu": report_content.WALL_EDU,
@@ -216,12 +224,14 @@ def _build_context(
             "facilities_empty_note": (
                 None if facilities else report_content.FACILITIES_EMPTY_NOTE
             ),
-            "estimate": _estimate_view(estimate_dict, origin=origin),
+            "estimate": (
+                _estimate_view(estimate_dict, origin=origin) if show_estimate else None
+            ),
             "legal_basis": legal_basis,
             "ruleset_version": (
                 ruleset_version if isinstance(ruleset_version, str) else None
             ),
-            "schedule": report_content.SCHEDULE,
+            "schedule": report_content.SCHEDULE if show_schedule else None,
             "consultation": report_content.consultation_view(origin),
             "legal_notice": report_content.LEGAL_NOTICE,
         }

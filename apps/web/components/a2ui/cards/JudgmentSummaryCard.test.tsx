@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@/test-utils';
+import { cleanup, render, screen, waitFor } from '@/test-utils';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,6 +14,9 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/sessions/api', () => apiMocks);
+
+const routerMocks = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => routerMocks }));
 
 vi.mock('@/components/leads/QuickPrecheckConsultForm', () => ({
   QuickPrecheckConsultForm: ({
@@ -303,5 +306,144 @@ describe('JudgmentSummaryCard 재선택 감지 (#judgment-selection-stamp)', () 
     const form = await screen.findByTestId('quick-consult-form');
     // 폼이 열린 뒤 재선택돼도 서버가 잡을 수 있게 선택 지문을 폼에 싣는다.
     expect(form.getAttribute('data-expected-selection')).toBe('wall:1|#');
+  });
+});
+
+describe('JudgmentSummaryCard 리포트 진입 (2026-09 감사)', () => {
+  const basePayload = {
+    decision: 'possible' as const,
+    title: '검토 결과',
+    summary: '선택한 벽과 창호를 기준으로 검토한 결과예요.',
+    session_id: 'sess-1'
+  };
+
+  it('호스트가 has_report 를 주면 리포트 보기가 1차 액션(링크)으로 붙고 상담은 2차가 된다', () => {
+    render(
+      <ChatActionsProvider
+        value={{
+          sessionId: 'sess-1',
+          sendMessage: vi.fn(),
+          busy: false,
+          hasReport: true,
+          floorplanReplaced: false
+        }}
+      >
+        <JudgmentSummaryCard payload={basePayload} />
+      </ChatActionsProvider>
+    );
+    const link = screen.getByRole('link', { name: '사전검토 리포트 보기' });
+    expect(link.getAttribute('href')).toBe('/sessions/sess-1/report');
+    expect(screen.getByRole('button', { name: '전문가 상담 신청하기' })).toBeTruthy();
+  });
+
+  it('리포트가 없는 예비 결과(rule_backed 없음·has_report 없음)에는 리포트 링크가 없다', () => {
+    render(<JudgmentSummaryCard payload={basePayload} />);
+    expect(screen.queryByRole('link', { name: '사전검토 리포트 보기' })).toBeNull();
+    expect(screen.getByRole('button', { name: '전문가 상담 신청하기' })).toBeTruthy();
+  });
+
+  it('호스트 브로드캐스트가 없으면 payload.rule_backed 로 폴백한다(스탬프 카드)', () => {
+    render(
+      <JudgmentSummaryCard payload={{ ...basePayload, rule_backed: true, asset_id: 'asset-1' }} />
+    );
+    expect(screen.getByRole('link', { name: '사전검토 리포트 보기' })).toBeTruthy();
+  });
+
+  it('스탬프 없는 옛 카드는 호스트가 교체 이력 없음을 확인했을 때만 리포트 링크를 띄운다', () => {
+    const legacy = { ...basePayload, rule_backed: true };
+    const { unmount } = render(
+      <ChatActionsProvider
+        value={{ sessionId: 'sess-1', sendMessage: vi.fn(), busy: false, hasReport: true, floorplanReplaced: true }}
+      >
+        <JudgmentSummaryCard payload={legacy} />
+      </ChatActionsProvider>
+    );
+    expect(screen.queryByRole('link', { name: '사전검토 리포트 보기' })).toBeNull();
+    unmount();
+    render(
+      <ChatActionsProvider
+        value={{ sessionId: 'sess-1', sendMessage: vi.fn(), busy: false, hasReport: true, floorplanReplaced: false }}
+      >
+        <JudgmentSummaryCard payload={legacy} />
+      </ChatActionsProvider>
+    );
+    expect(screen.getByRole('link', { name: '사전검토 리포트 보기' })).toBeTruthy();
+  });
+
+  it('도면이 교체된 옛 카드에서는 리포트 링크도 막는다', () => {
+    render(
+      <ChatActionsProvider
+        value={{
+          sessionId: 'sess-1',
+          sendMessage: vi.fn(),
+          busy: false,
+          hasReport: true,
+          selectedFloorplanAssetId: 'asset-new'
+        }}
+      >
+        <JudgmentSummaryCard payload={{ ...basePayload, asset_id: 'asset-old' }} />
+      </ChatActionsProvider>
+    );
+    expect(screen.queryByRole('link', { name: '사전검토 리포트 보기' })).toBeNull();
+  });
+});
+
+describe('JudgmentSummaryCard 리포트 상태 미확정(hasReport undefined)', () => {
+  it('호스트가 아직 모르면(undefined) payload.rule_backed 폴백이 살아 있고, 상담은 코랄 CtaButton 이 아니다', () => {
+    render(
+      <ChatActionsProvider
+        value={{ sessionId: 'sess-1', sendMessage: vi.fn(), busy: false, hasReport: undefined }}
+      >
+        <JudgmentSummaryCard
+          payload={{
+            decision: 'possible',
+            title: '검토 결과',
+            summary: '요약',
+            session_id: 'sess-1',
+            rule_backed: true,
+            asset_id: 'asset-1'
+          }}
+        />
+      </ChatActionsProvider>
+    );
+    expect(screen.getByRole('link', { name: '사전검토 리포트 보기' })).toBeTruthy();
+    const consult = screen.getByRole('button', { name: '전문가 상담 신청하기' });
+    expect(consult.getAttribute('data-variant')).toBe('light');
+  });
+
+  it('리포트가 없는 예비 결과에서는 상담이 유일한 전환 액션이라 CtaButton(coral filled)', () => {
+    render(<JudgmentSummaryCard payload={{ decision: 'possible', title: 't', summary: 's' }} />);
+    const consult = screen.getByRole('button', { name: '전문가 상담 신청하기' });
+    expect(consult.getAttribute('data-variant')).toBe('filled');
+    expect(consult.getAttribute('style') ?? '').toContain('coral');
+  });
+});
+
+describe('JudgmentSummaryCard 리포트 링크 클릭 시점 재검증', () => {
+  const stamped = {
+    decision: 'possible' as const,
+    title: '검토 결과',
+    summary: '요약',
+    session_id: 'sess-1',
+    rule_backed: true,
+    asset_id: 'asset-1'
+  };
+
+  it('클릭 시 세션을 다시 읽어 도면이 바뀌었으면 이동하지 않고 이전 도면 기준으로 표시한다', async () => {
+    const user = userEvent.setup();
+    apiMocks.getSession.mockResolvedValueOnce({ selected_floorplan_asset_id: 'asset-2' });
+    render(<JudgmentSummaryCard payload={stamped} />);
+    await user.click(screen.getByRole('link', { name: '사전검토 리포트 보기' }));
+    await screen.findByText(/이전에 올렸던 도면 기준/);
+    expect(routerMocks.push).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: '사전검토 리포트 보기' })).toBeNull();
+  });
+
+  it('세션이 그대로면 리포트로 이동한다', async () => {
+    const user = userEvent.setup();
+    apiMocks.getSession.mockResolvedValueOnce({ selected_floorplan_asset_id: 'asset-1' });
+    render(<JudgmentSummaryCard payload={stamped} />);
+    await user.click(screen.getByRole('link', { name: '사전검토 리포트 보기' }));
+    await waitFor(() => expect(routerMocks.push).toHaveBeenCalledWith('/sessions/sess-1/report'));
   });
 });

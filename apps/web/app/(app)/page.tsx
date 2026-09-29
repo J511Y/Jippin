@@ -8,7 +8,6 @@ import {
   SimpleGrid,
   Stack,
   Text,
-  ThemeIcon,
   Title
 } from '@mantine/core';
 import {
@@ -75,36 +74,37 @@ const STEPS = [
   }
 ];
 
+// 카피는 BRAND §4.1(한 문장 한 사실, 60자 이내) — 사실·숫자는 유지하고 수식만 덜어냈다.
 const FEATURES = [
   {
     icon: IconFileSearch,
     title: 'AI 사전검토',
-    body: '도면으로 철거·확장 가능성과 주의 구간, 행위허가 필요 여부를 1분 만에 진단합니다.'
+    body: '도면으로 철거·확장 가능성과 행위허가 필요 여부를 1분 만에 진단합니다.'
   },
   {
     icon: IconMessageCircle2,
     title: '전문가 상담',
-    body: '사전검토 결과를 바탕으로 20년 경력 전문가가 1:1 맞춤 상담. 우리 집 상황에 맞는 진행 방법을 안내합니다.'
+    body: '20년 경력 전문가가 사전검토 결과를 바탕으로 우리 집에 맞는 진행 방법을 1:1로 안내합니다.'
   },
   {
     icon: IconUsersGroup,
     title: '입주민 동의서 대행',
-    body: '낯선 이웃 방문부터 서명까지 담당자가 직접. 평일 저녁·주말에 찾아가고, 부재 세대도 끝까지 받아냅니다.'
+    body: '이웃 방문부터 서명까지 담당자가 직접. 평일 저녁·주말 방문으로 부재 세대까지 받습니다.'
   },
   {
     icon: IconFileCheck,
     title: '행위허가 대행',
-    body: '동의서·검인 도면·구조안전확인서·철거 사유서 준비부터 지자체 접수까지(약 7일). 누적 2만5천여 건.'
+    body: '서류 준비부터 지자체 접수까지 약 7일. 2007년부터 누적 2만5천여 건.'
   },
   {
     icon: IconFlame,
     title: '방화 판·유리·문 시공',
-    body: '발코니 확장 시 의무인 90cm 이상 방화판·방화유리를 건축법(KS F 2845) 기준에 맞게 시공합니다.'
+    body: '발코니 확장 시 의무인 90cm 이상 방화판·방화유리를 KS F 2845 기준으로 시공합니다.'
   },
   {
     icon: IconClipboardCheck,
     title: '사용검사 · 건축물대장 등재',
-    body: '사용검사를 신청해 공사 내용을 건축물대장에 정식 등재합니다. 이 절차까지 마쳐야 법적으로 완료됩니다.'
+    body: '사용검사 후 건축물대장에 정식 등재해야 법적으로 완료됩니다. 이 절차까지 맡습니다.'
   }
 ];
 
@@ -140,6 +140,7 @@ export default function HomePage() {
               <Title
                 order={1}
                 data-reveal
+                data-reveal-order="1"
                 style={{
                   fontSize: 'var(--jippin-fz-hero)',
                   lineHeight: 1.12,
@@ -163,12 +164,13 @@ export default function HomePage() {
                 c="dimmed"
                 maw={520}
                 data-reveal
+                data-reveal-order="2"
                 style={{ wordBreak: 'keep-all', lineHeight: 1.6 }}
               >
                 인테리어로 집 안의 벽을 트거나 옮기고 싶을 때, 철거해도 되는 벽인지
                 도면과 주소만으로 미리 확인해 드려요.
               </Text>
-              <Group gap="sm" mt="xs" data-reveal>
+              <Group gap="sm" mt="xs" data-reveal data-reveal-order="3">
                 {/* 1차 액션(제품 진입) = jippin filled. 이 화면의 코랄 1회는
                     QuickConsult 폼 제출이므로 상담 버튼은 outline 2차로 둔다. */}
                 <HeroStartCta
@@ -186,14 +188,15 @@ export default function HomePage() {
               </Group>
             </Stack>
 
-            {/* 리포트 목업 */}
-            <Box visibleFrom="md" data-reveal style={{ position: 'relative' }}>
-              <Card
-                shadow="xl"
-                padding="xl"
-                withBorder
-                style={{ transform: 'rotate(1deg)' }}
-              >
+            {/* 리포트 목업 — 실제 리포트 화면(판정 히어로 + 3행 요약 + 도면)과 같은 문법.
+                랜딩이 약속한 화면을 제품이 그대로 지킨다. 기울임·과한 그림자는 뺐다(감사). */}
+            <Box
+              visibleFrom="md"
+              data-reveal
+              data-reveal-order="4"
+              style={{ position: 'relative' }}
+            >
+              <Card shadow="md" padding="xl" withBorder radius="lg">
                 <Stack gap="md">
                   <Group justify="space-between" align="flex-start">
                     <Stack gap={2}>
@@ -268,9 +271,9 @@ export default function HomePage() {
                   <Divider />
                   <Stack gap="sm">
                     {[
-                      { label: '대상 벽체', value: '철거해도 되는 벽', tone: 'success' },
-                      { label: '허가 필요', value: '필요 (구청)', tone: 'warning' },
-                      { label: '주의 구간', value: '1곳 감지', tone: 'danger' }
+                      { label: '대상 벽체', value: '비내력벽 후보 1곳', tone: 'success' },
+                      { label: '행위허가', value: '필요 (구청)', tone: 'warning' },
+                      { label: '추가 확인', value: '1건', tone: 'warning' }
                     ].map((row) => (
                       <Group key={row.label} justify="space-between">
                         <Text size="sm" c="dimmed">
@@ -288,7 +291,8 @@ export default function HomePage() {
                     ))}
                   </Stack>
                   {/* 목업 장식 — 동작 없는 리포트 화면 예시라 실제 버튼 대신
-                      비인터랙티브 표현을 쓴다(죽은 버튼 오탭 방지). */}
+                      비인터랙티브 표현을 쓴다(죽은 버튼 오탭 방지). 색은 제품 진입
+                      (jippin) 틴트 — 코랄은 이 화면의 실제 전환 CTA(빠른 상담 폼) 1회 전용. */}
                   <Box
                     aria-hidden="true"
                     mt="xs"
@@ -296,13 +300,13 @@ export default function HomePage() {
                       textAlign: 'center',
                       padding: '10px 16px',
                       borderRadius: 'var(--mantine-radius-md)',
-                      background: 'var(--mantine-color-coral-0)',
-                      color: 'var(--mantine-color-coral-8)',
+                      background: 'var(--mantine-color-jippin-0)',
+                      color: 'var(--mantine-color-jippin-8)',
                       fontSize: 'var(--mantine-font-size-sm)',
                       fontWeight: 600
                     }}
                   >
-                    전문가 상담으로 전환
+                    PDF 리포트 받기
                   </Box>
                 </Stack>
               </Card>
@@ -336,11 +340,14 @@ export default function HomePage() {
           </Title>
         </Stack>
         <Reveal>
-        {/* 데스크탑·태블릿: 연결 스텝퍼 */}
-        <Box visibleFrom="sm" style={{ position: 'relative' }}>
-          {/* 연결 레일 (데스크탑) — 4단계가 한 흐름으로 읽히도록 */}
+        {/* 4단계 — 모바일은 세로 리스트(번호 왼쪽), 태블릿 2열, 데스크톱 4열 + 연결 레일.
+            가로 캐러셀은 2번째 단계부터 보이지 않아 폐지(2026-09 감사). 레이아웃은
+            globals.css .landing-steps / .landing-step. */}
+        <Box style={{ position: 'relative' }}>
+          {/* 레일은 4열 구간(75em+)에서만 — globals.css .landing-steps__rail 이 노출을 제어. */}
           <Box
-            visibleFrom="lg"
+            className="landing-steps__rail"
+            aria-hidden
             style={{
               position: 'absolute',
               top: 27,
@@ -352,75 +359,23 @@ export default function HomePage() {
               zIndex: 0
             }}
           />
-          <SimpleGrid
-            cols={{ base: 1, sm: 2, lg: 4 }}
-            spacing="xl"
-            verticalSpacing="xl"
-            style={{ position: 'relative', zIndex: 1 }}
-          >
+          <ol className="landing-steps" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {STEPS.map((step, i) => (
-              <Stack key={step.title} data-reveal gap="sm" align="center" ta="center">
-                <ThemeIcon
-                  size={54}
-                  radius="xl"
-                  variant="filled"
-                  color="jippin"
-                  style={{ boxShadow: '0 0 0 6px var(--mantine-color-body)' }}
-                >
-                  <Text fw={700} fz="lg" c="var(--jippin-brand-primary-fg)">
-                    {i + 1}
+              <li key={step.title} data-reveal className="landing-step">
+                <span className="landing-step__num" aria-hidden>
+                  {i + 1}
+                </span>
+                <Stack gap={4}>
+                  <Text fw={600} size="lg" style={{ wordBreak: 'keep-all' }}>
+                    {step.title}
                   </Text>
-                </ThemeIcon>
-                <Text fw={600} size="lg">
-                  {step.title}
-                </Text>
-                <Text
-                  size="sm"
-                  c="dimmed"
-                  maw={240}
-                  style={{ wordBreak: 'keep-all' }}
-                >
-                  {step.body}
-                </Text>
-              </Stack>
+                  <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
+                    {step.body}
+                  </Text>
+                </Stack>
+              </li>
             ))}
-          </SimpleGrid>
-        </Box>
-
-        {/* 모바일: 가로 스크롤 캐러셀 */}
-        <Box
-          hiddenFrom="sm"
-          style={{
-            display: 'flex',
-            gap: 'var(--mantine-spacing-md)',
-            overflowX: 'auto',
-            scrollSnapType: 'x mandatory',
-            paddingBottom: 8,
-            WebkitOverflowScrolling: 'touch'
-          }}
-        >
-          {STEPS.map((step, i) => (
-            <Card
-              key={step.title}
-              data-reveal
-              withBorder
-              style={{ flex: '0 0 80%', scrollSnapAlign: 'start' }}
-            >
-              <Stack gap="sm">
-                <ThemeIcon size={46} radius="xl" variant="filled" color="jippin">
-                  <Text fw={700} c="var(--jippin-brand-primary-fg)">
-                    {i + 1}
-                  </Text>
-                </ThemeIcon>
-                <Text fw={600} size="lg">
-                  {step.title}
-                </Text>
-                <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-                  {step.body}
-                </Text>
-              </Stack>
-            </Card>
-          ))}
+          </ol>
         </Box>
         </Reveal>
       </Container>
@@ -464,13 +419,15 @@ export default function HomePage() {
           <StatBand />
 
           <Reveal stagger={0.08}>
-          <SimpleGrid visibleFrom="sm" cols={{ sm: 2, md: 3 }} spacing="lg">
+          {/* 6개 서비스 — 모바일은 아이콘 왼쪽 컴팩트 행(전부 노출), sm 2열, md 3열.
+              레이아웃은 globals.css .landing-features / .landing-feature. */}
+          <div className="landing-features">
             {FEATURES.map((f) => (
-              <Card key={f.title} data-reveal withBorder>
-                <Stack gap="sm">
-                  <ThemeIcon size={48} radius="md" variant="light" color="jippin">
-                    <f.icon size={26} />
-                  </ThemeIcon>
+              <div key={f.title} data-reveal className="landing-feature">
+                <span className="landing-feature__icon" aria-hidden>
+                  <f.icon size={24} />
+                </span>
+                <Stack gap={4}>
                   <Text fw={600} size="lg" style={{ wordBreak: 'keep-all' }}>
                     {f.title}
                   </Text>
@@ -478,43 +435,9 @@ export default function HomePage() {
                     {f.body}
                   </Text>
                 </Stack>
-              </Card>
+              </div>
             ))}
-          </SimpleGrid>
-
-          {/* 모바일: 가로 스크롤 캐러셀 */}
-          <Box
-            hiddenFrom="sm"
-            style={{
-              display: 'flex',
-              gap: 'var(--mantine-spacing-md)',
-              overflowX: 'auto',
-              scrollSnapType: 'x mandatory',
-              paddingBottom: 8,
-              WebkitOverflowScrolling: 'touch'
-            }}
-          >
-            {FEATURES.map((f) => (
-              <Card
-                key={f.title}
-                data-reveal
-                withBorder
-                style={{ flex: '0 0 80%', scrollSnapAlign: 'start' }}
-              >
-                <Stack gap="sm">
-                  <ThemeIcon size={48} radius="md" variant="light" color="jippin">
-                    <f.icon size={26} />
-                  </ThemeIcon>
-                  <Text fw={600} size="lg" style={{ wordBreak: 'keep-all' }}>
-                    {f.title}
-                  </Text>
-                  <Text size="sm" c="dimmed" style={{ wordBreak: 'keep-all' }}>
-                    {f.body}
-                  </Text>
-                </Stack>
-              </Card>
-            ))}
-          </Box>
+          </div>
           </Reveal>
         </Container>
       </Box>

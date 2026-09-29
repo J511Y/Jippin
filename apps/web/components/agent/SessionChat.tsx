@@ -10,7 +10,12 @@
  */
 
 import { ActionIcon, Box, Button, Loader, Stack, Text } from '@mantine/core';
-import { IconArrowDown, IconExternalLink } from '@tabler/icons-react';
+import {
+  IconArrowDown,
+  IconArrowRight,
+  IconExternalLink,
+  IconReportAnalytics
+} from '@tabler/icons-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -51,7 +56,10 @@ function Conversation({
 }) {
   const { messages, streamingText, activity, plan, status, error, send } =
     useAgentStream(sessionId);
-  const [hasReport, setHasReport] = useState(false);
+  // undefined = 아직 조회 전/조회 실패(모름). 카드는 이때 payload.rule_backed 로 폴백한다 —
+  // false 를 성급히 브로드캐스트하면 일시적 메타 조회 실패가 리포트 진입점을 전부 지운다.
+  const [hasReport, setHasReport] = useState<boolean | undefined>(undefined);
+  const [floorplanReplaced, setFloorplanReplaced] = useState<boolean | undefined>(undefined);
   // 선택 도면 asset — 컨텍스트로 카드들에 브로드캐스트한다(#floorplan-cards-broadcast).
   // undefined = 아직 조회 전(카드가 자체 조회로 폴백).
   const [selectedFloorplanAssetId, setSelectedFloorplanAssetId] = useState<
@@ -108,6 +116,7 @@ function Conversation({
     (seq: number, row: Awaited<ReturnType<typeof getSession>>) => {
       if (seq !== sessionFetchSeq.current) return; // 더 새 조회가 이미 시작됨 — 폐기.
       setHasReport(row.has_report);
+      setFloorplanReplaced(row.floorplan_replaced === true);
       setSelectedFloorplanAssetId(row.selected_floorplan_asset_id ?? null);
     },
     []
@@ -159,23 +168,42 @@ function Conversation({
         sendMessage: send,
         busy,
         refreshSession,
-        selectedFloorplanAssetId
+        selectedFloorplanAssetId,
+        hasReport,
+        floorplanReplaced
       }}
     >
       <Box className="chat-shell">
         <Box className="chat-main">
-          {hasReport ? (
-            <Box className="chat-report-link">
+          {hasReport === true ? (
+            // 리포트 준비 배너 — 판정이 영속되는 순간 사용자가 알아채야 하는 1순위 신호
+            // (2026-09 감사: 우상단 14px 텍스트 링크는 아무도 못 봤다). role=status 로
+            // 보조기기에도 즉시 알리고, 결과 카드 안의 '리포트 보기' 버튼과 짝을 이룬다.
+            <Box className="chat-report-banner" role="status" aria-live="polite">
+              <span className="chat-report-banner__icon" aria-hidden>
+                <IconReportAnalytics size={18} />
+              </span>
+              <Box className="chat-report-banner__text">
+                <Text size="sm" fw={600} c="var(--jippin-brand-ink)">
+                  사전검토 리포트가 준비됐어요
+                </Text>
+                <Text size="xs" c="dimmed" className="chat-report-banner__sub">
+                  {/* 판정별로 섹션이 달라(DENY 는 견적 없음) 중립 문구로 둔다. */}
+                  판정과 근거를 한 화면에서 보고 PDF 로 받을 수 있어요.
+                </Text>
+              </Box>
               {/* 내부 내비게이션은 next/link — 클라이언트 컴포넌트라 RSC 제약 없음. */}
-              <Text
+              <Button
                 component={Link}
                 href={`/sessions/${sessionId}/report`}
+                color="jippin"
                 size="sm"
-                c="jippin.7"
-                fw={600}
+                mih={44}
+                radius="md"
+                rightSection={<IconArrowRight size={16} aria-hidden />}
               >
-                리포트 보기 →
-              </Text>
+                리포트 보기
+              </Button>
             </Box>
           ) : null}
 
