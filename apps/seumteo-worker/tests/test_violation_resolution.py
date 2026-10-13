@@ -8,6 +8,7 @@ silent-normal(실제 위반 → 정상 오안내)이 더 위험하므로 해제�
 
 from __future__ import annotations
 
+import re
 import unittest
 
 from src.flow import _parse_changes_pdf, _parse_changes_pdf_all, _resolve_violation
@@ -52,13 +53,25 @@ def _mark_count(pages: list[str]) -> int:
     return "".join("".join(pages).split()).count("위반건축물")
 
 
+def _bare_count(pages: list[str]) -> int:
+    return len(re.findall(r"위반건축물(?!표시)", "".join("".join(pages).split())))
+
+
 def _resolve(
-    pages: list[str], clip_violation: bool = True, clip_count: int | None = -1
+    pages: list[str],
+    clip_violation: bool = True,
+    clip_count: int | None = -1,
+    clip_bare_count: int | None = -1,
 ) -> tuple[bool, str | None]:
-    # 기본은 CLIP 디코드 텍스트가 PDF 와 같은 출현 수를 본 경우(-1 = PDF 에서 계산).
+    # 기본은 CLIP 텍스트가 PDF 와 같은 내용을 본 경우(-1 = PDF 에서 계산).
     count = _mark_count(pages) if clip_count == -1 else clip_count
+    bare = _bare_count(pages) if clip_bare_count == -1 else clip_bare_count
     return _resolve_violation(
-        clip_violation, pages, _parse_changes_pdf_all(pages), clip_count=count
+        clip_violation,
+        pages,
+        _parse_changes_pdf_all(pages),
+        clip_count=count,
+        clip_bare_count=bare,
     )
 
 
@@ -127,6 +140,7 @@ class ResolveViolationTest(unittest.TestCase):
                 [HEADING_PAGE1_PLAIN, page],
                 _parse_changes_pdf_all([page]),
                 clip_count=_mark_count([page]),
+                clip_bare_count=0,
             ),
             (False, "history_released"),
         )
@@ -256,6 +270,22 @@ class ResolveViolationTest(unittest.TestCase):
             "2015.7.16. 위반건축물 표시 해제 통보 대상 아님 2015.02.10.자\n- 이하여백 -",
         )
         self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_bare_mark_in_paint_keeps_verdict(self) -> None:
+        # paint 훅에만 잡힌 단독 현재 표시("표시"가 뒤따르지 않음) → 위반 유지(Codex 5R P1).
+        pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]
+        self.assertEqual(_resolve(pages, clip_bare_count=1), (True, None))
+        self.assertEqual(_resolve(pages, clip_bare_count=None), (True, None))
+
+    def test_pending_release_wording_is_ambiguous(self) -> None:
+        # 확정 문구 접두 뒤 미완료 표현("통보 대기/미완료/않음") → 해제 아님(Codex 5R P1).
+        for wording in ("통보 대기", "통보 미완료", "처리 않음"):
+            page = HEADING_CHANGES_ACTIVE.replace(
+                "- 이하여백 -",
+                f"2015.7.16. 위반건축물 표시 해제 {wording} 2015.02.10.자\n- 이하여백 -",
+            )
+            with self.subTest(wording=wording):
+                self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
 
     def test_unknown_clip_count_keeps_verdict(self) -> None:
         pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]

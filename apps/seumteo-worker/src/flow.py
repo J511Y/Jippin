@@ -1568,6 +1568,7 @@ class SeumteoFlow:
             pdf_pages,
             pdf_changes_all,
             clip_count=ex.get("violation_count"),
+            clip_bare_count=ex.get("violation_bare_count"),
         )
         if violation_source is None:
             violation_source = ex.get("violation_source")
@@ -1833,7 +1834,12 @@ _DATE_REF_SUFFIX = re.compile(r"^자(?:로)?(?:$|[\s\"'“”‘’,.)·])")
 _REF_DATE = re.compile(r"((?:19|20)\d{2})[.\-](\d{1,2})[.\-](\d{1,2})\.?\s*자")
 # 확정 해제 문구 — "위반건축물 표시 해제" 바로 뒤가 이 말이거나 사유 끝일 때만 해제로 인정한다
 # (허용 목록). "해제 대상 아님/검토" 등 그 밖의 표현은 모두 모호.
-_RELEASE_CONFIRM = ("통보", "정리", "처리", "에의거", "에따라", "됨")
+# "위반건축물 표시 해제" 뒤에 올 수 있는 문구 전체(공백·숫자·구두점 제거 골자 기준). 이 형태와
+# **완전히 일치**해야 해제다 — 접두만 맞고 "통보 대기/대상 아님" 등이 붙는 것은 모두 모호.
+# 실측: "…해제 통보에 의거 2015.02.10.자 "위반표시 해제" 정리" → "통보에의거자위반표시해제정리".
+_RELEASE_TAIL = re.compile(
+    r"(?:통보(?:에의거|에따라)?|에의거|에따라)?(?:자로?)?(?:위반표시해제)?(?:정리|처리|처리됨|됨)?"
+)
 # 확정 해제가 아닌 수식어 — 이 말이 붙은 해제 문구는 해제 사건으로 인정하지 않는다.
 _RELEASE_QUALIFIERS = (
     "취소", "요청", "신청", "예정", "보류", "반려", "철회", "불가",
@@ -1867,7 +1873,7 @@ def _violation_event(reason: str) -> str | None:
         if at < 0 or any(q in core for q in _RELEASE_QUALIFIERS):
             return "ambiguous"
         tail = core[at + len(phrase) :]
-        if tail and not tail.startswith(_RELEASE_CONFIRM):
+        if not _RELEASE_TAIL.fullmatch(tail):
             return "ambiguous"
         return "release"
     return "mark" if f"{_VIOLATION_MARK}표시" in core else "ambiguous"
@@ -1890,6 +1896,7 @@ def _resolve_violation(
     pdf_changes: list[dict] | None,
     *,
     clip_count: int | None,
+    clip_bare_count: int | None = None,
 ) -> tuple[bool, str | None]:
     """CLIP 1차 위반 신호를 PDF 정본으로 재확인한다 — (violation, source 덮어쓰기|None).
 
@@ -1932,6 +1939,10 @@ def _resolve_violation(
     # 양쪽 출현 수가 사건 행 수와 **정확히** 같아야 한다 — 많으면 이력 밖 현재 표시, 적으면
     # 일부만 추출된 불완전 증거(누락된 쪽에 현재 표시가 있을 수 있음).
     if not events or pdf_count != len(events) or clip_count != len(events):
+        return True, None
+    # CLIP(paint 포함)에 "표시"가 뒤따르지 않는 단독 "위반건축물"이 있으면 현재 상태 표시 → 위반.
+    # 모르면(None) 증명 불가로 거부.
+    if clip_bare_count != 0:
         return True, None
 
     events.sort(key=lambda e: e[0])  # 안정 정렬 — 같은 날짜는 문서 순서 유지

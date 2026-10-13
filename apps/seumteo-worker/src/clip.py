@@ -212,6 +212,10 @@ async def extract_report(
     violation_count = (
         re.sub(r"[\s+]+", "", decoded_text).count(_VIOLATION) if decoded_text else None
     )
+    # '단독' 위반표시 수(paint + 디코드) — 변동 이력은 항상 "위반건축물 표시 …" 형태이므로, 뒤에
+    # "표시"가 오지 않는 "위반건축물"은 현재 상태 표시(갑지 표시란 등)로 본다. paint 는 리페인트로
+    # 중복될 수 있어 개수 대조엔 못 쓰지만, 단독 표시의 **존재 여부**는 이걸로 검증한다.
+    violation_bare_count = len(re.findall(_VIOLATION + r"(?!표시)", compact))
     violation_source = "report_text" if full_text else None
     log_stage(_log, "clip_text_parse", parse_started, register_kind=register_kind)
 
@@ -241,6 +245,7 @@ async def extract_report(
         "violation": violation,
         "violation_source": violation_source,
         "violation_count": violation_count,
+        "violation_bare_count": violation_bare_count,
         "pdf_base64": pdf_b64,
         "pdf_source": pdf_source,
         "warnings": warnings,
