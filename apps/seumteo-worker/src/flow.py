@@ -1835,7 +1835,11 @@ _REF_DATE = re.compile(r"((?:19|20)\d{2})[.\-](\d{1,2})[.\-](\d{1,2})\.?\s*자")
 # (허용 목록). "해제 대상 아님/검토" 등 그 밖의 표현은 모두 모호.
 _RELEASE_CONFIRM = ("통보", "정리", "처리", "에의거", "에따라", "됨")
 # 확정 해제가 아닌 수식어 — 이 말이 붙은 해제 문구는 해제 사건으로 인정하지 않는다.
-_RELEASE_QUALIFIERS = ("취소", "요청", "신청", "예정", "보류", "반려", "철회", "불가")
+_RELEASE_QUALIFIERS = (
+    "취소", "요청", "신청", "예정", "보류", "반려", "철회", "불가",
+    # 확정 문구 뒤에 붙는 부정·비확정("해제 통보 대상 아님", "해제 처리 검토").
+    "아님", "아니", "대상", "검토", "미해제", "보완",
+)
 
 
 def _violation_event(reason: str) -> str | None:
@@ -1898,8 +1902,8 @@ def _resolve_violation(
       1) PDF 텍스트와 PDF 기반 변동사항 파싱(상한 전 전체)이 모두 있고, 모든 쪽의 텍스트가
          추출됐다(쪽 추출 실패 = 빈 문자열 → 그 쪽의 표시란을 못 봤으므로 불완전 입력).
       2) PDF 전문과 CLIP 디코드 텍스트(`clip_count`) 양쪽 모두에서 "위반건축물" 출현이
-         **표시/해제 사건 행 수 이하**다 — 갑지 표시란 등 이력 밖 출현이 어느 쪽에든 있으면
-         현재 위반표시다. CLIP 쪽 대조는 PDF 에서 현재 표시가 래스터화·누락된 경우를 막는다.
+         **표시/해제 사건 행 수와 정확히 같다** — 많으면 이력 밖(갑지 표시란 등) 현재
+         표시, 적으면 일부만 추출된 불완전 증거다. CLIP 쪽 대조는 PDF 에서 현재 표시가 래스터화·누락된 경우를 막는다.
          CLIP 출현 수를 모르면(디코드 텍스트 없음) 증명 불가로 거부. 모호한 사건 행도 거부.
       3) 모든 표시가 **짝지어진 해제**로 닫힌다. 해제는 사유가 참조하는 일자(…자)가 열린 표시의
          변동일과 같을 때 그 표시와 짝짓는다. 참조 일자가 없으면 이력 전체의 표시가 1건일 때만
@@ -1925,9 +1929,9 @@ def _resolve_violation(
         events.append((str(row.get("resChangeDate") or ""), event, _referenced_dates(reason)))
     # 사건 행마다 "위반건축물"은 정확히 1번 — 이력 밖 출현(갑지 표시란 등)이나 PDF 텍스트 부재
     # (이미지 표시 등)는 현재 위반으로 유지한다.
-    if not events or pdf_count == 0 or pdf_count > len(events):
-        return True, None
-    if clip_count is None or clip_count > len(events):
+    # 양쪽 출현 수가 사건 행 수와 **정확히** 같아야 한다 — 많으면 이력 밖 현재 표시, 적으면
+    # 일부만 추출된 불완전 증거(누락된 쪽에 현재 표시가 있을 수 있음).
+    if not events or pdf_count != len(events) or clip_count != len(events):
         return True, None
 
     events.sort(key=lambda e: e[0])  # 안정 정렬 — 같은 날짜는 문서 순서 유지

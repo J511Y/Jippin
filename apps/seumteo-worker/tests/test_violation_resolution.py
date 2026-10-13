@@ -244,6 +244,19 @@ class ResolveViolationTest(unittest.TestCase):
         pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]
         self.assertEqual(_resolve(pages, clip_count=_mark_count(pages) + 1), (True, None))
 
+    def test_partial_clip_count_keeps_verdict(self) -> None:
+        # CLIP 디코드가 일부 쪽만 잡아 사건 수보다 적으면 불완전 증거(Codex 4R P1).
+        pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]
+        self.assertEqual(_resolve(pages, clip_count=_mark_count(pages) - 1), (True, None))
+
+    def test_negation_after_confirm_word_is_ambiguous(self) -> None:
+        # "해제 통보 대상 아님" — 확정 문구 접두 뒤의 부정(Codex 4R P1).
+        page = HEADING_CHANGES_ACTIVE.replace(
+            "- 이하여백 -",
+            "2015.7.16. 위반건축물 표시 해제 통보 대상 아님 2015.02.10.자\n- 이하여백 -",
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
     def test_unknown_clip_count_keeps_verdict(self) -> None:
         pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]
         self.assertEqual(_resolve(pages, clip_count=None), (True, None))
