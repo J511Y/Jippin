@@ -116,6 +116,58 @@ class ResolveViolationTest(unittest.TestCase):
             (False, "history_released"),
         )
 
+    def test_ja_prefixed_reason_is_its_own_row(self) -> None:
+        # '자'로 시작하는 실제 사유("자진철거…")는 날짜 참조 연속이 아니다(Codex 2R P1).
+        page = HEADING_CHANGES_ACTIVE.replace(
+            "- 이하여백 -",
+            "2015.3.5. 자진철거에 따라 위반건축물 표시 해제\n- 이하여백 -",
+        )
+        rows = _parse_changes_pdf_all([page]) or []
+        self.assertIn("2015-03-05", [r["resChangeDate"] for r in rows])
+        # 표시 1건 + 참조일 없는 해제 1건 → 단건 짝짓기로 해제.
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (False, "history_released"))
+
+    def test_releases_must_pair_with_their_marks(self) -> None:
+        # 101호 표시·202호 표시 + 101호(2015.02.10.자) 해제 2건 → 202호는 미해제(Codex 2R P1).
+        page = HEADING_CHANGES_RELEASED.replace(
+            "2015.7.16.",
+            "2015.3.2. 수원시 주택과-1(2015.03.01.)호에 따라 위반건축물 표시 202호 무단증축\n"
+            "2015.7.16.",
+        ).replace(
+            "- 이하여백 -",
+            "2015.8.1. 수원시 주택과-2(2015.07.31.)호 위반건축물 표시 해제 통보에 의거\n"
+            '2015.02.10.자 "위반표시 해제" 재정리\n- 이하여백 -',
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_unreferenced_release_with_multiple_marks_is_ambiguous(self) -> None:
+        page = HEADING_CHANGES_ACTIVE.replace(
+            "- 이하여백 -",
+            "2015.3.2. 수원시 주택과-1호에 따라 위반건축물 표시 202호 무단증축\n"
+            "2015.9.1. 수원시 주택과 통보에 의거 위반건축물 표시 해제\n"
+            "2015.9.2. 수원시 주택과 통보에 의거 위반건축물 표시 해제\n- 이하여백 -",
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_non_final_release_is_not_a_release(self) -> None:
+        # "해제 취소"/"해제 요청"은 확정 해제가 아니다(Codex 2R P1).
+        for qualifier in ("취소", "요청"):
+            page = HEADING_CHANGES_ACTIVE.replace(
+                "- 이하여백 -",
+                f"2015.7.16. 위반건축물 표시 해제 {qualifier}에 따라 2015.02.10.자 정리\n"
+                "- 이하여백 -",
+            )
+            with self.subTest(qualifier=qualifier):
+                self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_absorbed_current_marker_is_ambiguous(self) -> None:
+        # 그 밖의 기재사항의 현재 표시가 사유에 빨려 들어오면 한 행에 2회 → 거부(Codex 2R P1).
+        page = HEADING_CHANGES_RELEASED.replace(
+            '2015.02.10.자 "위반표시 해제" 정리\n',
+            '2015.02.10.자 "위반표시 해제" 정리\n위반건축물\n',
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
     def test_no_pdf_keeps_clip_verdict(self) -> None:
         self.assertEqual(_resolve_violation(True, None, None), (True, None))
         pages = [HEADING_CHANGES_RELEASED]
