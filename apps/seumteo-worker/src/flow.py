@@ -1827,7 +1827,13 @@ _VIOLATION_MARK = "위반건축물"
 
 # 날짜 참조 접미("2015.02.10.자 …") — '자' 뒤가 공백·구두점·따옴표·줄끝일 때만. "자진철거…"처럼
 # '자'로 시작하는 실제 사유와 구분한다.
-_DATE_REF_SUFFIX = re.compile(r"^자(?:$|[\s\"'“”‘’,.)·])")
+_DATE_REF_SUFFIX = re.compile(r"^자(?:로)?(?:$|[\s\"'“”‘’,.)·])")
+# 사유 안의 표시 참조 일자 — "2015.02.10.자"처럼 '자'가 붙은 일자만. 공문 일자 "(2015.07.15.)호"는
+# 참조가 아니다.
+_REF_DATE = re.compile(r"((?:19|20)\d{2})[.\-](\d{1,2})[.\-](\d{1,2})\.?\s*자")
+# 확정 해제 문구 — "위반건축물 표시 해제" 바로 뒤가 이 말이거나 사유 끝일 때만 해제로 인정한다
+# (허용 목록). "해제 대상 아님/검토" 등 그 밖의 표현은 모두 모호.
+_RELEASE_CONFIRM = ("통보", "정리", "처리", "에의거", "에따라", "됨")
 # 확정 해제가 아닌 수식어 — 이 말이 붙은 해제 문구는 해제 사건으로 인정하지 않는다.
 _RELEASE_QUALIFIERS = ("취소", "요청", "신청", "예정", "보류", "반려", "철회", "불가")
 
@@ -1838,7 +1844,9 @@ def _violation_event(reason: str) -> str | None:
     한 행에 "위반건축물"이 정확히 1번 있어야 사건으로 본다. 2번 이상이면 인접 셀(그 밖의
     기재사항의 현재 표시 등)이 사유에 빨려 들어왔을 수 있어 "ambiguous"다.
       - mark    : "위반건축물 표시" 문구 + '해제' 없음.
-      - release : '해제' 있음 + 취소/요청/신청 등 비확정 수식어 없음.
+      - release : 그 1회의 "위반건축물"이 곧바로 "위반건축물 표시 해제" 구를 이루고, 그 뒤가 확정
+                  문구(통보·정리·처리·에 의거·에 따라·됨) 또는 사유 끝이며, 취소/요청/신청 등
+                  비확정 수식어가 없다. 약칭 "위반표시 해제" + 흡수된 별개 "위반건축물" 조합은 불가.
       - 그 외    : "ambiguous" — 호출측이 해제 판정을 거부한다(silent-normal 방지).
     "위반표시 해제" 같은 약칭만 있는 줄은 "위반건축물"이 없어 사건이 아니다(이중 집계 방지).
     """
@@ -1850,17 +1858,22 @@ def _violation_event(reason: str) -> str | None:
         return "ambiguous"
     core = _reason_core(reason)
     if "해제" in core:
-        if any(q in core for q in _RELEASE_QUALIFIERS):
+        phrase = f"{_VIOLATION_MARK}표시해제"
+        at = core.find(phrase)
+        if at < 0 or any(q in core for q in _RELEASE_QUALIFIERS):
+            return "ambiguous"
+        tail = core[at + len(phrase) :]
+        if tail and not tail.startswith(_RELEASE_CONFIRM):
             return "ambiguous"
         return "release"
     return "mark" if f"{_VIOLATION_MARK}표시" in core else "ambiguous"
 
 
 def _referenced_dates(reason: str) -> set[str]:
-    """사유가 참조하는 일자들(ISO) — 해제 행의 "2015.02.10.자 … 해제" 로 표시 행과 짝짓는다."""
+    """사유가 '…자'로 참조하는 일자들(ISO) — 해제 행을 표시 행과 짝짓는 근거."""
 
     dates: set[str] = set()
-    for y, m, d in _YEAR_DATE.findall(reason):
+    for y, m, d in _REF_DATE.findall(reason):
         iso = _normalize_change_date(y, m, d)
         if iso:
             dates.add(iso)
@@ -1918,14 +1931,19 @@ def _resolve_violation(
         return True, None
 
     events.sort(key=lambda e: e[0])  # 안정 정렬 — 같은 날짜는 문서 순서 유지
-    total_marks = sum(1 for _, kind, _ in events if kind == "mark")
+    mark_dates = [d for d, kind, _ in events if kind == "mark"]
+    total_marks = len(mark_dates)
+    # 같은 날 표시가 2건 이상이면 참조 일자로 어느 쪽을 해제했는지 구분할 수 없다 → 거부.
+    if len(set(mark_dates)) != total_marks:
+        return True, None
     open_marks: list[str] = []
     for date_value, kind, refs in events:
         if kind == "mark":
             open_marks.append(date_value)
             continue
         paired = next((m for m in open_marks if m in refs), None)
-        if paired is None and total_marks == 1 and len(open_marks) == 1:
+        # 참조 일자가 **없을 때만** 단건 짝짓기 — 다른 일자를 참조하는 해제는 이 표시의 해제가 아니다.
+        if paired is None and not refs and total_marks == 1 and len(open_marks) == 1:
             paired = open_marks[0]
         if paired is None:
             return True, None  # 어느 표시를 해제했는지 증명 불가
