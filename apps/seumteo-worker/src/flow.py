@@ -1513,7 +1513,6 @@ class SeumteoFlow:
     def _build_result(
         self, req: BuildingRegisterRequest, t: dict, ex: dict
     ) -> BuildingRegisterResult:
-        violation_status = "위반건축물" if ex.get("violation") else None
         # 발급 PDF 텍스트 레이어는 여기서 **한 번만** 추출한다 — pypdf 전 쪽 추출은 쪽수에
         # 비례해 수 초씩 걸려(실측: 표제부 ~9s), 대장상세·변동사항 파서가 각자 추출하면
         # 그 비용이 두 배가 된다. 파서들은 추출된 쪽 텍스트를 공유한다.
@@ -1551,12 +1550,37 @@ class SeumteoFlow:
         # 변동사항은 발급 PDF 텍스트 레이어가 정본이다 — CLIP viewData(글자단위 분절 +
         # 좌표숫자 잡음) 채굴은 절단/중복/필러 행을 만든다(실측: 세션 903c0c36). PDF 가
         # 없거나(예산 초과 생략) 파싱 불가일 때만 CLIP 텍스트로 폴백한다.
-        change_list = _parse_changes_pdf(pdf_pages)
+        # 위반 재확인은 표시 상한(20행) 이전의 **전체** 이력으로 한다 — 상한 뒤에 있는 표시/해제를
+        # 놓치지 않게. 타임라인(change_list)에만 상한을 적용한다.
+        pdf_changes_all = _parse_changes_pdf_all(pdf_pages)
+        change_list = pdf_changes_all[:20] if pdf_changes_all is not None else None
         change_source = "pdf"
         if change_list is None:
             change_list = _parse_changes(ex.get("full_text") or "")
             change_source = "clip_text"
         _log.info("flow.changes", source=change_source, rows=len(change_list))
+
+        # 위반표시 — CLIP 전문의 "위반건축물" 부분문자열 검출이 1차 신호다. 다만 변동사항의
+        # 과거 이력("위반건축물 표시" → "위반건축물 표시 해제")에만 등장하는 경우는 현재 위반이
+        # 아니므로 PDF 정본 텍스트로 재확인한다(#violation-history-released).
+        violation, violation_source = _resolve_violation(
+            bool(ex.get("violation")),
+            pdf_pages,
+            pdf_changes_all,
+            clip_count=ex.get("violation_count"),
+            clip_bare_count=ex.get("violation_bare_count"),
+        )
+        if violation_source is None:
+            violation_source = ex.get("violation_source")
+        violation_status = "위반건축물" if violation else None
+        _log.info(
+            "flow.violation",
+            kind=req.register_kind,
+            clip_violation=bool(ex.get("violation")),
+            clip_count=ex.get("violation_count"),
+            violation=violation,
+            source=violation_source,
+        )
 
         return BuildingRegisterResult(
             register_kind=req.register_kind,
@@ -1573,7 +1597,7 @@ class SeumteoFlow:
             detail_list=detail_list,
             original_pdf_base64=ex.get("pdf_base64"),
             extraction=ExtractionMeta(
-                violation_source=ex.get("violation_source"),
+                violation_source=violation_source,
                 report_text_len=len(ex.get("full_text") or ""),
                 pdf_source=ex.get("pdf_source"),
                 warnings=ex.get("warnings") or [],
@@ -1750,6 +1774,11 @@ def _scan_change_lines(lines: list[str]) -> list[dict]:
         if not line:
             continue
         m = _ROW_DATE.match(line)
+        # "2015.02.10.자 '위반표시 해제' 정리"처럼 날짜 직후 '자'가 붙은 줄은 앞 행 사유가 참조한
+        # 일자의 줄바꿈 연속이지 새 변동 행이 아니다 — 별도 행으로 쪼개면 해제가 이중 집계된다.
+        if m and date is not None and _DATE_REF_SUFFIX.match(m.group(4) or ""):
+            parts.append(line)
+            continue
         if m:
             flush()
             date = _normalize_change_date(m.group(1), m.group(2), m.group(3))
@@ -1766,6 +1795,13 @@ def _scan_change_lines(lines: list[str]) -> list[dict]:
 
 
 def _parse_changes_pdf(pages: list[str] | None) -> list[dict] | None:
+    """`_parse_changes_pdf_all` 의 표시용(최대 20행) 결과."""
+
+    rows = _parse_changes_pdf_all(pages)
+    return rows[:20] if rows is not None else None
+
+
+def _parse_changes_pdf_all(pages: list[str] | None) -> list[dict] | None:
     """발급 PDF 쪽별 텍스트(_pdf_page_texts 결과)에서 변동사항을 파싱한다(정본 경로).
 
     '변동사항'이 있는 쪽만 훑으므로 갑지 소유자현황(성명·주소·주민번호) 쪽은 열지 않는다.
@@ -1784,7 +1820,154 @@ def _parse_changes_pdf(pages: list[str] | None) -> list[dict] | None:
         rows.extend(_scan_change_lines(text.splitlines()))
     if not found_section:
         return None
-    return _dedupe_changes(rows)[:20]
+    return _dedupe_changes(rows)
+
+
+_VIOLATION_MARK = "위반건축물"
+
+
+# 날짜 참조 접미("2015.02.10.자 …") — '자' 뒤가 공백·구두점·따옴표·줄끝일 때만. "자진철거…"처럼
+# '자'로 시작하는 실제 사유와 구분한다.
+_DATE_REF_SUFFIX = re.compile(r"^자(?:로)?(?:$|[\s\"'“”‘’,.)·])")
+# 사유 안의 표시 참조 일자 — "2015.02.10.자"처럼 '자'가 붙은 일자만. 공문 일자 "(2015.07.15.)호"는
+# 참조가 아니다.
+_REF_DATE = re.compile(
+    r"((?:19|20)\d{2})[.\-](\d{1,2})[.\-](\d{1,2})\.?\s*자(?:로)?(?=$|[\s\"'“”‘’,.)·])"
+)
+# 확정 해제 문구 — "위반건축물 표시 해제" 바로 뒤가 이 말이거나 사유 끝일 때만 해제로 인정한다
+# (허용 목록). "해제 대상 아님/검토" 등 그 밖의 표현은 모두 모호.
+# "위반건축물 표시 해제" 뒤에 올 수 있는 문구 전체(공백·숫자·구두점 제거 골자 기준). 이 형태와
+# **완전히 일치**해야 해제다 — 접두만 맞고 "통보 대기/대상 아님" 등이 붙는 것은 모두 모호.
+# 실측: "…해제 통보에 의거 2015.02.10.자 "위반표시 해제" 정리" → "통보에의거자위반표시해제정리".
+_RELEASE_TAIL = re.compile(
+    r"(?:통보(?:에의거|에따라)?|에의거|에따라)?(?:자로?)?(?:위반표시해제)?(?:정리|처리|처리됨|됨)?"
+)
+# 확정 해제가 아닌 수식어 — 이 말이 붙은 해제 문구는 해제 사건으로 인정하지 않는다.
+_RELEASE_QUALIFIERS = (
+    "취소", "요청", "신청", "예정", "보류", "반려", "철회", "불가",
+    # 확정 문구 뒤에 붙는 부정·비확정("해제 통보 대상 아님", "해제 처리 검토").
+    "아님", "아니", "대상", "검토", "미해제", "보완",
+)
+
+
+def _violation_event(reason: str) -> str | None:
+    """변동 사유의 위반표시 사건 — "mark" / "release" / "ambiguous" / None(무관).
+
+    한 행에 "위반건축물"이 정확히 1번 있어야 사건으로 본다. 2번 이상이면 인접 셀(그 밖의
+    기재사항의 현재 표시 등)이 사유에 빨려 들어왔을 수 있어 "ambiguous"다.
+      - mark    : "위반건축물 표시" 문구 + '해제' 없음.
+      - release : 그 1회의 "위반건축물"이 곧바로 "위반건축물 표시 해제" 구를 이루고, 그 뒤가 확정
+                  문구(통보·정리·처리·에 의거·에 따라·됨) 또는 사유 끝이며, 취소/요청/신청 등
+                  비확정 수식어가 없다. 약칭 "위반표시 해제" + 흡수된 별개 "위반건축물" 조합은 불가.
+      - 그 외    : "ambiguous" — 호출측이 해제 판정을 거부한다(silent-normal 방지).
+    "위반표시 해제" 같은 약칭만 있는 줄은 "위반건축물"이 없어 사건이 아니다(이중 집계 방지).
+    """
+
+    count = re.sub(r"\s+", "", reason).count(_VIOLATION_MARK)
+    if count == 0:
+        return None
+    if count > 1:
+        return "ambiguous"
+    core = _reason_core(reason)
+    if "해제" in core:
+        phrase = f"{_VIOLATION_MARK}표시해제"
+        at = core.find(phrase)
+        if at < 0 or any(q in core for q in _RELEASE_QUALIFIERS):
+            return "ambiguous"
+        tail = core[at + len(phrase) :]
+        if not _RELEASE_TAIL.fullmatch(tail):
+            return "ambiguous"
+        return "release"
+    return "mark" if f"{_VIOLATION_MARK}표시" in core else "ambiguous"
+
+
+def _referenced_dates(reason: str) -> set[str]:
+    """사유가 '…자'로 참조하는 일자들(ISO) — 해제 행을 표시 행과 짝짓는 근거."""
+
+    dates: set[str] = set()
+    for y, m, d in _REF_DATE.findall(reason):
+        iso = _normalize_change_date(y, m, d)
+        if iso:
+            dates.add(iso)
+    return dates
+
+
+def _resolve_violation(
+    clip_violation: bool,
+    pdf_pages: list[str] | None,
+    pdf_changes: list[dict] | None,
+    *,
+    clip_count: int | None,
+    clip_bare_count: int | None = None,
+) -> tuple[bool, str | None]:
+    """CLIP 1차 위반 신호를 PDF 정본으로 재확인한다 — (violation, source 덮어쓰기|None).
+
+    오탐 사례(2026-10-13, 표제부 144동): 변동사항에 "2015.2.10. 위반건축물 표시" →
+    "2015.7.16. 위반건축물 표시 해제(2015.02.10.자 정리)" 이력만 있는데 부분문자열 검출이
+    현재 위반으로 판정했다.
+
+    silent-normal(실제 위반을 정상으로 오안내)이 더 위험하므로 **해제가 증명될 때만** 끈다.
+    다음을 모두 만족해야 False 로 내린다. 하나라도 불확실하면 CLIP 판정(True)을 유지한다.
+      1) PDF 텍스트와 PDF 기반 변동사항 파싱(상한 전 전체)이 모두 있고, 모든 쪽의 텍스트가
+         추출됐다(쪽 추출 실패 = 빈 문자열 → 그 쪽의 표시란을 못 봤으므로 불완전 입력).
+      2) PDF 전문과 CLIP 디코드 텍스트(`clip_count`) 양쪽 모두에서 "위반건축물" 출현이
+         **표시/해제 사건 행 수와 정확히 같다** — 많으면 이력 밖(갑지 표시란 등) 현재
+         표시, 적으면 일부만 추출된 불완전 증거다. CLIP 쪽 대조는 PDF 에서 현재 표시가 래스터화·누락된 경우를 막는다.
+         CLIP 출현 수를 모르면(디코드 텍스트 없음) 증명 불가로 거부. 모호한 사건 행도 거부.
+      3) 모든 표시가 **짝지어진 해제**로 닫힌다. 해제는 사유가 참조하는 일자(…자)가 열린 표시의
+         변동일과 같을 때 그 표시와 짝짓는다. 참조 일자가 없으면 이력 전체의 표시가 1건일 때만
+         그 표시와 짝짓고, 그 외(다건·짝 없음)는 거부한다.
+    """
+
+    if not clip_violation:
+        return False, None
+    if pdf_pages is None or pdf_changes is None:
+        return True, None
+    if not pdf_pages or any(not page.strip() for page in pdf_pages):
+        return True, None
+
+    pdf_count = re.sub(r"\s+", "", "".join(pdf_pages)).count(_VIOLATION_MARK)
+    events: list[tuple[str, str, set[str]]] = []
+    for row in pdf_changes:
+        reason = str(row.get("resChangeReason") or "")
+        event = _violation_event(reason)
+        if event is None:
+            continue
+        if event == "ambiguous":
+            return True, None
+        events.append((str(row.get("resChangeDate") or ""), event, _referenced_dates(reason)))
+    # 사건 행마다 "위반건축물"은 정확히 1번 — 이력 밖 출현(갑지 표시란 등)이나 PDF 텍스트 부재
+    # (이미지 표시 등)는 현재 위반으로 유지한다.
+    # 양쪽 출현 수가 사건 행 수와 **정확히** 같아야 한다 — 많으면 이력 밖 현재 표시, 적으면
+    # 일부만 추출된 불완전 증거(누락된 쪽에 현재 표시가 있을 수 있음).
+    if not events or pdf_count != len(events) or clip_count != len(events):
+        return True, None
+    # CLIP(paint 포함)에 "표시"가 뒤따르지 않는 단독 "위반건축물"이 있으면 현재 상태 표시 → 위반.
+    # 모르면(None) 증명 불가로 거부.
+    if clip_bare_count != 0:
+        return True, None
+
+    events.sort(key=lambda e: e[0])  # 안정 정렬 — 같은 날짜는 문서 순서 유지
+    mark_dates = [d for d, kind, _ in events if kind == "mark"]
+    total_marks = len(mark_dates)
+    # 같은 날 표시가 2건 이상이면 참조 일자로 어느 쪽을 해제했는지 구분할 수 없다 → 거부.
+    if len(set(mark_dates)) != total_marks:
+        return True, None
+    open_marks: list[str] = []
+    for date_value, kind, refs in events:
+        if kind == "mark":
+            open_marks.append(date_value)
+            continue
+        paired = next((m for m in open_marks if m in refs), None)
+        # 참조 일자가 **없을 때만** 단건 짝짓기 — 다른 일자를 참조하는 해제는 이 표시의 해제가 아니다.
+        if paired is None and not refs and total_marks == 1 and len(open_marks) == 1:
+            paired = open_marks[0]
+        if paired is None:
+            return True, None  # 어느 표시를 해제했는지 증명 불가
+        open_marks.remove(paired)
+    if total_marks == 0 or open_marks:
+        return True, None
+    return False, "history_released"
 
 
 def _pdf_page_texts(pdf_b64: str | None) -> list[str] | None:
