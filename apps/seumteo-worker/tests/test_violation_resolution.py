@@ -11,7 +11,12 @@ from __future__ import annotations
 import re
 import unittest
 
-from src.flow import _parse_changes_pdf, _parse_changes_pdf_all, _resolve_violation
+from src.flow import (
+    _parse_changes_pdf,
+    _parse_changes_pdf_all,
+    _referenced_dates,
+    _resolve_violation,
+)
 
 # 표제부(을) 변동사항 쪽 — 위반표시(2015.2.10.) 후 해제(2015.7.16.). '�' 는 PDF 의
 # 미매핑 글리프(실측 그대로).
@@ -252,6 +257,13 @@ class ResolveViolationTest(unittest.TestCase):
         rows = _parse_changes_pdf_all([page]) or []
         self.assertNotIn("2015-02-10", [r["resChangeDate"] for r in rows][1:])
         self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (False, "history_released"))
+
+    def test_reference_dates_need_suffix_boundary(self) -> None:
+        # "자진철거"의 '자'는 참조 접미가 아니다; "…자"/"…자로"만 참조(Codex 6R P2).
+        self.assertEqual(_referenced_dates("2014.01.01. 자진철거에 따라 위반건축물 표시 해제"), set())
+        self.assertEqual(_referenced_dates('2015.02.10.자 "위반표시 해제" 정리'), {"2015-02-10"})
+        self.assertEqual(_referenced_dates("2015.02.10.자로 정리"), {"2015-02-10"})
+        self.assertEqual(_referenced_dates("(2015.07.15.)호 의거"), set())
 
     def test_clip_sees_mark_missing_from_pdf_keeps_verdict(self) -> None:
         # 현재 표시가 PDF 텍스트에서 누락(래스터화 등)돼도 CLIP 디코드엔 있으면 위반 유지(Codex P1).
