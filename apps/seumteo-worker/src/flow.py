@@ -1513,7 +1513,6 @@ class SeumteoFlow:
     def _build_result(
         self, req: BuildingRegisterRequest, t: dict, ex: dict
     ) -> BuildingRegisterResult:
-        violation_status = "위반건축물" if ex.get("violation") else None
         # 발급 PDF 텍스트 레이어는 여기서 **한 번만** 추출한다 — pypdf 전 쪽 추출은 쪽수에
         # 비례해 수 초씩 걸려(실측: 표제부 ~9s), 대장상세·변동사항 파서가 각자 추출하면
         # 그 비용이 두 배가 된다. 파서들은 추출된 쪽 텍스트를 공유한다.
@@ -1558,6 +1557,25 @@ class SeumteoFlow:
             change_source = "clip_text"
         _log.info("flow.changes", source=change_source, rows=len(change_list))
 
+        # 위반표시 — CLIP 전문의 "위반건축물" 부분문자열 검출이 1차 신호다. 다만 변동사항의
+        # 과거 이력("위반건축물 표시" → "위반건축물 표시 해제")에만 등장하는 경우는 현재 위반이
+        # 아니므로 PDF 정본 텍스트로 재확인한다(#violation-history-released).
+        violation, violation_source = _resolve_violation(
+            bool(ex.get("violation")),
+            pdf_pages,
+            change_list if change_source == "pdf" else None,
+        )
+        if violation_source is None:
+            violation_source = ex.get("violation_source")
+        violation_status = "위반건축물" if violation else None
+        _log.info(
+            "flow.violation",
+            kind=req.register_kind,
+            clip_violation=bool(ex.get("violation")),
+            violation=violation,
+            source=violation_source,
+        )
+
         return BuildingRegisterResult(
             register_kind=req.register_kind,
             comm_unique_no=t.get("recap_pk")
@@ -1573,7 +1591,7 @@ class SeumteoFlow:
             detail_list=detail_list,
             original_pdf_base64=ex.get("pdf_base64"),
             extraction=ExtractionMeta(
-                violation_source=ex.get("violation_source"),
+                violation_source=violation_source,
                 report_text_len=len(ex.get("full_text") or ""),
                 pdf_source=ex.get("pdf_source"),
                 warnings=ex.get("warnings") or [],
@@ -1785,6 +1803,61 @@ def _parse_changes_pdf(pages: list[str] | None) -> list[dict] | None:
     if not found_section:
         return None
     return _dedupe_changes(rows)[:20]
+
+
+_VIOLATION_MARK = "위반건축물"
+
+
+def _is_violation_release(reason: str) -> bool:
+    """변동 사유가 위반표시 '해제' 정리인가("위반건축물 표시 해제 통보에 의거 … 정리")."""
+
+    core = _reason_core(reason)
+    return "위반" in core and "해제" in core
+
+
+def _resolve_violation(
+    clip_violation: bool,
+    pdf_pages: list[str] | None,
+    pdf_changes: list[dict] | None,
+) -> tuple[bool, str | None]:
+    """CLIP 1차 위반 신호를 PDF 정본으로 재확인한다 — (violation, source 덮어쓰기|None).
+
+    오탐 사례(2026-10-13, 표제부 144동): 변동사항에 "2015.2.10. 위반건축물 표시" →
+    "2015.7.16. 위반건축물 표시 해제" 이력만 있는데 부분문자열 검출이 현재 위반으로 판정했다.
+
+    silent-normal(실제 위반을 정상으로 오안내)이 더 위험하므로 **해제가 증명될 때만** 끈다.
+    다음을 모두 만족해야 False 로 내린다. 하나라도 불확실하면 CLIP 판정(True)을 유지한다.
+      1) PDF 텍스트와 PDF 기반 변동사항 파싱이 모두 있다.
+      2) PDF 전문의 "위반건축물" 출현이 **모두 변동사항 행 안**에 있다(갑지 표시란 등
+         이력 밖 출현이 하나라도 있으면 현재 위반표시).
+      3) 위반 관련 변동 행이 있고, 해제 행 수 ≥ 표시 행 수이며 마지막 위반 관련 행이 해제다.
+    """
+
+    if not clip_violation:
+        return False, None
+    if pdf_pages is None or pdf_changes is None:
+        return True, None
+
+    pdf_count = re.sub(r"\s+", "", "".join(pdf_pages)).count(_VIOLATION_MARK)
+    related = [
+        row
+        for row in pdf_changes
+        if "위반" in _reason_core(str(row.get("resChangeReason") or ""))
+    ]
+    history_count = sum(
+        re.sub(r"\s+", "", str(row.get("resChangeReason") or "")).count(_VIOLATION_MARK)
+        for row in related
+    )
+    # 이력 밖 출현(갑지 표시란 등) 또는 PDF 텍스트에 없음(이미지 표시 등) → 현재 위반 유지.
+    if pdf_count == 0 or pdf_count > history_count or not related:
+        return True, None
+
+    related.sort(key=lambda r: str(r.get("resChangeDate") or ""))
+    releases = [r for r in related if _is_violation_release(str(r["resChangeReason"]))]
+    marks = len(related) - len(releases)
+    if releases and len(releases) >= marks and related[-1] in releases:
+        return False, "history_released"
+    return True, None
 
 
 def _pdf_page_texts(pdf_b64: str | None) -> list[str] | None:
