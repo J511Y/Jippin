@@ -1550,7 +1550,10 @@ class SeumteoFlow:
         # 변동사항은 발급 PDF 텍스트 레이어가 정본이다 — CLIP viewData(글자단위 분절 +
         # 좌표숫자 잡음) 채굴은 절단/중복/필러 행을 만든다(실측: 세션 903c0c36). PDF 가
         # 없거나(예산 초과 생략) 파싱 불가일 때만 CLIP 텍스트로 폴백한다.
-        change_list = _parse_changes_pdf(pdf_pages)
+        # 위반 재확인은 표시 상한(20행) 이전의 **전체** 이력으로 한다 — 상한 뒤에 있는 표시/해제를
+        # 놓치지 않게. 타임라인(change_list)에만 상한을 적용한다.
+        pdf_changes_all = _parse_changes_pdf_all(pdf_pages)
+        change_list = pdf_changes_all[:20] if pdf_changes_all is not None else None
         change_source = "pdf"
         if change_list is None:
             change_list = _parse_changes(ex.get("full_text") or "")
@@ -1563,7 +1566,7 @@ class SeumteoFlow:
         violation, violation_source = _resolve_violation(
             bool(ex.get("violation")),
             pdf_pages,
-            change_list if change_source == "pdf" else None,
+            pdf_changes_all,
         )
         if violation_source is None:
             violation_source = ex.get("violation_source")
@@ -1768,6 +1771,11 @@ def _scan_change_lines(lines: list[str]) -> list[dict]:
         if not line:
             continue
         m = _ROW_DATE.match(line)
+        # "2015.02.10.자 '위반표시 해제' 정리"처럼 날짜 직후 '자'가 붙은 줄은 앞 행 사유가 참조한
+        # 일자의 줄바꿈 연속이지 새 변동 행이 아니다 — 별도 행으로 쪼개면 해제가 이중 집계된다.
+        if m and date is not None and (m.group(4) or "").startswith("자"):
+            parts.append(line)
+            continue
         if m:
             flush()
             date = _normalize_change_date(m.group(1), m.group(2), m.group(3))
@@ -1784,6 +1792,13 @@ def _scan_change_lines(lines: list[str]) -> list[dict]:
 
 
 def _parse_changes_pdf(pages: list[str] | None) -> list[dict] | None:
+    """`_parse_changes_pdf_all` 의 표시용(최대 20행) 결과."""
+
+    rows = _parse_changes_pdf_all(pages)
+    return rows[:20] if rows is not None else None
+
+
+def _parse_changes_pdf_all(pages: list[str] | None) -> list[dict] | None:
     """발급 PDF 쪽별 텍스트(_pdf_page_texts 결과)에서 변동사항을 파싱한다(정본 경로).
 
     '변동사항'이 있는 쪽만 훑으므로 갑지 소유자현황(성명·주소·주민번호) 쪽은 열지 않는다.
@@ -1802,17 +1817,24 @@ def _parse_changes_pdf(pages: list[str] | None) -> list[dict] | None:
         rows.extend(_scan_change_lines(text.splitlines()))
     if not found_section:
         return None
-    return _dedupe_changes(rows)[:20]
+    return _dedupe_changes(rows)
 
 
 _VIOLATION_MARK = "위반건축물"
 
 
-def _is_violation_release(reason: str) -> bool:
-    """변동 사유가 위반표시 '해제' 정리인가("위반건축물 표시 해제 통보에 의거 … 정리")."""
+def _violation_event(reason: str) -> str | None:
+    """변동 사유의 위반표시 사건 — "mark"(표시) / "release"(해제) / None(무관).
+
+    "위반건축물"이 명시된 행만 사건으로 본다. 해제 행의 실측 문구는 "위반건축물 표시 해제
+    통보에 의거 …"이며, "위반표시 해제" 같은 약칭만 있는 줄(연속·참조 문구)은 사건으로 세지
+    않는다 — 세면 해제가 이중 집계돼 남은 표시를 해제된 것으로 오판한다(silent-normal).
+    """
 
     core = _reason_core(reason)
-    return "위반" in core and "해제" in core
+    if _VIOLATION_MARK not in core:
+        return None
+    return "release" if "해제" in core else "mark"
 
 
 def _resolve_violation(
@@ -1827,35 +1849,37 @@ def _resolve_violation(
 
     silent-normal(실제 위반을 정상으로 오안내)이 더 위험하므로 **해제가 증명될 때만** 끈다.
     다음을 모두 만족해야 False 로 내린다. 하나라도 불확실하면 CLIP 판정(True)을 유지한다.
-      1) PDF 텍스트와 PDF 기반 변동사항 파싱이 모두 있다.
+      1) PDF 텍스트와 PDF 기반 변동사항 파싱(상한 전 전체)이 모두 있고, 모든 쪽의 텍스트가
+         추출됐다(쪽 추출 실패 = 빈 문자열 → 그 쪽의 표시란을 못 봤으므로 불완전 입력).
       2) PDF 전문의 "위반건축물" 출현이 **모두 변동사항 행 안**에 있다(갑지 표시란 등
          이력 밖 출현이 하나라도 있으면 현재 위반표시).
-      3) 위반 관련 변동 행이 있고, 해제 행 수 ≥ 표시 행 수이며 마지막 위반 관련 행이 해제다.
+      3) 위반표시 사건(`_violation_event`)이 있고, 해제 수 ≥ 표시 수이며 마지막 사건이 해제다.
     """
 
     if not clip_violation:
         return False, None
     if pdf_pages is None or pdf_changes is None:
         return True, None
-
-    pdf_count = re.sub(r"\s+", "", "".join(pdf_pages)).count(_VIOLATION_MARK)
-    related = [
-        row
-        for row in pdf_changes
-        if "위반" in _reason_core(str(row.get("resChangeReason") or ""))
-    ]
-    history_count = sum(
-        re.sub(r"\s+", "", str(row.get("resChangeReason") or "")).count(_VIOLATION_MARK)
-        for row in related
-    )
-    # 이력 밖 출현(갑지 표시란 등) 또는 PDF 텍스트에 없음(이미지 표시 등) → 현재 위반 유지.
-    if pdf_count == 0 or pdf_count > history_count or not related:
+    if not pdf_pages or any(not page.strip() for page in pdf_pages):
         return True, None
 
-    related.sort(key=lambda r: str(r.get("resChangeDate") or ""))
-    releases = [r for r in related if _is_violation_release(str(r["resChangeReason"]))]
-    marks = len(related) - len(releases)
-    if releases and len(releases) >= marks and related[-1] in releases:
+    pdf_count = re.sub(r"\s+", "", "".join(pdf_pages)).count(_VIOLATION_MARK)
+    events: list[tuple[str, str]] = []
+    history_count = 0
+    for row in pdf_changes:
+        reason = str(row.get("resChangeReason") or "")
+        history_count += re.sub(r"\s+", "", reason).count(_VIOLATION_MARK)
+        event = _violation_event(reason)
+        if event is not None:
+            events.append((str(row.get("resChangeDate") or ""), event))
+    # 이력 밖 출현(갑지 표시란 등) 또는 PDF 텍스트에 없음(이미지 표시 등) → 현재 위반 유지.
+    if pdf_count == 0 or pdf_count > history_count or not events:
+        return True, None
+
+    events.sort(key=lambda e: e[0])  # 안정 정렬 — 같은 날짜는 문서 순서 유지
+    releases = sum(1 for _, kind in events if kind == "release")
+    marks = len(events) - releases
+    if releases and releases >= marks and events[-1][1] == "release":
         return False, "history_released"
     return True, None
 

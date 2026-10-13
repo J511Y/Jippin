@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.flow import _parse_changes_pdf, _resolve_violation
+from src.flow import _parse_changes_pdf, _parse_changes_pdf_all, _resolve_violation
 
 # 표제부(을) 변동사항 쪽 — 위반표시(2015.2.10.) 후 해제(2015.7.16.). '�' 는 PDF 의
 # 미매핑 글리프(실측 그대로).
@@ -49,7 +49,7 @@ HEADING_PAGE1_PLAIN = """■ 건축물대장의 기재 및 관리 등에 관한 
 
 
 def _resolve(pages: list[str], clip_violation: bool = True) -> tuple[bool, str | None]:
-    return _resolve_violation(clip_violation, pages, _parse_changes_pdf(pages))
+    return _resolve_violation(clip_violation, pages, _parse_changes_pdf_all(pages))
 
 
 class ResolveViolationTest(unittest.TestCase):
@@ -79,6 +79,42 @@ class ResolveViolationTest(unittest.TestCase):
             "- 이하여백 -",
         )
         self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, extra]), (True, None))
+
+    def test_dated_reference_line_is_continuation(self) -> None:
+        # "2015.02.10.자 '위반표시 해제' 정리" 는 해제 행의 연속 — 별도 행이 아니다.
+        rows = _parse_changes_pdf([HEADING_CHANGES_RELEASED]) or []
+        release = [r for r in rows if r["resChangeDate"] == "2015-07-16"]
+        self.assertEqual(len(release), 1)
+        self.assertIn("위반표시 해제", release[0]["resChangeReason"])
+        self.assertEqual(sum(1 for r in rows if "위반" in r["resChangeReason"]), 2)
+
+    def test_two_marks_one_release_stays_violation(self) -> None:
+        # 해제 연속줄이 이중 집계되면 표시 2 / 해제 2 로 오판한다(Codex P1).
+        extra = HEADING_CHANGES_RELEASED.replace(
+            "2015.7.16.",
+            "2015.3.2. 수원시 주택과-1(2015.03.01.)호에 따라 위반건축물 표시 202호 무단증축\n"
+            "2015.7.16.",
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, extra]), (True, None))
+
+    def test_failed_page_extraction_keeps_clip_verdict(self) -> None:
+        # 쪽 추출 실패("")는 그 쪽 표시란을 못 본 것 — 해제 판정 거부(Codex P1).
+        self.assertEqual(_resolve(["", HEADING_CHANGES_RELEASED]), (True, None))
+
+    def test_resolution_uses_history_beyond_display_cap(self) -> None:
+        # 표시 상한(20행) 뒤의 표시/해제도 판정에 쓴다(Codex P2).
+        filler = "".join(
+            f"2001.1.{d}. 수원시 건축과 문서에 의거 표시변경 정리\n" for d in range(1, 26)
+        )
+        page = HEADING_CHANGES_RELEASED.replace(
+            "2015.2.10.", filler + "2015.2.10.", 1
+        )
+        self.assertGreater(len(_parse_changes_pdf_all([page]) or []), 20)
+        self.assertEqual(len(_parse_changes_pdf([page]) or []), 20)
+        self.assertEqual(
+            _resolve_violation(True, [HEADING_PAGE1_PLAIN, page], _parse_changes_pdf_all([page])),
+            (False, "history_released"),
+        )
 
     def test_no_pdf_keeps_clip_verdict(self) -> None:
         self.assertEqual(_resolve_violation(True, None, None), (True, None))
