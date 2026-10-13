@@ -48,8 +48,18 @@ HEADING_PAGE1_PLAIN = """■ 건축물대장의 기재 및 관리 등에 관한 
 건물ID 2120041860012558 고유번호 4111513800-3-07060000"""
 
 
-def _resolve(pages: list[str], clip_violation: bool = True) -> tuple[bool, str | None]:
-    return _resolve_violation(clip_violation, pages, _parse_changes_pdf_all(pages))
+def _mark_count(pages: list[str]) -> int:
+    return "".join("".join(pages).split()).count("위반건축물")
+
+
+def _resolve(
+    pages: list[str], clip_violation: bool = True, clip_count: int | None = -1
+) -> tuple[bool, str | None]:
+    # 기본은 CLIP 디코드 텍스트가 PDF 와 같은 출현 수를 본 경우(-1 = PDF 에서 계산).
+    count = _mark_count(pages) if clip_count == -1 else clip_count
+    return _resolve_violation(
+        clip_violation, pages, _parse_changes_pdf_all(pages), clip_count=count
+    )
 
 
 class ResolveViolationTest(unittest.TestCase):
@@ -112,7 +122,12 @@ class ResolveViolationTest(unittest.TestCase):
         self.assertGreater(len(_parse_changes_pdf_all([page]) or []), 20)
         self.assertEqual(len(_parse_changes_pdf([page]) or []), 20)
         self.assertEqual(
-            _resolve_violation(True, [HEADING_PAGE1_PLAIN, page], _parse_changes_pdf_all([page])),
+            _resolve_violation(
+                True,
+                [HEADING_PAGE1_PLAIN, page],
+                _parse_changes_pdf_all([page]),
+                clip_count=_mark_count([page]),
+            ),
             (False, "history_released"),
         )
 
@@ -168,11 +183,20 @@ class ResolveViolationTest(unittest.TestCase):
         )
         self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
 
+    def test_clip_sees_mark_missing_from_pdf_keeps_verdict(self) -> None:
+        # 현재 표시가 PDF 텍스트에서 누락(래스터화 등)돼도 CLIP 디코드엔 있으면 위반 유지(Codex P1).
+        pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]
+        self.assertEqual(_resolve(pages, clip_count=_mark_count(pages) + 1), (True, None))
+
+    def test_unknown_clip_count_keeps_verdict(self) -> None:
+        pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]
+        self.assertEqual(_resolve(pages, clip_count=None), (True, None))
+
     def test_no_pdf_keeps_clip_verdict(self) -> None:
-        self.assertEqual(_resolve_violation(True, None, None), (True, None))
+        self.assertEqual(_resolve_violation(True, None, None, clip_count=2), (True, None))
         pages = [HEADING_CHANGES_RELEASED]
         # PDF 변동사항 파싱이 없으면(CLIP 폴백) 재확인하지 않는다.
-        self.assertEqual(_resolve_violation(True, pages, None), (True, None))
+        self.assertEqual(_resolve_violation(True, pages, None, clip_count=2), (True, None))
 
     def test_mark_missing_from_pdf_text_keeps_clip_verdict(self) -> None:
         # CLIP 은 봤는데 PDF 텍스트 레이어에 없음(이미지 표시 등) → 현재 위반 유지.

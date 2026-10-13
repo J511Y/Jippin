@@ -26,7 +26,7 @@ ADR-0008 은 CODEF(세움터 스크래핑 대행 API)로 집합건축물대장 �
 | 호출 방식 | api → 워커 **Flycast 사설망**(`.flycast`) HTTP. `SEUMTEO_WORKER_TOKEN` Bearer 추가 인증. |
 | 인터페이스 | **CODEF 동형 유지**. `SeumteoBuildingRegisterClient` 가 CODEF 3 메서드+생성자 시그니처와 `codef.types` 결과 dataclass·예외를 그대로 쓴다 → `home_check.py`·기존 테스트 무변경. |
 | 발급 방식 | 1~8 단계 in-page fetch(JSON), 9 단계(발급 리포트)만 DOM 클릭. 담기 시 **`ownrYn:"N"`** 로 소유자 PII 미포함 대장 발급(ADR-0008 PII 정책 부합). |
-| 위반 판정 | CLIP Report(HTML5 canvas) 뷰어에서 텍스트 확보(`paintReportText` 후킹 + `viewData` 디코드) → "위반건축물" 부분문자열. |
+| 위반 판정 | CLIP Report(HTML5 canvas) 뷰어에서 텍스트 확보(`paintReportText` 후킹 + `viewData` 디코드) → "위반건축물" 부분문자열(1차 신호). **2026-10 보강**: 신호가 변동사항의 해제된 과거 이력에서만 왔음이 발급 PDF·CLIP 출현 수 대조와 표시-해제 짝짓기로 증명될 때만 위반을 끈다(fail-closed, 상세는 `apps/seumteo-worker/README.md`). |
 | PDF | 뷰어 "PDF 저장" 버튼 → 다운로드 → `original_pdf_base64` 반환. **기존 `home_check._store_pdfs` 가 Supabase 저장**(무변경). |
 | 전환 | `seumteo_enabled` 플래그. true=세움터, false=CODEF(롤백). 기본 false. |
 | 자격증명 | 세움터 password 는 api 프로세스에 없다. **워커(Fly secrets)만 보유**. |

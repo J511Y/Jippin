@@ -206,6 +206,12 @@ async def extract_report(
     # 검출한다 — 놓치면 위반건축물을 정상으로 오안내(silent-normal, 최악)한다. (전 쪽 로드 대상.)
     compact = re.sub(r"[\s+]+", "", full_text)
     violation = _VIOLATION in compact
+    # viewData 디코드(쪽별 중복 제거된 원문)의 "위반건축물" 출현 수 — flow 가 PDF 변동사항 이력과
+    # 대조해, CLIP 신호 전체가 해제된 이력에서 왔는지 증명할 때 쓴다(#violation-history-released).
+    # paint 텍스트는 리페인트로 중복될 수 있어 쓰지 않는다. 디코드가 비면 None(증명 불가).
+    violation_count = (
+        re.sub(r"[\s+]+", "", decoded_text).count(_VIOLATION) if decoded_text else None
+    )
     violation_source = "report_text" if full_text else None
     log_stage(_log, "clip_text_parse", parse_started, register_kind=register_kind)
 
@@ -234,6 +240,7 @@ async def extract_report(
         "compact_text": compact,
         "violation": violation,
         "violation_source": violation_source,
+        "violation_count": violation_count,
         "pdf_base64": pdf_b64,
         "pdf_source": pdf_source,
         "warnings": warnings,

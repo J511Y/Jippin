@@ -1567,6 +1567,7 @@ class SeumteoFlow:
             bool(ex.get("violation")),
             pdf_pages,
             pdf_changes_all,
+            clip_count=ex.get("violation_count"),
         )
         if violation_source is None:
             violation_source = ex.get("violation_source")
@@ -1575,6 +1576,7 @@ class SeumteoFlow:
             "flow.violation",
             kind=req.register_kind,
             clip_violation=bool(ex.get("violation")),
+            clip_count=ex.get("violation_count"),
             violation=violation,
             source=violation_source,
         )
@@ -1869,6 +1871,8 @@ def _resolve_violation(
     clip_violation: bool,
     pdf_pages: list[str] | None,
     pdf_changes: list[dict] | None,
+    *,
+    clip_count: int | None,
 ) -> tuple[bool, str | None]:
     """CLIP 1차 위반 신호를 PDF 정본으로 재확인한다 — (violation, source 덮어쓰기|None).
 
@@ -1880,8 +1884,10 @@ def _resolve_violation(
     다음을 모두 만족해야 False 로 내린다. 하나라도 불확실하면 CLIP 판정(True)을 유지한다.
       1) PDF 텍스트와 PDF 기반 변동사항 파싱(상한 전 전체)이 모두 있고, 모든 쪽의 텍스트가
          추출됐다(쪽 추출 실패 = 빈 문자열 → 그 쪽의 표시란을 못 봤으므로 불완전 입력).
-      2) PDF 전문의 "위반건축물" 출현이 **모두 표시/해제 사건 행 안**에 있다(갑지 표시란 등
-         이력 밖 출현이 하나라도 있으면 현재 위반표시). 모호한 사건 행이 하나라도 있으면 거부.
+      2) PDF 전문과 CLIP 디코드 텍스트(`clip_count`) 양쪽 모두에서 "위반건축물" 출현이
+         **표시/해제 사건 행 수 이하**다 — 갑지 표시란 등 이력 밖 출현이 어느 쪽에든 있으면
+         현재 위반표시다. CLIP 쪽 대조는 PDF 에서 현재 표시가 래스터화·누락된 경우를 막는다.
+         CLIP 출현 수를 모르면(디코드 텍스트 없음) 증명 불가로 거부. 모호한 사건 행도 거부.
       3) 모든 표시가 **짝지어진 해제**로 닫힌다. 해제는 사유가 참조하는 일자(…자)가 열린 표시의
          변동일과 같을 때 그 표시와 짝짓는다. 참조 일자가 없으면 이력 전체의 표시가 1건일 때만
          그 표시와 짝짓고, 그 외(다건·짝 없음)는 거부한다.
@@ -1907,6 +1913,8 @@ def _resolve_violation(
     # 사건 행마다 "위반건축물"은 정확히 1번 — 이력 밖 출현(갑지 표시란 등)이나 PDF 텍스트 부재
     # (이미지 표시 등)는 현재 위반으로 유지한다.
     if not events or pdf_count == 0 or pdf_count > len(events):
+        return True, None
+    if clip_count is None or clip_count > len(events):
         return True, None
 
     events.sort(key=lambda e: e[0])  # 안정 정렬 — 같은 날짜는 문서 순서 유지
