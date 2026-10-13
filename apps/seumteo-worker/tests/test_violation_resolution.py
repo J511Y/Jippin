@@ -8,9 +8,15 @@ silent-normal(실제 위반 → 정상 오안내)이 더 위험하므로 해제�
 
 from __future__ import annotations
 
+import re
 import unittest
 
-from src.flow import _parse_changes_pdf, _parse_changes_pdf_all, _resolve_violation
+from src.flow import (
+    _parse_changes_pdf,
+    _parse_changes_pdf_all,
+    _referenced_dates,
+    _resolve_violation,
+)
 
 # 표제부(을) 변동사항 쪽 — 위반표시(2015.2.10.) 후 해제(2015.7.16.). '�' 는 PDF 의
 # 미매핑 글리프(실측 그대로).
@@ -48,8 +54,30 @@ HEADING_PAGE1_PLAIN = """■ 건축물대장의 기재 및 관리 등에 관한 
 건물ID 2120041860012558 고유번호 4111513800-3-07060000"""
 
 
-def _resolve(pages: list[str], clip_violation: bool = True) -> tuple[bool, str | None]:
-    return _resolve_violation(clip_violation, pages, _parse_changes_pdf_all(pages))
+def _mark_count(pages: list[str]) -> int:
+    return "".join("".join(pages).split()).count("위반건축물")
+
+
+def _bare_count(pages: list[str]) -> int:
+    return len(re.findall(r"위반건축물(?!표시)", "".join("".join(pages).split())))
+
+
+def _resolve(
+    pages: list[str],
+    clip_violation: bool = True,
+    clip_count: int | None = -1,
+    clip_bare_count: int | None = -1,
+) -> tuple[bool, str | None]:
+    # 기본은 CLIP 텍스트가 PDF 와 같은 내용을 본 경우(-1 = PDF 에서 계산).
+    count = _mark_count(pages) if clip_count == -1 else clip_count
+    bare = _bare_count(pages) if clip_bare_count == -1 else clip_bare_count
+    return _resolve_violation(
+        clip_violation,
+        pages,
+        _parse_changes_pdf_all(pages),
+        clip_count=count,
+        clip_bare_count=bare,
+    )
 
 
 class ResolveViolationTest(unittest.TestCase):
@@ -112,15 +140,174 @@ class ResolveViolationTest(unittest.TestCase):
         self.assertGreater(len(_parse_changes_pdf_all([page]) or []), 20)
         self.assertEqual(len(_parse_changes_pdf([page]) or []), 20)
         self.assertEqual(
-            _resolve_violation(True, [HEADING_PAGE1_PLAIN, page], _parse_changes_pdf_all([page])),
+            _resolve_violation(
+                True,
+                [HEADING_PAGE1_PLAIN, page],
+                _parse_changes_pdf_all([page]),
+                clip_count=_mark_count([page]),
+                clip_bare_count=0,
+            ),
             (False, "history_released"),
         )
 
+    def test_ja_prefixed_reason_is_its_own_row(self) -> None:
+        # '자'로 시작하는 실제 사유("자진철거…")는 날짜 참조 연속이 아니다(Codex 2R P1).
+        page = HEADING_CHANGES_ACTIVE.replace(
+            "- 이하여백 -",
+            "2015.3.5. 자진철거에 따라 위반건축물 표시 해제\n- 이하여백 -",
+        )
+        rows = _parse_changes_pdf_all([page]) or []
+        self.assertIn("2015-03-05", [r["resChangeDate"] for r in rows])
+        # 표시 1건 + 참조일 없는 해제 1건 → 단건 짝짓기로 해제.
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (False, "history_released"))
+
+    def test_releases_must_pair_with_their_marks(self) -> None:
+        # 101호 표시·202호 표시 + 101호(2015.02.10.자) 해제 2건 → 202호는 미해제(Codex 2R P1).
+        page = HEADING_CHANGES_RELEASED.replace(
+            "2015.7.16.",
+            "2015.3.2. 수원시 주택과-1(2015.03.01.)호에 따라 위반건축물 표시 202호 무단증축\n"
+            "2015.7.16.",
+        ).replace(
+            "- 이하여백 -",
+            "2015.8.1. 수원시 주택과-2(2015.07.31.)호 위반건축물 표시 해제 통보에 의거\n"
+            '2015.02.10.자 "위반표시 해제" 재정리\n- 이하여백 -',
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_unreferenced_release_with_multiple_marks_is_ambiguous(self) -> None:
+        page = HEADING_CHANGES_ACTIVE.replace(
+            "- 이하여백 -",
+            "2015.3.2. 수원시 주택과-1호에 따라 위반건축물 표시 202호 무단증축\n"
+            "2015.9.1. 수원시 주택과 통보에 의거 위반건축물 표시 해제\n"
+            "2015.9.2. 수원시 주택과 통보에 의거 위반건축물 표시 해제\n- 이하여백 -",
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_non_final_release_is_not_a_release(self) -> None:
+        # "해제 취소"/"해제 요청"은 확정 해제가 아니다(Codex 2R P1).
+        for qualifier in ("취소", "요청"):
+            page = HEADING_CHANGES_ACTIVE.replace(
+                "- 이하여백 -",
+                f"2015.7.16. 위반건축물 표시 해제 {qualifier}에 따라 2015.02.10.자 정리\n"
+                "- 이하여백 -",
+            )
+            with self.subTest(qualifier=qualifier):
+                self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_absorbed_current_marker_is_ambiguous(self) -> None:
+        # 그 밖의 기재사항의 현재 표시가 사유에 빨려 들어오면 한 행에 2회 → 거부(Codex 2R P1).
+        page = HEADING_CHANGES_RELEASED.replace(
+            '2015.02.10.자 "위반표시 해제" 정리\n',
+            '2015.02.10.자 "위반표시 해제" 정리\n위반건축물\n',
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_document_date_is_not_a_mark_reference(self) -> None:
+        # 공문 일자 "(2015.03.02.)호"가 다른 표시 일자와 같아도 그 표시를 해제하지 않는다(Codex 3R P1).
+        page = HEADING_CHANGES_RELEASED.replace(
+            "2015.7.16.",
+            "2015.3.2. 수원시 주택과-1(2015.03.01.)호에 따라 위반건축물 표시 202호 무단증축\n"
+            "2015.7.16.",
+        ).replace(
+            "- 이하여백 -",
+            "2015.8.1. 수원시 주택과-2(2015.03.02.)호 위반건축물 표시 해제 통보에 의거\n"
+            '2015.02.10.자 "위반표시 해제" 재정리\n- 이하여백 -',
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_single_mark_release_with_other_reference_is_rejected(self) -> None:
+        # 표시는 2015.02.10. 인데 해제는 2014.01.01.자 를 참조 → 이 표시의 해제 아님(Codex 3R P1).
+        page = HEADING_CHANGES_RELEASED.replace("2015.02.10.자", "2014.01.01.자")
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_same_date_marks_are_ambiguous(self) -> None:
+        page = HEADING_CHANGES_RELEASED.replace(
+            "2015.7.16.",
+            "2015.2.10. 수원시 주택과-4386호에 따라 위반건축물 표시 202호 무단증축\n2015.7.16.",
+        ).replace(
+            "- 이하여백 -",
+            "2015.8.1. 수원시 주택과-2호 위반건축물 표시 해제 통보에 의거\n"
+            '2015.02.10.자 "위반표시 해제" 정리\n- 이하여백 -',
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_non_affirmative_release_wording_is_ambiguous(self) -> None:
+        # 허용 목록 밖 표현("대상 아님"/"검토")은 해제가 아니다(Codex 3R P1).
+        for wording in ("해제 대상 아님", "해제 검토"):
+            page = HEADING_CHANGES_ACTIVE.replace(
+                "- 이하여백 -",
+                f"2015.7.16. 위반건축물 표시 {wording} 2015.02.10.자\n- 이하여백 -",
+            )
+            with self.subTest(wording=wording):
+                self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_abbreviated_release_with_absorbed_marker_is_ambiguous(self) -> None:
+        # 약칭 "위반표시 해제" + 흡수된 별개 "위반건축물" 은 해제 구가 아니다(Codex 3R P1).
+        page = HEADING_CHANGES_ACTIVE.replace(
+            "- 이하여백 -",
+            '2015.7.16. 2015.02.10.자 "위반표시 해제" 정리\n위반건축물\n- 이하여백 -',
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_ja_ro_reference_is_continuation(self) -> None:
+        # "2015.02.10.자로 …" 도 앞 행의 참조 연속이다(Codex 3R P2).
+        page = HEADING_CHANGES_RELEASED.replace(
+            '2015.02.10.자 "위반표시 해제" 정리', "2015.02.10.자로 위반표시 해제 정리"
+        )
+        rows = _parse_changes_pdf_all([page]) or []
+        self.assertNotIn("2015-02-10", [r["resChangeDate"] for r in rows][1:])
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (False, "history_released"))
+
+    def test_reference_dates_need_suffix_boundary(self) -> None:
+        # "자진철거"의 '자'는 참조 접미가 아니다; "…자"/"…자로"만 참조(Codex 6R P2).
+        self.assertEqual(_referenced_dates("2014.01.01. 자진철거에 따라 위반건축물 표시 해제"), set())
+        self.assertEqual(_referenced_dates('2015.02.10.자 "위반표시 해제" 정리'), {"2015-02-10"})
+        self.assertEqual(_referenced_dates("2015.02.10.자로 정리"), {"2015-02-10"})
+        self.assertEqual(_referenced_dates("(2015.07.15.)호 의거"), set())
+
+    def test_clip_sees_mark_missing_from_pdf_keeps_verdict(self) -> None:
+        # 현재 표시가 PDF 텍스트에서 누락(래스터화 등)돼도 CLIP 디코드엔 있으면 위반 유지(Codex P1).
+        pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]
+        self.assertEqual(_resolve(pages, clip_count=_mark_count(pages) + 1), (True, None))
+
+    def test_partial_clip_count_keeps_verdict(self) -> None:
+        # CLIP 디코드가 일부 쪽만 잡아 사건 수보다 적으면 불완전 증거(Codex 4R P1).
+        pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]
+        self.assertEqual(_resolve(pages, clip_count=_mark_count(pages) - 1), (True, None))
+
+    def test_negation_after_confirm_word_is_ambiguous(self) -> None:
+        # "해제 통보 대상 아님" — 확정 문구 접두 뒤의 부정(Codex 4R P1).
+        page = HEADING_CHANGES_ACTIVE.replace(
+            "- 이하여백 -",
+            "2015.7.16. 위반건축물 표시 해제 통보 대상 아님 2015.02.10.자\n- 이하여백 -",
+        )
+        self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_bare_mark_in_paint_keeps_verdict(self) -> None:
+        # paint 훅에만 잡힌 단독 현재 표시("표시"가 뒤따르지 않음) → 위반 유지(Codex 5R P1).
+        pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]
+        self.assertEqual(_resolve(pages, clip_bare_count=1), (True, None))
+        self.assertEqual(_resolve(pages, clip_bare_count=None), (True, None))
+
+    def test_pending_release_wording_is_ambiguous(self) -> None:
+        # 확정 문구 접두 뒤 미완료 표현("통보 대기/미완료/않음") → 해제 아님(Codex 5R P1).
+        for wording in ("통보 대기", "통보 미완료", "처리 않음"):
+            page = HEADING_CHANGES_ACTIVE.replace(
+                "- 이하여백 -",
+                f"2015.7.16. 위반건축물 표시 해제 {wording} 2015.02.10.자\n- 이하여백 -",
+            )
+            with self.subTest(wording=wording):
+                self.assertEqual(_resolve([HEADING_PAGE1_PLAIN, page]), (True, None))
+
+    def test_unknown_clip_count_keeps_verdict(self) -> None:
+        pages = [HEADING_PAGE1_PLAIN, HEADING_CHANGES_RELEASED]
+        self.assertEqual(_resolve(pages, clip_count=None), (True, None))
+
     def test_no_pdf_keeps_clip_verdict(self) -> None:
-        self.assertEqual(_resolve_violation(True, None, None), (True, None))
+        self.assertEqual(_resolve_violation(True, None, None, clip_count=2), (True, None))
         pages = [HEADING_CHANGES_RELEASED]
         # PDF 변동사항 파싱이 없으면(CLIP 폴백) 재확인하지 않는다.
-        self.assertEqual(_resolve_violation(True, pages, None), (True, None))
+        self.assertEqual(_resolve_violation(True, pages, None, clip_count=2), (True, None))
 
     def test_mark_missing_from_pdf_text_keeps_clip_verdict(self) -> None:
         # CLIP 은 봤는데 PDF 텍스트 레이어에 없음(이미지 표시 등) → 현재 위반 유지.

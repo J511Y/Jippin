@@ -52,8 +52,18 @@ apps/api (app="jippin")                     apps/seumteo-worker (app="jippin-seu
 
 리포트 데이터는 뷰어가 `POST /report/RPTCAA02R02`(JSON, base64 `viewData`)로 받아 캔버스에
 그린다. 텍스트는 (1) `paintReportText` 후킹(`add_init_script` 로 렌더 전 주입) + (2) `viewData`
-디코드로 확보하고, "위반건축물" 부분문자열로 위반 판정한다. PDF 는 뷰어 툴바 "PDF 저장"
+디코드로 확보하고, "위반건축물" 부분문자열을 **1차 위반 신호**로 쓴다. PDF 는 뷰어 툴바 "PDF 저장"
 버튼(`.report_menu_pdf_button`) 클릭 → 다운로드로 받는다.
+
+**위반 재확인(`flow._resolve_violation`)** — 1차 신호가 변동사항의 *해제된 과거 이력*
+("위반건축물 표시" → "위반건축물 표시 해제")에서만 왔다는 것이 증명될 때만 위반을 끈다
+(`extraction.violation_source="history_released"`). 하나라도 불확실하면 위반 유지(fail-closed):
+
+- 발급 PDF 텍스트·PDF 변동사항 파싱이 있고 모든 쪽이 추출됨.
+- PDF 전문과 CLIP 디코드 텍스트 모두에서 "위반건축물" 출현 수 = 표시/해제 사건 행 수(많으면 이력 밖 현재 표시, 적으면 불완전 추출).
+- CLIP(paint 포함)에 "표시"가 뒤따르지 않는 단독 "위반건축물"(현재 상태 표시)이 없음.
+- 사건 행마다 "위반건축물" 정확히 1회, 해제에 취소·요청 등 비확정·부정 수식어 없음, "위반건축물 표시 해제" 뒤 문구가 허용 형태(`통보에 의거` · `…자 위반표시 해제 정리` 등, `flow._RELEASE_TAIL`)와 완전 일치.
+- 모든 표시가 해제와 짝지어짐(해제 사유의 참조 일자 `…자` = 표시 변동일, 참조 없으면 표시 1건일 때만).
 
 ## 로컬 PoC (배포 없이 실주소 검증)
 
