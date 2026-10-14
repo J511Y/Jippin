@@ -126,13 +126,14 @@ export default function HomeCheckLandingPage() {
             내 집 체크 시작
           </Button>
           {/* 이용가이드(PDF) — 1차 CTA 바로 아래, 새 탭으로 연다(2026-09-17 운영자 지시:
-              jippin 색 + pill). 위계는 폭·크기로 구분한다 — CTA 는 풀폭 lg, 가이드는
-              콘텐츠 폭 md 중앙 정렬. radius="xl" 은 같은 지시의 명시 요구. */}
+              jippin 색 + pill). 2026-10-14 운영자 지시로 outline(2차 위계)으로 전환 —
+              filled CTA 와 시각 위계를 분리한다. radius="xl" 은 같은 지시의 명시 요구. */}
           <Button
             component="a"
             href={USAGE_GUIDE_URLS.homeCheck}
             target="_blank"
             rel="noopener noreferrer"
+            variant="outline"
             color="jippin"
             radius="xl"
             rightSection={<IconExternalLink size={16} />}

@@ -273,12 +273,14 @@ function Compose({
           <Stack gap="xs" align="center">
             {/* 이용가이드 진입 — 예전 브랜드 마크(로고 원형) 자리를 대신한다(2026-09-17
                 운영자 지시). PDF 를 새 탭으로 열어 compose 상태를 잃지 않게 한다.
-                radius="xl"(pill) 은 같은 지시의 명시 요구 — 기본 radius 규칙의 예외. */}
+                radius="xl"(pill) 은 같은 지시의 명시 요구 — 기본 radius 규칙의 예외.
+                2026-10-14 운영자 지시로 outline(2차 위계)으로 전환. */}
             <Button
               component="a"
               href={USAGE_GUIDE_URLS.precheck}
               target="_blank"
               rel="noopener noreferrer"
+              variant="outline"
               color="jippin"
               radius="xl"
               rightSection={<IconExternalLink size={16} />}
