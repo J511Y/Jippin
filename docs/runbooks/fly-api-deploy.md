@@ -88,6 +88,20 @@
 - [ ] **OAuth provider 키·redirect 는 Fly 에 넣지 않는다.** Supabase Auth 가 OAuth SSOT — provider Client ID/Secret 은 Supabase 콘솔 단독 보유, provider redirect 는 Supabase 콜백으로 간다(§5). api 측 self-OAuth(`KAKAO_REDIRECT_URI` 등)는 라우트가 `_legacy_oauth_flow_removed()` 로 제거되어 미사용.
 - [ ] 전체 목록은 [`infra/compose/.env.example`](../../infra/compose/.env.example) 대조.
 
+### 3.1 파트너 건축물대장 발급 API 토큰 (`PARTNER_API_TOKEN`, ADR-0012)
+
+사내 업무 시스템 "워크"가 `/partner/building-registers` 를 호출할 때 쓰는 Bearer 토큰이다.
+결정 문서: [`docs/adr/0012-partner-building-register-api.md`](../adr/0012-partner-building-register-api.md).
+
+- [ ] 강한 랜덤값 생성: `python -c "import secrets;print(secrets.token_urlsafe(48))"` — 출력은 화면·이슈·PR 에 남기지 않는다.
+- [ ] `fly secrets set PARTNER_API_TOKEN="<값>"` (앱 `jippin`). 같은 값을 워크 쪽 환경변수에 넣는다.
+- [ ] **미설정이면 전 라우트가 503 `{"detail":"partner api disabled"}`** — 끄려면 `fly secrets unset PARTNER_API_TOKEN`.
+- [ ] 교체: 새 값으로 `fly secrets set` → 워크 환경변수 교체. 토큰은 하나만 유효하므로 그 사이 워크 호출은 401 이 난다(워크가 재시도).
+- [ ] 전제: `SEUMTEO_ENABLED=true` + 세움터 워커 시크릿(`SEUMTEO_WORKER_TOKEN` 등). 꺼져 있으면 잡이 `upstream` 실패 봉투로 끝난다.
+- [ ] 전제: `REDIS_URL`(또는 `CODEF_TOKEN_REDIS_URL`). 잡 상태·결과 PDF 가 Redis TTL(대기 15분·완료 30분)로만 보관된다. Redis 장애 시 503 `partner job store unavailable`.
+- [ ] 확인(주소 없이): `curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer <값>" https://api.jippin.ai/partner/building-registers/none` → `404` 면 토큰·Redis 정상, `401` 토큰 불일치, `503` 미설정 또는 Redis 장애.
+- [ ] 세움터 단일 계정·서킷브레이커를 우리집 체크와 공유한다. 파트너 쪽 대량 호출은 금지(저볼륨 합의).
+
 ---
 
 ## 4. 도메인 / DNS / TLS
