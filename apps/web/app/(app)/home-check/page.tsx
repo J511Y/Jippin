@@ -53,7 +53,7 @@ export default function HomeCheckLandingPage() {
       {/* 타이틀 크기는 theme headings h1 이 SSOT — 페이지별 fz 오버라이드 금지. */}
       <PageHeader
         title="우리집 체크"
-        subtitle="내 집(세대)의 건축물대장을 조회해 위반건축물(노란딱지) 표시 여부와 확장·변경 등재 여부를 셀프로 확인해요. 전유부와 건물 표제부를 함께 조회해 건물 단위 위반표시까지 살핍니다."
+        subtitle="내 집(세대)의 건축물대장을 조회해 위반건축물(노란딱지) 표시 여부와 확장·변경 등재 여부를 셀프로 확인해요. 위반건축물 여부는 해당 세대의 전유부를 기준으로 확인해요."
       />
 
       <Stack gap="xl">

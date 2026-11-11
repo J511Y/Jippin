@@ -10,9 +10,9 @@
  */
 export interface HomeCheckJob {
   /**
-   * 스키마 버전 (semver). 1.3.0: phase(진행 단계, 정보성 open string) 추가 — 대기 화면 실시간 스텝 표시용. 1.2.0: report 에 extension_check(신고확장↔변동사항 LLM 대조) 추가 + prices(공동주택가격) 제거 — 우리집 체크는 확장 등재 여부가 목적이라 가격/속성 노이즈 제외.
+   * 스키마 버전 (semver). 1.4.0: 위반 판정을 전유부 전용으로 변경(형상 불변, 의미 변경) — violation.is_violation 은 전유부 위반표시만 반영하고 violation.heading 은 항상 null. 1.3.0: phase(진행 단계, 정보성 open string) 추가 — 대기 화면 실시간 스텝 표시용. 1.2.0: report 에 extension_check(신고확장↔변동사항 LLM 대조) 추가 + prices(공동주택가격) 제거 — 우리집 체크는 확장 등재 여부가 목적이라 가격/속성 노이즈 제외.
    */
-  schema_version: "1.3.0";
+  schema_version: "1.4.0";
   /**
    * 조회 잡 UUID.
    */
@@ -139,7 +139,7 @@ export interface HomeCheckReport {
   disclaimer: string;
 }
 /**
- * 노란딱지(위반건축물) 판정. is_violation = 전유부 OR 표제부 resViolationStatus=='위반건축물'.
+ * 노란딱지(위반건축물) 판정. is_violation = 전유부 resViolationStatus=='위반건축물'. 표제부는 판정에 쓰지 않는다.
  */
 export interface Violation {
   /**
@@ -151,7 +151,7 @@ export interface Violation {
    */
   exclusive?: boolean | null;
   /**
-   * 표제부(건물) 위반표시.
+   * 사용 안 함 — 항상 null. 표제부 위반표시는 판정하지 않는다.
    */
   heading?: boolean | null;
   /**
