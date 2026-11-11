@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -230,7 +232,8 @@ def test_submit_then_poll_done_with_both_envelopes(monkeypatch):
                 "ok": True,
                 "register_kind": "heading",
                 "issue_date": "20261111",
-                "violation_status": "위반건축물",
+                # 워커가 표제부에서 위반 신호를 올려도 표제부는 항상 null 로 내보낸다.
+                "violation_status": None,
                 "res_doc_no": "HDOC-1",
                 "pdf_base64": "SEVBRA==",
             },
@@ -356,6 +359,13 @@ def test_single_kind_request(monkeypatch, kind, call):
     assert list(polled["results"]) == [kind]
     assert polled["results"][kind]["ok"] is True
     assert polled["results"][kind]["register_kind"] == kind
+
+
+def test_violation_status_comes_from_exclusive_only():
+    exclusive = replace(_exclusive(), violation_status="위반건축물")
+
+    assert svc._success("exclusive", exclusive)["violation_status"] == "위반건축물"
+    assert svc._success("heading", _heading())["violation_status"] is None
 
 
 def test_seumteo_disabled_finishes_with_upstream(monkeypatch):

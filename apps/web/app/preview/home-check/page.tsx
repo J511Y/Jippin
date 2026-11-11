@@ -70,7 +70,7 @@ const BASE_DOCS = [
 const MOCK_REPORTS: Record<Verdict, HomeCheckReport> = {
   illegal: {
     signal: 'violation',
-    violation: { is_violation: true, exclusive: true, heading: false, raw: '위반건축물' },
+    violation: { is_violation: true, exclusive: true, heading: null, raw: '위반건축물' },
     address: BASE_ADDRESS,
     exclusive_part: BASE_EXCLUSIVE,
     building: BASE_BUILDING,
@@ -92,7 +92,7 @@ const MOCK_REPORTS: Record<Verdict, HomeCheckReport> = {
 
   unrecorded_ext: {
     signal: 'violation',
-    violation: { is_violation: false, exclusive: false, heading: false, raw: null },
+    violation: { is_violation: false, exclusive: false, heading: null, raw: null },
     address: BASE_ADDRESS,
     exclusive_part: BASE_EXCLUSIVE,
     building: BASE_BUILDING,
@@ -114,7 +114,7 @@ const MOCK_REPORTS: Record<Verdict, HomeCheckReport> = {
 
   caution: {
     signal: 'caution',
-    violation: { is_violation: false, exclusive: false, heading: false, raw: null },
+    violation: { is_violation: false, exclusive: false, heading: null, raw: null },
     address: BASE_ADDRESS,
     exclusive_part: BASE_EXCLUSIVE,
     building: BASE_BUILDING,
@@ -131,7 +131,6 @@ const MOCK_REPORTS: Record<Verdict, HomeCheckReport> = {
     },
     documents: BASE_DOCS,
     caution_reasons: [
-      '전유부 기준 조회라 건물 전체(표제부) 위반표시는 별도 확인이 필요해요.',
       '용도변경 이력이 있어 현재 용도와 실제 사용이 일치하는지 확인이 필요해요.'
     ],
     disclaimer: DISCLAIMER
@@ -139,7 +138,7 @@ const MOCK_REPORTS: Record<Verdict, HomeCheckReport> = {
 
   normal: {
     signal: 'normal',
-    violation: { is_violation: false, exclusive: false, heading: false, raw: null },
+    violation: { is_violation: false, exclusive: false, heading: null, raw: null },
     address: BASE_ADDRESS,
     exclusive_part: BASE_EXCLUSIVE,
     building: BASE_BUILDING,
@@ -161,7 +160,7 @@ const MOCK_REPORTS: Record<Verdict, HomeCheckReport> = {
 
   not_checked: {
     signal: 'normal',
-    violation: { is_violation: false, exclusive: false, heading: false, raw: null },
+    violation: { is_violation: false, exclusive: false, heading: null, raw: null },
     address: BASE_ADDRESS,
     exclusive_part: BASE_EXCLUSIVE,
     building: BASE_BUILDING,

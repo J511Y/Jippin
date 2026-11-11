@@ -10,7 +10,7 @@ afterEach(() => {
 
 const REPORT: HomeCheckReport = {
   signal: 'normal',
-  violation: { is_violation: false, exclusive: false, heading: false, raw: null },
+  violation: { is_violation: false, exclusive: false, heading: null, raw: null },
   address: {
     road_addr: '서울특별시 영등포구 여의대방로 1',
     dong: '101',

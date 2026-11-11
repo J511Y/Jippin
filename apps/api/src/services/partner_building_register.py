@@ -7,7 +7,7 @@
 - **DB·Supabase Storage 에 아무것도 쓰지 않는다.** 잡 상태와 결과(PDF base64 포함)는
   Redis 에 TTL 로만 두고, 호출자가 받아 간 뒤 DELETE 로 즉시 지우거나 TTL 로 사라진다.
 - **구조화 추출을 하지 않는다.** 소유자·세대수 해석은 호출자가 PDF 로 직접 한다
-  (ADR-0008 §2.3 의 PII 비구조화 정책 유지). 여기서는 발급일·위반 여부·문서번호만 중계한다.
+  (ADR-0008 §2.3 의 PII 비구조화 정책 유지). 여기서는 발급일·위반 여부(전유부만)·문서번호만 중계한다.
 - needs_input 재개(resume)를 구현하지 않는다 — 호출자가 주소를 고쳐 새로 제출한다.
 
 개인정보: 주소·동·호·PDF 는 로그에 남기지 않는다(잡 ID·종류·결과 분류만 기록).
@@ -318,7 +318,8 @@ def _success(
         "ok": True,
         "register_kind": kind,
         "issue_date": result.issue_date,
-        "violation_status": result.violation_status,
+        # 위반건축물 여부는 전유부만 본다 — 표제부는 동 전체 이력이라 오탐이 난다.
+        "violation_status": result.violation_status if kind == "exclusive" else None,
         "res_doc_no": result.res_doc_no,
         "pdf_base64": result.original_pdf_base64,
     }

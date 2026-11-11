@@ -23,7 +23,7 @@
 | 인증 | `Authorization: Bearer <PARTNER_API_TOKEN>` 고정 토큰(상수 시간 비교). 토큰 미설정이면 전 라우트 503 — 기본은 꺼져 있다. |
 | 멱등 | `Idempotency-Key` 헤더 필수. 같은 키의 재제출은 기존 잡을 돌려주고 발급을 다시 하지 않는다. |
 | 처리 | 우리집 체크와 같은 `SeumteoBuildingRegisterClient`·BackgroundTasks. 두 종류를 함께 요청하면 통합 잡(`fetch_bundle`), 하나면 단건. |
-| 결과 | 종류별 봉투. 성공은 발급일·위반 여부·문서번호와 **PDF base64 중계만** 한다. 실패는 `auth`/`not_found`/`invalid`/`upstream`/`needs_input`/`busy` 분류. needs_input 재개는 없다 — 호출자가 주소를 고쳐 다시 제출한다. |
+| 결과 | 종류별 봉투. 성공은 발급일·위반 여부(전유부만 — 표제부 봉투의 `violation_status` 는 항상 `null`, ADR-0008 §5 2026-11-11)·문서번호와 **PDF base64 중계만** 한다. 실패는 `auth`/`not_found`/`invalid`/`upstream`/`needs_input`/`busy` 분류. needs_input 재개는 없다 — 호출자가 주소를 고쳐 다시 제출한다. |
 | 저장 | **Redis TTL 만.** `partner:bldg:job:<job_id>`, `partner:bldg:idem:<sha256>`. 대기·처리 중 15분(프로세스가 죽은 잡은 스스로 사라져 404), 완료 결과 30분. DELETE 는 즉시 지운다. |
 | 저장하지 않는 것 | `home_checks`/`home_check_documents` 테이블, Supabase Storage, request_logs 본문. 주소·동·호·PDF 는 로그에도 남기지 않는다. |
 | 구조화 추출 | **하지 않는다.** 세대수·소유자 해석은 워크가 PDF 를 직접 읽어 한다. jippin 은 소유자 정보를 파싱·저장하지 않는다(ADR-0008 §2.3 불변). |
