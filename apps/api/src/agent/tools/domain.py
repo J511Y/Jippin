@@ -485,7 +485,7 @@ async def get_building_register_impl(
             ),
         )
 
-    is_violation = bool(row.get("violation"))
+    is_violation = home_check.stored_verdict(row)[0]
     source_labels = {"exclusive": "전유부", "heading": "표제부"}
     history = [
         {

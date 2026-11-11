@@ -300,6 +300,29 @@ async def test_get_building_register_completed_returns_permit_history(
     )
 
 
+async def test_get_building_register_ignores_legacy_heading_violation(
+    monkeypatch,
+) -> None:
+    # 표제부 때문에 위반으로 저장된 과거 행 — 에이전트에는 전유부 기준으로 넘긴다.
+    async def completed_row(**_: object) -> dict[str, object]:
+        return {
+            "status": "completed",
+            "violation": True,
+            "exclusive_violation": False,
+            "heading_violation": True,
+            "change_list": [],
+        }
+
+    monkeypatch.setattr(home_check, "get_home_check_row", completed_row)
+    res = await domain.get_building_register_impl(
+        owner_user_id=uuid.uuid4(),
+        home_check_id=str(uuid.uuid4()),
+    )
+    assert res["ok"] is True
+    assert res["violation"] == {"is_violation": False, "exclusive": False}
+    assert "위반건축물 표시 없음" in res["summary"]
+
+
 async def test_get_building_register_skips_persist_on_address_change(
     monkeypatch,
 ) -> None:

@@ -211,7 +211,7 @@ def test_create_returns_202_querying_job(monkeypatch) -> None:
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "querying"
-    assert body["schema_version"] == "1.3.0"
+    assert body["schema_version"] == "1.4.0"
     assert body["report"] is None
     # 정본 계약으로 재검증.
     ContractHomeCheckJob.model_validate(body)
@@ -670,8 +670,7 @@ def test_serialize_completed_report_validates_against_contract() -> None:
         "addr_ho": "1001",
         "violation": True,
         "exclusive_violation": True,
-        # 과거 행에 남은 표제부 판정값 — 리포트로는 내보내지 않는다.
-        "heading_violation": True,
+        "heading_violation": None,
         "exclusive_area_m2": 84.99,
         "exclusive_use_type": "공동주택",
         "exclusive_structure": "철근콘크리트구조",
@@ -693,7 +692,7 @@ def test_serialize_completed_report_validates_against_contract() -> None:
     # documents 발급(외부 호출) 생략.
     job = _run(svc.serialize_job(row, with_documents=False))
     payload = job.model_dump(mode="json")
-    assert payload["schema_version"] == "1.3.0"
+    assert payload["schema_version"] == "1.4.0"
     assert payload["report"]["signal"] == "violation"
     assert payload["report"]["violation"] == {
         "is_violation": True,
@@ -706,6 +705,94 @@ def test_serialize_completed_report_validates_against_contract() -> None:
     assert "prices" not in payload["report"]
     assert payload["report"]["extension_check"] is None
     ContractHomeCheckJob.model_validate(payload)
+
+
+def _legacy_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "id": uuid.uuid4(),
+        "status": "completed",
+        "signal": "violation",
+        "created_at": datetime.now(UTC),
+        "updated_at": datetime.now(UTC),
+        "road_addr": "서울특별시 강남구 테헤란로 1",
+        "jibun_addr": None,
+        "addr_dong": "101",
+        "addr_ho": "1001",
+        "violation": True,
+        "exclusive_violation": False,
+        "heading_violation": True,
+        "change_list": [],
+        "result_fields": {"caution_reasons": []},
+    }
+    row.update(overrides)
+    return row
+
+
+def test_legacy_heading_only_violation_is_read_as_clean() -> None:
+    """표제부 때문에 위반으로 저장된 과거 행은 읽을 때 전유부 기준으로 다시 본다."""
+
+    job = _run(svc.serialize_job(_legacy_row(), with_documents=False))
+    payload = job.model_dump(mode="json")
+    assert payload["signal"] == "normal"
+    assert payload["report"]["signal"] == "normal"
+    assert payload["report"]["violation"] == {
+        "is_violation": False,
+        "exclusive": False,
+        "heading": None,
+        "raw": None,
+    }
+    assert payload["report"]["caution_reasons"] is None
+    ContractHomeCheckJob.model_validate(payload)
+
+
+def test_legacy_heading_only_violation_keeps_extension_verdict() -> None:
+    row = _legacy_row(
+        result_fields={
+            "caution_reasons": [],
+            "extension_check": {
+                "verdict": "violation",
+                "reason": "신고하신 확장이 대장에 없습니다.",
+                "reported_areas": ["거실"],
+                "matched_areas": [],
+                "unrecorded_areas": ["거실"],
+            },
+        }
+    )
+    payload = _run(svc.serialize_job(row, with_documents=False)).model_dump(mode="json")
+    assert payload["signal"] == "violation"
+    assert payload["report"]["violation"]["is_violation"] is False
+
+
+def test_legacy_heading_caution_reason_is_dropped() -> None:
+    row = _legacy_row(
+        signal="caution",
+        violation=False,
+        heading_violation=False,
+        result_fields={
+            "caution_reasons": [
+                "건물 전체(표제부) 위반표시를 확인하지 못했습니다. 별도 확인이 필요합니다."
+            ]
+        },
+    )
+    payload = _run(svc.serialize_job(row, with_documents=False)).model_dump(mode="json")
+    assert payload["signal"] == "normal"
+    assert payload["report"]["caution_reasons"] is None
+
+
+def test_stored_verdict_keeps_current_rows_untouched() -> None:
+    row = _legacy_row(
+        signal="caution",
+        violation=False,
+        heading_violation=None,
+        result_fields={"caution_reasons": ["전유부 핵심 정보를 확인하지 못했습니다."]},
+    )
+    assert svc.stored_verdict(row) == (
+        False,
+        "caution",
+        ["전유부 핵심 정보를 확인하지 못했습니다."],
+    )
+    violating = _legacy_row(exclusive_violation=True, heading_violation=None)
+    assert svc.stored_verdict(violating) == (True, "violation", [])
 
 
 def test_serialize_completed_report_with_extension_check_validates_against_contract() -> (
@@ -1081,7 +1168,7 @@ def test_serialize_job_exposes_phase(monkeypatch) -> None:
     payload = _run(svc.serialize_job(row)).model_dump(mode="json")
 
     assert payload["phase"] == "issuing_registers"
-    assert payload["schema_version"] == "1.3.0"
+    assert payload["schema_version"] == "1.4.0"
     ContractHomeCheckJob.model_validate(payload)
 
     # 구 행(phase 키 부재) — None 으로 관용.

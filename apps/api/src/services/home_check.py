@@ -64,7 +64,7 @@ DISCLAIMER = (
 )
 
 _VIOLATION_VALUE = "위반건축물"
-_SCHEMA_VERSION = "1.3.0"
+_SCHEMA_VERSION = "1.4.0"
 
 # 진행 phase (정보성 — 대기 화면 표시용, schema 1.3.0). status 가 상태 기계 정본이고
 # phase 는 파이프라인이 남기는 힌트다. 값 추가는 자유(DB CHECK 없음, 계약 open string) —
@@ -75,6 +75,11 @@ PHASE_JUDGING = "judging"
 PHASE_SAVING_REPORT = "saving_report"
 
 # 확장 verdict=uncertain 일 때 종합 신호에 덧붙이는 🟡 caution 사유(한국어).
+# 표제부를 판정에 쓰던 시절 저장된 caution 사유 — 읽을 때 걸러 낸다(stored_verdict).
+_LEGACY_HEADING_CAUTION = (
+    "건물 전체(표제부) 위반표시를 확인하지 못했습니다. 별도 확인이 필요합니다."
+)
+
 _EXTENSION_UNCERTAIN_CAUTION = (
     "신고하신 확장 내용을 대장 변동사항과 자동으로 대조하지 못했습니다. "
     "변동사항 타임라인을 직접 확인해 주세요."
@@ -513,6 +518,33 @@ def _judge(exclusive: ExclusivePartResult) -> tuple[bool, bool, str, list[str]]:
             )
         signal = "caution" if caution_reasons else "normal"
     return exclusive_violation, violation, signal, caution_reasons
+
+
+def stored_verdict(row: dict[str, Any]) -> tuple[bool, str, list[str]]:
+    """저장된 행의 ``(violation, signal, caution_reasons)`` 를 전유부 기준으로 읽는다.
+
+    표제부를 판정에 쓰던 시절의 행은 ``violation``·``signal``·caution 사유에 표제부 결과가
+    섞여 있다. 그런 흔적이 있는 행만 전유부 위반표시와 확장 대조 결과로 다시 계산하고,
+    나머지는 저장된 값을 그대로 돌려준다.
+    """
+
+    fields = row.get("result_fields") or {}
+    stored_reasons = list(fields.get("caution_reasons") or [])
+    reasons = [r for r in stored_reasons if r != _LEGACY_HEADING_CAUTION]
+    stored_violation = bool(row.get("violation"))
+    exclusive = row.get("exclusive_violation")
+    violation = stored_violation if exclusive is None else bool(exclusive)
+    if violation == stored_violation and len(reasons) == len(stored_reasons):
+        return stored_violation, row.get("signal") or "normal", stored_reasons
+
+    ext_verdict = (fields.get("extension_check") or {}).get("verdict")
+    if violation or ext_verdict == "violation":
+        signal = "violation"
+    elif reasons or ext_verdict == "uncertain":
+        signal = "caution"
+    else:
+        signal = "normal"
+    return violation, signal, reasons
 
 
 def _exclusive_core_missing(exclusive: ExclusivePartResult) -> bool:
@@ -1144,7 +1176,7 @@ async def serialize_job(
     }
 
     if status == "completed":
-        job_kwargs["signal"] = row.get("signal")
+        job_kwargs["signal"] = stored_verdict(row)[1] if row.get("signal") else None
         job_kwargs["report"] = await _build_report(row, with_documents=with_documents)
     elif status == "needs_input":
         fields = row.get("result_fields") or {}
@@ -1171,9 +1203,9 @@ async def serialize_job(
 async def _build_report(
     row: dict[str, Any], *, with_documents: bool
 ) -> HomeCheckReport:
-    signal = row.get("signal") or "normal"
+    is_violation, signal, reasons = stored_verdict(row)
     fields = row.get("result_fields") or {}
-    caution_reasons = fields.get("caution_reasons") or None
+    caution_reasons = reasons or None
 
     address = AddressInfo(
         road_addr=row.get("road_addr"),
@@ -1182,11 +1214,11 @@ async def _build_report(
         ho=row.get("addr_ho"),
     )
     violation = Violation(
-        is_violation=bool(row.get("violation")),
+        is_violation=is_violation,
         exclusive=row.get("exclusive_violation"),
         # 표제부 위반 여부는 내보내지 않는다(과거 행의 값도 노출하지 않음).
         heading=None,
-        raw=_VIOLATION_VALUE if row.get("violation") else None,
+        raw=_VIOLATION_VALUE if is_violation else None,
     )
 
     exclusive_part = None

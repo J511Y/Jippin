@@ -10,9 +10,9 @@
  */
 export interface HomeCheckJob {
   /**
-   * 스키마 버전 (semver). 1.3.0: phase(진행 단계, 정보성 open string) 추가 — 대기 화면 실시간 스텝 표시용. 1.2.0: report 에 extension_check(신고확장↔변동사항 LLM 대조) 추가 + prices(공동주택가격) 제거 — 우리집 체크는 확장 등재 여부가 목적이라 가격/속성 노이즈 제외.
+   * 스키마 버전 (semver). 1.4.0: 위반 판정을 전유부 전용으로 변경(형상 불변, 의미 변경) — violation.is_violation 은 전유부 위반표시만 반영하고 violation.heading 은 항상 null. 1.3.0: phase(진행 단계, 정보성 open string) 추가 — 대기 화면 실시간 스텝 표시용. 1.2.0: report 에 extension_check(신고확장↔변동사항 LLM 대조) 추가 + prices(공동주택가격) 제거 — 우리집 체크는 확장 등재 여부가 목적이라 가격/속성 노이즈 제외.
    */
-  schema_version: "1.3.0";
+  schema_version: "1.4.0";
   /**
    * 조회 잡 UUID.
    */
