@@ -496,6 +496,13 @@ class _FakeRedis:
     async def get(self, key):
         return self.data.get(key)
 
+    async def eval(self, _script, _numkeys, key, expected, value, ttl):
+        if self.data.get(key) != expected.encode("utf-8"):
+            return 0
+        self.data[key] = value.encode("utf-8")
+        self.ttl[key] = ttl
+        return 1
+
     async def delete(self, *keys):
         for key in keys:
             self.data.pop(key, None)
@@ -514,7 +521,8 @@ def test_redis_store_keys_and_ttls(monkeypatch):
     assert polled["results"]["exclusive"]["ok"] is True
     assert fake_redis.ttl[job_key] == 30 * 60
     assert len(idem_keys) == 1 and len(idem_keys[0].split(":")[-1]) == 64
-    assert fake_redis.ttl[idem_keys[0]] == 30 * 60
+    # 멱등 표식은 잡보다 먼저 만료된다(표식이 잡보다 오래 남지 않게).
+    assert fake_redis.ttl[idem_keys[0]] == 30 * 60 - svc.IDEM_TTL_MARGIN_SECONDS
     assert "redis-key" not in idem_keys[0]
     # 주소는 저장소에 남기지 않는다.
     assert BODY["road_addr"].encode("utf-8") not in fake_redis.data[job_key]
@@ -546,3 +554,87 @@ def test_redis_outage_is_503(monkeypatch):
     ):
         assert resp.status_code == 503
         assert resp.json() == {"detail": "partner job store unavailable"}
+
+
+# ---------------------------------------------------------------------------
+# 멱등 표식 회수 경합 / 프로세스 내 저장소 만료 청소
+# ---------------------------------------------------------------------------
+def _stale_marker_race(store):
+    """잡 없는 표식을 두 제출이 동시에 본 상황을 강제한다.
+
+    A 가 낡은 표식을 읽는 순간 B 의 제출 전체를 끼워 넣는다 — B 가 먼저 회수하고,
+    A 는 낡은 값을 손에 쥔 채 회수를 시도한다.
+    """
+
+    import asyncio
+    import hashlib
+
+    idem_key = svc._idem_key(hashlib.sha256(b"race-key").hexdigest())
+    box: dict[str, object] = {}
+    original_get = store.get
+
+    async def racing_get(key):
+        value = await original_get(key)
+        if key == idem_key and "b" not in box:
+            box["b"] = None  # 재진입 방지
+            box["b"] = await svc.submit_job(
+                idempotency_key="race-key", kinds=["exclusive", "heading"]
+            )
+        return value
+
+    async def scenario():
+        await store.set(idem_key, "gone-job", svc.PENDING_TTL_SECONDS)
+        store.get = racing_get
+        return await svc.submit_job(
+            idempotency_key="race-key", kinds=["exclusive", "heading"]
+        )
+
+    a = asyncio.run(scenario())
+    return a, box["b"]
+
+
+def test_stale_marker_reclaim_has_single_winner_memory(monkeypatch):
+    store = svc._MemoryStore()
+    monkeypatch.setattr(svc, "_get_store", lambda: store)
+
+    (job_a, created_a), (job_b, created_b) = _stale_marker_race(store)
+
+    assert sorted([created_a, created_b]) == [False, True]
+    assert job_a["job_id"] == job_b["job_id"]
+    # 진 쪽이 만든 잡은 남지 않는다.
+    job_keys = [k for k in store._items if k.startswith(svc.JOB_KEY_PREFIX)]
+    assert job_keys == [f"{svc.JOB_KEY_PREFIX}{job_a['job_id']}"]
+
+
+def test_stale_marker_reclaim_has_single_winner_redis(monkeypatch):
+    fake_redis = _FakeRedis()
+    store = svc._RedisStore(fake_redis)
+    monkeypatch.setattr(svc, "_get_store", lambda: store)
+
+    (job_a, created_a), (job_b, created_b) = _stale_marker_race(store)
+
+    assert sorted([created_a, created_b]) == [False, True]
+    assert job_a["job_id"] == job_b["job_id"]
+    job_keys = [k for k in fake_redis.data if k.startswith(svc.JOB_KEY_PREFIX)]
+    assert job_keys == [f"{svc.JOB_KEY_PREFIX}{job_a['job_id']}"]
+
+
+def test_memory_store_sweeps_expired_pdf_on_next_write(monkeypatch):
+    now = {"t": 1000.0}
+    monkeypatch.setattr(svc.time, "monotonic", lambda: now["t"])
+    _install(monkeypatch, _FakeClient(bundle=(_exclusive(), _heading(), False)))
+    client = _client()
+
+    first, _ = _submit_and_poll(client, key="sweep-1")
+    store = svc._get_store()
+    first_key = f"{svc.JOB_KEY_PREFIX}{first['job_id']}"
+    assert "RVhDTA==" in store._items[first_key][1]
+
+    # 첫 잡을 다시 읽지 않아도, 만료 뒤 다른 잡이 쓰이면 PDF 가 메모리에서 사라진다.
+    now["t"] += svc.RESULT_TTL_SECONDS + 1
+    second, _ = _submit_and_poll(client, key="sweep-2")
+
+    assert first_key not in store._items
+    job_keys = [k for k in store._items if k.startswith(svc.JOB_KEY_PREFIX)]
+    assert job_keys == [f"{svc.JOB_KEY_PREFIX}{second['job_id']}"]
+    assert len([k for k in store._items if k.startswith(svc.IDEM_KEY_PREFIX)]) == 1

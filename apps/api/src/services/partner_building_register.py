@@ -49,6 +49,18 @@ IDEM_KEY_PREFIX = "partner:bldg:idem:"
 PENDING_TTL_SECONDS = 15 * 60
 # 완료 결과(PDF base64 포함) 보관 — 호출자가 DELETE 로 ack 하지 않아도 이 뒤에는 없다.
 RESULT_TTL_SECONDS = 30 * 60
+# 멱등 표식은 잡보다 이만큼 먼저 만료시킨다 — 표식이 잡보다 오래 남아 "표식은 있는데 잡이
+# 없는" 창이 자연 만료로는 생기지 않게 한다(삭제·장애로 생긴 경우는 submit_job 이 CAS 로 회수).
+IDEM_TTL_MARGIN_SECONDS = 30
+# 표식 교체(CAS). 읽은 값 그대로일 때만 바꿔 동시 회수가 한 쪽만 이기게 한다.
+_SWAP_LUA = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  redis.call("SET", KEYS[1], ARGV[2], "EX", ARGV[3])
+  return 1
+end
+return 0
+"""
+_SUBMIT_ATTEMPTS = 3
 
 _SEUMTEO_DISABLED_MESSAGE = "세움터 연동이 꺼져 있습니다"
 _UPSTREAM_MESSAGE = "건축물대장 발급에 실패했습니다."
@@ -84,6 +96,12 @@ class _RedisStore:
             return None
         return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
 
+    async def swap(self, key: str, expected: str, value: str, ttl: int) -> bool:
+        try:
+            return bool(await self._redis.eval(_SWAP_LUA, 1, key, expected, value, ttl))
+        except RedisError as exc:
+            raise PartnerJobStoreUnavailable() from exc
+
     async def delete(self, *keys: str) -> None:
         if not keys:
             return
@@ -103,14 +121,16 @@ class _MemoryStore:
     def __init__(self) -> None:
         self._items: dict[str, tuple[float, str]] = {}
 
+    def _sweep(self) -> None:
+        # 만료된 항목(PDF base64 포함)을 그 키를 다시 읽을 때까지 쥐고 있지 않는다.
+        now = time.monotonic()
+        for key in [k for k, item in self._items.items() if item[0] <= now]:
+            del self._items[key]
+
     def _live(self, key: str) -> str | None:
+        self._sweep()
         item = self._items.get(key)
-        if item is None:
-            return None
-        if item[0] <= time.monotonic():
-            self._items.pop(key, None)
-            return None
-        return item[1]
+        return item[1] if item is not None else None
 
     async def set(
         self, key: str, value: str, ttl: int, *, nx: bool = False, xx: bool = False
@@ -123,6 +143,12 @@ class _MemoryStore:
 
     async def get(self, key: str) -> str | None:
         return self._live(key)
+
+    async def swap(self, key: str, expected: str, value: str, ttl: int) -> bool:
+        if self._live(key) != expected:
+            return False
+        self._items[key] = (time.monotonic() + ttl, value)
+        return True
 
     async def delete(self, *keys: str) -> None:
         for key in keys:
@@ -186,17 +212,23 @@ async def submit_job(
     }
     # 잡을 먼저 쓰고 멱등 키를 NX 로 잡는다 — 키를 본 쪽은 항상 잡을 읽을 수 있다.
     await store.set(_job_key(job_id), _dump(job), PENDING_TTL_SECONDS)
-    if await store.set(idem_key, job_id, PENDING_TTL_SECONDS, nx=True):
-        return job, True
-
-    existing_id = await store.get(idem_key)
-    existing = await get_job(existing_id) if existing_id else None
-    if existing is not None:
-        await store.delete(_job_key(job_id))
-        return existing, False
-    # 멱등 키만 남고 잡이 사라진 경우(삭제·만료) — 새 잡으로 갈아 끼운다.
-    await store.set(idem_key, job_id, PENDING_TTL_SECONDS)
-    return job, True
+    idem_ttl = PENDING_TTL_SECONDS - IDEM_TTL_MARGIN_SECONDS
+    for _ in range(_SUBMIT_ATTEMPTS):
+        if await store.set(idem_key, job_id, idem_ttl, nx=True):
+            return job, True
+        existing_id = await store.get(idem_key)
+        if existing_id is None:
+            continue  # 그 사이 표식이 만료됐다 — NX 부터 다시.
+        existing = await get_job(existing_id)
+        if existing is not None:
+            await store.delete(_job_key(job_id))
+            return existing, False
+        # 표식만 남고 잡이 사라진 경우(삭제·장애). 방금 읽은 값일 때만 갈아 끼운다(CAS) —
+        # 동시에 회수하려던 다른 제출은 실패하고 다음 바퀴에서 이긴 쪽 잡을 돌려받는다.
+        if await store.swap(idem_key, existing_id, job_id, idem_ttl):
+            return job, True
+    await store.delete(_job_key(job_id))
+    raise PartnerJobStoreUnavailable()
 
 
 async def get_job(job_id: str) -> dict[str, Any] | None:
@@ -364,7 +396,12 @@ async def run_job(
             _job_key(job_id), _dump(job), RESULT_TTL_SECONDS, xx=True
         )
         if stored and isinstance(job.get("idem"), str):
-            await store.set(_idem_key(job["idem"]), job_id, RESULT_TTL_SECONDS, xx=True)
+            await store.set(
+                _idem_key(job["idem"]),
+                job_id,
+                RESULT_TTL_SECONDS - IDEM_TTL_MARGIN_SECONDS,
+                xx=True,
+            )
         logger.info(
             "partner_building_register_done",
             job_id=job_id,
