@@ -75,6 +75,8 @@ PHASE_JUDGING = "judging"
 PHASE_SAVING_REPORT = "saving_report"
 
 # 확장 verdict=uncertain 일 때 종합 신호에 덧붙이는 🟡 caution 사유(한국어).
+_EXCLUSIVE_CORE_CAUTION = "전유부 핵심 정보(전유면적/구조 등)를 확인하지 못했습니다."
+
 # 표제부를 판정에 쓰던 시절 저장된 caution 사유 — 읽을 때 걸러 낸다(stored_verdict).
 _LEGACY_HEADING_CAUTION = (
     "건물 전체(표제부) 위반표시를 확인하지 못했습니다. 별도 확인이 필요합니다."
@@ -513,9 +515,7 @@ def _judge(exclusive: ExclusivePartResult) -> tuple[bool, bool, str, list[str]]:
         signal = "violation"
     else:
         if _exclusive_core_missing(exclusive):
-            caution_reasons.append(
-                "전유부 핵심 정보(전유면적/구조 등)를 확인하지 못했습니다."
-            )
+            caution_reasons.append(_EXCLUSIVE_CORE_CAUTION)
         signal = "caution" if caution_reasons else "normal"
     return exclusive_violation, violation, signal, caution_reasons
 
@@ -536,6 +536,17 @@ def stored_verdict(row: dict[str, Any]) -> tuple[bool, str, list[str]]:
     violation = stored_violation if exclusive is None else bool(exclusive)
     if violation == stored_violation and len(reasons) == len(stored_reasons):
         return stored_violation, row.get("signal") or "normal", stored_reasons
+
+    # 표제부 때문에 위반이던 행은 저장 당시 전유부 핵심 정보 점검을 건너뛰었다 —
+    # 저장된 전유부 요약으로 같은 점검을 되살린다(_exclusive_core_missing 과 같은 조건).
+    if (
+        stored_violation
+        and not violation
+        and row.get("exclusive_area_m2") is None
+        and row.get("exclusive_use_type") is None
+        and _EXCLUSIVE_CORE_CAUTION not in reasons
+    ):
+        reasons.insert(0, _EXCLUSIVE_CORE_CAUTION)
 
     ext_verdict = (fields.get("extension_check") or {}).get("verdict")
     if violation or ext_verdict == "violation":

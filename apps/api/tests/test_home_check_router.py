@@ -721,11 +721,23 @@ def _legacy_row(**overrides: object) -> dict[str, object]:
         "violation": True,
         "exclusive_violation": False,
         "heading_violation": True,
+        "exclusive_area_m2": 84.99,
+        "exclusive_use_type": "공동주택",
         "change_list": [],
         "result_fields": {"caution_reasons": []},
     }
     row.update(overrides)
     return row
+
+
+def test_legacy_heading_only_violation_restores_core_missing_caution() -> None:
+    """위반이 풀린 과거 행은 당시 건너뛴 전유부 핵심 정보 점검을 되살린다."""
+
+    row = _legacy_row(exclusive_area_m2=None, exclusive_use_type=None)
+    violation, signal, reasons = svc.stored_verdict(row)
+    assert violation is False
+    assert signal == "caution"
+    assert reasons == ["전유부 핵심 정보(전유면적/구조 등)를 확인하지 못했습니다."]
 
 
 def test_legacy_heading_only_violation_is_read_as_clean() -> None:
