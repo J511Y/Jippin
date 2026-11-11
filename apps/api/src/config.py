@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     # 통합 잡 HTTP 상한 — 워커 bundle_deadline_ms(180s)보다 넉넉히.
     seumteo_worker_bundle_timeout_seconds: int = Field(default=240)
 
+    # 파트너(서버 간) 건축물대장 발급 API 토큰 (ADR-0012). 사내 업무 시스템 "워크"가
+    # /partner/building-registers 를 Bearer 로 호출한다. 미설정이면 해당 라우트 전체가 503.
+    partner_api_token: str | None = Field(default=None)
+
     # 사전검토 PDF 리포트 보관 Supabase Storage 버킷명. 운영자가 버킷 생성 필요
     # (인프라 선행). 발부된 PDF 는 이 버킷에 service-role 로 업로드되고 단기 서명
     # URL 로만 다운로드된다(브라우저에 직접 노출 안 됨).

@@ -34,8 +34,12 @@ SKIP_PATHS: frozenset[str] = frozenset({"/healthz"})
 # 본문(body)을 저장하지 않을 경로 substring. 에이전트 채팅(start/resume)은 자유 입력
 # 텍스트(전체 주소·리모델링 상세 등 PII)를 담으므로 본문 로깅에서 제외한다 — 메타
 # (메서드/상태/소요시간)는 그대로 남긴다. redactor 가 nested message.content 를 못
-# 가리므로 경로 단위로 막는다.
-BODY_SKIP_SUBSTRINGS: tuple[str, ...] = ("/agent/runs",)
+# 가리므로 경로 단위로 막는다. 파트너 건축물대장 발급(ADR-0012)은 본문이 주소·동·호
+# 그 자체라 같은 이유로 제외한다.
+BODY_SKIP_SUBSTRINGS: tuple[str, ...] = (
+    "/agent/runs",
+    "/partner/building-registers",
+)
 
 
 class RequestLogMiddleware:

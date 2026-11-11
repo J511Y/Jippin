@@ -22,6 +22,13 @@ from .routers.floorplans import router as floorplans_router
 from .routers.healthz import router as healthz_router
 from .routers.home_check import router as home_check_router
 from .routers.leads import router as leads_router
+from .routers.partner_building_register import (
+    PartnerApiError,
+    partner_api_error_handler,
+)
+from .routers.partner_building_register import (
+    router as partner_building_register_router,
+)
 from .routers.quiz import router as quiz_router
 from .routers.sessions import router as sessions_router
 from .services.phone_verification import close_phone_verification_store
@@ -85,6 +92,8 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestLogMiddleware)
 
     register_exception_handlers(app)
+    # 파트너 API 는 호출자(워크)와 고정한 `{"detail": ...}` 오류 본문을 쓴다(ADR-0012).
+    app.add_exception_handler(PartnerApiError, partner_api_error_handler)
     app.include_router(auth_router)
     # 이메일/비밀번호 회원가입·문자인증·아이디/비번 찾기·회원탈퇴 (CMP-DIRECT).
     # DB/Supabase-backed 실 기능이므로 phase_a 플래그와 무관하게 항상 등록한다.
@@ -103,6 +112,9 @@ def create_app() -> FastAPI:
     # DB-backed 실 기능이므로 phase_a 플래그와 무관하게 항상 등록한다. 비회원(익명
     # Supabase 토큰)도 조회 가능하고, /mine 이력은 로그인 회원만 가능하다.
     app.include_router(home_check_router)
+    # 파트너(서버 간) 건축물대장 발급 — 사내 "워크" 연동(ADR-0012). PARTNER_API_TOKEN
+    # Bearer 로만 열리고, 토큰 미설정이면 전 라우트가 503 이다. DB/Storage 를 쓰지 않는다.
+    app.include_router(partner_building_register_router)
     # 사전검토 세션/도면/채팅 — 프로덕션 실기능(세션 CRUD·도면 업로드·리포트). 웹의
     # /sessions 노출과 한 몸이므로 phase_a 플래그와 무관하게 **항상** 등록한다. 과거
     # skeleton 시절엔 phase_a_skeleton_enabled 로 가렸지만, 웹은 빌드타임에 노출되어
