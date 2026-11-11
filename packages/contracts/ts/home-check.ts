@@ -139,7 +139,7 @@ export interface HomeCheckReport {
   disclaimer: string;
 }
 /**
- * 노란딱지(위반건축물) 판정. is_violation = 전유부 OR 표제부 resViolationStatus=='위반건축물'.
+ * 노란딱지(위반건축물) 판정. is_violation = 전유부 resViolationStatus=='위반건축물'. 표제부는 판정에 쓰지 않는다.
  */
 export interface Violation {
   /**
@@ -151,7 +151,7 @@ export interface Violation {
    */
   exclusive?: boolean | null;
   /**
-   * 표제부(건물) 위반표시.
+   * 사용 안 함 — 항상 null. 표제부 위반표시는 판정하지 않는다.
    */
   heading?: boolean | null;
   /**

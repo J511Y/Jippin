@@ -445,11 +445,11 @@ async def _process(
         await _mark_unexpected(home_check_id)
         return
 
-    # 표제부 — best-effort. 모든 실패(2-way 추가입력 포함)를 caution 으로 흡수한다.
-    # needs_input 까지 사용자에게 되묻지 않는 이유: ① 표제부는 건물 위반표시 보조신호일
-    # 뿐이고(ADR-0008 §2.4), ② 전유부에서 이미 주소·동·호를 받았는데 표제부 때문에 또
-    # 묻는 건 UX 후퇴이며, ③ 전유부·표제부가 둘 다 주소 모호일 때 재질문이 서로 맞물려
-    # 루프가 된다. heading=None → "건물 위반표시 미확인" caution 사유로 표시된다.
+    # 표제부 — best-effort. 모든 실패(2-way 추가입력 포함)를 조용히 흡수한다.
+    # needs_input 까지 사용자에게 되묻지 않는 이유: ① 표제부는 건물 요약·원본 PDF 용
+    # 보조 자료일 뿐 위반 판정에 쓰지 않고(ADR-0008 §5), ② 전유부에서 이미 주소·동·호를
+    # 받았는데 표제부 때문에 또 묻는 건 UX 후퇴이며, ③ 전유부·표제부가 둘 다 주소 모호일
+    # 때 재질문이 서로 맞물려 루프가 된다. heading=None 이면 건물 요약만 비운다.
     heading: BuildingHeadingResult | None = None
     heading_error = False
     try:
@@ -495,31 +495,24 @@ async def _run_timed_stage(home_check_id: uuid.UUID, stage: str, factory: Any) -
 # ---------------------------------------------------------------------------
 # 판정 (정본 — ADR-0008 §2 / 작업지시 판정 규칙).
 # ---------------------------------------------------------------------------
-def _judge(
-    exclusive: ExclusivePartResult, heading: BuildingHeadingResult | None
-) -> tuple[bool, bool, bool, str, list[str]]:
-    """(exclusive_violation, heading_violation, violation, signal, caution_reasons)."""
+def _judge(exclusive: ExclusivePartResult) -> tuple[bool, bool, str, list[str]]:
+    """(exclusive_violation, violation, signal, caution_reasons)."""
 
+    # 위반건축물 여부는 전유부만 본다. 표제부 변동사항은 동 전체 이력이라 다른 호의
+    # 위반 표기·해제가 섞여 오탐을 만들므로, 표제부의 위반 신호는 판정에 쓰지 않는다.
     exclusive_violation = exclusive.violation_status == _VIOLATION_VALUE
-    heading_violation = (
-        heading is not None and heading.violation_status == _VIOLATION_VALUE
-    )
-    violation = exclusive_violation or heading_violation
+    violation = exclusive_violation
 
     caution_reasons: list[str] = []
     if violation:
         signal = "violation"
     else:
-        if heading is None:
-            caution_reasons.append(
-                "건물 전체(표제부) 위반표시를 확인하지 못했습니다. 별도 확인이 필요합니다."
-            )
         if _exclusive_core_missing(exclusive):
             caution_reasons.append(
                 "전유부 핵심 정보(전유면적/구조 등)를 확인하지 못했습니다."
             )
         signal = "caution" if caution_reasons else "normal"
-    return exclusive_violation, heading_violation, violation, signal, caution_reasons
+    return exclusive_violation, violation, signal, caution_reasons
 
 
 def _exclusive_core_missing(exclusive: ExclusivePartResult) -> bool:
@@ -751,13 +744,7 @@ async def _mark_completed(
     # 발급이 끝나고 판정(+확장 LLM 대조) 구간에 들어섰다 — 대기 화면 스텝 갱신.
     await _set_phase(home_check_id, PHASE_JUDGING)
     judge_started = time.monotonic()
-    (
-        exclusive_violation,
-        heading_violation,
-        violation,
-        signal,
-        caution_reasons,
-    ) = _judge(exclusive, heading)
+    exclusive_violation, violation, signal, caution_reasons = _judge(exclusive)
 
     exclusive_summary = _summarize_exclusive(exclusive)
     heading_summary = _summarize_heading(heading) if heading is not None else None
@@ -767,7 +754,7 @@ async def _mark_completed(
     # 답하므로, 게이트가 꺼져 있어도(default) 그 입력을 버리지 않는다 — 버리면 web 이 '확장 여부를
     # 입력하지 않아 미대조'(not_checked)로 오표시한다. OpenAI 의존은 reported_extension=True 대조에만
     # 있어, 게이트 off 면 None/False 는 그대로 채우고 True 만 uncertain(자동 대조 못함)으로 degrade.
-    # 공식 노란딱지 축(exclusive_violation/heading_violation/violation)은 절대 건드리지 않고,
+    # 공식 노란딱지 축(exclusive_violation/violation)은 절대 건드리지 않고,
     # 종합 signal 과 caution_reasons 에만 확장 verdict 를 접는다.
     extension_check: dict[str, Any] | None = None
     settings = get_settings()
@@ -827,7 +814,8 @@ async def _mark_completed(
         "status": "completed",
         "signal": signal,
         "exclusive_violation": exclusive_violation,
-        "heading_violation": heading_violation,
+        # 표제부 위반 여부는 판정하지 않는다 — NULL = 확인하지 않음.
+        "heading_violation": None,
         "violation": violation,
         "exclusive_area_m2": exclusive_summary.area_m2,
         "exclusive_use_type": exclusive_summary.use_type,
@@ -1196,7 +1184,8 @@ async def _build_report(
     violation = Violation(
         is_violation=bool(row.get("violation")),
         exclusive=row.get("exclusive_violation"),
-        heading=row.get("heading_violation"),
+        # 표제부 위반 여부는 내보내지 않는다(과거 행의 값도 노출하지 않음).
+        heading=None,
         raw=_VIOLATION_VALUE if row.get("violation") else None,
     )
 

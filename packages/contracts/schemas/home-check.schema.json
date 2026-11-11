@@ -180,11 +180,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["is_violation"],
-      "description": "노란딱지(위반건축물) 판정. is_violation = 전유부 OR 표제부 resViolationStatus=='위반건축물'.",
+      "description": "노란딱지(위반건축물) 판정. is_violation = 전유부 resViolationStatus=='위반건축물'. 표제부는 판정에 쓰지 않는다.",
       "properties": {
         "is_violation": { "type": "boolean", "description": "종합 위반 여부." },
         "exclusive": { "type": ["boolean", "null"], "description": "전유부 위반표시." },
-        "heading": { "type": ["boolean", "null"], "description": "표제부(건물) 위반표시." },
+        "heading": { "type": ["boolean", "null"], "description": "사용 안 함 — 항상 null. 표제부 위반표시는 판정하지 않는다." },
         "raw": { "type": ["string", "null"], "description": "원본 resViolationStatus 값(예: '위반건축물')." }
       }
     },

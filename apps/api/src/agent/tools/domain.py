@@ -552,7 +552,6 @@ async def get_building_register_impl(
         violation={
             "is_violation": is_violation,
             "exclusive": row.get("exclusive_violation"),
-            "heading": row.get("heading_violation"),
         },
         building_floors=row.get("building_floors"),
         # 전유부 층 표기(예: "3층") — 세대 층수(floor_count) 확인의 근거로 쓸 수 있다.

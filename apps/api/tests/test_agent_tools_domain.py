@@ -270,6 +270,8 @@ async def test_get_building_register_completed_returns_permit_history(
     assert res["ok"] is True
     assert res["status"] == "completed"
     assert res["violation"]["is_violation"] is False
+    # 표제부 위반 여부는 판정하지 않으므로 에이전트에도 넘기지 않는다.
+    assert "heading" not in res["violation"]
     assert res["unit_floor"] == "3층"
     # 날짜 오름차순 정렬 — 소스(전유부/표제부) 저장 순서가 아니라 시간순.
     dates = [e["date"] for e in res["change_history"]]

@@ -82,5 +82,6 @@ CODEF가 세움터 집합건축물대장을 API로 제공한다. 다만 (a) 스�
 
 ## 5. 후속 변경 (schema changelog)
 
+- **2026-11-11 — 위반건축물 판정은 전유부만 본다 (§0·§2.1·§3·§4 의 "표제부 병행 판정"을 대체)**: 표제부 변동사항은 동 전체의 이력이라 **다른 호의 위반 표기와 그 해제**가 함께 적힌다(예: "위반건축물 표기[위반내용:(○동○호)…무단확장]" 뒤에 "위반건축물 해제[시정내용:…]"). 이 문구는 해제 판별이 알아보지 못해 fail-closed 로 위반이 남고, 조회한 세대의 전유부가 깨끗해도 건물이 위반으로 표시되는 오탐이 났다. 그래서 `violation` = 전유부 `violation_status == "위반건축물"` 하나로만 정한다. 표제부는 건물 요약·원본 PDF·변동 이력 수집용으로 계속 발급하지만 판정·신호등·caution 사유에 쓰지 않는다(표제부 발급 실패도 더 이상 caution 이 아니다). `home_checks.heading_violation` 과 `report.violation.heading` 은 형상을 유지한 채 항상 `null`(확인하지 않음)이며, 파트너 API(ADR-0012)의 표제부 봉투도 `violation_status: null` 만 돌려준다. 스키마 형상 변경이 없어 `schema_version` 은 1.3.0 그대로다. 워커(`apps/seumteo-worker`)는 바꾸지 않았다 — 표제부 위반 신호를 계속 올릴 수 있으나 API 가 무시한다.
 - **1.3.0 (2026-07-14)**: `HomeCheckJob` 에 `phase`(진행 단계, 정보성 open string) 추가 — 대기 화면(약 1.5~3분)의 실시간 스텝 표시용. 알려진 값 `received → issuing_registers → judging → saving_report`. `status` 가 상태 기계 정본이고 phase 는 파이프라인 힌트라 DB CHECK/엄격 enum 을 두지 않는다(값 추가는 마이그레이션 없이 배포, 클라이언트는 미지 값을 일반 대기 문구로 폴백). DDL: `0022_home_check_phase.sql`.
 - **1.2.0**: `report.extension_check`(신고확장↔변동사항 LLM 대조) 추가 + `prices` 제거.

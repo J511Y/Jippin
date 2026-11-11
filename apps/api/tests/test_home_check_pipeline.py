@@ -48,7 +48,7 @@ _HEAD_NORMAL = {
 def _judge_result(worker_excl: dict, worker_head: dict | None):
     excl = _to_exclusive(worker_excl)
     head = _to_heading(worker_head) if worker_head is not None else None
-    ev, hv, viol, signal, caution = _judge(excl, head)
+    _ev, viol, signal, caution = _judge(excl)
     return excl, head, signal, viol, caution
 
 
@@ -76,19 +76,20 @@ def test_exclusive_violation_signal():
     assert viol is True
 
 
-def test_heading_violation_signal():
-    # 표제부(건물 전체) 위반표시 — 전유부는 정상이어도 종합 위반.
+def test_heading_violation_is_ignored():
+    # 표제부는 동 전체 이력이라 다른 호의 위반 표기가 섞인다 — 판정은 전유부만 본다.
     head = {**_HEAD_NORMAL, "violation_status": "위반건축물"}
-    _e, _h, signal, viol, _c = _judge_result(_EXCL_NORMAL, head)
-    assert signal == "violation"
-    assert viol is True
-
-
-def test_heading_missing_is_caution():
-    _e, _h, signal, viol, caution = _judge_result(_EXCL_NORMAL, None)
-    assert signal == "caution"
+    _e, _h, signal, viol, caution = _judge_result(_EXCL_NORMAL, head)
+    assert signal == "normal"
     assert viol is False
-    assert any("표제부" in c for c in caution)
+    assert caution == []
+
+
+def test_heading_missing_is_not_caution():
+    _e, _h, signal, viol, caution = _judge_result(_EXCL_NORMAL, None)
+    assert signal == "normal"
+    assert viol is False
+    assert caution == []
 
 
 def test_exclusive_core_missing_is_caution():

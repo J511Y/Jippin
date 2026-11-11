@@ -260,7 +260,9 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_signal_violation_when_heading_violation(monkeypatch) -> None:
+def test_heading_violation_is_ignored_when_exclusive_clean(monkeypatch) -> None:
+    """표제부가 위반건축물이어도 전유부가 깨끗하면 위반으로 보지 않는다."""
+
     captured = _capture_updates(monkeypatch)
     hid = uuid.uuid4()
     monkeypatch.setattr(
@@ -275,10 +277,11 @@ def test_signal_violation_when_heading_violation(monkeypatch) -> None:
     )
     values = captured[str(hid)]
     assert values["status"] == "completed"
-    assert values["signal"] == "violation"
-    assert values["violation"] is True
-    assert values["heading_violation"] is True
+    assert values["signal"] == "normal"
+    assert values["violation"] is False
+    assert values["heading_violation"] is None
     assert values["exclusive_violation"] is False
+    assert not values["result_fields"]["caution_reasons"]
 
 
 def test_signal_normal_when_both_clean(monkeypatch) -> None:
@@ -416,7 +419,7 @@ def test_signal_folds_extension_violation_over_official_normal(monkeypatch) -> N
     # 공식 노란딱지 축은 확장 verdict 에 영향받지 않는다.
     assert values["violation"] is False
     assert values["exclusive_violation"] is False
-    assert values["heading_violation"] is False
+    assert values["heading_violation"] is None
     ext = values["result_fields"]["extension_check"]
     assert ext["verdict"] == "violation"
     assert ext["unrecorded_areas"] == ["거실"]
@@ -524,7 +527,9 @@ def test_official_violation_survives_extension_legal_or_uncertain(monkeypatch) -
         assert values["exclusive_violation"] is True, ext_verdict
 
 
-def test_signal_caution_when_heading_fails(monkeypatch) -> None:
+def test_heading_failure_does_not_change_signal(monkeypatch) -> None:
+    """표제부 발급 실패는 판정에 영향을 주지 않는다 — 위반 여부는 전유부만 본다."""
+
     captured = _capture_updates(monkeypatch)
     hid = uuid.uuid4()
     monkeypatch.setattr(
@@ -542,15 +547,14 @@ def test_signal_caution_when_heading_fails(monkeypatch) -> None:
     )
     values = captured[str(hid)]
     assert values["status"] == "completed"
-    assert values["signal"] == "caution"
+    assert values["signal"] == "normal"
     assert values["violation"] is False
-    assert values["heading_violation"] is False
-    reasons = values["result_fields"]["caution_reasons"]
-    assert any("표제부" in r for r in reasons)
+    assert values["heading_violation"] is None
+    assert not values["result_fields"]["caution_reasons"]
 
 
-def test_heading_needs_input_absorbed_as_caution(monkeypatch) -> None:
-    """표제부 needs_input 은 사용자 재질문 대신 caution 으로 흡수 → 잡은 completed."""
+def test_heading_needs_input_is_absorbed(monkeypatch) -> None:
+    """표제부 needs_input 은 사용자에게 되묻지 않고 흡수 → 잡은 completed."""
 
     captured = _capture_updates(monkeypatch)
     hid = uuid.uuid4()
@@ -571,9 +575,8 @@ def test_heading_needs_input_absorbed_as_caution(monkeypatch) -> None:
     )
     values = captured[str(hid)]
     assert values["status"] == "completed"
-    assert values["signal"] == "caution"
-    reasons = values["result_fields"]["caution_reasons"]
-    assert any("표제부" in r for r in reasons)
+    assert values["signal"] == "normal"
+    assert not values["result_fields"]["caution_reasons"]
 
 
 def test_needs_input_records_resume_token(monkeypatch) -> None:
@@ -667,7 +670,8 @@ def test_serialize_completed_report_validates_against_contract() -> None:
         "addr_ho": "1001",
         "violation": True,
         "exclusive_violation": True,
-        "heading_violation": False,
+        # 과거 행에 남은 표제부 판정값 — 리포트로는 내보내지 않는다.
+        "heading_violation": True,
         "exclusive_area_m2": 84.99,
         "exclusive_use_type": "공동주택",
         "exclusive_structure": "철근콘크리트구조",
@@ -691,6 +695,12 @@ def test_serialize_completed_report_validates_against_contract() -> None:
     payload = job.model_dump(mode="json")
     assert payload["schema_version"] == "1.3.0"
     assert payload["report"]["signal"] == "violation"
+    assert payload["report"]["violation"] == {
+        "is_violation": True,
+        "exclusive": True,
+        "heading": None,
+        "raw": "위반건축물",
+    }
     assert payload["report"]["disclaimer"].startswith("본 결과는")
     # 1.2.0: prices 제거, extension_check 미입력 시 null.
     assert "prices" not in payload["report"]
@@ -902,7 +912,7 @@ def test_bundle_path_completes_with_single_call(monkeypatch) -> None:
     assert values["signal"] == "normal"
 
 
-def test_bundle_heading_error_becomes_caution(monkeypatch) -> None:
+def test_bundle_heading_error_does_not_change_signal(monkeypatch) -> None:
     captured = _capture_updates(monkeypatch)
     _enable_bundle(monkeypatch)
     hid = uuid.uuid4()
@@ -917,7 +927,8 @@ def test_bundle_heading_error_becomes_caution(monkeypatch) -> None:
 
     values = captured[str(hid)]
     assert values["status"] == "completed"
-    assert values["signal"] == "caution"
+    assert values["signal"] == "normal"
+    assert values["heading_violation"] is None
 
 
 def test_bundle_needs_input_marks_row(monkeypatch) -> None:
