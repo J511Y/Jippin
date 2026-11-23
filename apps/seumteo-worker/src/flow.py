@@ -343,6 +343,44 @@ def _parcel_address_key(jibun_addr: str, mnnm: str, slno: str) -> str:
     return re.sub(r"[\s()]", "", str(jibun_addr)[: match.end()])
 
 
+# 지번 주소의 필지 번호 토큰 — '897-1'·'1105'·'산12-3'·'12번지'. '종로1가'처럼 숫자가 섞인
+# 법정동명은 순수 번지 토큰이 아니라 걸리지 않는다.
+_PARCEL_TOKEN = re.compile(r"^(?:산)?\d+(?:-\d+)?(?:번지)?$")
+
+# 같은 필지·도로명에 총괄 레코드가 여럿일 때 동 매칭을 시도할 최대 후보 수.
+_MAX_BUILDING_CANDIDATES = 5
+
+
+def _jibun_parcel_prefix(addr: str | None) -> str:
+    """지번 주소를 '시도 … 법정동[리] [산] 본번[-부번]' 까지만 남긴다(건물명 등 꼬리 제거).
+
+    도로명주소 API 의 jibunAddr 는 '서울특별시 영등포구 신길동 897-1 삼환아파트' 처럼 건물명이
+    붙는데, 세움터 ES 의 건물명 표기와 다를 수 있어 검색어에서 뗀다. 필지 번호 토큰이 없으면
+    (필지를 특정할 수 없는 주소) 빈 문자열 — 호출측은 지번 검색을 건너뛴다.
+    """
+
+    tokens = re.sub(r"[()]", " ", str(addr or "")).split()
+    # 시도·시군구 다음부터만 번지가 온다(시군구명 속 숫자 오인 방지).
+    for i in range(2, len(tokens)):
+        if _PARCEL_TOKEN.match(tokens[i]):
+            parts = tokens[: i + 1]
+            parts[-1] = parts[-1].removesuffix("번지")
+            return " ".join(parts)
+    return ""
+
+
+def _parcel_key(addr: str | None) -> str:
+    """필지 비교 키 — 필지까지의 접두어에서 공백을 없앤다('산 1-1'≡'산1-1')."""
+
+    return re.sub(r"\s+", "", _jibun_parcel_prefix(addr))
+
+
+def _road_key(addr: str | None) -> str:
+    """도로명주소 비교 키 — 괄호 참고항목('(신길동,삼환아파트)')을 떼고 공백을 없앤다."""
+
+    return re.sub(r"\s+", "", str(addr or "").split("(", 1)[0])
+
+
 def _es_field(hits: list[dict], pk: str, field: str) -> str | None:
     """_id 가 pk 인 ES hit 의 _source[field] 를 돌려준다(없으면 None)."""
 
@@ -805,53 +843,14 @@ class SeumteoFlow:
 
         통합 잡은 이 결과를 전유부·표제부가 함께 재사용한다(ES 검색 중복 제거)."""
 
-        search = self._s.eais_search_base_url
-
-        # 1) 총괄PK
-        mst = await self._post(
-            page,
-            f"{search}/bldrgstmst/_search",
-            {
-                "query": {
-                    "multi_match": {
-                        "query": req.road_addr.strip(),
-                        "type": "cross_fields",
-                        "operator": "and",
-                        "fields": ["jibunAddr", "roadAddr^3"],
-                        "tie_breaker": 0.3,
-                    }
-                },
-                "collapse": {"field": "mgmUpperBldrgstPk"},
-                "size": 20,
-            },
-        )
-        hits = (((mst or {}).get("hits") or {}).get("hits")) or []
-        if not hits:
-            raise FlowError("not_found", "해당 주소의 건축물대장을 찾지 못했습니다.")
-        src0 = hits[0].get("_source") or {}
+        # 1~2) 총괄PK 후보 → 표제부PK(동 매칭)
+        src0, title_pk, thits = await self._find_building(page, req)
         mgm_upper_pk = str(src0.get("mgmUpperBldrgstPk") or "")
         road_addr = src0.get("roadAddr")
         jibun_addr = src0.get("jibunAddr")
         # untClsfCd(용도분류코드)는 **건물마다 다르다**(예: 아파트 1020/1118). ES 원본값을
         # R01/R04 에 그대로 넣어야 한다 — 하드코딩(1020)하면 다른 건물에서 R01 이 빈 결과.
         unt = str(src0.get("untClsfCd") or _UNT_CLSF_CD)
-
-        # 2) 표제부PK (동 매칭)
-        title = await self._post(
-            page,
-            f"{search}/bldrgsttitle/_search",
-            {
-                "sort": [{"dongNm": "asc"}],
-                "query": {
-                    "bool": {"filter": [{"term": {"mgmUpperBldrgstPk": mgm_upper_pk}}]}
-                },
-                "size": 1000,  # 대단지(동 다수) — 요청 동이 잘려 not_found 나지 않게 넉넉히.
-            },
-        )
-        thits = (((title or {}).get("hits") or {}).get("hits")) or []
-        title_pk = self._match_dong(thits, req.dong)
-        if title_pk is None:
-            raise FlowError("not_found", "입력한 동을 찾지 못했습니다.", field="dong")
         # 담기(C01) loc* 는 사용자 입력(req)이 아니라 ES 원본값을 쓴다(앱 동작과 일치 —
         # 건물별로 "504호"/"901" 처럼 포맷이 달라짐).
         es_dong_nm = _es_field(thits, title_pk, "dongNm") or req.dong
@@ -864,6 +863,124 @@ class SeumteoFlow:
             "jibun_addr": jibun_addr,
             "es_dong_nm": es_dong_nm,
         }
+
+    async def _search_masters(
+        self, page: Page, query: str, fields: list[str]
+    ) -> list[dict]:
+        """총괄(bldrgstmst) ES 검색 — 총괄PK 단위로 접어(collapse) 점수순 hit 를 돌려준다."""
+
+        mst = await self._post(
+            page,
+            f"{self._s.eais_search_base_url}/bldrgstmst/_search",
+            {
+                "query": {
+                    "multi_match": {
+                        "query": query,
+                        "type": "cross_fields",
+                        "operator": "and",
+                        "fields": fields,
+                        "tie_breaker": 0.3,
+                    }
+                },
+                "collapse": {"field": "mgmUpperBldrgstPk"},
+                "size": 20,
+            },
+        )
+        return (((mst or {}).get("hits") or {}).get("hits")) or []
+
+    async def _search_titles(self, page: Page, mgm_upper_pk: str) -> list[dict]:
+        """총괄PK 아래 표제부(동) 목록."""
+
+        title = await self._post(
+            page,
+            f"{self._s.eais_search_base_url}/bldrgsttitle/_search",
+            {
+                "sort": [{"dongNm": "asc"}],
+                "query": {
+                    "bool": {"filter": [{"term": {"mgmUpperBldrgstPk": mgm_upper_pk}}]}
+                },
+                "size": 1000,  # 대단지(동 다수) — 요청 동이 잘려 not_found 나지 않게 넉넉히.
+            },
+        )
+        return (((title or {}).get("hits") or {}).get("hits")) or []
+
+    async def _find_building(
+        self, page: Page, req: BuildingRegisterRequest
+    ) -> tuple[dict, str, list[dict]]:
+        """주소 → 총괄 레코드(_source) + 표제부PK + 표제부 hit 목록.
+
+        **지번 우선**(#jibun-first): 세움터 대장은 지번이 정본이라 도로명이 비었거나(roadAddr
+        null 레코드 실재) 표기가 달라 도로명 검색이 빗나가는 건물이 있다. 지번 주소가 있으면
+        필지('…동 897-1')까지만 떼어 jibunAddr 로 찾고, **필지 정확 일치** hit 만 후보로 쓴다 —
+        ES 숫자 토큰은 부분일치('897'→'89-7')라 점수 1위를 그대로 믿으면 남의 필지를 집는다.
+        지번이 없거나 일치 후보가 없으면 기존 도로명 검색으로 폴백한다(도로명 정확 일치 우선,
+        없으면 종전처럼 1위 1건만).
+
+        같은 필지·도로명에 총괄 레코드가 여럿일 수 있다(예: 동 목록이 없는 필지 단위 레코드와
+        단지 레코드가 공존). 정확 일치 후보는 동 매칭이 되는 레코드를 고른다. 정확 일치가 아닌
+        폴백 1위는 다른 건물일 수 있어 후보를 넓히지 않는다(같은 '101동'을 가진 남의 단지 발급 방지).
+        """
+
+        candidates: list[dict] = []
+        source = "road"
+        jibun_query = _jibun_parcel_prefix(req.jibun_addr)
+        if jibun_query:
+            jibun_key = _parcel_key(jibun_query)
+            hits = await self._search_masters(page, jibun_query, ["jibunAddr"])
+            candidates = [
+                h
+                for h in hits
+                if _parcel_key((h.get("_source") or {}).get("jibunAddr")) == jibun_key
+            ]
+            if candidates:
+                source = "jibun"
+        road_key = _road_key(req.road_addr)
+        if not candidates:
+            hits = await self._search_masters(
+                page, req.road_addr.strip(), ["jibunAddr", "roadAddr^3"]
+            )
+            exact = [
+                h
+                for h in hits
+                if road_key
+                and _road_key((h.get("_source") or {}).get("roadAddr")) == road_key
+            ]
+            candidates = exact or hits[:1]
+            source = "road_exact" if exact else "road_top"
+        if not candidates:
+            raise FlowError("not_found", "해당 주소의 건축물대장을 찾지 못했습니다.")
+        candidates = candidates[:_MAX_BUILDING_CANDIDATES]
+
+        # 후보별 동 목록은 상호 독립 — 같은 페이지 in-page fetch 동시 실행(프로토콜상 병렬 안전).
+        title_lists = await asyncio.gather(
+            *(
+                self._search_titles(
+                    page, str((h.get("_source") or {}).get("mgmUpperBldrgstPk") or "")
+                )
+                for h in candidates
+            )
+        )
+        matched: list[tuple[dict, str, list[dict]]] = []
+        for h, thits in zip(candidates, title_lists):
+            title_pk = self._match_dong(thits, req.dong)
+            if title_pk is not None:
+                matched.append((h.get("_source") or {}, title_pk, thits))
+        _log.info(
+            "flow.building_resolved",
+            source=source,
+            candidates=len(candidates),
+            dong_matched=len(matched),
+        )
+        if not matched:
+            raise FlowError("not_found", "입력한 동을 찾지 못했습니다.", field="dong")
+        if len(matched) > 1 and road_key:
+            # 같은 필지에 동명이 겹치는 레코드가 여럿이면 도로명까지 같은 쪽을 고른다.
+            same_road = [
+                m for m in matched if _road_key(m[0].get("roadAddr")) == road_key
+            ]
+            if same_road:
+                return same_road[0]
+        return matched[0]
 
     async def _resolve_kind(
         self, page: Page, req: BuildingRegisterRequest, shared: dict

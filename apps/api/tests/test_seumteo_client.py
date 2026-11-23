@@ -423,3 +423,97 @@ async def test_fetch_bundle_sequential_fallback_swallows_heading_error():
     assert exclusive.comm_unique_no == "102011442"
     assert heading is None
     assert heading_error is True
+
+
+# ---------------------------------------------------------------------------
+# 지번 보강(#jibun-first) — 도로명만 받은 요청에 지번을 채워 워커로 보낸다.
+# ---------------------------------------------------------------------------
+_ROAD = "서울특별시 영등포구 여의대방로43나길 25"
+_JIBUN = "서울특별시 영등포구 신길동 897-1 삼환아파트"
+
+
+def _client_with_lookup(responses, lookup):
+    http = _FakeHttp(responses)
+    client = SeumteoBuildingRegisterClient(
+        _Settings(), redis_client=None, http_client=http, jibun_lookup=lookup
+    )
+    return client, http
+
+
+async def test_bundle_enriches_missing_jibun_from_road_address():
+    asked: list[str] = []
+
+    async def _lookup(road: str) -> str | None:
+        asked.append(road)
+        return _JIBUN
+
+    client, http = _client_with_lookup([_FakeResponse(200, _BUNDLE_OK)], _lookup)
+    await client.fetch_bundle(
+        BuildingRegisterQuery(road_addr=_ROAD, dong="104동", ho="504호")
+    )
+
+    assert asked == [_ROAD]
+    payload = http.calls[0]["json"]
+    assert payload["jibun_addr"] == _JIBUN
+    # 사용자 입력 도로명은 그대로 보낸다(워커 폴백·접수 매칭용).
+    assert payload["road_addr"] == _ROAD
+
+
+async def test_caller_supplied_jibun_is_not_overwritten():
+    async def _lookup(_road: str) -> str | None:
+        raise AssertionError("지번이 이미 있으면 조회하지 않는다")
+
+    client, http = _client_with_lookup([_FakeResponse(200, _EXCLUSIVE_OK)], _lookup)
+    q = BuildingRegisterQuery(
+        road_addr=_ROAD, dong="104동", ho="504호", jibun_addr="원래 지번 1"
+    )
+    await client.fetch_exclusive_part(q)
+
+    assert http.calls[0]["json"]["jibun_addr"] == "원래 지번 1"
+
+
+async def test_jibun_lookup_failure_falls_back_to_road_only():
+    async def _lookup(_road: str) -> str | None:
+        raise RuntimeError("juso down")
+
+    client, http = _client_with_lookup([_FakeResponse(200, _EXCLUSIVE_OK)], _lookup)
+    await client.fetch_exclusive_part(
+        BuildingRegisterQuery(road_addr=_ROAD, dong="104동", ho="504호")
+    )
+
+    assert http.calls[0]["json"]["jibun_addr"] is None
+
+
+async def test_needs_input_resume_ctx_keeps_enriched_jibun():
+    """needs_input 재개 ctx 에 보강된 지번을 저장한다 — 재조회도 지번 우선으로 간다."""
+
+    async def _lookup(_road: str) -> str | None:
+        return _JIBUN
+
+    needs = {
+        "ok": False,
+        "category": "needs_input",
+        "message": "호 선택",
+        "field": "ho",
+    }
+    client, _ = _client_with_lookup([_FakeResponse(200, needs)], _lookup)
+    saved: list[BuildingRegisterQuery] = []
+
+    async def _save_resume(query, field):
+        saved.append(query)
+        return "tok"
+
+    client._save_resume = _save_resume  # type: ignore[method-assign]
+    with pytest.raises(CodefNeedsUserInput):
+        await client.fetch_exclusive_part(
+            BuildingRegisterQuery(road_addr=_ROAD, dong="104동", ho="")
+        )
+
+    assert saved[0].jibun_addr == _JIBUN
+
+
+def test_default_lookup_disabled_without_juso_key():
+    client = SeumteoBuildingRegisterClient(
+        _Settings(), redis_client=None, http_client=None
+    )
+    assert client._jibun_lookup is None
