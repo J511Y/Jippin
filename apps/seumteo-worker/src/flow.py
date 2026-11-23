@@ -960,15 +960,26 @@ class SeumteoFlow:
                 for h in candidates
             )
         )
-        matched: list[tuple[dict, str, list[dict]]] = []
+        # 동명이 **명시적으로 일치**하는 후보를 '동이 하나뿐이라 그 동' 폴백보다 앞세운다 —
+        # 같은 필지에 '101동'만 있는 레코드와 요청한 '104동'을 가진 레코드가 공존할 때, 폴백이
+        # 이기면 남의 동을 발급한다(Codex P1 #229). 폴백은 명시 일치가 하나도 없을 때만 쓴다.
+        explicit: list[tuple[dict, str, list[dict]]] = []
+        fallback: list[tuple[dict, str, list[dict]]] = []
         for h, thits in zip(candidates, title_lists):
+            src = h.get("_source") or {}
+            exact_pk = self._explicit_dong(thits, req.dong)
+            if exact_pk is not None:
+                explicit.append((src, exact_pk, thits))
+                continue
             title_pk = self._match_dong(thits, req.dong)
             if title_pk is not None:
-                matched.append((h.get("_source") or {}, title_pk, thits))
+                fallback.append((src, title_pk, thits))
+        matched = explicit or fallback
         _log.info(
             "flow.building_resolved",
             source=source,
             candidates=len(candidates),
+            dong_explicit=len(explicit),
             dong_matched=len(matched),
         )
         if not matched:
@@ -1101,6 +1112,17 @@ class SeumteoFlow:
         # 동이 하나뿐이면 그것으로.
         if len(hits) == 1:
             return str(hits[0].get("_id"))
+        return None
+
+    def _explicit_dong(self, hits: list[dict], dong: str) -> str | None:
+        """정규화한 dongNm 이 요청 동과 같은 표제부PK — '동 하나뿐' 폴백 없이."""
+
+        norm = _norm_unit(dong)
+        if not norm:
+            return None
+        for h in hits:
+            if _norm_unit((h.get("_source") or {}).get("dongNm")) == norm:
+                return str(h.get("_id"))
         return None
 
     def _match_ho(self, hits: list[dict], ho: str) -> tuple[str | None, str | None]:

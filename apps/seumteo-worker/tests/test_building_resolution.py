@@ -163,6 +163,34 @@ class FindBuildingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(src["mgmUpperBldrgstPk"], "COMPLEX")
         self.assertEqual(title_pk, "COMPLEX-T1")
 
+    async def test_explicit_dong_match_beats_singleton_fallback(self) -> None:
+        # 1위 후보는 '101동' 하나뿐이라 _match_dong 의 '동 하나면 그 동' 폴백에 걸린다.
+        # 요청한 '104동'을 실제로 가진 2위 후보가 이겨야 한다(Codex P1 #229).
+        router = _EsRouter(
+            jibun_hits=[
+                _mst("SINGLE", _JIBUN, _ROAD_ES),
+                _mst("REAL", _JIBUN, _ROAD_ES),
+            ],
+            titles={"SINGLE": ["101동"], "REAL": ["103동", "104동"]},
+        )
+        src, title_pk, _ = await _flow(router)._find_building(
+            None, _req(road=_ROAD, jibun=_JIBUN)
+        )
+
+        self.assertEqual(src["mgmUpperBldrgstPk"], "REAL")
+        self.assertEqual(title_pk, "REAL-T1")
+
+    async def test_singleton_fallback_still_used_without_explicit_match(self) -> None:
+        router = _EsRouter(
+            jibun_hits=[_mst("ONLY", _JIBUN, _ROAD_ES)],
+            titles={"ONLY": ["동명칭없음"]},
+        )
+        _, title_pk, _ = await _flow(router)._find_building(
+            None, _req(road=_ROAD, jibun=_JIBUN, dong="")
+        )
+
+        self.assertEqual(title_pk, "ONLY-T0")
+
     async def test_multiple_dong_matches_prefer_same_road(self) -> None:
         router = _EsRouter(
             jibun_hits=[
