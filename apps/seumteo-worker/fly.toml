@@ -28,10 +28,11 @@ swap_size_mb = 1024             # Chromium 메모리 스파이크 OOM-kill 방�
 [http_service]
   internal_port = 8080
   force_https = false           # Flycast(사설)는 HTTP 전용
-  # 간헐 워크로드 — 유휴 시 정지, 요청 오면 기동. 콜드스타트(수 초) 감안해 호출측 타임아웃 넉넉히.
-  auto_stop_machines = "stop"
+  # 상시 가동(2026-11-12) — 워크 연동(ADR-0012) 발급이 건마다 콜드스타트+로그인 약 21초를
+  # 떠안아서 유휴 정지를 껐다. 머신이 죽었을 때는 Flycast 요청이 다시 띄운다(auto_start 유지).
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [http_service.concurrency]
     type = "requests"

@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -37,8 +39,13 @@ from ..codef.types import (
     CodefUpstreamError,
     ExclusivePartResult,
 )
+from .jibun import lookup_jibun_addr
 
 _log = structlog.get_logger(__name__)
+
+_DEFAULT_JUSO_API_URL = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
+
+JibunLookup = Callable[[str], Awaitable[str | None]]
 
 _JOB_PATH = "/jobs/building-register"
 _BUNDLE_PATH = "/jobs/building-register-bundle"
@@ -55,8 +62,11 @@ class SeumteoBuildingRegisterClient:
         *,
         redis_client: redis.Redis | None = None,
         http_client: httpx.AsyncClient | None = None,
+        jibun_lookup: JibunLookup | None = None,
     ) -> None:
         self._settings = settings
+        # 지번 보강(#jibun-first) — 주입이 없으면 도로명주소 API 승인키가 있을 때만 켠다.
+        self._jibun_lookup = jibun_lookup or self._default_jibun_lookup(settings)
         self._redis = redis_client
         self._http = http_client
         self._wake_url = str(getattr(settings, "seumteo_worker_url", "") or "").rstrip(
@@ -82,6 +92,44 @@ class SeumteoBuildingRegisterClient:
             open_seconds=settings.codef_breaker_open_seconds,
             redis_client=redis_client,
         )
+
+    @staticmethod
+    def _default_jibun_lookup(settings: Any) -> JibunLookup | None:
+        confm_key = getattr(settings, "juso_confm_key", None)
+        if not confm_key:
+            return None
+        api_url = str(getattr(settings, "juso_api_url", "") or _DEFAULT_JUSO_API_URL)
+
+        async def _lookup(road_addr: str) -> str | None:
+            return await lookup_jibun_addr(
+                road_addr, confm_key=confm_key, api_url=api_url
+            )
+
+        return _lookup
+
+    async def _with_jibun(self, query: BuildingRegisterQuery) -> BuildingRegisterQuery:
+        """지번이 비었으면 도로명주소로 지번을 찾아 채운다(best-effort).
+
+        세움터는 지번 검색이 도로명보다 잘 맞는다 — 워커는 지번을 먼저 쓰고 못 찾으면 도로명으로
+        폴백한다. 호출측이 넘긴 지번은 덮지 않는다. 실패는 지번 없이(종전 경로) 진행한다.
+        """
+
+        if (query.jibun_addr or "").strip() or self._jibun_lookup is None:
+            return query
+        try:
+            jibun = await self._jibun_lookup(query.road_addr)
+        except Exception:  # noqa: BLE001 — 보강 실패가 발급을 막으면 안 된다.
+            _log.info("seumteo.jibun_lookup", outcome="exception")
+            return query
+        return dataclasses.replace(query, jibun_addr=jibun) if jibun else query
+
+    async def _prepare(self, query: BuildingRegisterQuery) -> BuildingRegisterQuery:
+        """워커 준비(깨우기·로그인 확인)와 지번 보강을 동시에 — 보강이 지연을 더하지 않게."""
+
+        enriched, _ = await asyncio.gather(
+            self._with_jibun(query), self._ensure_worker_ready()
+        )
+        return enriched
 
     # ------------------------------------------------------------------
     # 전유부
@@ -162,7 +210,7 @@ class SeumteoBuildingRegisterClient:
         if not self._wake_url or not self._job_url:
             raise CodefUpstreamError("세움터 워커 URL이 설정되지 않았습니다.")
         await self._breaker.ensure_closed()
-        await self._ensure_worker_ready()
+        query = await self._prepare(query)
 
         payload = {
             "road_addr": query.road_addr.strip(),
@@ -257,7 +305,7 @@ class SeumteoBuildingRegisterClient:
         if not self._wake_url or not self._job_url:
             raise CodefUpstreamError("세움터 워커 URL이 설정되지 않았습니다.")
         await self._breaker.ensure_closed()
-        await self._ensure_worker_ready()
+        query = await self._prepare(query)
 
         payload = {
             "road_addr": query.road_addr.strip(),
