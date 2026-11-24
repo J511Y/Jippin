@@ -304,6 +304,15 @@ def _units_terminal(
     return False
 
 
+# 동 지정 표기 — 숫자('101')·영문/숫자 조합('A'·'B1'·'C-2')·한 글자 한글('가'). _norm_unit 을
+# 거친 값 기준. '동명칭없음'·'판교푸르지오월드마크' 같은 건물명은 동 지정이 아니다.
+_DONG_DESIGNATION_RE = re.compile(r"[0-9A-Za-z]+(?:-[0-9A-Za-z]+)*|[가-힣]")
+
+
+def _is_dong_designation(norm: str) -> bool:
+    return bool(norm) and _DONG_DESIGNATION_RE.fullmatch(norm) is not None
+
+
 def _collapse_spaces(text: str) -> str:
     """괄호를 공백으로 바꾸고 공백 연속을 한 칸으로 접는다(토큰 경계 보존 비교용)."""
 
@@ -1109,8 +1118,14 @@ class SeumteoFlow:
         for h in hits:
             if _norm_unit((h.get("_source") or {}).get("dongNm")) == norm:
                 return str(h.get("_id"))
-        # 동이 하나뿐이면 그것으로.
+        # 동이 하나뿐이면 그것으로 — 단, 그 하나가 요청과 **다른 동 번호**면 쓰지 않는다
+        # (#dong-singleton-guard). '동명칭없음'·건물명처럼 동 지정이 아닌 표제부만 대신 쓴다.
+        # 같은 필지 후보가 여럿이면(#jibun-first) 동 목록이 빈 단지 레코드 옆의 '207동' 하나짜리
+        # 레코드가 '203동' 요청을 207동으로 바꿔 남의 세대를 발급할 수 있었다(운영 실측: 죽전동 832-1).
         if len(hits) == 1:
+            only = _norm_unit((hits[0].get("_source") or {}).get("dongNm"))
+            if _is_dong_designation(norm) and _is_dong_designation(only):
+                return None
             return str(hits[0].get("_id"))
         return None
 
