@@ -191,6 +191,44 @@ class FindBuildingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(title_pk, "ONLY-T0")
 
+    async def test_singleton_with_other_dong_number_is_not_substituted(self) -> None:
+        # 운영 실측(죽전동 832-1): 단지 레코드는 동 목록이 비고 같은 필지 다른 레코드엔 '207동'
+        # 하나뿐 — '203동' 요청을 207동으로 바꿔 남의 세대를 발급하면 안 된다(#dong-singleton-guard).
+        router = _EsRouter(
+            jibun_hits=[
+                _mst("COMPLEX", _JIBUN, _ROAD_ES),
+                _mst("SIDE", _JIBUN, _ROAD_ES),
+            ],
+            titles={"COMPLEX": [], "SIDE": ["207동"]},
+        )
+        with self.assertRaisesRegex(FlowError, "동을 찾지 못했"):
+            await _flow(router)._find_building(
+                None, _req(road=_ROAD, jibun=_JIBUN, dong="203동")
+            )
+
+    async def test_singleton_letter_dong_is_not_substituted(self) -> None:
+        router = _EsRouter(
+            jibun_hits=[_mst("ONLY", _JIBUN, _ROAD_ES)],
+            titles={"ONLY": ["B동"]},
+        )
+        with self.assertRaisesRegex(FlowError, "동을 찾지 못했"):
+            await _flow(router)._find_building(
+                None, _req(road=_ROAD, jibun=_JIBUN, dong="A")
+            )
+
+    async def test_singleton_without_dong_designation_still_used(self) -> None:
+        # 단일 동 건물은 표제부 동명이 '동명칭없음'·건물명이다 — 입력 동이 있어도 그것을 쓴다.
+        for dong_nm in ("동명칭없음", "판교푸르지오월드마크"):
+            with self.subTest(dong_nm=dong_nm):
+                router = _EsRouter(
+                    jibun_hits=[_mst("ONLY", _JIBUN, _ROAD_ES)],
+                    titles={"ONLY": [dong_nm]},
+                )
+                _, title_pk, _ = await _flow(router)._find_building(
+                    None, _req(road=_ROAD, jibun=_JIBUN, dong="102동")
+                )
+                self.assertEqual(title_pk, "ONLY-T0")
+
     async def test_multiple_dong_matches_prefer_same_road(self) -> None:
         router = _EsRouter(
             jibun_hits=[
