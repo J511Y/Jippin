@@ -922,16 +922,20 @@ class SeumteoFlow:
         null 레코드 실재) 표기가 달라 도로명 검색이 빗나가는 건물이 있다. 지번 주소가 있으면
         필지('…동 897-1')까지만 떼어 jibunAddr 로 찾고, **필지 정확 일치** hit 만 후보로 쓴다 —
         ES 숫자 토큰은 부분일치('897'→'89-7')라 점수 1위를 그대로 믿으면 남의 필지를 집는다.
-        지번이 없거나 일치 후보가 없으면 기존 도로명 검색으로 폴백한다(도로명 정확 일치 우선,
-        없으면 종전처럼 1위 1건만).
+        지번이 없거나, 일치 후보가 없거나, **후보 중 어느 것도 요청 동을 해석하지 못하면** 도로명
+        검색으로 폴백한다(도로명 정확 일치 우선, 없으면 종전처럼 1위 1건만). 필지 후보가 있다는
+        것만으로 건물이 해석된 것은 아니다 — 동 목록이 빈 필지 단위 레코드만 걸리면 도로명으로
+        찾던 요청이 지번이 붙었다는 이유로 실패한다(Codex P2 #232). 이미 본 총괄PK 는 건너뛴다.
 
         같은 필지·도로명에 총괄 레코드가 여럿일 수 있다(예: 동 목록이 없는 필지 단위 레코드와
         단지 레코드가 공존). 정확 일치 후보는 동 매칭이 되는 레코드를 고른다. 정확 일치가 아닌
         폴백 1위는 다른 건물일 수 있어 후보를 넓히지 않는다(같은 '101동'을 가진 남의 단지 발급 방지).
         """
 
-        candidates: list[dict] = []
-        source = "road"
+        road_key = _road_key(req.road_addr)
+        tried: set[str] = set()
+        seen_any = False
+
         jibun_query = _jibun_parcel_prefix(req.jibun_addr)
         if jibun_query:
             jibun_key = _parcel_key(jibun_query)
@@ -942,39 +946,76 @@ class SeumteoFlow:
                 if _parcel_key((h.get("_source") or {}).get("jibunAddr")) == jibun_key
             ]
             if candidates:
-                source = "jibun"
-        road_key = _road_key(req.road_addr)
-        if not candidates:
-            hits = await self._search_masters(
-                page, req.road_addr.strip(), ["jibunAddr", "roadAddr^3"]
+                seen_any = True
+                found = await self._match_candidates(
+                    page, req, candidates, road_key, tried, source="jibun"
+                )
+                if found is not None:
+                    return found
+
+        hits = await self._search_masters(
+            page, req.road_addr.strip(), ["jibunAddr", "roadAddr^3"]
+        )
+        exact = [
+            h
+            for h in hits
+            if road_key
+            and _road_key((h.get("_source") or {}).get("roadAddr")) == road_key
+        ]
+        candidates = exact or hits[:1]
+        if candidates:
+            seen_any = True
+            found = await self._match_candidates(
+                page,
+                req,
+                candidates,
+                road_key,
+                tried,
+                source="road_exact" if exact else "road_top",
             )
-            exact = [
-                h
-                for h in hits
-                if road_key
-                and _road_key((h.get("_source") or {}).get("roadAddr")) == road_key
-            ]
-            candidates = exact or hits[:1]
-            source = "road_exact" if exact else "road_top"
-        if not candidates:
+            if found is not None:
+                return found
+
+        if not seen_any:
             raise FlowError("not_found", "해당 주소의 건축물대장을 찾지 못했습니다.")
-        candidates = candidates[:_MAX_BUILDING_CANDIDATES]
+        raise FlowError("not_found", "입력한 동을 찾지 못했습니다.", field="dong")
+
+    async def _match_candidates(
+        self,
+        page: Page,
+        req: BuildingRegisterRequest,
+        candidates: list[dict],
+        road_key: str,
+        tried: set[str],
+        *,
+        source: str,
+    ) -> tuple[dict, str, list[dict]] | None:
+        """총괄 후보들의 동 목록에서 요청 동을 해석한다 — 못 하면 None(호출측이 다음 검색으로).
+
+        ``tried`` 에 있는 총괄PK 는 건너뛰고, 이번에 본 PK 를 추가한다."""
+
+        pending: list[tuple[dict, str]] = []
+        for h in candidates:
+            pk = str((h.get("_source") or {}).get("mgmUpperBldrgstPk") or "")
+            if pk in tried:
+                continue
+            tried.add(pk)
+            pending.append((h, pk))
+            if len(pending) >= _MAX_BUILDING_CANDIDATES:
+                break
+        if not pending:
+            return None
 
         # 후보별 동 목록은 상호 독립 — 같은 페이지 in-page fetch 동시 실행(프로토콜상 병렬 안전).
         title_lists = await asyncio.gather(
-            *(
-                self._search_titles(
-                    page, str((h.get("_source") or {}).get("mgmUpperBldrgstPk") or "")
-                )
-                for h in candidates
-            )
+            *(self._search_titles(page, pk) for _, pk in pending)
         )
         # 동명이 **명시적으로 일치**하는 후보를 '동이 하나뿐이라 그 동' 폴백보다 앞세운다 —
         # 같은 필지에 '101동'만 있는 레코드와 요청한 '104동'을 가진 레코드가 공존할 때, 폴백이
         # 이기면 남의 동을 발급한다(Codex P1 #229). 폴백은 명시 일치가 하나도 없을 때만 쓴다.
         explicit: list[tuple[dict, str, list[dict]]] = []
         fallback: list[tuple[dict, str, list[dict]]] = []
-        for h, thits in zip(candidates, title_lists):
+        for (h, _), thits in zip(pending, title_lists):
             src = h.get("_source") or {}
             exact_pk = self._explicit_dong(thits, req.dong)
             if exact_pk is not None:
@@ -987,12 +1028,12 @@ class SeumteoFlow:
         _log.info(
             "flow.building_resolved",
             source=source,
-            candidates=len(candidates),
+            candidates=len(pending),
             dong_explicit=len(explicit),
             dong_matched=len(matched),
         )
         if not matched:
-            raise FlowError("not_found", "입력한 동을 찾지 못했습니다.", field="dong")
+            return None
         if len(matched) > 1 and road_key:
             # 같은 필지에 동명이 겹치는 레코드가 여럿이면 도로명까지 같은 쪽을 고른다.
             same_road = [

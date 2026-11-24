@@ -262,6 +262,37 @@ class FindBuildingTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("NEAR", router.title_pks)
 
+    async def test_road_search_runs_when_parcel_candidates_miss_the_dong(self) -> None:
+        # 필지 정확 일치 후보가 있어도 동을 못 풀면 도로명으로 다시 찾는다 — 지번이 붙었다는
+        # 이유로 도로명으로 찾던 요청이 실패하면 안 된다(Codex P2 #232).
+        router = _EsRouter(
+            jibun_hits=[_mst("PARCEL", _JIBUN, None)],
+            road_hits=[
+                _mst("COMPLEX", "서울특별시 영등포구 신길동 897 삼환아파트", _ROAD_ES)
+            ],
+            titles={"PARCEL": [], "COMPLEX": ["103동", "104동"]},
+        )
+        src, title_pk, _ = await _flow(router)._find_building(
+            None, _req(road=_ROAD, jibun=_JIBUN)
+        )
+
+        self.assertEqual(src["mgmUpperBldrgstPk"], "COMPLEX")
+        self.assertEqual(title_pk, "COMPLEX-T1")
+        self.assertEqual(
+            [fields for _, fields in router.mst_queries],
+            [["jibunAddr"], ["jibunAddr", "roadAddr^3"]],
+        )
+
+    async def test_road_fallback_skips_masters_already_tried(self) -> None:
+        router = _EsRouter(
+            jibun_hits=[_mst("SAME", _JIBUN, _ROAD_ES)],
+            road_hits=[_mst("SAME", _JIBUN, _ROAD_ES)],
+            titles={"SAME": ["101동", "102동"]},
+        )
+        with self.assertRaisesRegex(FlowError, "동을 찾지 못했"):
+            await _flow(router)._find_building(None, _req(road=_ROAD, jibun=_JIBUN))
+        self.assertEqual(router.title_pks, ["SAME"])
+
     async def test_without_jibun_road_exact_match_beats_top_score(self) -> None:
         router = _EsRouter(
             road_hits=[
